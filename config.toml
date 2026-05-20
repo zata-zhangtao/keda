@@ -108,3 +108,43 @@ ingestion_document_seconds = 600
 ingestion_job_seconds = 7200
 # Timeout for MinIO operations
 minio_seconds = 60
+
+# =============================================================================
+# Agent Runner Settings
+# =============================================================================
+[agent_runner]
+max_issues = 1
+default_agent = "auto"
+
+[agent_runner.labels]
+ready = "agent/ready"
+running = "agent/running"
+review = "agent/review"
+failed = "agent/failed"
+blocked = "agent/blocked"
+codex = "agent/codex"
+claude = "agent/claude"
+
+[agent_runner.git]
+remote = "origin"
+base_branch = "main"
+
+[agent_runner.worktree]
+create_command = "just worktree --issue {issue_number} enter_shell=false"
+reuse_command = "just worktree --issue {issue_number} --existing-branch enter_shell=false"
+path_command = "bash scripts/git_worktree.sh --print-path --issue {issue_number} --existing-branch"
+
+[agent_runner.runner]
+verification_commands = [
+  "git diff --check",
+  "uv run mkdocs build",
+]
+
+[agent_runner.safety]
+auto_merge = false
+forbidden_path_patterns = [
+  ".env",
+  ".env.*",
+  "secrets/*",
+  "docker-compose.prod.yml",
+]

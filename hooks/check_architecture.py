@@ -36,7 +36,7 @@ LAYER_ORDER: list[str] = ["infrastructure", "engines", "core", "api"]
 FORBIDDEN_IMPORTS: dict[str, list[str]] = {
     "infrastructure": ["core", "engines", "api"],
     "core": ["engines", "infrastructure", "api"],
-    "api": ["infrastructure", "engines"],
+    "api": ["infrastructure"],
     "engines": ["api"],
 }
 """每个层禁止 import 的其他层列表。"""

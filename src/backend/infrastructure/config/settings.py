@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
-from pydantic import Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -254,6 +254,96 @@ class TimeoutSettings(BaseSettings):
         )
 
 
+class AgentRunnerLabelSettings(BaseModel):
+    """GitHub labels used as runner queue state."""
+
+    ready: str = "agent/ready"
+    running: str = "agent/running"
+    review: str = "agent/review"
+    failed: str = "agent/failed"
+    blocked: str = "agent/blocked"
+    codex: str = "agent/codex"
+    claude: str = "agent/claude"
+
+
+class AgentRunnerGitSettings(BaseModel):
+    """Git publishing configuration."""
+
+    remote: str = "origin"
+    base_branch: str = "main"
+
+
+class AgentRunnerWorktreeSettings(BaseModel):
+    """Commands used to create and locate target worktrees."""
+
+    create_command: str = "just worktree --issue {issue_number} enter_shell=false"
+    reuse_command: str = (
+        "just worktree --issue {issue_number} --existing-branch enter_shell=false"
+    )
+    path_command: str = "bash scripts/git_worktree.sh --print-path --issue {issue_number} --existing-branch"
+
+
+class AgentRunnerRunnerSettings(BaseModel):
+    """Local runner behavior."""
+
+    max_issues: int = 1
+    default_agent: str = "auto"
+    verification_commands: list[str] = Field(
+        default_factory=lambda: [
+            "git diff --check",
+            "uv run mkdocs build",
+        ]
+    )
+
+
+class AgentRunnerSafetySettings(BaseModel):
+    """Safety boundaries enforced before publishing."""
+
+    auto_merge: bool = False
+    forbidden_path_patterns: list[str] = Field(
+        default_factory=lambda: [
+            ".env",
+            ".env.*",
+            "secrets/*",
+            "docker-compose.prod.yml",
+        ]
+    )
+
+
+class AgentRunnerSettings(BaseSettings):
+    """Agent Runner configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="AGENT_RUNNER_")
+
+    max_issues: int = 1
+    default_agent: str = "auto"
+    labels: AgentRunnerLabelSettings = Field(default_factory=AgentRunnerLabelSettings)
+    git: AgentRunnerGitSettings = Field(default_factory=AgentRunnerGitSettings)
+    worktree: AgentRunnerWorktreeSettings = Field(
+        default_factory=AgentRunnerWorktreeSettings
+    )
+    runner: AgentRunnerRunnerSettings = Field(default_factory=AgentRunnerRunnerSettings)
+    safety: AgentRunnerSafetySettings = Field(default_factory=AgentRunnerSafetySettings)
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
+        file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        toml_source: _TomlSectionSource = _TomlSectionSource(
+            settings_cls, "agent_runner"
+        )
+        return (
+            env_settings,
+            toml_source,
+            init_settings,
+        )
+
+
 class AppSettings(BaseSettings):
     """应用主配置 - 聚合所有子配置。"""
 
@@ -281,6 +371,7 @@ class AppSettings(BaseSettings):
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     timeouts: TimeoutSettings = Field(default_factory=TimeoutSettings)
+    agent_runner: AgentRunnerSettings = Field(default_factory=AgentRunnerSettings)
 
     base_dir: Path = _PROJECT_ROOT_PATH
     log_dir: Path = Field(default_factory=lambda: _PROJECT_ROOT_PATH / "logs")
@@ -370,6 +461,7 @@ config.ensure_log_directory()
 _ensure_no_proxy_for_local_services()
 
 __all__ = [
+    "AgentRunnerSettings",
     "AppSettings",
     "ChatModelSettings",
     "ChunkingSettings",

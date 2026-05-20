@@ -1,4 +1,4 @@
-site_name: issue-prd
+site_name: keda
 
 theme:
   name: material
@@ -59,6 +59,7 @@ nav:
   - 使用指南:
       - 配置说明: guides/configuration.md
       - 部署指南: guides/deployment.md
+      - Agent Runner: guides/agent-runner.md
       - PRD 编写规范: guides/prd-standard.md
       - Review Workflow: guides/review-workflow.md
       - Skill Lifecycle: guides/skill-lifecycle.md

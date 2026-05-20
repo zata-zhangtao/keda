@@ -26,6 +26,10 @@
 
 - 后端必须遵守四层依赖方向：
   `src/backend/api/ -> src/backend/core/ -> src/backend/engines/ -> src/backend/infrastructure/`
+  - `api/` 可导入 `core/` 和 `engines/`，禁止直接导入 `infrastructure/`
+  - `core/` 可导入自身和 `core/shared/interfaces/`，禁止导入 `engines/` 或 `infrastructure/`
+  - `engines/` 可导入 `core/` 和 `infrastructure/`，提供适配与工厂能力
+  - `infrastructure/` 只能依赖外部第三方包，禁止导入 `core/` / `engines/` / `api/`
 - Python 项目优先使用 `uv` 和 `just`
 - 公共 Python API 使用 Google Style Docstrings
 - Python 文本文件 I/O 必须显式写 `encoding="utf-8"`
@@ -45,3 +49,6 @@
 ## Maintenance Rule
 
 共享规范优先写入 `docs/ai-standards/`，不要把长篇规则重新复制回本文件。
+用户让你写prd的时候，如果你觉得需求不明确，需要不断询问用户
+完成任务之后必须要运行 just test 保证改动正确，不引入回归
+用于询问问题默认基于当前仓库回答，如果用户说的你不明白，你要去先查看仓库，查看完仓库还是不明白再询问用户

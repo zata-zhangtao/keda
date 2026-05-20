@@ -1,4 +1,4 @@
-# issue-prd
+# keda
 
 > 项目描述：请在此处添加项目的简要描述。
 
@@ -23,7 +23,7 @@ just dev
 1. **克隆仓库**
    ```bash
    git clone <repository-url>
-   cd issue-prd
+   cd keda
    ```
 
 2. **安装依赖**
@@ -44,6 +44,29 @@ just test
 just docs-serve
 ```
 
+### `iar` CLI
+
+本项目内置 `iar`（issue-agent-runner）CLI，用于将 GitHub Issues 转为本地 AI Agent 队列：
+
+```bash
+# 同步 GitHub Labels
+uv run iar labels sync --repo /path/to/target-repo
+
+# 从 PRD 创建 GitHub Issue
+uv run iar issue-from-prd tasks/pending/example.md --repo /path/to/target-repo --agent codex
+
+# 单次执行（dry-run 预览）
+uv run iar run-once --repo /path/to/target-repo --dry-run
+
+# 单次执行
+uv run iar run-once --repo /path/to/target-repo
+
+# Daemon 模式轮询
+uv run iar daemon --repo /path/to/target-repo --interval 600
+```
+
+安装后也可直接使用 `iar`（通过 `pyproject.toml` 的 `[project.scripts]` 注册）。
+
 ## 配置说明
 
 配置文件位于 `config.toml`，敏感信息请使用 `.env` 文件管理。
@@ -53,6 +76,7 @@ just docs-serve
 - `app.log_level` - 日志级别
 - `database.*` - 数据库配置
 - `chat_model.*` - 聊天模型配置
+- `agent_runner.*` - Agent Runner 配置（labels、git、worktree、runner、safety）
 
 ## 开发指南
 
