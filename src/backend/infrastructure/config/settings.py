@@ -276,11 +276,13 @@ class AgentRunnerGitSettings(BaseModel):
 class AgentRunnerWorktreeSettings(BaseModel):
     """Commands used to create and locate target worktrees."""
 
-    create_command: str = "just worktree --issue {issue_number} enter_shell=false"
+    create_command: str = "just worktree issue-{issue_number} enter_shell=false"
     reuse_command: str = (
-        "just worktree --issue {issue_number} --existing-branch enter_shell=false"
+        "bash -c 'test -d \"$(dirname \"$(git rev-parse --show-toplevel)\")/issue-{issue_number}\"'"
     )
-    path_command: str = "bash scripts/git_worktree.sh --print-path --issue {issue_number} --existing-branch"
+    path_command: str = (
+        "bash -c 'echo \"$(dirname \"$(git rev-parse --show-toplevel)\")/issue-{issue_number}\"'"
+    )
 
 
 class AgentRunnerRunnerSettings(BaseModel):

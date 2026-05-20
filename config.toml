@@ -130,9 +130,9 @@ remote = "origin"
 base_branch = "main"
 
 [agent_runner.worktree]
-create_command = "just worktree --issue {issue_number} enter_shell=false"
-reuse_command = "just worktree --issue {issue_number} --existing-branch enter_shell=false"
-path_command = "bash scripts/git_worktree.sh --print-path --issue {issue_number} --existing-branch"
+create_command = "just worktree issue-{issue_number} enter_shell=false"
+reuse_command = "bash -c 'test -d \"$(dirname \"$(git rev-parse --show-toplevel)\")/issue-{issue_number}\"'"
+path_command = "bash -c 'echo \"$(dirname \"$(git rev-parse --show-toplevel)\")/issue-{issue_number}\"'"
 
 [agent_runner.runner]
 verification_commands = [
