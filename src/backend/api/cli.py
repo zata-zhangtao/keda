@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 
 from backend.core.use_cases.create_issue_from_prd import create_issue_from_prd
@@ -22,7 +21,9 @@ _logger = logging.getLogger(__name__)
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     """Allow global options before or after the effective subcommand."""
-    parser.add_argument("--repo", default=argparse.SUPPRESS, help="Target repository path.")
+    parser.add_argument(
+        "--repo", default=argparse.SUPPRESS, help="Target repository path."
+    )
     parser.add_argument(
         "--config",
         default=argparse.SUPPRESS,
@@ -41,13 +42,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     labels_parser = subparsers.add_parser("labels", help="Manage GitHub labels.")
-    labels_subparsers = labels_parser.add_subparsers(dest="labels_command", required=True)
-    labels_sync_parser = labels_subparsers.add_parser("sync", help="Sync standard labels to the repository.")
+    labels_subparsers = labels_parser.add_subparsers(
+        dest="labels_command", required=True
+    )
+    labels_sync_parser = labels_subparsers.add_parser(
+        "sync", help="Sync standard labels to the repository."
+    )
     add_common_options(labels_sync_parser)
 
     issue_parser = subparsers.add_parser("issue-from-prd")
     issue_parser.add_argument("prd_path")
-    issue_parser.add_argument("--type", choices=("feature", "refactor", "bug"), default="feature")
+    issue_parser.add_argument(
+        "--type", choices=("feature", "refactor", "bug"), default="feature"
+    )
     issue_parser.add_argument("--title")
     issue_parser.add_argument(
         "--ready",
@@ -66,13 +73,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run-once")
     run_parser.add_argument("--dry-run", action="store_true")
-    run_parser.add_argument("--agent", choices=("auto", "codex", "claude"), default="auto")
+    run_parser.add_argument(
+        "--agent", choices=("auto", "codex", "claude"), default="auto"
+    )
     run_parser.add_argument("--max-issues", type=int)
     add_common_options(run_parser)
 
     daemon_parser = subparsers.add_parser("daemon")
     daemon_parser.add_argument("--interval", type=int, default=600)
-    daemon_parser.add_argument("--agent", choices=("auto", "codex", "claude"), default="auto")
+    daemon_parser.add_argument(
+        "--agent", choices=("auto", "codex", "claude"), default="auto"
+    )
     daemon_parser.add_argument("--max-issues", type=int)
     add_common_options(daemon_parser)
     return parser
@@ -90,7 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     process_runner = create_process_runner()
 
     if parsed.config:
-        _logger.warning("The --config flag is deprecated. Use config.toml or env vars instead.")
+        _logger.warning(
+            "The --config flag is deprecated. Use config.toml or env vars instead."
+        )
 
     try:
         if parsed.command == "labels":

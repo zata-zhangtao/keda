@@ -28,7 +28,9 @@ def test_cli_parser_issue_from_prd_defaults() -> None:
 def test_cli_parser_run_once() -> None:
     """run-once should accept dry-run and agent flags."""
     parser = build_parser()
-    parsed = parser.parse_args(["run-once", "--dry-run", "--agent", "claude", "--max-issues", "5"])
+    parsed = parser.parse_args(
+        ["run-once", "--dry-run", "--agent", "claude", "--max-issues", "5"]
+    )
     assert parsed.command == "run-once"
     assert parsed.dry_run is True
     assert parsed.agent == "claude"

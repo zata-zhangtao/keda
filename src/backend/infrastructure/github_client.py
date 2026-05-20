@@ -42,7 +42,9 @@ class GitHubCliClient:
     ``backend.core.shared.interfaces.agent_runner`` via duck typing.
     """
 
-    def __init__(self, repo_path: Path, process_runner: SubprocessRunner | None = None) -> None:
+    def __init__(
+        self, repo_path: Path, process_runner: SubprocessRunner | None = None
+    ) -> None:
         """Create the client.
 
         Args:
@@ -56,13 +58,21 @@ class GitHubCliClient:
         """Create or update standard labels."""
         label_specs = [
             ("agent/ready", "0E8A16", "Issue is ready for a local AI runner to claim."),
-            ("agent/running", "FBCA04", "Issue is currently being executed by a local AI runner."),
+            (
+                "agent/running",
+                "FBCA04",
+                "Issue is currently being executed by a local AI runner.",
+            ),
             ("agent/review", "1D76DB", "AI runner opened work for human review."),
             ("agent/failed", "D73A4A", "AI runner failed and posted details."),
             ("agent/blocked", "000000", "AI runner needs human input."),
             ("agent/codex", "5319E7", "Use Codex for local runner execution."),
             ("agent/claude", "BFDADC", "Use Claude Code for local runner execution."),
-            ("source/prd", "0052CC", "Issue has a canonical PRD tracked in the repository."),
+            (
+                "source/prd",
+                "0052CC",
+                "Issue has a canonical PRD tracked in the repository.",
+            ),
             ("type/feature", "1D76DB", "User-facing feature or capability work."),
             ("type/refactor", "5319E7", "Internal refactor or structural improvement."),
             ("type/bug", "D73A4A", "Broken behavior or regression fix."),
@@ -149,7 +159,14 @@ class GitHubCliClient:
             comment_path = Path(temp_dir) / "comment.md"
             comment_path.write_text(body, encoding="utf-8")
             self._runner.run(
-                ["gh", "issue", "comment", str(issue_number), "--body-file", str(comment_path)],
+                [
+                    "gh",
+                    "issue",
+                    "comment",
+                    str(issue_number),
+                    "--body-file",
+                    str(comment_path),
+                ],
                 cwd=self.repo_path,
             )
 
@@ -164,13 +181,23 @@ class GitHubCliClient:
         with tempfile.TemporaryDirectory(prefix="iar-issue-") as temp_dir:
             body_path = Path(temp_dir) / "issue.md"
             body_path.write_text(body, encoding="utf-8")
-            command = ["gh", "issue", "create", "--title", title, "--body-file", str(body_path)]
+            command = [
+                "gh",
+                "issue",
+                "create",
+                "--title",
+                title,
+                "--body-file",
+                str(body_path),
+            ]
             for label in labels:
                 command.extend(["--label", label])
             result = self._runner.run(command, cwd=self.repo_path)
         return result.stdout.strip().splitlines()[-1]
 
-    def create_draft_pr(self, *, title: str, body: str, base_branch: str, cwd: Path) -> str:
+    def create_draft_pr(
+        self, *, title: str, body: str, base_branch: str, cwd: Path
+    ) -> str:
         """Create a draft pull request from the current branch."""
         with tempfile.TemporaryDirectory(prefix="iar-pr-") as temp_dir:
             body_path = Path(temp_dir) / "pr.md"

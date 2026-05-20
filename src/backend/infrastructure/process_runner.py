@@ -32,28 +32,44 @@ class SubprocessRunner:
         cwd: Path,
         check: bool = True,
         timeout: int | None = None,
+        capture_output: bool = True,
     ) -> CommandResult:
         """Run a subprocess and capture output."""
-        completed = subprocess.run(
-            list(command),
-            cwd=cwd,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=timeout,
-        )
+        if capture_output:
+            completed = subprocess.run(
+                list(command),
+                cwd=cwd,
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=timeout,
+            )
+            stdout = completed.stdout
+            stderr = completed.stderr
+        else:
+            completed = subprocess.run(
+                list(command),
+                cwd=cwd,
+                check=False,
+                stdout=None,
+                stderr=None,
+                encoding="utf-8",
+                timeout=timeout,
+            )
+            stdout = ""
+            stderr = ""
         result = CommandResult(
             command=tuple(command),
             return_code=completed.returncode,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+            stdout=stdout,
+            stderr=stderr,
         )
         if check and completed.returncode != 0:
             raise subprocess.CalledProcessError(
                 completed.returncode,
                 list(command),
-                output=completed.stdout,
-                stderr=completed.stderr,
+                output=stdout,
+                stderr=stderr,
             )
         return result

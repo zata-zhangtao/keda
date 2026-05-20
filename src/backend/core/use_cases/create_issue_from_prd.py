@@ -43,7 +43,9 @@ def extract_acceptance_items(prd_text: str) -> list[str]:
     ]
 
 
-def build_issue_body(*, relative_prd_path: Path, title: str, acceptance_items: list[str]) -> str:
+def build_issue_body(
+    *, relative_prd_path: Path, title: str, acceptance_items: list[str]
+) -> str:
     """Build the Issue body from PRD metadata."""
 
     return "\n".join(
@@ -99,14 +101,23 @@ def create_issue_from_prd(
         URL of the created GitHub Issue.
     """
 
-    absolute_prd_path = (repo_path / prd_path).resolve() if not prd_path.is_absolute() else prd_path
+    absolute_prd_path = (
+        (repo_path / prd_path).resolve() if not prd_path.is_absolute() else prd_path
+    )
     relative_prd_path = absolute_prd_path.relative_to(repo_path.resolve())
     prd_text = absolute_prd_path.read_text(encoding="utf-8")
     if not force and any(ISSUE_LINE_RE.match(line) for line in prd_text.splitlines()):
-        raise ValueError("PRD already has a GitHub Issue link. Use --force to replace it.")
+        raise ValueError(
+            "PRD already has a GitHub Issue link. Use --force to replace it."
+        )
 
-    fallback_title = absolute_prd_path.stem.split("-prd-", maxsplit=1)[-1].replace("-", " ")
-    title = title_override or f"[{issue_type.title()}] {extract_title(prd_text, fallback_title)}"
+    fallback_title = absolute_prd_path.stem.split("-prd-", maxsplit=1)[-1].replace(
+        "-", " "
+    )
+    title = (
+        title_override
+        or f"[{issue_type.title()}] {extract_title(prd_text, fallback_title)}"
+    )
     effective_labels_config = labels_config or LabelConfig()
     labels = [f"type/{issue_type}", "status/backlog", "source/prd"]
     if queue_ready:

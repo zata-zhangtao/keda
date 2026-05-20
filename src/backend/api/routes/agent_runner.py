@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from backend.engines.agent_runner.factory import build_app_config, create_github_client
+from backend.engines.agent_runner.factory import build_app_config
 
 router = APIRouter(tags=["agent-runner"])
 

@@ -11,7 +11,9 @@ from tests.conftest import FakeGitHubClient
 
 def _run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """Run a command for test setup."""
-    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8")
+    return subprocess.run(
+        command, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
+    )
 
 
 def _init_repo(path: Path) -> None:
@@ -46,11 +48,18 @@ def test_create_issue_from_prd_writes_issue_link(tmp_path: Path) -> None:
     )
 
     assert issue_url == "https://github.com/example/repo/issues/42"
-    assert "- GitHub Issue: https://github.com/example/repo/issues/42" in prd.read_text(encoding="utf-8")
+    assert "- GitHub Issue: https://github.com/example/repo/issues/42" in prd.read_text(
+        encoding="utf-8"
+    )
     create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
     assert len(create_calls) == 1
     call = create_calls[0]
-    assert call["labels"] == ["type/feature", "status/backlog", "source/prd", "agent/ready"]
+    assert call["labels"] == [
+        "type/feature",
+        "status/backlog",
+        "source/prd",
+        "agent/ready",
+    ]
 
 
 def test_create_issue_from_prd_with_agent_label(tmp_path: Path) -> None:

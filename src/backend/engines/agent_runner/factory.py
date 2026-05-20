@@ -68,6 +68,8 @@ def create_process_runner() -> SubprocessRunner:
     return SubprocessRunner()
 
 
-def create_github_client(repo_path: Path, process_runner: SubprocessRunner | None = None) -> GitHubCliClient:
+def create_github_client(
+    repo_path: Path, process_runner: SubprocessRunner | None = None
+) -> GitHubCliClient:
     """Create a new GitHub CLI client instance."""
     return GitHubCliClient(repo_path, process_runner)

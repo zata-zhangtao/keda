@@ -24,6 +24,7 @@ class IProcessRunner(ABC):
         cwd: Path,
         check: bool = True,
         timeout: int | None = None,
+        capture_output: bool = True,
     ) -> CommandResult:
         """Run a command and capture its result.
 
@@ -32,6 +33,9 @@ class IProcessRunner(ABC):
             cwd: Working directory for the command.
             check: Whether to raise on non-zero exit code.
             timeout: Optional timeout in seconds.
+            capture_output: Whether to capture stdout/stderr. When False,
+                output streams directly to the terminal and returned
+                CommandResult contains empty strings.
 
         Returns:
             CommandResult with captured output.

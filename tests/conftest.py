@@ -100,6 +100,7 @@ class FakeProcessRunner(IProcessRunner):
         cwd: Path,
         check: bool = True,
         timeout: int | None = None,
+        capture_output: bool = True,
     ) -> CommandResult:
         self.calls.append(list(command))
         key = tuple(command)

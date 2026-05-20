@@ -6,13 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.shared.models.agent_runner import AppConfig, CommandResult, IssueSummary
+from backend.core.shared.models.agent_runner import (
+    AppConfig,
+    CommandResult,
+    IssueSummary,
+)
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
     format_command,
     validate_safe_changes,
 )
-from backend.infrastructure.process_runner import SubprocessRunner
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
 
@@ -31,7 +34,9 @@ def test_choose_agent_override() -> None:
 
 def test_choose_agent_from_labels() -> None:
     """Issue labels should determine agent when override is auto."""
-    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=("agent/claude",))
+    issue = IssueSummary(
+        number=1, title="T", url="U", body="B", labels=("agent/claude",)
+    )
     config = AppConfig()
     assert choose_agent(issue, config, "auto") == "claude"
 
