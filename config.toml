@@ -1,0 +1,110 @@
+# =============================================================================
+# Configuration File - Non-Sensitive Defaults
+# =============================================================================
+# This file contains non-sensitive configuration defaults organized by section.
+# Sensitive values (passwords, API keys) should be set in .env file.
+#
+# To override any value, either:
+# 1. Set the corresponding environment variable (highest priority)
+# 2. Modify this file
+# 3. Accept the code default (lowest priority)
+# =============================================================================
+
+# =============================================================================
+# Application Settings
+# =============================================================================
+[app]
+name = "my-app"
+log_level = "INFO"
+
+# =============================================================================
+# Template Sync Settings
+# =============================================================================
+[template_sync]
+# Project-specific paths skipped by default by `just sync-template`.
+# Use `just sync-template --all` to include these paths for a one-off sync.
+project_skip_paths = [
+    "src/backend/",
+    "frontend/",
+    "docs/",
+    "tests/",
+    "apps/",
+    "services/",
+    "infra/",
+    "deploy/",
+    "helm/",
+    "terraform/",
+    "ansible/",
+    "data/",
+    "uploads/",
+    "artifacts/",
+    "tmp/",
+]
+
+# Paths that should stay visible even if they match `project_skip_paths`.
+project_include_paths = []
+
+# =============================================================================
+# Database Settings (PostgreSQL)
+# =============================================================================
+[database]
+backend = "postgresql"
+host = "localhost"
+port = 5432
+name = "app_database"
+driver = "psycopg2"
+
+# =============================================================================
+# Chat Model Settings
+# =============================================================================
+[chat_model]
+name = "gpt-4"
+provider = "openai"
+temperature = 0.2
+
+# =============================================================================
+# MinIO Object Storage Settings
+# =============================================================================
+[minio]
+endpoint = "localhost:9000"
+secure = false
+bucket_raw_documents = "default-bucket"
+
+# =============================================================================
+# Qdrant Vector Database Settings
+# =============================================================================
+[qdrant]
+host = "localhost"
+port = 6333
+collection_name = "default_collection"
+
+# =============================================================================
+# Embedding Model Settings
+# =============================================================================
+[embedding]
+model = "sentence-transformers/all-MiniLM-L6-v2"
+dim = 384
+offline_mode = true
+model_dir = "resources/models"
+
+# =============================================================================
+# Document Chunking Settings
+# =============================================================================
+[chunking]
+# Chunk size in characters
+size = 512
+# Overlap between chunks in characters
+overlap = 50
+
+# =============================================================================
+# Timeout Settings (in seconds)
+# =============================================================================
+[timeouts]
+# Timeout for embedding model loading
+embedding_model_load_seconds = 300
+# Timeout for single document processing
+ingestion_document_seconds = 600
+# Timeout for overall ingestion job
+ingestion_job_seconds = 7200
+# Timeout for MinIO operations
+minio_seconds = 60

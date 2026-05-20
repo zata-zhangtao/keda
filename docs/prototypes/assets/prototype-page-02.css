@@ -1,0 +1,57 @@
+.topbar-eyebrow {
+  font-size: 11px;
+}
+
+.topbar-title {
+  margin-top: 4px;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.banner {
+  margin-top: 12px;
+}
+
+.page {
+  margin-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.page-header p {
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.muted {
+  font-size: 13px;
+}
+
+.empty {
+  border: 1px dashed var(--line);
+}
+
+.callout {
+  margin-top: 2px;
+}
+
+@media (max-width: 980px) {
+  .prototype-shell {
+    grid-template-columns: 1fr;
+  }
+}

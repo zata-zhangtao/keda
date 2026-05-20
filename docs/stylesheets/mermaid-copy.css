@@ -1,0 +1,35 @@
+.mermaid-copy-wrapper {
+  position: relative;
+}
+
+.mermaid-copy-button {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  z-index: 2;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.08rem 0.35rem;
+  font-size: 0.65rem;
+  line-height: 1.4;
+  color: var(--md-default-fg-color);
+  background: color-mix(in srgb, var(--md-default-bg-color) 50%, transparent);
+  opacity: 0.22;
+  cursor: pointer;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.mermaid-copy-wrapper:hover .mermaid-copy-button,
+.mermaid-copy-button:focus-visible {
+  opacity: 0.72;
+}
+
+.mermaid-copy-button:hover,
+.mermaid-copy-button:focus-visible {
+  background: color-mix(in srgb, var(--md-default-bg-color) 78%, transparent);
+  outline: none;
+}
+
+.mermaid-copy-button[data-copy-state="copied"] {
+  opacity: 0.88;
+}

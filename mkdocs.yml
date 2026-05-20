@@ -1,0 +1,82 @@
+site_name: issue-prd
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - toc.integrate
+    - content.code.copy
+
+plugins:
+  - search
+  - git-revision-date-localized:
+      fallback_to_build_date: true
+      strict: false
+      type: date
+      locale: zh
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            members_order: source
+            show_source: false
+            separate_signature: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed
+
+extra_javascript:
+  - https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js
+  - javascripts/mermaid.js
+
+extra_css:
+  - stylesheets/mermaid-copy.css
+
+nav:
+  - 首页: index.md
+  - 快速开始: getting-started.md
+  - AI 规范:
+      - 概览: ai-standards/index.md
+      - 架构规范: ai-standards/architecture.md
+      - 代码复用规范: ai-standards/code-reuse.md
+      - 命名规范: ai-standards/naming.md
+      - 注释与 Docstring: ai-standards/comments-docstrings.md
+      - 文档规范: ai-standards/documentation.md
+      - 测试规范: ai-standards/testing.md
+      - 工具与命令: ai-standards/tooling.md
+  - 使用指南:
+      - 配置说明: guides/configuration.md
+      - 部署指南: guides/deployment.md
+      - PRD 编写规范: guides/prd-standard.md
+      - Review Workflow: guides/review-workflow.md
+      - Skill Lifecycle: guides/skill-lifecycle.md
+      - Codex macOS 通知: guides/codex-notifications.md
+  - 原型演示:
+      - 概览: prototypes/index.md
+      - PRD Demo UI: prototypes/prd-demo.html
+      - Worktree 前端依赖策略: prototypes/worktree-frontend-demo.html
+      - Assets 命名规范: prototypes/assets/README.md
+  - 核心概念:
+      - Prompt 工程: core/prompt_engineering.md
+  - 数据库:
+      - Schema 设计: database/schema.md
+      - 迁移规范: database/migrations.md
+  - API 参考:
+      - 模块引用: api/references.md
+  - 系统架构:
+      - 架构设计: architecture/system-design.md
+      - 前端架构: architecture/frontend-architecture.md
+  - 开发者:
+      - 评测与测试: dev/evaluation.md

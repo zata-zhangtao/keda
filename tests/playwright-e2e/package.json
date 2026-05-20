@@ -1,0 +1,24 @@
+{
+  "name": "playwright-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test --grep-invert @visual",
+    "test:smoke": "playwright test tests/smoke",
+    "test:headed": "playwright test --grep-invert @visual --headed --workers=1",
+    "test:visual": "playwright test --grep @visual",
+    "test:update": "playwright test --grep @visual --update-snapshots",
+    "test:no-auth": "playwright test --project=no-auth",
+    "lint": "eslint . --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "@types/node": "^24.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Worktree 前端依赖策略 Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="./assets/prototype.css" />
+  </head>
+  <body>
+    <main class="prototype-shell">
+      <header class="prototype-header">
+        <div class="title-wrap">
+          <div class="eyebrow">Worktree / Frontend / Vite</div>
+          <h1>Worktree 前端依赖策略 Demo</h1>
+        </div>
+        <nav class="header-links">
+          <a class="ghost-link" href="../../guides/prd-standard.md">PRD 规范</a>
+          <a class="ghost-link" href="../index.md">返回原型索引</a>
+        </nav>
+      </header>
+
+      <section class="layout-grid">
+        <aside class="card">
+          <h2>1. 选择依赖模式</h2>
+          <p>切换不同策略，查看新 worktree 中 <code>vite</code> 是否可用。</p>
+          <div class="toggle-group" id="strategyToggleGroup">
+            <button
+              type="button"
+              class="toggle-btn is-active"
+              data-strategy="install-per-worktree"
+            >
+              每个 worktree 单独安装
+            </button>
+            <button
+              type="button"
+              class="toggle-btn"
+              data-strategy="symlink-from-main"
+            >
+              复用主工程 node_modules
+            </button>
+          </div>
+
+          <h3>2. 模拟命令</h3>
+          <div class="control-grid">
+            <button type="button" class="control-btn start" id="createWorktreeBtn">
+              ① just worktree feature-frontend
+            </button>
+            <button type="button" class="control-btn next" id="runDemoUpBtn" disabled>
+              ② just demo-up
+            </button>
+            <button type="button" class="control-btn reset" id="resetScenarioBtn">
+              重置场景
+            </button>
+          </div>
+        </aside>
+
+        <section class="card main-panel">
+          <h2 id="statusTitle">还未创建 worktree</h2>
+          <p id="statusDescription">
+            点击左侧的 <strong>① just worktree feature-frontend</strong> 以创建新 worktree，并在下方观察
+            <code>vite</code> 可用性与日志变化。
+          </p>
+
+          <div class="progress-track">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+
+          <div class="pill-row">
+            <div class="pill" id="strategyPill">策略：每个 worktree 单独安装</div>
+            <div class="pill" id="viteAvailabilityPill">vite: 未检查</div>
+            <div class="pill" id="nodeModulesPill">node_modules: 未创建</div>
+          </div>
+        </section>
+
+        <aside class="card">
+          <h2>Worktree 日志时间线</h2>
+          <ul class="timeline-list" id="timelineList"></ul>
+        </aside>
+      </section>
+    </main>
+
+    <script src="./assets/prototype.js"></script>
+    <script>
+      const worktreeScenarioState = {
+        selectedStrategyKey: "install-per-worktree",
+        createdWorktree: false,
+        ranDemoUp: false,
+      };
+
+      const strategyButtonElements = Array.from(
+        document.querySelectorAll(".toggle-btn[data-strategy]"),
+      );
+      const createWorktreeButtonElement =
+        document.getElementById("createWorktreeBtn");
+      const runDemoUpButtonElement = document.getElementById("runDemoUpBtn");
+      const resetScenarioButtonElement =
+        document.getElementById("resetScenarioBtn");
+
+      const statusTitleElement = document.getElementById("statusTitle");
+      const statusDescriptionElement =
+        document.getElementById("statusDescription");
+      const strategyPillElement = document.getElementById("strategyPill");
+      const viteAvailabilityPillElement =
+        document.getElementById("viteAvailabilityPill");
+      const nodeModulesPillElement =
+        document.getElementById("nodeModulesPill");
+      const progressFillElement = document.getElementById("progressFill");
+      const timelineListElement = document.getElementById("timelineList");
+
+      function getStrategyDisplayName(strategyKey) {
+        if (strategyKey === "symlink-from-main") {
+          return "复用主工程 node_modules";
+        }
+        return "每个 worktree 单独安装";
+      }
+
+      function getTimelineRecords() {
+        const records = [];
+
+        records.push({
+          title: "准备阶段",
+          note: "脚本已准备好复制 .env、安装 Python 依赖，并处理前端项目依赖。",
+          status: "Completed",
+        });
+
+        if (!worktreeScenarioState.createdWorktree) {
+          records.push({
+            title: "等待创建 worktree",
+            note: "点击左侧按钮以创建 feature worktree。",
+            status: "Pending",
+          });
+          return records;
+        }
+
+        records.push({
+          title: "创建 worktree",
+          note: "已执行 just worktree feature-frontend。",
+          status: "Completed",
+        });
+
+        if (!worktreeScenarioState.ranDemoUp) {
+          records.push({
+            title: "等待运行 just demo-up",
+            note: "点击第二个按钮以在新 worktree 中运行前端。",
+            status: "Pending",
+          });
+          return records;
+        }
+
+        const isSymlinkStrategy =
+          worktreeScenarioState.selectedStrategyKey === "symlink-from-main";
+
+        if (isSymlinkStrategy) {
+          records.push({
+            title: "成功复用 node_modules",
+            note: "为 feature worktree 创建指向主工程的 node_modules 符号链接。",
+            status: "Completed",
+          });
+          records.push({
+            title: "just demo-up 成功",
+            note: "vite 可执行，前端 dev server 正常启动。",
+            status: "Completed",
+          });
+        } else {
+          records.push({
+            title: "独立安装前端依赖",
+            note: "脚本在 demo-frontend、admin-frontend 等子目录内执行 npm ci / pnpm install。",
+            status: "Completed",
+          });
+          records.push({
+            title: "just demo-up 成功",
+            note: "vite 可执行，但首次创建 worktree 的耗时高于符号链接策略。",
+            status: "Completed",
+          });
+        }
+
+        return records;
+      }
+
+      function renderStrategyButtons() {
+        strategyButtonElements.forEach((buttonElement) => {
+          const strategyKey = buttonElement.getAttribute("data-strategy");
+          const isActive =
+            strategyKey === worktreeScenarioState.selectedStrategyKey;
+          buttonElement.classList.toggle("is-active", isActive);
+          buttonElement.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+      }
+
+      function renderMainPanel() {
+        const isSymlinkStrategy =
+          worktreeScenarioState.selectedStrategyKey === "symlink-from-main";
+
+        strategyPillElement.textContent = `策略：${getStrategyDisplayName(
+          worktreeScenarioState.selectedStrategyKey,
+        )}`;
+
+        if (!worktreeScenarioState.createdWorktree) {
+          statusTitleElement.textContent = "还未创建 worktree";
+          statusDescriptionElement.textContent =
+            "点击左侧的创建按钮，模拟通过脚本创建 feature worktree。";
+          viteAvailabilityPillElement.textContent = "vite: 未检查";
+          nodeModulesPillElement.textContent = "node_modules: 未创建";
+          progressFillElement.style.width = "0%";
+          runDemoUpButtonElement.disabled = true;
+          return;
+        }
+
+        if (!worktreeScenarioState.ranDemoUp) {
+          statusTitleElement.textContent = "已创建 worktree，等待运行 just demo-up";
+          statusDescriptionElement.textContent =
+            "下一步将在新 worktree 中运行 just demo-up，检查 vite 是否可用。";
+          viteAvailabilityPillElement.textContent = "vite: 未检查";
+          nodeModulesPillElement.textContent = isSymlinkStrategy
+            ? "node_modules: 准备创建符号链接"
+            : "node_modules: 准备独立安装";
+          progressFillElement.style.width = "40%";
+          runDemoUpButtonElement.disabled = false;
+          return;
+        }
+
+        if (isSymlinkStrategy) {
+          statusTitleElement.textContent = "使用符号链接复用依赖（推荐）";
+          statusDescriptionElement.textContent =
+            "feature worktree 中通过符号链接指向主工程的 node_modules，避免重复安装，同时保证 vite 可用。";
+          viteAvailabilityPillElement.textContent = "vite: 可执行";
+          nodeModulesPillElement.textContent =
+            "node_modules: 指向主工程的符号链接";
+          progressFillElement.style.width = "100%";
+        } else {
+          statusTitleElement.textContent = "已独立安装依赖并启动成功";
+          statusDescriptionElement.textContent =
+            "新 worktree 会在各个前端子项目目录中安装依赖，启动成功，但首次准备时间通常长于符号链接复用。";
+          viteAvailabilityPillElement.textContent = "vite: 可执行";
+          nodeModulesPillElement.textContent = "node_modules: 已在各子项目安装";
+          progressFillElement.style.width = "100%";
+        }
+      }
+
+      function renderTimeline() {
+        const records = getTimelineRecords();
+        timelineListElement.innerHTML = "";
+
+        records.forEach((record) => {
+          const itemElement = document.createElement("li");
+          itemElement.className = "timeline-item";
+
+          const titleElement = document.createElement("div");
+          titleElement.className = "timeline-item-title";
+          titleElement.textContent = record.title;
+
+          const noteElement = document.createElement("div");
+          noteElement.className = "timeline-item-note";
+          noteElement.textContent = record.note;
+
+          const statusElement = document.createElement("div");
+          statusElement.className = "timeline-item-status";
+          statusElement.textContent = record.status;
+
+          if (record.status === "Completed") {
+            itemElement.classList.add("is-complete");
+          } else if (record.status === "Current") {
+            itemElement.classList.add("is-current");
+          }
+
+          itemElement.appendChild(titleElement);
+          itemElement.appendChild(noteElement);
+          itemElement.appendChild(statusElement);
+          timelineListElement.appendChild(itemElement);
+        });
+      }
+
+      function renderWorktreePrototype() {
+        renderStrategyButtons();
+        renderMainPanel();
+        renderTimeline();
+      }
+
+      function onStrategyButtonClick(event) {
+        const strategyKey = event.currentTarget.getAttribute("data-strategy");
+        if (!strategyKey || strategyKey === worktreeScenarioState.selectedStrategyKey) {
+          return;
+        }
+        worktreeScenarioState.selectedStrategyKey = strategyKey;
+        renderWorktreePrototype();
+      }
+
+      function onCreateWorktreeClick() {
+        if (!worktreeScenarioState.createdWorktree) {
+          worktreeScenarioState.createdWorktree = true;
+          worktreeScenarioState.ranDemoUp = false;
+          renderWorktreePrototype();
+        }
+      }
+
+      function onRunDemoUpClick() {
+        if (!worktreeScenarioState.createdWorktree) {
+          return;
+        }
+        if (!worktreeScenarioState.ranDemoUp) {
+          worktreeScenarioState.ranDemoUp = true;
+          renderWorktreePrototype();
+        }
+      }
+
+      function onResetScenarioClick() {
+        worktreeScenarioState.createdWorktree = false;
+        worktreeScenarioState.ranDemoUp = false;
+        renderWorktreePrototype();
+      }
+
+      function bindWorktreePrototypeEvents() {
+        strategyButtonElements.forEach((buttonElement) => {
+          buttonElement.addEventListener("click", onStrategyButtonClick);
+        });
+        createWorktreeButtonElement.addEventListener(
+          "click",
+          onCreateWorktreeClick,
+        );
+        runDemoUpButtonElement.addEventListener("click", onRunDemoUpClick);
+        resetScenarioButtonElement.addEventListener("click", onResetScenarioClick);
+      }
+
+      bindWorktreePrototypeEvents();
+      renderWorktreePrototype();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "openai": {
+    "api_key_env": "OPENAI_API_KEY",
+    "base_url": "https://api.openai.com/v1",
+    "chat_models": [
+      {
+        "name": "gpt-4",
+        "description": "OpenAI GPT-4 model"
+      }
+    ]
+  }
+}

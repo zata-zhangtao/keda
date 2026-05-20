@@ -1,0 +1,120 @@
+# -----------------------------------------------------------------------------
+# Docker Compose — Dokploy Production Deployment
+# -----------------------------------------------------------------------------
+# Usage:
+#   Deploy via Dokploy UI by pointing it to this compose file.
+#
+# Prerequisites:
+#   1. Set DOMAIN in Dokploy environment (e.g. app.example.com).
+#   2. Set DATABASE_URL to your production database.
+#   3. Ensure "dokploy-network" exists (Dokploy creates it).
+#
+# Traefik labels route traffic to the frontend (Nginx).
+# -----------------------------------------------------------------------------
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: src/backend/Dockerfile
+    container_name: app-backend
+    expose:
+      - "8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DATABASE_URL=${DATABASE_URL}
+      - API_SECRET_KEY
+      - ADMIN_IDENTIFIER
+      - ADMIN_PASSWORD_HASH
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - backend-logs:/app/backend/logs
+      - backend-data:/app/backend/data
+    networks:
+      - dokploy-network
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: app-frontend
+    expose:
+      - "80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.app.entrypoints=websecure"
+      - "traefik.http.routers.app.tls.certResolver=letsencrypt"
+      - "traefik.http.services.app.loadbalancer.server.port=80"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.125"
+          memory: 64M
+
+  backup:
+    build:
+      context: .
+      dockerfile: scripts/backup_service/Dockerfile
+    container_name: app-backup
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET=${S3_BUCKET:-app-backups}
+      - S3_PREFIX=${S3_PREFIX:-app-backups}
+      - BACKUP_TIME=${BACKUP_TIME:-18:00}
+      - FULL_BACKUP_DAY=${FULL_BACKUP_DAY:-6}
+      - LOGS_DIR=/app/backend/logs
+      - RESOURCES_DIR=/app/backend/data
+      - WORK_DIR=/tmp/backups
+      - RETENTION_DAYS=${RETENTION_DAYS:-30}
+    volumes:
+      - backend-logs:/app/backend/logs:ro
+      - backend-data:/app/backend/data:ro
+      - backup-work:/tmp/backups
+    restart: unless-stopped
+    networks:
+      - dokploy-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.125"
+          memory: 128M
+
+volumes:
+  backend-logs:
+  backend-data:
+  backup-work:
+
+networks:
+  dokploy-network:
+    external: true

@@ -1,0 +1,45 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.pytest_cache
+.mypy_cache
+
+# Node.js
+node_modules
+frontend/node_modules
+frontend/dist
+
+# Build artifacts
+dist
+build
+target
+.coverage
+htmlcov
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+
+# Docs & tests
+docs
+tests
+mkdocs.yml
+
+# Local env files
+.env
+.env.local
+
+# Misc
+*.sqlite3
+*.db

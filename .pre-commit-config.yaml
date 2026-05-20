@@ -1,0 +1,104 @@
+# -*- coding: utf-8 -*-
+#
+# 项目初始化命令
+# 1. 添加 pre-commit 作为开发依赖
+# 2. 安装 pre-commit 钩子
+# 3. 检查当前所有文件（建议首次配置或依赖升级后执行）
+#
+# 执行顺序建议参考下方说明：
+
+
+# uv add --dev pre-commit        # 添加 pre-commit 为开发依赖
+# uv run pre-commit install      # 初始化 pre-commit 钩子
+# uv run pre-commit run --all-files  # 对所有文件执行预提交检测
+
+
+# 排除生成的文档或特定目录不检查 (可选)
+exclude: '^docs/|/migrations/'
+
+repos:
+  # ==========================================
+  # 1. 基础文件卫生 (官方标准钩子)
+  # ==========================================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace    # 自动删除行尾多余的空格
+      - id: end-of-file-fixer      # 确保文件以一个空行结尾 (POSIX标准)
+      - id: check-yaml             # 检查 .yaml/.yml 文件的语法合法性
+        args: ['--unsafe']         # 允许 PyYAML 特殊标签（如 !!python/name:）
+      - id: check-toml             # 检查 .toml 文件的语法合法性
+      - id: check-added-large-files # 防止不小心提交巨大的文件
+        args: ['--maxkb=50000']     # 限制单文件最大 50MB
+      - id: debug-statements       # 【Python神器】防止提交 pdb/ipdb 断点代码
+
+  # ==========================================
+  # 2. Python 代码质量 (Ruff - 现代化的极速选择)
+  # ==========================================
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.8
+    hooks:
+      # Linter: 检查逻辑错误、未使用的 import 等
+      - id: ruff
+        args: [ --fix ]            # 尝试自动修复简单问题 (如删除未使用的引用)
+
+      # Formatter: 强力格式化 (替代 Black)
+      - id: ruff-format
+
+  # ==========================================
+  # 3. 项目文档一致性检查
+  # ==========================================
+  - repo: local
+    hooks:
+      - id: check-prd-acceptance-checklist
+        name: Check PRD acceptance checklist
+        entry: uv run python hooks/check_prd_acceptance_checklist.py
+        language: system
+        files: ^tasks/(?:archive/)?[^/]+-prd-[^/]+\.md$
+      - id: check-guidelines-consistency
+        name: Check guidelines consistency
+        entry: uv run python hooks/check_guidelines_consistency.py
+        language: system
+        files: ^(AGENTS\.md|CLAUDE\.md|\.cursor/commands/cursor\.md)$
+        pass_filenames: false
+      - id: archive-tasks
+        name: Archive task markdown files
+        entry: uv run python hooks/archive_tasks.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+        always_run: true
+      - id: check-architecture
+        name: Check architecture layer dependencies
+        entry: uv run python hooks/check_architecture.py
+        language: system
+        files: ^(src/[^/]+/(api|core|engines|infrastructure))/.*\.py$
+        pass_filenames: false
+      - id: check-max-file-lines
+        name: Check max file lines (non-empty)
+        entry: uv run python hooks/check_max_file_lines.py --max-lines 1000 --warn-only
+        language: system
+        files: \.py$
+        pass_filenames: true
+      - id: jscpd
+        name: Check copy-paste duplication
+        entry: uv run python hooks/run_jscpd_duplication_check.py
+        language: node
+        additional_dependencies: [jscpd@4.1.1]
+        files: ^(src/[^/]+|frontend)/.*\.(py|js|jsx|ts|tsx)$
+        pass_filenames: true
+        stages: [manual]
+      - id: pylint-duplicate-code
+        name: Check Python duplicate code
+        entry: uv run python hooks/run_pylint_duplication_check.py
+        language: system
+        files: ^src/[^/]+/.*\.py$
+        pass_filenames: true
+        stages: [manual]
+      - id: check-test-flag
+        name: Check just test flag
+        entry: bash scripts/hooks/check_test_flag.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

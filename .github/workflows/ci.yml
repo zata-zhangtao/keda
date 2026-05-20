@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  validate-template:
+    name: Validate Template
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Sync dependencies from lock file
+        run: uv sync --all-groups --frozen
+
+      - name: Run pre-commit checks
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+      - name: Check max file lines (hard limit)
+        run: uv run python hooks/check_max_file_lines.py --max-lines 1000 $(find backend -name "*.py")
+
+      - name: Run local test suite
+        run: uv run pytest tests/ -v --ignore=tests/test_model_loader_real.py -m "not expensive"
+
+      - name: Build documentation
+        run: uv run mkdocs build --strict
+
+      - name: Build template release archive
+        run: uv run python scripts/release.py
+
+      - name: Locate release archive
+        id: release_archive
+        run: |
+          shopt -s nullglob
+          release_archives=(dist/*.zip)
+          if [ "${#release_archives[@]}" -ne 1 ]; then
+            echo "Expected exactly one release archive, found ${#release_archives[@]}."
+            exit 1
+          fi
+          echo "release_archive_path=${release_archives[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-release-${{ github.sha }}
+          path: ${{ steps.release_archive.outputs.release_archive_path }}
+          if-no-files-found: error

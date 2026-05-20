@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.14"
+
+jobs:
+  build-release:
+    name: Build Release Archive
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Sync dependencies from lock file
+        run: uv sync --all-groups --frozen
+
+      - name: Run pre-commit checks
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+      - name: Check max file lines (hard limit)
+        run: uv run python hooks/check_max_file_lines.py --max-lines 1000 $(find backend -name "*.py")
+
+      - name: Run local test suite
+        run: uv run pytest tests/ -v --ignore=tests/test_model_loader_real.py -m "not expensive"
+
+      - name: Build documentation
+        run: uv run mkdocs build --strict
+
+      - name: Build template release archive
+        run: uv run python scripts/release.py
+
+      - name: Locate release archive
+        id: release_archive
+        run: |
+          shopt -s nullglob
+          release_archives=(dist/*.zip)
+          if [ "${#release_archives[@]}" -ne 1 ]; then
+            echo "Expected exactly one release archive, found ${#release_archives[@]}."
+            exit 1
+          fi
+          echo "release_archive_path=${release_archives[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-release-${{ github.run_id }}
+          path: ${{ steps.release_archive.outputs.release_archive_path }}
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: ${{ github.event_name == 'push' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.release_archive.outputs.release_archive_path }}
+          generate_release_notes: true
+
+      - name: Publish workflow summary
+        run: |
+          {
+            echo "### Template release workflow"
+            echo ""
+            echo "- Ref: \`${GITHUB_REF_NAME}\`"
+            echo "- Archive: \`${{ steps.release_archive.outputs.release_archive_path }}\`"
+            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              echo "- GitHub Release: published"
+            else
+              echo "- GitHub Release: skipped for manual workflow dispatch"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

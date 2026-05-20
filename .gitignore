@@ -1,0 +1,59 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Logs
+logs/
+*.log
+*.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ========================================
+# Frontend (React + npm)
+# ========================================
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+site/
+
+# Cache
+.npm/
+.eslintcache
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+
+
+# Testing
+coverage/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude planning session archives (local state, not for VCS)
