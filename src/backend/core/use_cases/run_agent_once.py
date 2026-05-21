@@ -218,7 +218,16 @@ def create_or_reuse_worktree(
 
 
 def _build_claude_command(prompt: str, worktree_path: Path) -> list[str]:  # noqa: ARG001
-    return ["claude", "--permission-mode", "dontAsk", "-p", prompt]
+    return [
+        "claude",
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        prompt,
+    ]
 
 
 def _build_kimi_command(prompt: str, worktree_path: Path) -> list[str]:  # noqa: ARG001

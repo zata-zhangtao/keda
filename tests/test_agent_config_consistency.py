@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from backend.core.shared.models.agent_runner import LabelConfig as CoreLabelConfig
 from backend.core.use_cases.run_agent_once import _AGENT_COMMAND_BUILDERS
+from backend.engines.agent_runner.factory import build_app_config
+from backend.infrastructure.config import settings as settings_module
 from backend.infrastructure.config.settings import AgentRunnerLabelSettings
 from backend.infrastructure.github_client import LabelConfig as InfraLabelConfig
+
+
+def test_agent_runner_reads_root_config_toml() -> None:
+    """Agent runner settings should load the repository root config.toml."""
+    repository_root = Path(__file__).resolve().parents[1]
+
+    assert settings_module._PROJECT_ROOT_PATH == repository_root
+    assert settings_module._TOML_CONFIG_FILE_PATH == repository_root / "config.toml"
+    assert build_app_config().runner.default_agent == "claude"
 
 
 def test_settings_and_core_agent_labels_are_identical() -> None:

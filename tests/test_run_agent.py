@@ -22,6 +22,7 @@ from backend.core.use_cases.run_agent_once import (
     format_command,
     get_head_sha,
     publish_changes,
+    run_agent_with_prompt,
     validate_safe_changes,
 )
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
@@ -54,6 +55,26 @@ def test_choose_agent_defaults_to_codex() -> None:
     issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     config = AppConfig()
     assert choose_agent(issue, config, "auto") == "codex"
+
+
+def test_run_agent_with_prompt_uses_claude_yolo_mode(tmp_path: Path) -> None:
+    """Claude runner should bypass permission prompts for unattended execution."""
+    fake_runner = FakeProcessRunner()
+
+    run_agent_with_prompt("claude", "Implement the issue.", tmp_path, fake_runner)
+
+    assert fake_runner.calls == [
+        [
+            "claude",
+            "--dangerously-skip-permissions",
+            "--verbose",
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "Implement the issue.",
+        ]
+    ]
 
 
 def test_run_once_dry_run() -> None:

@@ -22,7 +22,9 @@ from pydantic_settings import (
 _SETTINGS_FILE_PATH: Path = Path(__file__).resolve()
 _CONFIG_DIR_PATH: Path = _SETTINGS_FILE_PATH.parent
 _INFRASTRUCTURE_DIR_PATH: Path = _CONFIG_DIR_PATH.parent
-_PROJECT_ROOT_PATH: Path = _INFRASTRUCTURE_DIR_PATH.parent.parent
+_BACKEND_DIR_PATH: Path = _INFRASTRUCTURE_DIR_PATH.parent
+_SOURCE_DIR_PATH: Path = _BACKEND_DIR_PATH.parent
+_PROJECT_ROOT_PATH: Path = _SOURCE_DIR_PATH.parent
 _TOML_CONFIG_FILE_PATH: Path = _PROJECT_ROOT_PATH / "config.toml"
 
 

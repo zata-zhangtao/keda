@@ -247,6 +247,7 @@ export ANTHROPIC_API_KEY="sk-ant-your-anthropic-key"
 ```
 
 > 也可以把 API Key 写到 `.env` 文件里，iar 会自动加载。
+> `iar` 以无人值守方式调用 Claude Code，会使用 `--dangerously-skip-permissions` 跳过文件编辑权限确认，并启用 verbose `stream-json` 输出，避免长时间无终端反馈。
 
 #### 3. 单次执行（测试用）
 
