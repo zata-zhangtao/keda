@@ -5,10 +5,16 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from backend.core.use_cases.create_issue_from_prd import (
     IssueFromPrdRequest,
+    PrdPublishContext,
     create_issue_from_prd,
+    current_git_branch,
+    parse_issue_number,
+    publish_prd_file,
+    resolve_prd_paths,
 )
 from backend.core.use_cases.run_agent_daemon import run_agent_daemon
 from backend.core.use_cases.run_agent_once import run_once
@@ -19,7 +25,53 @@ from backend.engines.agent_runner.factory import (
     create_process_runner,
 )
 
+if TYPE_CHECKING:
+    from backend.core.shared.interfaces.agent_runner import (
+        IGitHubClient,
+        IProcessRunner,
+    )
+    from backend.core.shared.models.agent_runner import LabelConfig
+
 _logger = logging.getLogger(__name__)
+
+
+def _prompt_and_publish_prd_if_needed(
+    *,
+    repo_path: Path,
+    relative_prd_path: Path,
+    issue_url: str,
+    queue_ready: bool,
+    git_remote: str,
+    labels_config: "LabelConfig",
+    github_client: "IGitHubClient",
+    process_runner: "IProcessRunner",
+) -> bool:
+    """Prompt user to commit and push PRD changes if working tree is dirty."""
+
+    status_result = process_runner.run(["git", "status", "--porcelain"], cwd=repo_path)
+    if not status_result.stdout.strip():
+        return False
+
+    prd_path_text = relative_prd_path.as_posix()
+    print(f"\n检测到 PRD 文件有未提交的变更：{prd_path_text}")
+    response = input("是否立即 commit 并 push 该变更？(y/N): ")
+    if response.lower() not in ("y", "yes"):
+        return False
+
+    current_branch = current_git_branch(repo_path, process_runner)
+    publish_context = PrdPublishContext(
+        repo_path=repo_path,
+        relative_prd_path=relative_prd_path,
+        git_remote=git_remote,
+        current_branch=current_branch,
+    )
+    publish_prd_file(publish_context, process_runner)
+    if queue_ready:
+        github_client.edit_issue_labels(
+            parse_issue_number(issue_url),
+            add=[labels_config.ready],
+        )
+    return True
 
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
@@ -62,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     issue_parser.add_argument(
         "--ready",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Add the ready label so a runner can pick the Issue up.",
     )
     issue_parser.add_argument(
@@ -121,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if parsed.command == "issue-from-prd":
             github_client = create_github_client(repo_path, process_runner)
+            _, relative_prd_path = resolve_prd_paths(repo_path, Path(parsed.prd_path))
             issue_url = create_issue_from_prd(
                 request=IssueFromPrdRequest(
                     repo_path=repo_path,
@@ -138,6 +191,23 @@ def main(argv: list[str] | None = None) -> int:
                 github_client=github_client,
                 process_runner=process_runner,
             )
+            if not parsed.publish_prd:
+                _prompt_and_publish_prd_if_needed(
+                    repo_path=repo_path,
+                    relative_prd_path=relative_prd_path,
+                    issue_url=issue_url,
+                    queue_ready=parsed.ready,
+                    git_remote=config.git.remote,
+                    labels_config=config.labels,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                )
+            if not parsed.ready:
+                _logger.info(
+                    "Issue created without '%s' label. "
+                    "Use --ready if you want a runner to pick it up.",
+                    config.labels.ready,
+                )
             _logger.info("Created GitHub Issue: %s", issue_url)
             return 0
         if parsed.command == "run-once":

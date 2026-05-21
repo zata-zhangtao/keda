@@ -8,7 +8,10 @@ from typing import Any
 
 import pytest
 
-from backend.core.shared.models.agent_runner import CommandResult
+from unittest.mock import patch
+
+from backend.api.cli import _prompt_and_publish_prd_if_needed
+from backend.core.shared.models.agent_runner import CommandResult, LabelConfig
 from backend.core.use_cases.create_issue_from_prd import (
     IssueFromPrdRequest,
     create_issue_from_prd,
@@ -92,7 +95,6 @@ def test_create_issue_from_prd_writes_issue_link(tmp_path: Path) -> None:
         "type/feature",
         "status/backlog",
         "source/prd",
-        "agent/ready",
     ]
 
 
@@ -389,3 +391,110 @@ def test_without_publish_prd_no_git_commands_are_run(tmp_path: Path) -> None:
     )
 
     assert process_runner.calls == []
+
+
+def test_prompt_publish_on_yes(tmp_path: Path) -> None:
+    """Interactive prompt should publish PRD when user answers yes."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+    process_runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): _command_result(
+                ["git", "status", "--porcelain"],
+                stdout=" M tasks/pending/example.md\n",
+            ),
+            ("git", "branch", "--show-current"): _command_result(
+                ["git", "branch", "--show-current"], stdout="main\n"
+            ),
+        }
+    )
+
+    with patch("builtins.input", return_value="y"):
+        published = _prompt_and_publish_prd_if_needed(
+            repo_path=repo,
+            relative_prd_path=Path("tasks/pending/example.md"),
+            issue_url="https://github.com/example/repo/issues/42",
+            queue_ready=True,
+            git_remote="origin",
+            labels_config=LabelConfig(),
+            github_client=fake_client,
+            process_runner=process_runner,
+        )
+
+    assert published is True
+    assert ["git", "status", "--porcelain"] in process_runner.calls
+    assert ["git", "push", "origin", "main"] in process_runner.calls
+    assert fake_client.calls[-1] == {
+        "method": "edit_issue_labels",
+        "issue_number": 42,
+        "add": ["agent/ready"],
+        "remove": [],
+    }
+
+
+def test_prompt_publish_on_no(tmp_path: Path) -> None:
+    """Interactive prompt should skip publishing when user answers no."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+    process_runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): _command_result(
+                ["git", "status", "--porcelain"],
+                stdout=" M tasks/pending/example.md\n",
+            ),
+        }
+    )
+
+    with patch("builtins.input", return_value="n"):
+        published = _prompt_and_publish_prd_if_needed(
+            repo_path=repo,
+            relative_prd_path=Path("tasks/pending/example.md"),
+            issue_url="https://github.com/example/repo/issues/42",
+            queue_ready=True,
+            git_remote="origin",
+            labels_config=LabelConfig(),
+            github_client=fake_client,
+            process_runner=process_runner,
+        )
+
+    assert published is False
+    assert process_runner.calls == [["git", "status", "--porcelain"]]
+    assert [
+        call for call in fake_client.calls if call["method"] == "edit_issue_labels"
+    ] == []
+
+
+def test_prompt_publish_clean_worktree(tmp_path: Path) -> None:
+    """Interactive prompt should not prompt when working tree is clean."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+    process_runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): _command_result(
+                ["git", "status", "--porcelain"], stdout=""
+            ),
+        }
+    )
+
+    published = _prompt_and_publish_prd_if_needed(
+        repo_path=repo,
+        relative_prd_path=Path("tasks/pending/example.md"),
+        issue_url="https://github.com/example/repo/issues/42",
+        queue_ready=True,
+        git_remote="origin",
+        labels_config=LabelConfig(),
+        github_client=fake_client,
+        process_runner=process_runner,
+    )
+
+    assert published is False
+    assert process_runner.calls == [["git", "status", "--porcelain"]]
+    assert [
+        call for call in fake_client.calls if call["method"] == "edit_issue_labels"
+    ] == []

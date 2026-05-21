@@ -20,7 +20,7 @@ def test_cli_parser_issue_from_prd_defaults() -> None:
     assert parsed.command == "issue-from-prd"
     assert parsed.prd_path == "tasks/example.md"
     assert parsed.type == "feature"
-    assert parsed.ready is True
+    assert parsed.ready is False
     assert parsed.agent == "auto"
     assert parsed.publish_prd is False
     assert parsed.force is False

@@ -24,7 +24,7 @@ class IssueFromPrdRequest:
     prd_path: Path
     issue_type: str
     title_override: str | None = None
-    queue_ready: bool = True
+    queue_ready: bool = False
     issue_agent: str = "auto"
     labels_config: LabelConfig | None = None
     force: bool = False
