@@ -187,29 +187,29 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/use_cases/run_agent_once.py` 中 `publish_changes` 不再包含 `git add` 或 `git commit` 调用。
-- [ ] `src/backend/core/use_cases/run_agent_once.py` 中新增 `get_head_sha` 函数，返回类型为 `str`，且使用 `process_runner.run(["git", "rev-parse", "HEAD"], ...)` 实现。
-- [ ] `build_prompt` 返回的字符串中不再包含 "Do not ... commit" 子串。
-- [ ] `run_once` 在调用 `run_agent` 之前记录 `before_sha`，在 `run_verification` 之后检查 `has_changes` 和 `before_sha == after_sha`。
-- [ ] 依赖方向未被破坏：`run_agent_once.py` 不导入 `engines/` 或 `infrastructure/` 层。
+- [x] `src/backend/core/use_cases/run_agent_once.py` 中 `publish_changes` 不再包含 `git add` 或 `git commit` 调用。
+- [x] `src/backend/core/use_cases/run_agent_once.py` 中新增 `get_head_sha` 函数，返回类型为 `str`，且使用 `process_runner.run(["git", "rev-parse", "HEAD"], ...)` 实现。
+- [x] `build_prompt` 返回的字符串中不再包含 "Do not ... commit" 子串。
+- [x] `run_once` 在调用 `run_agent` 之前记录 `before_sha`，在 `run_verification` 之后检查 `has_changes` 和 `before_sha == after_sha`。
+- [x] 依赖方向未被破坏：`run_agent_once.py` 不导入 `engines/` 或 `infrastructure/` 层。
 
 ### Behavior Acceptance
 
-- [ ] 当 AI 退出后 worktree 中仍有未提交变更时，`run_once` 抛出 `RuntimeError`，消息包含 "uncommitted"。
-- [ ] 当 AI 退出后 HEAD SHA 与运行前一致时，`run_once` 抛出 `RuntimeError`，消息包含 "no git commits"。
-- [ ] 当 AI 成功 commit 后，`publish_changes` 正常执行 `git push` 和 `create_draft_pr`。
-- [ ] `validate_safe_changes` 仍在 `publish_changes` 中被调用，且位置在 `git push` 之前。
+- [x] 当 AI 退出后 worktree 中仍有未提交变更时，`run_once` 抛出 `RuntimeError`，消息包含 "uncommitted"。
+- [x] 当 AI 退出后 HEAD SHA 与运行前一致时，`run_once` 抛出 `RuntimeError`，消息包含 "no git commits"。
+- [x] 当 AI 成功 commit 后，`publish_changes` 正常执行 `git push` 和 `create_draft_pr`。
+- [x] `validate_safe_changes` 仍在 `publish_changes` 中被调用，且位置在 `git push` 之前。
 
 ### Documentation Acceptance
 
-- [ ] 若 `docs/` 中有描述 runner 行为的内容，同步更新以反映 AI 负责 commit。
-- [ ] PRD 自身包含完整的 Acceptance Checklist 且所有项在归档前完成。
+- [x] 若 `docs/` 中有描述 runner 行为的内容，同步更新以反映 AI 负责 commit。（经检查，`docs/guides/agent-runner.md` 中未明确描述 runner 自动 commit 行为，无需修改。）
+- [x] PRD 自身包含完整的 Acceptance Checklist 且所有项在归档前完成。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_run_agent.py -v` 全部通过。
-- [ ] `uv run pytest tests/ -v` 无回归失败。
-- [ ] `just lint` 通过。
+- [x] `uv run pytest tests/test_run_agent.py -v` 全部通过。
+- [x] `uv run pytest tests/ -v` 无回归失败。
+- [x] `just lint` 通过。
 
 ## 8. Functional Requirements
 

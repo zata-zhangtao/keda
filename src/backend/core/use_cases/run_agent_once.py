@@ -67,7 +67,8 @@ def build_prompt(issue: IssueSummary, worktree_path: Path) -> str:
             "Execution rules:",
             "- Read AGENTS.md and follow repository instructions.",
             "- Only modify files inside the current worktree.",
-            "- Do not merge main, delete branches, push, create PRs, or commit; the runner handles publishing.",
+            "- Do not merge main, delete branches, push, or create PRs; the runner handles publishing.",
+            "- After finishing your changes, stage them with `git add` and commit with a descriptive message.",
             "- Do not touch production systems or real business data.",
             "- Implement the requested task with focused tests and docs updates.",
             "- Finish with a concise summary, tests run, and remaining risk.",
@@ -143,6 +144,12 @@ def run_agent(
     return process_runner.run(command, cwd=worktree_path, capture_output=False)
 
 
+def get_head_sha(worktree_path: Path, process_runner: IProcessRunner) -> str:
+    """Return the full SHA of the current HEAD commit."""
+    result = process_runner.run(["git", "rev-parse", "HEAD"], cwd=worktree_path)
+    return result.stdout.strip()
+
+
 def run_verification(
     worktree_path: Path,
     config: AppConfig,
@@ -208,16 +215,11 @@ def publish_changes(
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
 ) -> tuple[str, str]:
-    """Commit, push, and create a draft PR."""
+    """Push and create a draft PR. Assumes the agent has already committed."""
     branch = process_runner.run(
         ["git", "branch", "--show-current"], cwd=worktree_path
     ).stdout.strip()
     validate_safe_changes(worktree_path, config, process_runner)
-    process_runner.run(["git", "add", "-A"], cwd=worktree_path)
-    process_runner.run(
-        ["git", "commit", "-m", f"agent: complete issue #{issue.number}"],
-        cwd=worktree_path,
-    )
     process_runner.run(
         ["git", "push", "-u", config.git.remote, branch], cwd=worktree_path
     )
@@ -282,12 +284,16 @@ def run_once(
             worktree_path = create_or_reuse_worktree(
                 repo_path, issue, config, process_runner
             )
+            before_sha = get_head_sha(worktree_path, process_runner)
             run_agent(selected_agent, issue, worktree_path, process_runner)
             verification_results = run_verification(
                 worktree_path, config, process_runner
             )
-            if not has_changes(worktree_path, process_runner):
-                raise RuntimeError("Agent completed but produced no git changes.")
+            if has_changes(worktree_path, process_runner):
+                raise RuntimeError("Agent left uncommitted changes.")
+            after_sha = get_head_sha(worktree_path, process_runner)
+            if before_sha == after_sha:
+                raise RuntimeError("Agent produced no git commits.")
             branch, pr_url = publish_changes(
                 issue, worktree_path, config, github_client, process_runner
             )
