@@ -9,9 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, MutableMapping
 
 from dotenv import load_dotenv
-from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseLanguageModel
-from langchain_openai import ChatOpenAI
 
 # Load repository-level environment variables when present.
 PROJECT_ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -394,6 +392,9 @@ def create_chat_model(
 
     if selected_base_url:
         llm_kwargs.setdefault("base_url", selected_base_url)
+
+    from langchain_anthropic import ChatAnthropic
+    from langchain_openai import ChatOpenAI
 
     if selected_provider == "anthropic":
         llm_class = ChatAnthropic
