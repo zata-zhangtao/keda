@@ -61,8 +61,8 @@ uv run iar run-once --repo /path/to/target-repo --dry-run
 # 单次执行
 uv run iar run-once --repo /path/to/target-repo
 
-# Daemon 模式轮询
-uv run iar daemon --repo /path/to/target-repo --interval 600
+# Daemon 模式轮询（默认每 600 秒轮询一次）
+uv run iar daemon --repo /path/to/target-repo
 ```
 
 安装后也可直接使用 `iar`（通过 `pyproject.toml` 的 `[project.scripts]` 注册）。

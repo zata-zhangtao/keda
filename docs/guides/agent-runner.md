@@ -85,8 +85,8 @@ iar run-once [--repo] --dry-run
 # 单次执行
 iar run-once [--repo]
 
-# Daemon 模式（每 600 秒轮询一次）
-iar daemon [--repo] --interval 600
+# Daemon 模式（默认每 600 秒轮询一次）
+iar daemon [--repo] [--interval 600]
 ```
 
 ## 失败重跑
@@ -267,7 +267,7 @@ uv run iar run-once [--repo] --agent codex
 cd ~/keda
 
 # 每 600 秒（10 分钟）轮询一次
-uv run iar daemon [--repo] --interval 600 --agent auto
+uv run iar daemon [--repo] --agent auto
 ```
 
 > 建议用 `tmux`、`screen` 或 `systemd` 保持后台运行。
@@ -276,7 +276,7 @@ uv run iar daemon [--repo] --interval 600 --agent auto
 
 ```bash
 tmux new -s iar-daemon
-cd ~/keda && uv run iar daemon [--repo] --interval 600
+cd ~/keda && uv run iar daemon [--repo]
 # 按 Ctrl+B 再按 D  detach
 ```
 
@@ -301,7 +301,7 @@ uv run iar labels sync [--repo]
 uv run iar issue-from-prd tasks/pending/xxx.md [--repo] --agent codex --publish-prd --ready
 
 # 5. 启动 daemon 自动执行
-uv run iar daemon [--repo] --interval 600
+uv run iar daemon [--repo]
 ```
 
 ### 运行前检查清单
