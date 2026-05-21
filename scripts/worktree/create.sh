@@ -16,14 +16,21 @@ Options:
                     从指定本地分支创建 worktree。默认使用: main
   --cmd [code_cmd]  创建完成后自动执行: <code_cmd> --add <worktree_path>
                     不传 code_cmd 时默认使用: code
-  --subdir <dir>    在 <repo_parent>/<dir>/ 下创建 worktree，而非直接放在 <repo_parent>/
+  --subdir <dir>    在 <repo>-worktrees/<dir>/ 下创建 worktree，
+                    而非直接放在 <repo>-worktrees/
   -h, --help        显示帮助
+
+Behavior:
+  所有 worktree 统一集中到 <repo_parent>/<repo-name>-worktrees/ 下。
+  issue-* 分支在未指定 --subdir 时，默认归入 tasks/ 子目录。
 
 Examples:
   ai_worktree feature-login
   ai_worktree feature-login --base develop
   ai_worktree feature-login --cmd
   ai_worktree feature-login --cmd code-insiders
+  ai_worktree issue-3
+  ai_worktree issue-3 --subdir foo
   ./scripts/worktree/create.sh feature-login
   ./scripts/worktree/create.sh feature-login --base develop
   ./scripts/worktree/create.sh feature-login --cmd
@@ -376,12 +383,21 @@ function ai_worktree() {
 
     repo_root_path="$(git rev-parse --show-toplevel)"
     repo_parent_path="$(dirname "$repo_root_path")"
-    # 1. 约定 worktree 建立在仓库根目录上级的同名文件夹中
-    #    指定 --subdir 时放在 repo_parent_path/<subdir>/<branch_name>
+    # 1. 约定 worktree 统一集中到 <repo_parent>/<repo-name>-worktrees/
+    #    issue-* 分支在未指定 --subdir 时默认归入 tasks/ 子目录
+    if [ -z "$subdir_name" ] && [[ "$branch_name" == issue-* ]]; then
+        subdir_name="tasks"
+    fi
+
+    local repo_name=""
+    repo_name="$(basename "$repo_root_path")"
+    local worktrees_base_path=""
+    worktrees_base_path="$repo_parent_path/${repo_name}-worktrees"
+
     if [ -n "$subdir_name" ]; then
-        target_abs_path="$repo_parent_path/$subdir_name/$branch_name"
+        target_abs_path="$worktrees_base_path/$subdir_name/$branch_name"
     else
-        target_abs_path="$repo_parent_path/$branch_name"
+        target_abs_path="$worktrees_base_path/$branch_name"
     fi
     if [ -e "$target_abs_path" ]; then
         echo "❌ 目标目录已存在: $target_abs_path"

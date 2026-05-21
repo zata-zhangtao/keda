@@ -30,6 +30,8 @@ resolve_worktree_path_by_branch() {
     local repo_root_path="$2"
     local repo_parent_path="$3"
     local worktree_path=""
+    local repo_name=""
+    repo_name="$(basename "$repo_root_path")"
 
     # 优先通过 git worktree list 查找分支对应的 worktree 路径
     worktree_path="$(git -C "$repo_root_path" worktree list --porcelain 2>/dev/null \
@@ -47,11 +49,20 @@ resolve_worktree_path_by_branch() {
         return 0
     fi
 
-    # 回退到 create.sh 的约定路径: 仓库根目录上级的同名文件夹
-    worktree_path="$repo_parent_path/$branch_name"
+    # 回退到约定路径: <repo_parent>/<repo-name>-worktrees/<branch_name>
+    worktree_path="$repo_parent_path/${repo_name}-worktrees/$branch_name"
     if [ -d "$worktree_path" ]; then
         printf '%s\n' "$worktree_path"
         return 0
+    fi
+
+    # issue-* 分支再回退到 tasks/ 子目录
+    if [[ "$branch_name" == issue-* ]]; then
+        worktree_path="$repo_parent_path/${repo_name}-worktrees/tasks/$branch_name"
+        if [ -d "$worktree_path" ]; then
+            printf '%s\n' "$worktree_path"
+            return 0
+        fi
     fi
 
     return 1
@@ -119,7 +130,7 @@ function ai_open() {
 
     if [ -z "$worktree_path" ]; then
         echo "❌ 未找到分支 '$branch_name' 对应的 worktree 目录。"
-        echo "   已尝试查找 git worktree list 及约定路径: $repo_parent_path/$branch_name"
+        echo "   已尝试查找 git worktree list 及约定路径: $repo_parent_path/$(basename "$repo_root_path")-worktrees/$branch_name"
         return 1
     fi
 

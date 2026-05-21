@@ -134,14 +134,14 @@ resolved_cleanup_worktree_path="$(dirname "$repo_root")/$(basename "$repo_root")
 
 ## 5. Acceptance Checklist
 
-- [ ] `ai_worktree issue-3` 创建到 `~/code/keda-worktrees/tasks/issue-3`。
-- [ ] `ai_worktree feature-login` 创建到 `~/code/keda-worktrees/feature-login`。
-- [ ] `ai_worktree issue-3 --subdir foo` 创建到 `~/code/keda-worktrees/foo/issue-3`（显式优先）。
-- [ ] `ai_open issue-3` 能正确打开 `~/code/keda-worktrees/tasks/issue-3`。
-- [ ] `merge.sh issue-3 --cleanup` 能正确清理 `~/code/keda-worktrees/tasks/issue-3`。
-- [ ] 目录已存在时报错信息正确显示新路径。
-- [ ] `create.sh` 帮助文案更新，说明新集中目录和 issue 默认归类行为。
-- [ ] 存量旧路径（如 `~/code/issue-3`）不受影响、不自动迁移。
+- [x] `ai_worktree issue-3` 创建到 `~/code/keda-worktrees/tasks/issue-3`。
+- [x] `ai_worktree feature-login` 创建到 `~/code/keda-worktrees/feature-login`。
+- [x] `ai_worktree issue-3 --subdir foo` 创建到 `~/code/keda-worktrees/foo/issue-3`（显式优先）。
+- [x] `ai_open issue-3` 能正确打开 `~/code/keda-worktrees/tasks/issue-3`。
+- [x] `merge.sh issue-3 --cleanup` 能正确清理 `~/code/keda-worktrees/tasks/issue-3`。
+- [x] 目录已存在时报错信息正确显示新路径。
+- [x] `create.sh` 帮助文案更新，说明新集中目录和 issue 默认归类行为。
+- [x] 存量旧路径（如 `~/code/issue-3`）不受影响、不自动迁移。
 
 ## 6. Out of Scope / Future Work
 

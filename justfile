@@ -544,7 +544,15 @@ worktree arg1 arg2="" arg3="" arg4="" arg5="":
     "${worktree_command[@]}"
 
     if [ "$enter_shell_value" = "true" ]; then
-        target_worktree_path="$(dirname "$(git rev-parse --show-toplevel)")/$branch_name"
+        repo_root="$(git rev-parse --show-toplevel)"
+        repo_parent="$(dirname "$repo_root")"
+        repo_name="$(basename "$repo_root")"
+        worktrees_base="$repo_parent/${repo_name}-worktrees"
+        if [[ "$branch_name" == issue-* ]]; then
+            target_worktree_path="$worktrees_base/tasks/$branch_name"
+        else
+            target_worktree_path="$worktrees_base/$branch_name"
+        fi
         echo "Entering worktree shell: $target_worktree_path"
         echo "Run 'exit' to return to previous shell."
         cd "$target_worktree_path"
@@ -658,7 +666,8 @@ implement prd_file ai_tool prompt="":
 
     # Determine worktree path
     repo_root="$(git rev-parse --show-toplevel)"
-    worktree_path="$(dirname "$repo_root")/tasks/$branch_name"
+    repo_name="$(basename "$repo_root")"
+    worktree_path="$(dirname "$repo_root")/${repo_name}-worktrees/tasks/$branch_name"
 
     # Copy PRD file into worktree preserving relative path
     prd_abs="$(cd "$(dirname "$prd_file")" && pwd)/$(basename "$prd_file")"
