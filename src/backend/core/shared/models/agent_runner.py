@@ -57,8 +57,8 @@ class WorktreeConfig:
     """Commands used to create and locate target worktrees."""
 
     create_command: str = "just worktree issue-{issue_number} enter_shell=false"
-    reuse_command: str = 'bash -c \'test -d "$(dirname "$(git rev-parse --show-toplevel)")/issue-{issue_number}"\''
-    path_command: str = 'bash -c \'echo "$(dirname "$(git rev-parse --show-toplevel)")/issue-{issue_number}"\''
+    reuse_command: str = 'bash -c \'test -d "$(dirname "$(git rev-parse --show-toplevel)")/$(basename "$(git rev-parse --show-toplevel)")-worktrees/tasks/issue-{issue_number}"\''
+    path_command: str = 'bash -c \'echo "$(dirname "$(git rev-parse --show-toplevel)")/$(basename "$(git rev-parse --show-toplevel)")-worktrees/tasks/issue-{issue_number}"\''
 
 
 @dataclass(frozen=True)
