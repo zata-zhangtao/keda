@@ -89,6 +89,59 @@ iar run-once [--repo]
 iar daemon [--repo] --interval 600
 ```
 
+## 失败重跑
+
+Issue 执行失败后会被标记为 `agent/failed`，runner 不会再自动处理。以下是将失败 Issue 重新置为可执行状态的完整流程。
+
+### 何时适合重跑
+
+- 临时网络故障或 API 限流导致 Agent 中断
+- 本地环境问题（如 API Key 失效、worktree 权限错误）已修复
+- 目标仓库的 pre-commit hook 等外部检查临时失败
+
+> **不建议重跑的情况**：Issue 描述本身有误、Agent 逻辑已正确执行但业务结果不符合预期。这类情况应修改 Issue 内容或人工接管，而不是简单重跑。
+
+### 操作步骤
+
+1. **可选：清理旧的 worktree**
+
+   如果上一次失败时 worktree 已创建但处于脏状态，建议先清理，避免残留文件影响重跑：
+
+   ```bash
+   # 删除对应 issue 的 worktree（将 <issue-number> 替换为实际编号）
+   git worktree remove issue-<issue-number>
+   ```
+
+2. **将标签从 `agent/failed` 改为 `agent/ready`**
+
+   使用 GitHub CLI：
+
+   ```bash
+   gh issue edit <issue-number> --add-label ready --remove-label failed
+   ```
+
+   或者在 GitHub 网页上手动编辑 Issue 标签，移除 `agent/failed` 并添加 `agent/ready`。
+
+3. **触发 runner 执行**
+
+   标签改回 `ready` 后，runner 会在下一次轮询时自动拾取：
+
+   ```bash
+   # 单次轮询（立即执行）
+   iar run-once [--repo]
+
+   # 或等待 daemon 下次轮询
+   ```
+
+### 状态流转回顾
+
+```
+agent/ready  →  agent/running  →  agent/review  →  关闭
+      ↑              ↓
+      └──────  agent/failed  ←─────┘
+              （人工修复后改回 ready）
+```
+
 ## 多机部署与操作指南
 
 `iar` 支持在单台或多台电脑上运行。以下介绍两种典型部署方式：
