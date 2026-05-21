@@ -18,6 +18,7 @@ def get_agent_runner_status() -> dict:
         "config": {
             "max_issues": app_config.runner.max_issues,
             "default_agent": app_config.runner.default_agent,
+            "max_recovery_attempts": app_config.runner.max_recovery_attempts,
             "ready_label": app_config.labels.ready,
             "running_label": app_config.labels.running,
             "review_label": app_config.labels.review,

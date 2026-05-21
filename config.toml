@@ -136,9 +136,11 @@ path_command = "bash -c 'echo \"$(dirname \"$(git rev-parse --show-toplevel)\")/
 
 [agent_runner.runner]
 default_agent = "claude"
+max_recovery_attempts = 2
 verification_commands = [
   "git diff --check",
-  "uv run mkdocs build",
+  "just test",
+  "uv run mkdocs build --strict",
 ]
 
 [agent_runner.safety]

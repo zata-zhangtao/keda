@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shlex
 import socket
-from fnmatch import fnmatch
 from collections.abc import Callable
+from fnmatch import fnmatch
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
@@ -18,6 +19,18 @@ from backend.core.shared.models.agent_runner import (
 )
 
 _logger = logging.getLogger(__name__)
+
+_COMMIT_REQUEST_RELATIVE_PATH = Path(".agent-runner/commit-request.json")
+_MAX_COMMIT_MESSAGE_LENGTH = 200
+_MAX_RECOVERY_OUTPUT_LENGTH = 4000
+
+
+class VerificationFailedError(RuntimeError):
+    """Raised when configured verification commands do not pass."""
+
+    def __init__(self, verification_results: list[CommandResult]) -> None:
+        self.verification_results = verification_results
+        super().__init__(format_verification_failure(verification_results))
 
 
 def format_command(template: str, *, issue_number: int) -> list[str]:
@@ -67,10 +80,114 @@ def build_prompt(issue: IssueSummary, worktree_path: Path) -> str:
             "Execution rules:",
             "- Read AGENTS.md and follow repository instructions.",
             "- Only modify files inside the current worktree.",
-            "- Do not merge main, delete branches, push, or create PRs; the runner handles publishing.",
-            "- After finishing your changes, stage them with `git add` and commit with a descriptive message.",
+            "- Do not merge main, delete branches, push, or create PRs; "
+            "the runner handles publishing.",
+            "- Do not run `git add` or `git commit`; the runner exposes "
+            "a restricted commit proxy.",
+            "- After finishing your changes, request a commit by writing "
+            "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
             "- Do not touch production systems or real business data.",
             "- Implement the requested task with focused tests and docs updates.",
+            "- Finish with a concise summary, tests run, and remaining risk.",
+        ]
+    )
+
+
+def truncate_recovery_output(output_text: str) -> str:
+    """Limit command output included in recovery prompts and failure comments."""
+    if len(output_text) <= _MAX_RECOVERY_OUTPUT_LENGTH:
+        return output_text
+    return "\n".join(
+        [
+            "[output truncated; showing tail]",
+            output_text[-_MAX_RECOVERY_OUTPUT_LENGTH:],
+        ]
+    )
+
+
+def format_result_for_recovery(result: CommandResult) -> str:
+    """Format one command result for a recovery prompt."""
+    return "\n".join(
+        [
+            f"Command: `{shlex.join(result.command)}`",
+            f"Exit code: {result.return_code}",
+            "stdout:",
+            "```text",
+            truncate_recovery_output(result.stdout),
+            "```",
+            "stderr:",
+            "```text",
+            truncate_recovery_output(result.stderr),
+            "```",
+        ]
+    )
+
+
+def failed_verification_results(
+    verification_results: list[CommandResult],
+) -> list[CommandResult]:
+    """Return failed command results from a verification run."""
+    return [result for result in verification_results if result.return_code != 0]
+
+
+def format_verification_failure(verification_results: list[CommandResult]) -> str:
+    """Format configured verification failures for logs and Issue comments."""
+    failed_results = failed_verification_results(verification_results)
+    if not failed_results:
+        return "Verification failed without a captured failing command."
+    first_failed_result = failed_results[0]
+    return "\n".join(
+        [
+            f"Command failed: {shlex.join(first_failed_result.command)}",
+            f"Exit code: {first_failed_result.return_code}",
+            "stdout:",
+            truncate_recovery_output(first_failed_result.stdout),
+            "stderr:",
+            truncate_recovery_output(first_failed_result.stderr),
+        ]
+    )
+
+
+def ensure_verification_passed(verification_results: list[CommandResult]) -> None:
+    """Raise when any configured verification command failed."""
+    if failed_verification_results(verification_results):
+        raise VerificationFailedError(verification_results)
+
+
+def build_recovery_prompt(
+    issue: IssueSummary,
+    worktree_path: Path,
+    *,
+    recovery_attempt: int,
+    max_recovery_attempts: int,
+    failure_summary: str,
+) -> str:
+    """Build a prompt that asks the agent to repair a failed attempt."""
+    prd_path = extract_prd_path(issue.body)
+    prd_line = (
+        f"Also re-check the canonical PRD at `{prd_path}` if it affects the fix."
+        if prd_path
+        else "If the Issue references a PRD, re-check it if it affects the fix."
+    )
+    return "\n".join(
+        [
+            f"Repair GitHub Issue #{issue.number}: {issue.title}",
+            "",
+            f"Issue URL: {issue.url}",
+            f"Worktree: {worktree_path}",
+            f"Recovery attempt: {recovery_attempt}/{max_recovery_attempts}",
+            prd_line,
+            "",
+            "The runner could not finish the previous attempt:",
+            failure_summary,
+            "",
+            "Recovery rules:",
+            "- Inspect the current worktree and fix the failure.",
+            "- Only modify files inside the current worktree.",
+            "- Do not switch branches, merge main, push, or create PRs.",
+            "- Do not run `git add` or `git commit`; the runner handles commits.",
+            "- After fixing the issue, write or update "
+            "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
             "- Finish with a concise summary, tests run, and remaining risk.",
         ]
     )
@@ -136,6 +253,16 @@ def run_agent(
 ) -> CommandResult:
     """Run Codex or Claude Code in non-interactive mode."""
     prompt = build_prompt(issue, worktree_path)
+    return run_agent_with_prompt(agent_name, prompt, worktree_path, process_runner)
+
+
+def run_agent_with_prompt(
+    agent_name: str,
+    prompt: str,
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+) -> CommandResult:
+    """Run Codex or Claude Code with a prepared prompt."""
     builder = _AGENT_COMMAND_BUILDERS.get(agent_name)
     if builder is not None:
         command = builder(prompt, worktree_path)
@@ -150,16 +277,252 @@ def get_head_sha(worktree_path: Path, process_runner: IProcessRunner) -> str:
     return result.stdout.strip()
 
 
+def get_current_branch(worktree_path: Path, process_runner: IProcessRunner) -> str:
+    """Return the current branch name for a worktree."""
+    result = process_runner.run(["git", "branch", "--show-current"], cwd=worktree_path)
+    return result.stdout.strip()
+
+
 def run_verification(
     worktree_path: Path,
     config: AppConfig,
     process_runner: IProcessRunner,
 ) -> list[CommandResult]:
     """Run configured verification commands."""
-    return [
-        process_runner.run(shlex.split(command), cwd=worktree_path)
-        for command in config.runner.verification_commands
-    ]
+    verification_results: list[CommandResult] = []
+    for command in config.runner.verification_commands:
+        result = process_runner.run(
+            shlex.split(command),
+            cwd=worktree_path,
+            check=False,
+        )
+        verification_results.append(result)
+        if result.return_code != 0:
+            break
+    return verification_results
+
+
+def default_commit_message(issue: IssueSummary) -> str:
+    """Build the fallback commit message for an Issue."""
+    return f"[Agent] Issue #{issue.number}: {issue.title}"
+
+
+def sanitize_commit_message(raw_message: object, issue: IssueSummary) -> str:
+    """Return a single-line commit message safe to pass to Git."""
+    if not isinstance(raw_message, str):
+        return default_commit_message(issue)
+    message = " ".join(raw_message.split())
+    if not message:
+        return default_commit_message(issue)
+    return message[:_MAX_COMMIT_MESSAGE_LENGTH]
+
+
+def read_commit_request(worktree_path: Path, issue: IssueSummary) -> str:
+    """Read the agent's restricted commit request file."""
+    request_path = worktree_path / _COMMIT_REQUEST_RELATIVE_PATH
+    if not request_path.is_file():
+        raise RuntimeError("Agent left uncommitted changes without a commit request.")
+    with request_path.open("r", encoding="utf-8") as request_file:
+        try:
+            request_payload = json.load(request_file)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Commit request must be valid JSON.") from exc
+    if not isinstance(request_payload, dict):
+        raise RuntimeError("Commit request must be a JSON object.")
+    return sanitize_commit_message(request_payload.get("commit_message"), issue)
+
+
+def remove_commit_request(worktree_path: Path) -> None:
+    """Remove the transient agent commit request file from the worktree."""
+    request_path = worktree_path / _COMMIT_REQUEST_RELATIVE_PATH
+    if request_path.exists():
+        request_path.unlink()
+    request_directory = request_path.parent
+    try:
+        request_directory.rmdir()
+    except OSError:
+        pass
+
+
+def commit_requested_changes(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    *,
+    expected_branch: str,
+) -> list[CommandResult]:
+    """Commit agent changes through the runner's restricted commit proxy."""
+    current_branch = get_current_branch(worktree_path, process_runner)
+    if current_branch != expected_branch:
+        raise RuntimeError(f"Refusing to commit on unexpected branch: {current_branch}")
+    commit_message = read_commit_request(worktree_path, issue)
+    remove_commit_request(worktree_path)
+    if not has_changes(worktree_path, process_runner):
+        raise RuntimeError("Agent requested a commit but produced no file changes.")
+    validate_safe_changes(worktree_path, config, process_runner)
+    process_runner.run(["git", "add", "-A"], cwd=worktree_path)
+    verification_results = run_verification(worktree_path, config, process_runner)
+    ensure_verification_passed(verification_results)
+    process_runner.run(["git", "commit", "-m", commit_message], cwd=worktree_path)
+    return verification_results
+
+
+def unstage_changes(worktree_path: Path, process_runner: IProcessRunner) -> None:
+    """Reset the Git index after a staged verification failure."""
+    process_runner.run(["git", "reset", "--mixed"], cwd=worktree_path)
+
+
+def is_recoverable_commit_request_error(exc: RuntimeError) -> bool:
+    """Return whether the agent can repair a commit request protocol error."""
+    message = str(exc)
+    return message.startswith(
+        (
+            "Agent left uncommitted changes without a commit request.",
+            "Commit request must be valid JSON.",
+            "Commit request must be a JSON object.",
+            "Agent requested a commit but produced no file changes.",
+        )
+    )
+
+
+def format_recovery_failure_summary(
+    heading: str,
+    verification_results: list[CommandResult],
+) -> str:
+    """Build the failure section for a verification recovery prompt."""
+    failed_results = failed_verification_results(verification_results)
+    if not failed_results:
+        return heading
+    result_sections = "\n\n".join(
+        format_result_for_recovery(result) for result in failed_results
+    )
+    return "\n\n".join([heading, result_sections])
+
+
+def run_agent_until_committed(
+    *,
+    selected_agent: str,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    before_sha: str,
+    expected_branch: str,
+) -> list[CommandResult]:
+    """Run the agent, recover failed verification, and return final checks."""
+    max_recovery_attempts = max(0, config.runner.max_recovery_attempts)
+    recovery_failure_summary = ""
+    final_verification_results: list[CommandResult] = []
+
+    for attempt_index in range(max_recovery_attempts + 1):
+        if attempt_index == 0:
+            run_agent(selected_agent, issue, worktree_path, process_runner)
+        else:
+            recovery_prompt = build_recovery_prompt(
+                issue,
+                worktree_path,
+                recovery_attempt=attempt_index,
+                max_recovery_attempts=max_recovery_attempts,
+                failure_summary=recovery_failure_summary,
+            )
+            run_agent_with_prompt(
+                selected_agent, recovery_prompt, worktree_path, process_runner
+            )
+
+        verification_results = run_verification(worktree_path, config, process_runner)
+        final_verification_results = verification_results
+        try:
+            ensure_verification_passed(verification_results)
+        except VerificationFailedError as exc:
+            if attempt_index >= max_recovery_attempts:
+                raise
+            recovery_failure_summary = format_recovery_failure_summary(
+                "Verification before staging failed.",
+                exc.verification_results,
+            )
+            _logger.warning(
+                "Verification failed for Issue #%d; "
+                "asking agent to recover (%d/%d).",
+                issue.number,
+                attempt_index + 1,
+                max_recovery_attempts,
+            )
+            continue
+
+        if has_changes(worktree_path, process_runner):
+            _logger.warning(
+                "Agent left uncommitted changes for Issue #%d; "
+                "runner processing commit request.",
+                issue.number,
+            )
+            try:
+                final_verification_results = commit_requested_changes(
+                    issue,
+                    worktree_path,
+                    config,
+                    process_runner,
+                    expected_branch=expected_branch,
+                )
+            except VerificationFailedError as exc:
+                unstage_changes(worktree_path, process_runner)
+                if attempt_index >= max_recovery_attempts:
+                    raise
+                recovery_failure_summary = format_recovery_failure_summary(
+                    "Verification after runner staged changes with git add -A failed.",
+                    exc.verification_results,
+                )
+                _logger.warning(
+                    "Staged verification failed for Issue #%d; "
+                    "asking agent to recover (%d/%d).",
+                    issue.number,
+                    attempt_index + 1,
+                    max_recovery_attempts,
+                )
+                continue
+            except RuntimeError as exc:
+                if (
+                    attempt_index >= max_recovery_attempts
+                    or not is_recoverable_commit_request_error(exc)
+                ):
+                    raise
+                recovery_failure_summary = "\n".join(
+                    [
+                        "The runner could not process the commit request.",
+                        str(exc),
+                        "Fix the worktree and write a valid commit request JSON.",
+                    ]
+                )
+                _logger.warning(
+                    "Commit request failed for Issue #%d; "
+                    "asking agent to recover (%d/%d).",
+                    issue.number,
+                    attempt_index + 1,
+                    max_recovery_attempts,
+                )
+                continue
+
+        after_sha = get_head_sha(worktree_path, process_runner)
+        if before_sha != after_sha:
+            return final_verification_results
+
+        if attempt_index >= max_recovery_attempts:
+            raise RuntimeError("Agent produced no git commits.")
+        recovery_failure_summary = "\n".join(
+            [
+                "The previous attempt produced no git commits.",
+                "Make the requested code changes and write a valid commit request JSON.",
+            ]
+        )
+        _logger.warning(
+            "Agent produced no git commits for Issue #%d; "
+            "asking agent to recover (%d/%d).",
+            issue.number,
+            attempt_index + 1,
+            max_recovery_attempts,
+        )
+
+    raise RuntimeError("Agent produced no git commits.")
 
 
 def has_changes(worktree_path: Path, process_runner: IProcessRunner) -> bool:
@@ -216,9 +579,7 @@ def publish_changes(
     process_runner: IProcessRunner,
 ) -> tuple[str, str]:
     """Push and create a draft PR. Assumes the agent has already committed."""
-    branch = process_runner.run(
-        ["git", "branch", "--show-current"], cwd=worktree_path
-    ).stdout.strip()
+    branch = get_current_branch(worktree_path, process_runner)
     validate_safe_changes(worktree_path, config, process_runner)
     process_runner.run(
         ["git", "push", "-u", config.git.remote, branch], cwd=worktree_path
@@ -279,21 +640,24 @@ def run_once(
             )
             github_client.comment_issue(
                 issue.number,
-                f"## Agent Runner Claimed\n\n- Host: `{socket.gethostname()}`\n- Agent: `{selected_agent}`\n",
+                "## Agent Runner Claimed\n\n"
+                f"- Host: `{socket.gethostname()}`\n"
+                f"- Agent: `{selected_agent}`\n",
             )
             worktree_path = create_or_reuse_worktree(
                 repo_path, issue, config, process_runner
             )
             before_sha = get_head_sha(worktree_path, process_runner)
-            run_agent(selected_agent, issue, worktree_path, process_runner)
-            verification_results = run_verification(
-                worktree_path, config, process_runner
+            expected_branch = get_current_branch(worktree_path, process_runner)
+            verification_results = run_agent_until_committed(
+                selected_agent=selected_agent,
+                issue=issue,
+                worktree_path=worktree_path,
+                config=config,
+                process_runner=process_runner,
+                before_sha=before_sha,
+                expected_branch=expected_branch,
             )
-            if has_changes(worktree_path, process_runner):
-                raise RuntimeError("Agent left uncommitted changes.")
-            after_sha = get_head_sha(worktree_path, process_runner)
-            if before_sha == after_sha:
-                raise RuntimeError("Agent produced no git commits.")
             branch, pr_url = publish_changes(
                 issue, worktree_path, config, github_client, process_runner
             )

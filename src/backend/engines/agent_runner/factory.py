@@ -53,6 +53,7 @@ def build_app_config() -> AppConfig:
         runner=RunnerConfig(
             max_issues=runner_settings.max_issues,
             default_agent=runner_settings.default_agent,
+            max_recovery_attempts=runner_settings.max_recovery_attempts,
             verification_commands=tuple(runner_settings.verification_commands),
         ),
         safety=SafetyConfig(
