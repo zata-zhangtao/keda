@@ -17,12 +17,16 @@ from backend.core.use_cases.create_issue_from_prd import (
     resolve_prd_paths,
 )
 from backend.core.use_cases.run_agent_daemon import run_agent_daemon
-from backend.core.use_cases.run_agent_once import run_once
+from backend.core.use_cases.run_agent_repositories_once import (
+    run_agent_repositories_once,
+)
 from backend.core.use_cases.sync_labels import sync_labels
 from backend.engines.agent_runner.factory import (
-    build_app_config,
     create_github_client,
     create_process_runner,
+    get_agent_runner_settings,
+    resolve_issue_from_prd_target,
+    resolve_repository_targets,
 )
 
 if TYPE_CHECKING:
@@ -80,6 +84,9 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
         "--repo", default=argparse.SUPPRESS, help="Target repository path."
     )
     parser.add_argument(
+        "--repo-id", default=argparse.SUPPRESS, help="Target configured repository ID."
+    )
+    parser.add_argument(
         "--config",
         default=argparse.SUPPRESS,
         help="Deprecated: config is loaded from config.toml and env vars.",
@@ -90,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(prog="iar")
     parser.add_argument("--repo", default=".", help="Target repository path.")
+    parser.add_argument(
+        "--repo-id", default=None, help="Target configured repository ID."
+    )
     parser.add_argument(
         "--config",
         help="Deprecated: config is loaded from config.toml and env vars.",
@@ -156,49 +166,73 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     parsed = build_parser().parse_args(argv)
-    repo_path = Path(parsed.repo).resolve()
-    config = build_app_config()
-    process_runner = create_process_runner()
 
     if parsed.config:
         _logger.warning(
             "The --config flag is deprecated. Use config.toml or env vars instead."
         )
 
+    repo_id: str | None = getattr(parsed, "repo_id", None)
+    repo_override: str | None = getattr(parsed, "repo", None)
+
+    if repo_id is not None and repo_override is not None:
+        _logger.error("--repo and --repo-id are mutually exclusive.")
+        return 1
+
+    process_runner = create_process_runner()
+    runner_settings = get_agent_runner_settings()
+
     try:
         if parsed.command == "labels":
-            github_client = create_github_client(repo_path, process_runner)
-            sync_labels(labels_config=config.labels, github_client=github_client)
+            contexts = resolve_repository_targets(
+                runner_settings,
+                repo_id=repo_id,
+                repo_path_override=repo_override,
+            )
+            for context in contexts:
+                github_client = create_github_client(context.repo_path, process_runner)
+                sync_labels(
+                    labels_config=context.config.labels, github_client=github_client
+                )
             _logger.info("Labels are ready.")
             return 0
+
         if parsed.command == "issue-from-prd":
-            github_client = create_github_client(repo_path, process_runner)
-            _, relative_prd_path = resolve_prd_paths(repo_path, Path(parsed.prd_path))
+            context = resolve_issue_from_prd_target(
+                runner_settings,
+                repo_id=repo_id,
+                repo_path_override=repo_override,
+                cwd=Path.cwd(),
+            )
+            github_client = create_github_client(context.repo_path, process_runner)
+            _, relative_prd_path = resolve_prd_paths(
+                context.repo_path, Path(parsed.prd_path)
+            )
             issue_url = create_issue_from_prd(
                 request=IssueFromPrdRequest(
-                    repo_path=repo_path,
+                    repo_path=context.repo_path,
                     prd_path=Path(parsed.prd_path),
                     issue_type=parsed.type,
                     title_override=parsed.title,
                     queue_ready=parsed.ready,
                     issue_agent=parsed.agent,
-                    labels_config=config.labels,
+                    labels_config=context.config.labels,
                     force=parsed.force,
                     publish_prd=parsed.publish_prd,
-                    git_remote=config.git.remote,
-                    git_base_branch=config.git.base_branch,
+                    git_remote=context.config.git.remote,
+                    git_base_branch=context.config.git.base_branch,
                 ),
                 github_client=github_client,
                 process_runner=process_runner,
             )
             if not parsed.publish_prd:
                 _prompt_and_publish_prd_if_needed(
-                    repo_path=repo_path,
+                    repo_path=context.repo_path,
                     relative_prd_path=relative_prd_path,
                     issue_url=issue_url,
                     queue_ready=parsed.ready,
-                    git_remote=config.git.remote,
-                    labels_config=config.labels,
+                    git_remote=context.config.git.remote,
+                    labels_config=context.config.labels,
                     github_client=github_client,
                     process_runner=process_runner,
                 )
@@ -206,31 +240,43 @@ def main(argv: list[str] | None = None) -> int:
                 _logger.info(
                     "Issue created without '%s' label. "
                     "Use --ready if you want a runner to pick it up.",
-                    config.labels.ready,
+                    context.config.labels.ready,
                 )
             _logger.info("Created GitHub Issue: %s", issue_url)
             return 0
+
         if parsed.command == "run-once":
-            github_client = create_github_client(repo_path, process_runner)
-            return run_once(
-                repo_path=repo_path,
-                config=config,
+            contexts = resolve_repository_targets(
+                runner_settings,
+                repo_id=repo_id,
+                repo_path_override=repo_override,
+            )
+            return run_agent_repositories_once(
+                contexts=contexts,
                 dry_run=parsed.dry_run,
                 agent=parsed.agent,
-                max_issues=parsed.max_issues or config.runner.max_issues,
-                github_client=github_client,
+                max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                 process_runner=process_runner,
+                github_client_factory=lambda rp: create_github_client(
+                    rp, process_runner
+                ),
             )
+
         if parsed.command == "daemon":
-            github_client = create_github_client(repo_path, process_runner)
+            contexts = resolve_repository_targets(
+                runner_settings,
+                repo_id=repo_id,
+                repo_path_override=repo_override,
+            )
             run_agent_daemon(
-                repo_path=repo_path,
-                config=config,
+                contexts=contexts,
                 interval=parsed.interval,
                 agent=parsed.agent,
-                max_issues=parsed.max_issues or config.runner.max_issues,
-                github_client=github_client,
+                max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                 process_runner=process_runner,
+                github_client_factory=lambda rp: create_github_client(
+                    rp, process_runner
+                ),
             )
             return 0
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.

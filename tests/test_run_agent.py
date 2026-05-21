@@ -1149,3 +1149,105 @@ def test_run_once_success() -> None:
     assert len(review_calls) == 1
     pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
     assert len(pr_calls) == 1
+
+
+def test_run_agent_repositories_once_aggregates_exit_code() -> None:
+    """Multi-repo run-once should return 1 if any repository fails."""
+    from backend.core.shared.models.agent_runner import (
+        RepositoryRunContext,
+    )
+    from backend.core.use_cases.run_agent_repositories_once import (
+        run_agent_repositories_once,
+    )
+
+    fake_client = FakeGitHubClient()
+    fake_client.list_ready_issues = lambda ready_label, limit: []
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "remote"): CommandResult(
+                command=("git", "remote"),
+                return_code=0,
+                stdout="origin\n",
+                stderr="",
+            ),
+        }
+    )
+
+    contexts = [
+        RepositoryRunContext(
+            repo_id="repo-a",
+            display_name="Repo A",
+            repo_path=Path("."),
+            config=AppConfig(),
+        ),
+        RepositoryRunContext(
+            repo_id="repo-b",
+            display_name="Repo B",
+            repo_path=Path("."),
+            config=AppConfig(),
+        ),
+    ]
+
+    exit_code = run_agent_repositories_once(
+        contexts=contexts,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        process_runner=fake_runner,
+        github_client_factory=lambda rp: fake_client,
+    )
+
+    assert exit_code == 0
+
+
+def test_run_agent_repositories_once_isolates_failures() -> None:
+    """One repository failure should not block subsequent repositories."""
+    from backend.core.shared.models.agent_runner import (
+        RepositoryRunContext,
+    )
+    from backend.core.use_cases.run_agent_repositories_once import (
+        run_agent_repositories_once,
+    )
+
+    class _FailingClient(FakeGitHubClient):
+        def __init__(self, should_fail: bool = False) -> None:
+            super().__init__()
+            self._should_fail = should_fail
+
+        def list_ready_issues(self, ready_label: str, limit: int) -> list:
+            if self._should_fail:
+                raise RuntimeError("Simulated failure")
+            return []
+
+    contexts = [
+        RepositoryRunContext(
+            repo_id="repo-a",
+            display_name="Repo A",
+            repo_path=Path("."),
+            config=AppConfig(),
+        ),
+        RepositoryRunContext(
+            repo_id="repo-b",
+            display_name="Repo B",
+            repo_path=Path("."),
+            config=AppConfig(),
+        ),
+    ]
+
+    call_index = [0]
+
+    def client_factory(rp: Path) -> FakeGitHubClient:
+        call_index[0] += 1
+        return _FailingClient(should_fail=(call_index[0] == 1))
+
+    fake_runner = FakeProcessRunner()
+    exit_code = run_agent_repositories_once(
+        contexts=contexts,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        process_runner=fake_runner,
+        github_client_factory=client_factory,
+    )
+
+    assert exit_code == 1

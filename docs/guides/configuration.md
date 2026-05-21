@@ -59,6 +59,39 @@
 - `SYNC_TEMPLATE_PROJECT_SKIP_PATHS`：逗号或空格分隔的跳过路径列表。
 - `SYNC_TEMPLATE_PROJECT_INCLUDE_PATHS`：逗号或空格分隔的保留显示路径列表。
 
+## Agent Runner 仓库配置
+
+`config.toml` 的 `[agent_runner.repositories.<repo_id>]` 段支持配置多个目标仓库：
+
+- `path`：本地已 clone 的仓库绝对路径（必填）。
+- `enabled`：是否启用该仓库，默认为 `true`。
+- `display_name`：前端展示名称，默认为 `repo_id`。
+
+每个仓库可独立覆盖 `labels`、`git`、`worktree`、`runner`、`safety` 子配置：
+
+```toml
+[agent_runner.repositories.keda]
+path = "/Users/zata/code/keda"
+enabled = true
+display_name = "Keda"
+
+[agent_runner.repositories.keda.git]
+remote = "origin"
+base_branch = "main"
+
+[agent_runner.repositories.backend_service]
+path = "/Users/zata/code/backend-service"
+enabled = true
+
+[agent_runner.repositories.backend_service.runner]
+verification_commands = [
+  "git diff --check",
+  "uv run pytest",
+]
+```
+
+未覆盖的字段自动继承全局 `[agent_runner]` 默认值。环境变量仍可对全局段生效，但暂不支持通过环境变量覆盖单个仓库的字段。
+
 ## 日志相关配置
 
 日志位于 `logs/` 目录，默认文件为 `logs/app.log`，并通过 `TimedRotatingFileHandler` 按天切分。

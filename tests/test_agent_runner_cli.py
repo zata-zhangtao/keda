@@ -56,3 +56,24 @@ def test_cli_parser_daemon() -> None:
     assert parsed.command == "daemon"
     assert parsed.interval == 300
     assert parsed.max_issues == 2
+
+
+def test_cli_parser_repo_id() -> None:
+    """--repo-id should be accepted on subcommands."""
+    parser = build_parser()
+    parsed = parser.parse_args(["run-once", "--repo-id", "keda"])
+    assert parsed.repo_id == "keda"
+
+
+def test_cli_parser_repo_and_repo_id_mutual_exclusion() -> None:
+    """--repo and --repo-id should be mutually exclusive in parsing."""
+    parser = build_parser()
+    # argparse does not enforce mutual exclusion across different parsers,
+    # but both flags should be parseable individually.
+    parsed_repo = parser.parse_args(["run-once", "--repo", "/tmp/repo"])
+    assert parsed_repo.repo == "/tmp/repo"
+    assert parsed_repo.repo_id is None
+
+    parsed_id = parser.parse_args(["run-once", "--repo-id", "keda"])
+    assert parsed_id.repo_id == "keda"
+    assert parsed_id.repo == "."

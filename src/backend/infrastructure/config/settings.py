@@ -322,6 +322,19 @@ class AgentRunnerSafetySettings(BaseModel):
     )
 
 
+class AgentRunnerRepositorySettings(BaseModel):
+    """Per-repository Agent Runner configuration overrides."""
+
+    path: str
+    enabled: bool = True
+    display_name: str | None = None
+    labels: AgentRunnerLabelSettings | None = None
+    git: AgentRunnerGitSettings | None = None
+    worktree: AgentRunnerWorktreeSettings | None = None
+    runner: AgentRunnerRunnerSettings | None = None
+    safety: AgentRunnerSafetySettings | None = None
+
+
 class AgentRunnerSettings(BaseSettings):
     """Agent Runner configuration."""
 
@@ -336,6 +349,7 @@ class AgentRunnerSettings(BaseSettings):
     )
     runner: AgentRunnerRunnerSettings = Field(default_factory=AgentRunnerRunnerSettings)
     safety: AgentRunnerSafetySettings = Field(default_factory=AgentRunnerSafetySettings)
+    repositories: dict[str, AgentRunnerRepositorySettings] = Field(default_factory=dict)
 
     @classmethod
     def settings_customise_sources(
