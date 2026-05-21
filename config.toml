@@ -114,7 +114,6 @@ minio_seconds = 60
 # =============================================================================
 [agent_runner]
 max_issues = 1
-default_agent = "claude"
 
 [agent_runner.labels]
 ready = "agent/ready"
@@ -136,6 +135,7 @@ reuse_command = "bash -c 'test -d \"$(dirname \"$(git rev-parse --show-toplevel)
 path_command = "bash -c 'echo \"$(dirname \"$(git rev-parse --show-toplevel)\")/issue-{issue_number}\"'"
 
 [agent_runner.runner]
+default_agent = "claude"
 verification_commands = [
   "git diff --check",
   "uv run mkdocs build",

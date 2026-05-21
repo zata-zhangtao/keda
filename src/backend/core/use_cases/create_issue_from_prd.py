@@ -138,7 +138,9 @@ def build_issue_labels(
     if request.issue_agent in effective_labels_config.agent_labels:
         labels.append(effective_labels_config.agent_labels[request.issue_agent])
     elif request.issue_agent not in {"auto", "none"}:
-        allowed = ", ".join([*effective_labels_config.agent_labels.keys(), "auto", "none"])
+        allowed = ", ".join(
+            [*effective_labels_config.agent_labels.keys(), "auto", "none"]
+        )
         raise ValueError(f"issue_agent must be one of: {allowed}")
     return labels
 
