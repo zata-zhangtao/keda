@@ -22,7 +22,19 @@ def test_cli_parser_issue_from_prd_defaults() -> None:
     assert parsed.type == "feature"
     assert parsed.ready is True
     assert parsed.agent == "auto"
+    assert parsed.publish_prd is False
     assert parsed.force is False
+
+
+def test_cli_parser_issue_from_prd_publish_prd() -> None:
+    """issue-from-prd should expose explicit PRD publishing."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["issue-from-prd", "tasks/example.md", "--publish-prd", "--no-ready"]
+    )
+    assert parsed.command == "issue-from-prd"
+    assert parsed.publish_prd is True
+    assert parsed.ready is False
 
 
 def test_cli_parser_run_once() -> None:

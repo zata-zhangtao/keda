@@ -5,7 +5,7 @@
 ## 功能概述
 
 - **labels sync**：在目标仓库创建或更新标准 labels（`agent/ready`、`agent/running` 等）
-- **issue-from-prd**：从 PRD Markdown 文件创建 GitHub Issue，并将 Issue URL 回写到 PRD
+- **issue-from-prd**：从 PRD Markdown 文件创建 GitHub Issue，并可在 ready 前发布 PRD
 - **run-once**：单次轮询 `agent/ready` 的 Issues，claim 后执行 AI Agent，验证并创建 draft PR
 - **daemon**：常驻进程，按指定间隔循环执行 `run-once`
 
@@ -76,8 +76,8 @@ iar labels sync [--repo]
 # 同步 Labels
 iar labels sync [--repo]
 
-# 从 PRD 创建 Issue
-iar issue-from-prd tasks/pending/example.md [--repo] --type feature --agent codex
+# 从 PRD 创建 ready Issue，并先发布 PRD
+iar issue-from-prd tasks/pending/example.md [--repo] --type feature --agent codex --publish-prd --ready
 
 # 单次执行（dry-run 预览）
 iar run-once [--repo] --dry-run
@@ -186,10 +186,22 @@ uv run iar labels sync [--repo]
 uv run iar issue-from-prd tasks/pending/feature-login.md \
   [--repo] \
   --type feature \
-  --agent codex
+  --agent codex \
+  --publish-prd \
+  --ready
 ```
 
-> `--agent` 可选 `codex` / `claude` / `auto`（按 Issue label 自动路由）。
+> `--agent` 可选 `codex` / `claude` / `auto`（按 Issue label 自动路由）。推荐在交给 runner 前使用 `--publish-prd --ready`，确保 runner 的 base branch 能读取到已回写 Issue URL 的 canonical PRD。
+
+#### `--publish-prd` 发布边界
+
+`--publish-prd` 是显式 Git 发布行为，未传入时 `issue-from-prd` 只创建 Issue 并本地回写 PRD，不执行 `git add`、`git commit` 或 `git push`。
+
+传入 `--publish-prd` 后，命令会在 Issue URL 回写到目标 PRD 后执行 PRD-only 发布：只 `git add` 传入的 PRD 文件，只提交该 PRD 文件，然后 push 到 `config.toml` 中 `[agent_runner.git]` 配置的 remote。工作区其他未跟踪或已修改文件不会被加入这个 commit；如果 Git index 里已经 staged 了非目标 PRD 文件，命令会失败，避免把用户已有 staged changes 混入 PRD 发布 commit。
+
+当同时传入 `--publish-prd --ready` 时，创建 Issue 的第一步不会带 `agent/ready`。只有 PRD commit push 成功后，命令才会通过 GitHub API 给 Issue 添加 `agent/ready`。如果 push 失败，命令返回失败，保留已创建但未 ready 的 backlog Issue，runner 不会领取它。
+
+Ready 发布要求当前分支等于 `[agent_runner.git].base_branch`，因为 runner 默认从 base branch 创建 worktree。若当前分支不是 base branch，命令会失败并提示切换到 base branch 或改用 `--no-ready`。
 
 #### 4. 查看结果
 
@@ -284,7 +296,7 @@ export OPENAI_API_KEY="sk-xxx"
 uv run iar labels sync [--repo]
 
 # 4. 创建 Issue
-uv run iar issue-from-prd tasks/pending/xxx.md [--repo] --agent codex
+uv run iar issue-from-prd tasks/pending/xxx.md [--repo] --agent codex --publish-prd --ready
 
 # 5. 启动 daemon 自动执行
 uv run iar daemon [--repo] --interval 600

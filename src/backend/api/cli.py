@@ -6,7 +6,10 @@ import argparse
 import logging
 from pathlib import Path
 
-from backend.core.use_cases.create_issue_from_prd import create_issue_from_prd
+from backend.core.use_cases.create_issue_from_prd import (
+    IssueFromPrdRequest,
+    create_issue_from_prd,
+)
 from backend.core.use_cases.run_agent_daemon import run_agent_daemon
 from backend.core.use_cases.run_agent_once import run_once
 from backend.core.use_cases.sync_labels import sync_labels
@@ -68,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Optional agent routing label to add to the Issue.",
     )
+    issue_parser.add_argument(
+        "--publish-prd",
+        action="store_true",
+        help="Commit and push only the target PRD before adding the ready label.",
+    )
     issue_parser.add_argument("--force", action="store_true")
     add_common_options(issue_parser)
 
@@ -114,15 +122,21 @@ def main(argv: list[str] | None = None) -> int:
         if parsed.command == "issue-from-prd":
             github_client = create_github_client(repo_path, process_runner)
             issue_url = create_issue_from_prd(
-                repo_path=repo_path,
-                prd_path=Path(parsed.prd_path),
-                issue_type=parsed.type,
-                title_override=parsed.title,
-                queue_ready=parsed.ready,
-                issue_agent=parsed.agent,
-                labels_config=config.labels,
-                force=parsed.force,
+                request=IssueFromPrdRequest(
+                    repo_path=repo_path,
+                    prd_path=Path(parsed.prd_path),
+                    issue_type=parsed.type,
+                    title_override=parsed.title,
+                    queue_ready=parsed.ready,
+                    issue_agent=parsed.agent,
+                    labels_config=config.labels,
+                    force=parsed.force,
+                    publish_prd=parsed.publish_prd,
+                    git_remote=config.git.remote,
+                    git_base_branch=config.git.base_branch,
+                ),
                 github_client=github_client,
+                process_runner=process_runner,
             )
             _logger.info("Created GitHub Issue: %s", issue_url)
             return 0

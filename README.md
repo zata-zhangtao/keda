@@ -52,8 +52,8 @@ just docs-serve
 # 同步 GitHub Labels
 uv run iar labels sync --repo /path/to/target-repo
 
-# 从 PRD 创建 GitHub Issue
-uv run iar issue-from-prd tasks/pending/example.md --repo /path/to/target-repo --agent codex
+# 从 PRD 创建 GitHub Issue，并在 ready 前发布 PRD
+uv run iar issue-from-prd tasks/pending/example.md --repo /path/to/target-repo --agent codex --publish-prd --ready
 
 # 单次执行（dry-run 预览）
 uv run iar run-once --repo /path/to/target-repo --dry-run
