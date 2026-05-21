@@ -1,5 +1,7 @@
 # PRD: Agent Runner 支持多个目标仓库
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/2
+
 ## 1. Introduction & Goals
 
 当前 `iar` 已支持通过 `--repo` 临时指定一个目标仓库路径，但运行模型仍是“单进程、单仓库、单套全局 agent_runner 配置”。当同一台执行机需要同时维护多个目标代码仓库时，操作者必须为每个仓库手动启动独立命令或独立 daemon，配置、状态查询和文档也无法表达“仓库列表”这一目标态。
