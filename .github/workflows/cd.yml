@@ -39,7 +39,7 @@ jobs:
         run: uv run pre-commit run --all-files --show-diff-on-failure
 
       - name: Check max file lines (hard limit)
-        run: uv run python hooks/check_max_file_lines.py --max-lines 1000 $(find backend -name "*.py")
+        run: uv run python hooks/check_max_file_lines.py --max-lines 1000 $(find src/backend -name "*.py")
 
       - name: Run local test suite
         run: uv run pytest tests/ -v --ignore=tests/test_model_loader_real.py -m "not expensive"

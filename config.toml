@@ -126,7 +126,7 @@ claude = "agent/claude"
 kimi = "agent/kimi"
 
 [agent_runner.git]
-remote = "origin"
+remote = "zata"
 base_branch = "main"
 
 [agent_runner.worktree]
@@ -136,7 +136,8 @@ path_command = "bash -c 'echo \"$(dirname \"$(git rev-parse --show-toplevel)\")/
 
 [agent_runner.runner]
 default_agent = "claude"
-max_recovery_attempts = 2
+max_recovery_attempts = 5
+recovery_retry_delay_seconds = 30
 verification_commands = [
   "git diff --check",
   "just test",

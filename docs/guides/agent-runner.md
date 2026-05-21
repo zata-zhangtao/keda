@@ -247,7 +247,7 @@ export ANTHROPIC_API_KEY="sk-ant-your-anthropic-key"
 ```
 
 > 也可以把 API Key 写到 `.env` 文件里，iar 会自动加载。
-> `iar` 以无人值守方式调用 Claude Code，会使用 `--dangerously-skip-permissions` 跳过文件编辑权限确认，并启用 verbose `stream-json` 输出，避免长时间无终端反馈。
+> `iar` 以无人值守方式调用 Claude Code，会使用 `--dangerously-skip-permissions` 跳过文件编辑权限确认，并启用 verbose `stream-json`。runner 会过滤原始 JSON，只显示工具调用摘要、assistant 文本和最终错误。
 
 #### 3. 单次执行（测试用）
 
@@ -343,6 +343,7 @@ path_command = "bash -c 'echo \"$(dirname \"$(git rev-parse --show-toplevel)\")/
 [agent_runner.runner]
 default_agent = "auto"
 max_recovery_attempts = 2
+recovery_retry_delay_seconds = 30
 verification_commands = [
   "git diff --check",
   "just test",
@@ -364,13 +365,14 @@ forbidden_path_patterns = [
 ## 安全边界
 
 - `auto_merge` 固定为 `false`，不会自动合并 PR
+- `iar labels sync` 只同步 GitHub labels，不校验发布 remote；`iar run-once` 在领取 Issue 前会校验 `[agent_runner.git].remote` 必须存在，不存在时直接失败并列出当前可用 remote
 - 发布变更前会检查 `forbidden_path_patterns`，拒绝匹配的文件变更
 - Agent 执行在隔离 worktree 中进行，不影响主工作区
 - Agent 不直接执行 `git add` 或 `git commit`；完成修改后写入 `.agent-runner/commit-request.json` 请求 runner 在 host 侧提交
 - `commit-request.json` 只允许提供 `commit_message`；runner 会校验当前 branch 未变化、删除请求文件、检查 `forbidden_path_patterns`，再执行 `git add -A` 和 `git commit`
 - 不同仓库应在 `verification_commands` 中配置自己的验证命令，例如 `just test`、`npm test`、`pnpm lint` 或 `make test`
 - runner 会在提交前先运行一次 `verification_commands`；发现未提交变更并执行 `git add -A` 后，会再次运行同一组验证命令，覆盖依赖 staged 状态的 commit hook 或测试标记
-- 任一验证失败时，runner 最多按 `max_recovery_attempts` 重新调用同一个 Agent，并把失败命令的 exit code、stdout、stderr 放入 recovery prompt；Agent 修复后仍只能写 commit request，不能直接提交
+- Agent CLI 非零退出或任一验证失败时，runner 最多按 `max_recovery_attempts` 重新调用同一个 Agent；每次 recovery 前会等待 `recovery_retry_delay_seconds` 秒，并把失败摘要或失败命令的 exit code、stdout、stderr 放入 recovery prompt；Agent 修复后仍只能写 commit request，不能直接提交
 - 如果 Agent 没有产生任何新 commit 且工作区也没有未提交变更，runner 仍会将 Issue 标记为 `agent/failed`
 
 ## FastAPI 状态端点

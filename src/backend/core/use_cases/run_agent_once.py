@@ -7,6 +7,8 @@ import logging
 import re
 import shlex
 import socket
+import subprocess
+import time
 from collections.abc import Callable
 from fnmatch import fnmatch
 from pathlib import Path
@@ -409,6 +411,66 @@ def format_recovery_failure_summary(
     return "\n\n".join([heading, result_sections])
 
 
+def format_agent_execution_failure(exc: BaseException) -> str:
+    """Build the failure section for a failed agent CLI invocation."""
+    lines = ["Agent command failed before runner verification could start."]
+    if isinstance(exc, subprocess.CalledProcessError):
+        lines.extend(
+            [
+                f"Command: `{_agent_command_name(exc.cmd)}`",
+                f"Exit code: {exc.returncode}",
+                "stdout:",
+                "```text",
+                truncate_recovery_output(str(exc.output or "")),
+                "```",
+                "stderr:",
+                "```text",
+                truncate_recovery_output(str(exc.stderr or "")),
+                "```",
+            ]
+        )
+        if not exc.output and not exc.stderr:
+            lines.append("The command streamed its details to the terminal.")
+    else:
+        lines.extend(
+            [
+                f"Exception type: {type(exc).__name__}",
+                "Exception:",
+                "```text",
+                truncate_recovery_output(str(exc)),
+                "```",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _agent_command_name(command: object) -> str:
+    """Return a short command name without echoing a potentially huge prompt."""
+    if isinstance(command, (list, tuple)) and command:
+        return str(command[0])
+    return str(command)
+
+
+def wait_before_recovery_attempt(
+    issue_number: int,
+    *,
+    recovery_attempt: int,
+    max_recovery_attempts: int,
+    delay_seconds: int,
+) -> None:
+    """Wait before a recovery attempt when retry delay is configured."""
+    if delay_seconds <= 0:
+        return
+    _logger.info(
+        "Waiting %d seconds before recovery attempt %d/%d for Issue #%d.",
+        delay_seconds,
+        recovery_attempt,
+        max_recovery_attempts,
+        issue_number,
+    )
+    time.sleep(delay_seconds)
+
+
 def run_agent_until_committed(
     *,
     selected_agent: str,
@@ -421,23 +483,44 @@ def run_agent_until_committed(
 ) -> list[CommandResult]:
     """Run the agent, recover failed verification, and return final checks."""
     max_recovery_attempts = max(0, config.runner.max_recovery_attempts)
+    recovery_retry_delay_seconds = max(0, config.runner.recovery_retry_delay_seconds)
     recovery_failure_summary = ""
     final_verification_results: list[CommandResult] = []
 
     for attempt_index in range(max_recovery_attempts + 1):
-        if attempt_index == 0:
-            run_agent(selected_agent, issue, worktree_path, process_runner)
-        else:
-            recovery_prompt = build_recovery_prompt(
-                issue,
-                worktree_path,
+        if attempt_index > 0:
+            wait_before_recovery_attempt(
+                issue.number,
                 recovery_attempt=attempt_index,
                 max_recovery_attempts=max_recovery_attempts,
-                failure_summary=recovery_failure_summary,
+                delay_seconds=recovery_retry_delay_seconds,
             )
-            run_agent_with_prompt(
-                selected_agent, recovery_prompt, worktree_path, process_runner
+        try:
+            if attempt_index == 0:
+                run_agent(selected_agent, issue, worktree_path, process_runner)
+            else:
+                recovery_prompt = build_recovery_prompt(
+                    issue,
+                    worktree_path,
+                    recovery_attempt=attempt_index,
+                    max_recovery_attempts=max_recovery_attempts,
+                    failure_summary=recovery_failure_summary,
+                )
+                run_agent_with_prompt(
+                    selected_agent, recovery_prompt, worktree_path, process_runner
+                )
+        except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            if attempt_index >= max_recovery_attempts:
+                raise
+            recovery_failure_summary = format_agent_execution_failure(exc)
+            _logger.warning(
+                "Agent command failed for Issue #%d; "
+                "asking agent to recover (%d/%d).",
+                issue.number,
+                attempt_index + 1,
+                max_recovery_attempts,
             )
+            continue
 
         verification_results = run_verification(worktree_path, config, process_runner)
         final_verification_results = verification_results
@@ -580,18 +663,66 @@ def validate_safe_changes(
         raise RuntimeError(f"Refusing to publish forbidden paths: {blocked_paths_text}")
 
 
+def list_git_remotes(worktree_path: Path, process_runner: IProcessRunner) -> list[str]:
+    """Return configured Git remote names for the worktree."""
+    remote_result = process_runner.run(["git", "remote"], cwd=worktree_path)
+    remote_names = []
+    for remote_line in remote_result.stdout.splitlines():
+        remote_name = remote_line.strip()
+        if remote_name and remote_name not in remote_names:
+            remote_names.append(remote_name)
+    return remote_names
+
+
+def validate_publish_remote(
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> str:
+    """Return the configured publish remote after confirming it exists."""
+    remote_names = list_git_remotes(worktree_path, process_runner)
+    configured_remote_name = config.git.remote
+    if configured_remote_name in remote_names:
+        return configured_remote_name
+
+    available_remotes_text = ", ".join(remote_names) if remote_names else "(none)"
+    raise RuntimeError(
+        "Configured git remote "
+        f"'{configured_remote_name}' does not exist. "
+        f"Available remotes: {available_remotes_text}. "
+        "Update [agent_runner.git].remote in config.toml before publishing."
+    )
+
+
+def run_preflight_checks(
+    repo_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> None:
+    """Validate runner configuration before claiming any Issue."""
+    validate_publish_remote(repo_path, config, process_runner)
+
+
 def publish_changes(
     issue: IssueSummary,
     worktree_path: Path,
     config: AppConfig,
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
+    *,
+    expected_branch: str | None = None,
 ) -> tuple[str, str]:
     """Push and create a draft PR. Assumes the agent has already committed."""
     branch = get_current_branch(worktree_path, process_runner)
+    if expected_branch is not None and branch != expected_branch:
+        raise RuntimeError(
+            f"Refusing to publish from unexpected branch: {branch} "
+            f"(expected {expected_branch})"
+        )
     validate_safe_changes(worktree_path, config, process_runner)
+    publish_remote_name = validate_publish_remote(worktree_path, config, process_runner)
     process_runner.run(
-        ["git", "push", "-u", config.git.remote, branch], cwd=worktree_path
+        ["git", "push", "-u", publish_remote_name, branch], cwd=worktree_path
     )
     pr_body = f"Closes #{issue.number}\n\nGenerated by issue-agent-runner.\n"
     pr_url = github_client.create_draft_pr(
@@ -627,6 +758,13 @@ def run_once(
     Returns:
         Exit code (0 on success, 1 if any issue failed).
     """
+    if not dry_run:
+        try:
+            run_preflight_checks(repo_path, config, process_runner)
+        except Exception as exc:  # noqa: BLE001 - report preflight failure cleanly.
+            _logger.error("Agent runner preflight failed: %s", exc)
+            return 1
+
     issues = github_client.list_ready_issues(config.labels.ready, max_issues)
     if not issues:
         _logger.info("No open Issues found with label %s.", config.labels.ready)
@@ -668,7 +806,12 @@ def run_once(
                 expected_branch=expected_branch,
             )
             branch, pr_url = publish_changes(
-                issue, worktree_path, config, github_client, process_runner
+                issue,
+                worktree_path,
+                config,
+                github_client,
+                process_runner,
+                expected_branch=expected_branch,
             )
             github_client.edit_issue_labels(
                 issue.number, add=[config.labels.review], remove=[config.labels.running]

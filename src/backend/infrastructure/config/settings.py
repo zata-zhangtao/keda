@@ -299,6 +299,7 @@ class AgentRunnerRunnerSettings(BaseModel):
     max_issues: int = 1
     default_agent: str = "auto"
     max_recovery_attempts: int = 2
+    recovery_retry_delay_seconds: int = 30
     verification_commands: list[str] = Field(
         default_factory=lambda: [
             "git diff --check",

@@ -10,6 +10,7 @@ import pytest
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
+    GitConfig,
     IssueSummary,
     RunnerConfig,
     WorktreeConfig,
@@ -109,6 +110,37 @@ def test_run_once_dry_run() -> None:
     assert len(edit_calls) == 0
 
 
+def test_run_once_preflight_rejects_missing_configured_remote(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """run_once should fail before claiming work when configured remote is absent."""
+    fake_client = FakeGitHubClient()
+    fake_runner = FakeProcessRunner(
+        responses={
+            _git_remote_command(): _git_remote_result("zata"),
+        }
+    )
+    caplog.set_level(logging.ERROR, logger="backend.core.use_cases.run_agent_once")
+
+    from backend.core.use_cases.run_agent_once import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=AppConfig(),
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 1
+    assert fake_client.calls == []
+    assert fake_runner.calls == [["git", "remote"]]
+    assert "Configured git remote 'origin' does not exist" in caplog.text
+    assert "Available remotes: zata" in caplog.text
+
+
 def test_build_prompt_uses_commit_request_proxy() -> None:
     """Prompt should route commit intent through the runner proxy."""
     issue = IssueSummary(
@@ -199,6 +231,7 @@ def test_publish_changes_no_git_commit() -> None:
                 stdout="",
                 stderr="",
             ),
+            _git_remote_command(): _git_remote_result("origin"),
         }
     )
     branch, pr_url = publish_changes(
@@ -210,6 +243,114 @@ def test_publish_changes_no_git_commit() -> None:
     assert ("git", "add", "-A") not in commands
     assert ("git", "commit", "-m", "agent: complete issue #1") not in commands
     assert ("git", "push", "-u", "origin", "issue-1") in commands
+
+
+def test_publish_changes_rejects_missing_configured_remote() -> None:
+    """publish_changes should fail instead of guessing another remote."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Test body",
+        labels=(),
+    )
+    fake_client = FakeGitHubClient()
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            _git_remote_command(): _git_remote_result("zata", "upstream"),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="Configured git remote 'origin'"):
+        publish_changes(issue, Path("."), AppConfig(), fake_client, fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "push", "-u", "origin", "issue-1") not in commands
+    assert ("git", "push", "-u", "zata", "issue-1") not in commands
+
+
+def test_publish_changes_uses_configured_existing_remote() -> None:
+    """publish_changes should push only to the configured remote."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Test body",
+        labels=(),
+    )
+    fake_client = FakeGitHubClient()
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            _git_remote_command(): _git_remote_result("origin", "zata"),
+        }
+    )
+    config = AppConfig(git=GitConfig(remote="zata"))
+
+    branch, _ = publish_changes(issue, Path("."), config, fake_client, fake_runner)
+
+    assert branch == "issue-1"
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "push", "-u", "zata", "issue-1") in commands
+    assert ("git", "push", "-u", "origin", "issue-1") not in commands
+
+
+def test_publish_changes_rejects_branch_change() -> None:
+    """publish_changes should refuse to push if the worktree branch changed."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Test body",
+        labels=(),
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="main\n",
+                stderr="",
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected branch: main"):
+        publish_changes(
+            issue,
+            Path("."),
+            AppConfig(),
+            FakeGitHubClient(),
+            fake_runner,
+            expected_branch="issue-1",
+        )
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "status", "--porcelain") not in commands
+    assert ("git", "push", "-u", "origin", "main") not in commands
 
 
 def test_validate_safe_changes_rejects_forbidden_path(tmp_path: Path) -> None:
@@ -250,11 +391,13 @@ def _config_for_worktree(
     worktree_path: Path,
     *verification_commands: str,
     max_recovery_attempts: int = 2,
+    recovery_retry_delay_seconds: int = 0,
 ) -> AppConfig:
     commands = verification_commands or ("just test",)
     return AppConfig(
         runner=RunnerConfig(
             max_recovery_attempts=max_recovery_attempts,
+            recovery_retry_delay_seconds=recovery_retry_delay_seconds,
             verification_commands=commands,
         ),
         worktree=WorktreeConfig(path_command=f"echo {worktree_path}"),
@@ -269,6 +412,20 @@ def _worktree_path_response(
         command=command,
         return_code=0,
         stdout=f"{worktree_path}\n",
+        stderr="",
+    )
+
+
+def _git_remote_command() -> tuple[str, ...]:
+    return ("git", "remote")
+
+
+def _git_remote_result(*remote_names: str) -> CommandResult:
+    command = _git_remote_command()
+    return CommandResult(
+        command=command,
+        return_code=0,
+        stdout="".join(f"{remote_name}\n" for remote_name in remote_names),
         stderr="",
     )
 
@@ -346,6 +503,7 @@ def test_run_once_uncommitted_changes_runner_commits(
             stdout="issue-123\n",
             stderr="",
         ),
+        _git_remote_command(): _git_remote_result("origin"),
     }
     config = _config_for_worktree(worktree_path, "npm test")
     caplog.set_level(logging.WARNING, logger="backend.core.use_cases.run_agent_once")
@@ -465,7 +623,10 @@ def test_run_once_recovers_after_staged_verification_failure(
 
     fake_runner = _StagedRecoveryRunner()
     path_command, path_result = _worktree_path_response(worktree_path)
-    fake_runner.responses = {path_command: path_result}
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
     config = _config_for_worktree(worktree_path)
 
     from backend.core.use_cases.run_agent_once import run_once
@@ -507,6 +668,100 @@ def test_run_once_recovers_after_staged_verification_failure(
     assert ("git", "commit", "-m", "agent: recovered fix") in commands
 
 
+def test_run_once_recovers_after_agent_command_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_once should retry when the agent CLI exits before verification."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _AgentCommandRecoveryRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._agent_calls = 0
+            self._sha_calls = 0
+            self._committed = False
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                return self.responses[command_tuple]
+            if command_tuple[:1] == ("codex",):
+                self._agent_calls += 1
+                if self._agent_calls == 1:
+                    raise RuntimeError("API Error: 400 Invalid request Error")
+                prompt = command_tuple[-1]
+                assert "Recovery attempt: 1/2" in prompt
+                assert "API Error: 400 Invalid request Error" in prompt
+                _write_commit_request(worktree_path, "agent: recovered after api error")
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self._sha_calls += 1
+                sha = "after-sha" if self._sha_calls > 1 else "before-sha"
+                return CommandResult(command_tuple, 0, f"{sha}\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                stdout = "" if self._committed else " M file.txt\n"
+                return CommandResult(command_tuple, 0, stdout, "")
+            if command_tuple == (
+                "git",
+                "commit",
+                "-m",
+                "agent: recovered after api error",
+            ):
+                self._committed = True
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _AgentCommandRecoveryRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    sleep_calls: list[int] = []
+    monkeypatch.setattr(
+        "backend.core.use_cases.run_agent_once.time.sleep",
+        lambda seconds: sleep_calls.append(seconds),
+    )
+    config = _config_for_worktree(worktree_path, recovery_retry_delay_seconds=7)
+    caplog.set_level(logging.WARNING, logger="backend.core.use_cases.run_agent_once")
+
+    from backend.core.use_cases.run_agent_once import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    commands = [tuple(command) for command in fake_runner.calls]
+    agent_commands = [command for command in commands if command[:1] == ("codex",)]
+    failed_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "edit_issue_labels"
+        and config.labels.failed in c.get("add", [])
+    ]
+    assert exit_code == 0
+    assert len(agent_commands) == 2
+    assert sleep_calls == [7]
+    assert ("git", "commit", "-m", "agent: recovered after api error") in commands
+    assert len(failed_calls) == 0
+    assert "Agent command failed for Issue #123" in caplog.text
+
+
 def test_run_once_uncommitted_changes_validation_failure_does_not_stage(
     tmp_path: Path,
 ) -> None:
@@ -540,6 +795,7 @@ def test_run_once_uncommitted_changes_validation_failure_does_not_stage(
                 stdout="",
                 stderr="tests failed\n",
             ),
+            _git_remote_command(): _git_remote_result("origin"),
         }
     )
     config = _config_for_worktree(worktree_path)
@@ -606,6 +862,7 @@ def test_run_once_uncommitted_changes_missing_request_fails(tmp_path: Path) -> N
                 stdout=" M file.txt\n",
                 stderr="",
             ),
+            _git_remote_command(): _git_remote_result("origin"),
         }
     )
     config = _config_for_worktree(worktree_path)
@@ -665,6 +922,7 @@ def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> No
                 stdout="",
                 stderr="commit failed\n",
             ),
+            _git_remote_command(): _git_remote_result("origin"),
         }
     )
     config = _config_for_worktree(worktree_path)
@@ -790,9 +1048,10 @@ def test_run_once_no_new_commits_fails() -> None:
                 stdout="",
                 stderr="",
             ),
+            _git_remote_command(): _git_remote_result("origin"),
         }
     )
-    config = AppConfig()
+    config = AppConfig(runner=RunnerConfig(recovery_retry_delay_seconds=0))
 
     from backend.core.use_cases.run_agent_once import run_once
 
@@ -864,6 +1123,7 @@ def test_run_once_success() -> None:
             stdout="issue-123\n",
             stderr="",
         ),
+        _git_remote_command(): _git_remote_result("origin"),
     }
     config = AppConfig()
 

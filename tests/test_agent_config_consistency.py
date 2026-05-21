@@ -15,10 +15,12 @@ from backend.infrastructure.github_client import LabelConfig as InfraLabelConfig
 def test_agent_runner_reads_root_config_toml() -> None:
     """Agent runner settings should load the repository root config.toml."""
     repository_root = Path(__file__).resolve().parents[1]
+    app_config = build_app_config()
 
     assert settings_module._PROJECT_ROOT_PATH == repository_root
     assert settings_module._TOML_CONFIG_FILE_PATH == repository_root / "config.toml"
-    assert build_app_config().runner.default_agent == "claude"
+    assert app_config.runner.default_agent == "claude"
+    assert app_config.runner.recovery_retry_delay_seconds == 30
 
 
 def test_settings_and_core_agent_labels_are_identical() -> None:

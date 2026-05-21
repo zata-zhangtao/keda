@@ -344,6 +344,7 @@ No external validation required; repository evidence was sufficient.
 - **不引入外部模板引擎**：recovery prompt 使用简单字符串拼接或复用已有的 `str.format()` 模板机制。
 - **不实现跨 issue 的状态共享**：每个 issue 的恢复循环是独立的，不共享 worktree 或上下文。
 - **不处理网络/API 级别的重试**：本 PRD 只处理业务逻辑层面的失败恢复，LLM API 的 rate limit 重试由 agent CLI 自身处理。
+- **不处理发布阶段失败恢复**：Agent 已完成并产生本地 commit 后的 `git push`、PR 创建、label 收尾失败，由 `tasks/pending/20260521-192533-prd-agent-runner-publish-recovery.md` 单独处理。
 - **不实现人工 approve 后才继续**：检查点暂停机制属于另一个潜在 PRD，本 PRD 的 recovery loop 是全自动的。
 
 ## 10. Risks And Follow-Ups
