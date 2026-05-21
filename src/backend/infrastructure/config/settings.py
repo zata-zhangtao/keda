@@ -264,6 +264,16 @@ class AgentRunnerLabelSettings(BaseModel):
     blocked: str = "agent/blocked"
     codex: str = "agent/codex"
     claude: str = "agent/claude"
+    kimi: str = "agent/kimi"
+
+    @property
+    def agent_labels(self) -> dict[str, str]:
+        """Agent routing labels as a lookup table."""
+        return {
+            "codex": self.codex,
+            "claude": self.claude,
+            "kimi": self.kimi,
+        }
 
 
 class AgentRunnerGitSettings(BaseModel):

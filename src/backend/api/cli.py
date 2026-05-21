@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_parser.add_argument(
         "--agent",
-        choices=("auto", "codex", "claude", "none"),
+        choices=("auto", "codex", "claude", "kimi", "none"),
         default="auto",
         help="Optional agent routing label to add to the Issue.",
     )
@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run-once")
     run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument(
-        "--agent", choices=("auto", "codex", "claude"), default="auto"
+        "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
     )
     run_parser.add_argument("--max-issues", type=int)
     add_common_options(run_parser)
@@ -82,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_parser = subparsers.add_parser("daemon")
     daemon_parser.add_argument("--interval", type=int, default=600)
     daemon_parser.add_argument(
-        "--agent", choices=("auto", "codex", "claude"), default="auto"
+        "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
     )
     daemon_parser.add_argument("--max-issues", type=int)
     add_common_options(daemon_parser)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
@@ -31,8 +31,13 @@ class LabelConfig:
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
-    codex: str = "agent/codex"
-    claude: str = "agent/claude"
+    agent_labels: dict[str, str] = field(
+        default_factory=lambda: {
+            "codex": "agent/codex",
+            "claude": "agent/claude",
+            "kimi": "agent/kimi",
+        }
+    )
 
 
 class GitHubCliClient:
@@ -66,8 +71,6 @@ class GitHubCliClient:
             ("agent/review", "1D76DB", "AI runner opened work for human review."),
             ("agent/failed", "D73A4A", "AI runner failed and posted details."),
             ("agent/blocked", "000000", "AI runner needs human input."),
-            ("agent/codex", "5319E7", "Use Codex for local runner execution."),
-            ("agent/claude", "BFDADC", "Use Claude Code for local runner execution."),
             (
                 "source/prd",
                 "0052CC",
@@ -78,15 +81,26 @@ class GitHubCliClient:
             ("type/bug", "D73A4A", "Broken behavior or regression fix."),
             ("status/backlog", "BFDADC", "Tracked work that is not in progress yet."),
         ]
+        _agent_label_meta: dict[str, tuple[str, str]] = {
+            "codex": ("5319E7", "Use Codex for local runner execution."),
+            "claude": ("BFDADC", "Use Claude Code for local runner execution."),
+            "kimi": ("FF6B6B", "Use Kimi for local runner execution."),
+        }
+        for agent_name, label_text in labels.agent_labels.items():
+            color, description = _agent_label_meta.get(
+                agent_name, ("5319E7", f"Use {agent_name} for local runner execution.")
+            )
+            label_specs.append((f"agent/{agent_name}", color, description))
         configured_names = {
             "agent/ready": labels.ready,
             "agent/running": labels.running,
             "agent/review": labels.review,
             "agent/failed": labels.failed,
             "agent/blocked": labels.blocked,
-            "agent/codex": labels.codex,
-            "agent/claude": labels.claude,
         }
+        configured_names.update(
+            {f"agent/{k}": v for k, v in labels.agent_labels.items()}
+        )
         for label_name, color, description in label_specs:
             effective_name = configured_names.get(label_name, label_name)
             self._runner.run(

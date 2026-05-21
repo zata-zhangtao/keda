@@ -39,8 +39,7 @@ def build_app_config() -> AppConfig:
             review=label_settings.review,
             failed=label_settings.failed,
             blocked=label_settings.blocked,
-            codex=label_settings.codex,
-            claude=label_settings.claude,
+            agent_labels=label_settings.agent_labels,
         ),
         git=GitConfig(
             remote=git_settings.remote,

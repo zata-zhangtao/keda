@@ -122,12 +122,11 @@ def create_issue_from_prd(
     labels = [f"type/{issue_type}", "status/backlog", "source/prd"]
     if queue_ready:
         labels.append(effective_labels_config.ready)
-    if issue_agent == "codex":
-        labels.append(effective_labels_config.codex)
-    elif issue_agent == "claude":
-        labels.append(effective_labels_config.claude)
+    if issue_agent in effective_labels_config.agent_labels:
+        labels.append(effective_labels_config.agent_labels[issue_agent])
     elif issue_agent not in {"auto", "none"}:
-        raise ValueError("issue_agent must be one of: auto, codex, claude, none")
+        allowed = ", ".join([*effective_labels_config.agent_labels, "auto", "none"])
+        raise ValueError(f"issue_agent must be one of: {allowed}")
     body = build_issue_body(
         relative_prd_path=relative_prd_path,
         title=title,

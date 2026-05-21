@@ -114,7 +114,7 @@ minio_seconds = 60
 # =============================================================================
 [agent_runner]
 max_issues = 1
-default_agent = "auto"
+default_agent = "claude"
 
 [agent_runner.labels]
 ready = "agent/ready"
@@ -124,6 +124,7 @@ failed = "agent/failed"
 blocked = "agent/blocked"
 codex = "agent/codex"
 claude = "agent/claude"
+kimi = "agent/kimi"
 
 [agent_runner.git]
 remote = "origin"

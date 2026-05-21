@@ -7,6 +7,7 @@ import re
 import shlex
 import socket
 from fnmatch import fnmatch
+from collections.abc import Callable
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
@@ -28,10 +29,9 @@ def choose_agent(issue: IssueSummary, config: AppConfig, override_agent: str) ->
     """Choose an AI agent for the Issue."""
     if override_agent != "auto":
         return override_agent
-    if config.labels.claude in issue.labels:
-        return "claude"
-    if config.labels.codex in issue.labels:
-        return "codex"
+    for agent_name, label in config.labels.agent_labels.items():
+        if label in issue.labels:
+            return agent_name
     return (
         config.runner.default_agent
         if config.runner.default_agent != "auto"
@@ -99,6 +99,34 @@ def create_or_reuse_worktree(
     return Path(path_result.stdout.strip()).resolve()
 
 
+def _build_claude_command(prompt: str, worktree_path: Path) -> list[str]:  # noqa: ARG001
+    return ["claude", "--permission-mode", "dontAsk", "-p", prompt]
+
+
+def _build_kimi_command(prompt: str, worktree_path: Path) -> list[str]:  # noqa: ARG001
+    return ["kimi", "--prompt", prompt]
+
+
+def _build_codex_command(prompt: str, worktree_path: Path) -> list[str]:
+    return [
+        "codex",
+        "--cd",
+        str(worktree_path),
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
+        "exec",
+        prompt,
+    ]
+
+
+_AGENT_COMMAND_BUILDERS: dict[str, Callable[[str, Path], list[str]]] = {
+    "claude": _build_claude_command,
+    "kimi": _build_kimi_command,
+}
+
+
 def run_agent(
     agent_name: str,
     issue: IssueSummary,
@@ -107,20 +135,11 @@ def run_agent(
 ) -> CommandResult:
     """Run Codex or Claude Code in non-interactive mode."""
     prompt = build_prompt(issue, worktree_path)
-    if agent_name == "claude":
-        command = ["claude", "--permission-mode", "dontAsk", "-p", prompt]
+    builder = _AGENT_COMMAND_BUILDERS.get(agent_name)
+    if builder is not None:
+        command = builder(prompt, worktree_path)
     else:
-        command = [
-            "codex",
-            "--cd",
-            str(worktree_path),
-            "--sandbox",
-            "workspace-write",
-            "--ask-for-approval",
-            "never",
-            "exec",
-            prompt,
-        ]
+        command = _build_codex_command(prompt, worktree_path)
     return process_runner.run(command, cwd=worktree_path, capture_output=False)
 
 

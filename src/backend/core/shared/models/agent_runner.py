@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -35,8 +35,13 @@ class LabelConfig:
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
-    codex: str = "agent/codex"
-    claude: str = "agent/claude"
+    agent_labels: dict[str, str] = field(
+        default_factory=lambda: {
+            "codex": "agent/codex",
+            "claude": "agent/claude",
+            "kimi": "agent/kimi",
+        }
+    )
 
 
 @dataclass(frozen=True)

@@ -35,20 +35,6 @@
 
 这条规则的目标是让“归档”代表交付完成，同时避免历史归档文档被新标准批量翻旧账。
 
-## Codex Session Workflow
-
-在新的 Codex CLI 会话开始时：
-
-1. 运行 `bash scripts/hooks/session-start.sh`
-2. 把返回 JSON 中的 `result` 当作补充上下文
-3. 这个动作每个 CLI 会话只做一次
-
-如果需要显式跑开始/结束 hook，优先使用：
-
-```bash
-bash scripts/codex_session.sh
-```
-
 ### Codex macOS 通知
 
 macOS 用户可以把 Codex CLI 的 `notify` 事件转发到系统快捷指令：

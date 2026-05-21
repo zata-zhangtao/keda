@@ -31,6 +31,27 @@
 - 同一判断逻辑在当前变更中出现 2 次以上，即使只有两行，也必须提取为命名函数
 - `src/backend/core/` 是后端业务规则唯一可信源；`src/backend/api/` 只做入口适配、参数校验、DTO 转换和用例调用
 
+## 配置集中化
+
+同一组映射关系（如 agent 类型 → label、状态 → 行为）禁止分散硬编码到多个文件。当同一概念需要在 **3 个及以上文件中追加硬编码分支**时，必须提取为集中式数据结构（字典、注册表或配置对象），通过查表驱动逻辑。已有 2 个分支且预计会扩展的，也应提前提取。
+
+明确不会扩展的一次性映射允许保留硬编码，但须标注：
+
+```python
+# NOTE: 若扩展至第 3 个，需改为注册表/字典
+```
+
+**反例**：新增 agent 标签时在 `settings.py` 加字段、`factory.py` 透传、`run_agent_once.py` 加 `elif`——这是散弹枪修改。正确做法：
+
+```python
+agent_labels: dict[str, str] = {
+    "codex": "agent/codex",
+    "claude": "agent/claude",
+    "kimi": "agent/kimi",
+}
+label = config.labels.agent_labels.get(agent_name, default_label)
+```
+
 ## 参数收敛
 
 参数游行是同一组相关参数沿调用链层层展开传递。新增或修改函数时遵守以下规则：
@@ -99,6 +120,7 @@ cost_values = fetch_costs("2026-01-01", "2026-01-31", True)
 
 - [ ] 我没有复制粘贴已有代码后微调（复用优先于复制）
 - [ ] 我复用的是业务规则（`is_` / `can_` / `validate_`）而非数据加载操作（`load_` / `get_` / `fetch_`）
+- [ ] 当同一映射关系需要新增第 3 个硬编码分支时，我已提取为注册表/字典/配置对象
 - [ ] 我的函数参数不超过 4 个，成组参数已收敛到对象
 - [ ] 我没有在同一文件里无限追加逻辑（当前文件非空行少于 800 行，目标少于 500 行）
 - [ ] 我的 import 方向符合四层架构（`api -> core -> engines -> infrastructure`）
