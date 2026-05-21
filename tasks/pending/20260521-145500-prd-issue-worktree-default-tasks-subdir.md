@@ -1,5 +1,7 @@
 # PRD: Worktree 统一集中到 `<repo>-worktrees` 并自动归类 issue 分支
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/5
+
 ## 1. Introduction & Goals
 
 当前 `scripts/worktree/create.sh` 的默认行为是把任何 worktree 直接放在仓库父目录下：

@@ -5,6 +5,32 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/hooks/quality_flag.sh
 source "$script_dir/quality_flag.sh"
 
+# 如果所有变更均为非代码文件，直接跳过 just test 检查
+all_changes_are_excluded() {
+    local files
+    files="$(git diff --cached --name-only)"
+    if [ -z "$files" ]; then
+        files="$(git diff --name-only HEAD)"
+    fi
+    if [ -z "$files" ]; then
+        return 0
+    fi
+    while IFS= read -r file_path; do
+        if [ -z "$file_path" ]; then
+            continue
+        fi
+        if [[ ! "$file_path" =~ $QUALITY_TEST_EXCLUDED_FILE_PATTERN ]]; then
+            return 1
+        fi
+    done <<< "$files"
+    return 0
+}
+
+if all_changes_are_excluded; then
+    echo "✅ 所有变更均为非代码文件，跳过 just test 检查。"
+    exit 0
+fi
+
 git_dir="$(quality_git_dir)"
 FLAG_FILE="$git_dir/.last_tested_commit"
 
