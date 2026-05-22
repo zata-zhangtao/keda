@@ -13,6 +13,7 @@ from backend.engines.agent_runner.factory import (
 )
 from backend.infrastructure.config.settings import (
     AgentRunnerGitSettings,
+    AgentRunnerLabelSettings,
     AgentRunnerRepositorySettings,
     AgentRunnerRunnerSettings,
     AgentRunnerSettings,
@@ -55,6 +56,39 @@ def test_merge_repository_config_inherits_unset_fields() -> None:
     merged = merge_repository_config(global_config, repo_settings)
     assert merged.runner.max_issues == 3
     assert merged.runner.default_agent == "claude"
+
+
+def test_merge_repository_config_overrides_labels() -> None:
+    """Repository-level label overrides should map correctly to LabelConfig."""
+    from backend.core.shared.models.agent_runner import LabelConfig
+
+    global_config = AppConfig(labels=LabelConfig(ready="global/ready"))
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        labels=AgentRunnerLabelSettings(ready="repo/ready", codex="repo/codex"),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.labels.ready == "repo/ready"
+    assert merged.labels.agent_labels["codex"] == "repo/codex"
+    assert merged.labels.agent_labels["claude"] == "agent/claude"
+
+
+def test_merge_repository_config_inherits_label_agent_labels() -> None:
+    """Unoverridden agent labels should inherit from global config."""
+    from backend.core.shared.models.agent_runner import LabelConfig
+
+    global_config = AppConfig(
+        labels=LabelConfig(
+            agent_labels={"codex": "global/codex", "claude": "global/claude"}
+        )
+    )
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        labels=AgentRunnerLabelSettings(claude="repo/claude"),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.labels.agent_labels["codex"] == "global/codex"
+    assert merged.labels.agent_labels["claude"] == "repo/claude"
 
 
 def test_resolve_repository_targets_ad_hoc_repo() -> None:

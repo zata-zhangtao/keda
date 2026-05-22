@@ -96,7 +96,7 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(prog="iar")
-    parser.add_argument("--repo", default=".", help="Target repository path.")
+    parser.add_argument("--repo", default=None, help="Target repository path.")
     parser.add_argument(
         "--repo-id", default=None, help="Target configured repository ID."
     )

@@ -65,15 +65,83 @@ def test_cli_parser_repo_id() -> None:
     assert parsed.repo_id == "keda"
 
 
-def test_cli_parser_repo_and_repo_id_mutual_exclusion() -> None:
-    """--repo and --repo-id should be mutually exclusive in parsing."""
+def test_cli_parser_repo_and_repo_id_individually_parseable() -> None:
+    """--repo and --repo-id should each be parseable individually."""
     parser = build_parser()
-    # argparse does not enforce mutual exclusion across different parsers,
-    # but both flags should be parseable individually.
     parsed_repo = parser.parse_args(["run-once", "--repo", "/tmp/repo"])
     assert parsed_repo.repo == "/tmp/repo"
     assert parsed_repo.repo_id is None
 
     parsed_id = parser.parse_args(["run-once", "--repo-id", "keda"])
     assert parsed_id.repo_id == "keda"
-    assert parsed_id.repo == "."
+    assert parsed_id.repo is None
+
+
+def test_main_rejects_repo_and_repo_id_together() -> None:
+    """main should exit 1 when both --repo and --repo-id are given."""
+    from backend.api.cli import main
+
+    exit_code = main(["run-once", "--repo", "/tmp/repo", "--repo-id", "keda"])
+    assert exit_code == 1
+
+
+def test_main_rejects_unknown_repo_id() -> None:
+    """main should exit 1 when repo-id does not exist in config."""
+    from unittest.mock import patch
+
+    from backend.api.cli import main
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        side_effect=ValueError("not found"),
+    ):
+        exit_code = main(["run-once", "--repo-id", "nonexistent"])
+        assert exit_code == 1
+
+
+def test_main_labels_sync_iterates_multiple_repos() -> None:
+    """labels sync without selector should call sync_labels for each repo."""
+    from pathlib import Path
+    from unittest.mock import MagicMock, patch
+
+    from backend.api.cli import main
+
+    mock_context_a = MagicMock()
+    mock_context_a.repo_path = Path("/tmp/repo-a")
+    mock_context_a.config.labels = MagicMock()
+    mock_context_b = MagicMock()
+    mock_context_b.repo_path = Path("/tmp/repo-b")
+    mock_context_b.config.labels = MagicMock()
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context_a, mock_context_b],
+    ), patch("backend.api.cli.sync_labels") as mock_sync, patch(
+        "backend.api.cli.create_github_client"
+    ):
+        exit_code = main(["labels", "sync"])
+        assert exit_code == 0
+        assert mock_sync.call_count == 2
+
+
+def test_main_issue_from_prd_defaults_to_cwd() -> None:
+    """issue-from-prd without --repo or --repo-id should resolve to cwd."""
+    from pathlib import Path
+    from unittest.mock import MagicMock, patch
+
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path.cwd()
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd",
+        return_value="https://github.com/example/issues/1",
+    ), patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False):
+        exit_code = main(["issue-from-prd", "tasks/example.md"])
+        assert exit_code == 0

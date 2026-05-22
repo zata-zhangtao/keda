@@ -23,6 +23,7 @@ from backend.core.shared.models.agent_runner import (
     WorktreeConfig,
 )
 from backend.infrastructure.config.settings import (
+    AgentRunnerLabelSettings,
     AgentRunnerRepositorySettings,
     AgentRunnerSettings,
     config,
@@ -84,7 +85,12 @@ def get_agent_runner_settings() -> AgentRunnerSettings:
 
 
 def get_agent_runner_status_data() -> dict:
-    """Build the status response dict for the FastAPI status endpoint."""
+    """Build the status response dict for the FastAPI status endpoint.
+
+    Returns:
+        A dictionary with ``daemon_mode``, ``config`` (global runner settings),
+        and ``repositories`` (list of per-repository summaries).
+    """
     agent_runner_settings = config.agent_runner
     app_config = build_app_config_from_settings(agent_runner_settings)
     repositories = []
@@ -153,11 +159,40 @@ def _merge_optional_model(base_model, override_model):
     return type(base_model)(**merged_data)
 
 
+def _merge_label_config(
+    base_config: LabelConfig, override: AgentRunnerLabelSettings | None
+) -> LabelConfig:
+    """Merge repository-specific label overrides into a base ``LabelConfig``."""
+    if override is None:
+        return base_config
+    override_data = _pydantic_override_dict(override)
+    agent_labels = dict(base_config.agent_labels)
+    for agent_key in ("codex", "claude", "kimi"):
+        if agent_key in override_data:
+            agent_labels[agent_key] = override_data[agent_key]
+    return LabelConfig(
+        ready=override_data.get("ready", base_config.ready),
+        running=override_data.get("running", base_config.running),
+        review=override_data.get("review", base_config.review),
+        failed=override_data.get("failed", base_config.failed),
+        blocked=override_data.get("blocked", base_config.blocked),
+        agent_labels=agent_labels,
+    )
+
+
 def merge_repository_config(
     global_config: AppConfig, repo_settings: AgentRunnerRepositorySettings
 ) -> AppConfig:
-    """Merge repository-specific overrides into a global ``AppConfig``."""
-    labels = _merge_optional_model(global_config.labels, repo_settings.labels)
+    """Merge repository-specific overrides into a global ``AppConfig``.
+
+    Args:
+        global_config: The global application configuration.
+        repo_settings: Repository-specific override settings.
+
+    Returns:
+        A new ``AppConfig`` with per-repository overrides applied.
+    """
+    labels = _merge_label_config(global_config.labels, repo_settings.labels)
     git = _merge_optional_model(global_config.git, repo_settings.git)
     worktree = _merge_optional_model(global_config.worktree, repo_settings.worktree)
     runner = _merge_optional_model(global_config.runner, repo_settings.runner)
