@@ -31,22 +31,23 @@
 - **发布前安全检查已落地**：runner 会校验发布 remote、当前分支、禁止路径模式，并在失败时把 issue 标记为 `agent/failed`。
 - **基础 API 状态端点已落地**：提供 agent-runner status 和 health 只读端点，用于暴露配置摘要和 `gh` 可用性。
 - **文档与测试基础已落地**：已有 Agent Runner 使用指南、配置说明、架构规范、归档 PRD、pytest 覆盖和 `just test` 验证入口。
+- **多仓库配置与轮询已落地**：`config.toml` 支持 `[agent_runner.repositories]` 声明多个目标仓库；`labels sync`、`run-once`、`daemon` 在未指定 `--repo` 或 `--repo-id` 时自动处理所有启用仓库；`issue-from-prd` 支持通过 `--repo-id` 解析到唯一目标仓库；API 状态端点返回多仓库配置摘要。
+- **新 worktree 默认基于最新远程 base ref 已落地**：`scripts/worktree/create.sh` 在创建前默认 fetch 远程 tracking ref，新增 `KEDA_WORKTREE_SYNC_BASE` 和 `KEDA_WORKTREE_BASE_REMOTE` 环境变量，无远程或同步关闭时回退到本地 base branch。
 
 ### Partially Completed
 
 - **交互终端能力**：已有 CLI 和少量交互式提示，但还没有完整的 issue 浏览、任务选择、状态追踪和人工介入终端体验。
-- **自动恢复能力**：agent 执行、验证和提交请求失败已有有限恢复；发布阶段失败后的显式 resume / recover 命令尚未完成。
-- **worktree 管理能力**：集中式 worktree 路径和 issue 分组已完成；新 worktree 默认基于最新远程 base ref 仍在待办。
+- **自动恢复能力**：agent 执行、验证和提交请求失败已有有限 recovery loop；发布阶段失败后的显式 `recover-publish` CLI 命令尚未完成。
 - **可观测性**：终端前台输出、Issue comment 和健康端点已具备；还缺少统一的执行事件时间线和可审计运行记录。
 - **review 能力**：runner 会执行验证和安全检查，并把 PR 标记为 Draft；独立的自动 code review gate 尚未实现。
 - **前端能力**：已有基础前端结构和页面骨架；面向 agent runner 的可用操作台尚未完成。
 
 ### Not Completed
 
-- 多目标仓库配置、轮询和状态汇总。
 - prompt template 与 phase 配置化。
-- 发布失败后的 `recover-publish` / resume 命令。
-- 新 worktree 默认使用最新远程 base ref。
+- 发布失败后的显式 `recover-publish` / resume CLI 命令。
+- PRD 完成后自动归档到 `tasks/archive/` 并更新 Acceptance Checklist。
+- pre-push AI code review 和 post-PR supervisor review 工作流。
 - 多 agent 合议会话。
 - 无 PRD Issue 的合议澄清、PRD 审批、PRD 落盘和 ready label 闭环。
 - PR 创建后的自动 rebase、重新验证和状态维护。
@@ -89,6 +90,7 @@ Status: Partially completed.
 
 - 已完成：通过 `agent/ready` label 和 agent 路由 label 控制 issue 是否进入 runner。
 - 已完成：从 PRD 创建 Issue，并在 Issue body 中保留 canonical PRD 路径和验收摘要。
+- 已完成：新 worktree 默认基于最新远程 base ref，避免任务从过期本地分支开始。
 - 未完成：完整交互终端中浏览 issue、选择任务、追问需求和展示状态。
 - 未完成：直接输入自然语言任务后生成可追踪 PRD / Issue 的完整闭环。
 - 未完成：没有 PRD 的用户 Issue 自动进入 intake 候选池，并通过管理员决策转换为 PRD 草稿或转人工结论。
@@ -100,7 +102,7 @@ Status: Partially completed.
 
 Status: Partially completed.
 
-- 已完成：runner 能创建或复用 issue worktree，并启动 Codex、Claude 或 Kimi。
+- 已完成：runner 能创建或复用 issue worktree，并启动 Codex、Claude 或 Kimi；新 worktree 默认基于最新远程 base ref。
 - 已完成：prompt 会要求 agent 读取 `AGENTS.md`、遵守仓库规范、修改代码、测试和必要文档。
 - 已完成：runner 通过 commit request 文件完成受限提交。
 - 未完成：prompt template / phase 配置化，避免每次调整 prompt 都改 Python 代码。
@@ -124,18 +126,19 @@ Status: Partially completed.
 - 已完成：自动推送任务分支并创建 Draft PR。
 - 已完成：PR body 包含 `Closes #<issue-number>`，Issue comment 记录分支、PR URL 和验证结果。
 - 已完成：成功后 issue 从 `agent/running` 流转到 `agent/review`。
+- 已完成：发布阶段失败后已有有限 recovery loop，但显式 `recover-publish` CLI 命令尚未完成。
 - 未完成：PR 正文中的实现摘要、验证详情和残余风险仍不够完整。
-- 未完成：发布失败后的幂等恢复命令。
 - 未完成：创建 PR 前的独立 review gate。
+- 未完成：PRD 完成后自动归档并更新 Acceptance Checklist。
 
 ### M5: Multi-Repository Runner
 
-Status: Not completed.
+Status: Completed.
 
-- 支持在 `config.toml` 中声明多个目标仓库。
-- `labels sync`、`run-once` 和 `daemon` 在未指定单一仓库时处理所有启用仓库。
-- `issue-from-prd` 在多仓库配置存在时必须解析到唯一目标仓库。
-- API 状态端点返回多仓库配置摘要和基础健康信息。
+- 已完成：在 `config.toml` 中通过 `[agent_runner.repositories]` 声明多个目标仓库。
+- 已完成：`labels sync`、`run-once` 和 `daemon` 在未指定 `--repo` 或 `--repo-id` 时自动处理所有启用仓库。
+- 已完成：`issue-from-prd` 在多仓库配置存在时通过 `--repo-id` 解析到唯一目标仓库。
+- 已完成：API 状态端点返回多仓库配置摘要和基础健康信息。
 
 ### M6: Main Branch Rebase Automation
 
@@ -172,12 +175,12 @@ Status: Not completed.
 
 ## Near-Term Delivery Order
 
-1. 完成 worktree 默认远程新鲜基线，避免新任务从过期本地 base branch 开始。
-2. 完成发布失败恢复命令，支持已有本地 commit 的任务安全 resume。
-3. 完成 prompt template 与 phase 系统，降低 runner 行为调整成本。
-4. 完成只读多 agent 合议基础能力，为需求澄清和 Issue-first intake 提供讨论引擎。
-5. 基于合议能力补齐无 PRD Issue intake：写回 Issue 讨论、管理员 PRD gate、确认后落盘 PRD 并添加 `agent/ready`。
-6. 完成多仓库 runner，支持一个执行端轮询多个目标仓库。
+1. 完成发布失败后的显式 `recover-publish` CLI 命令，支持已有本地 commit 的任务安全 resume。
+2. 完成 prompt template 与 phase 系统，降低 runner 行为调整成本。
+3. 完成 PRD 完成后自动归档到 `tasks/archive/` 并更新 Acceptance Checklist 的机制。
+4. 完成 pre-push AI code review 和 post-PR supervisor review 工作流。
+5. 完成只读多 agent 合议基础能力，为需求澄清和 Issue-first intake 提供讨论引擎。
+6. 基于合议能力补齐无 PRD Issue intake：写回 Issue 讨论、管理员 PRD gate、确认后落盘 PRD 并添加 `agent/ready`。
 7. 补齐自动 code review gate，并定义哪些风险必须转人工。
 8. 补齐 PR rebase 维护链路。
 9. 在 CLI 能力稳定后，再完善前端或交互终端体验。
@@ -193,6 +196,7 @@ Status: Not completed.
 - [x] 能够自动提交受控变更、推送任务分支并创建 Draft PR。
 - [x] 能够在验证失败、agent 执行失败或 commit request 错误时做有限恢复。
 - [x] 能够在失败时停止并报告原因到 Issue comment。
+- [x] 能够处理多个目标仓库。
 - [ ] 能够通过完整交互终端浏览、选择 issue 或输入明确任务。
 - [ ] 能够在需求不明确时主动追问，而不是直接启动任务。
 - [ ] 能够接收没有 PRD 的用户 Issue，并将其限制在 intake / 合议 / 审批流程中。
@@ -207,7 +211,6 @@ Status: Not completed.
 - [ ] 能够在发布失败后通过显式恢复命令继续已有本地成果。
 - [ ] 能够在主分支更新后自动 rebase 已提交 PR。
 - [ ] 能够在 rebase 冲突或验证失败时安全停止并报告原因。
-- [ ] 能够处理多个目标仓库。
 - [ ] 能够通过配置化 prompt template 管理不同执行阶段。
 
 ## Open Questions
