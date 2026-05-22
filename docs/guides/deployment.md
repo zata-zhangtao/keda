@@ -15,7 +15,7 @@
 
 1. `ci.yml`
    - 触发时机：`pull_request`、推送到 `main`、手动触发。
-   - 执行内容：`uv sync --all-groups --frozen`、`pre-commit`、本地测试集、`mkdocs build --strict`、发布包烟雾构建。
+   - 执行内容：`uv sync --all-extras --all-groups --frozen`、`pre-commit`、本地测试集、`mkdocs build --strict`、发布包烟雾构建。
 2. `cd.yml`
    - 触发时机：推送 `v*` 标签、手动触发。
    - 执行内容：重复执行发布前校验，生成 `dist/*.zip`，上传构建产物；当事件来自标签推送时，同时创建 GitHub Release。
