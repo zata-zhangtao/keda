@@ -392,54 +392,54 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/` 不导入 `backend.infrastructure`、`backend.engines` 或 `backend.api`。
-- [ ] 多仓库配置读取只发生在 `src/backend/infrastructure/config/settings.py` 和 `src/backend/engines/agent_runner/factory.py` 的组合路径中。
-- [ ] `src/backend/core/use_cases/run_agent_once.py` 的 claim / worktree / verification / publish 主流程没有被复制到新的多仓库实现中。
-- [ ] 没有新增 SQLAlchemy model、Alembic migration 或仓库 CRUD API。
+- [x] `src/backend/core/` 不导入 `backend.infrastructure`、`backend.engines` 或 `backend.api`。
+- [x] 多仓库配置读取只发生在 `src/backend/infrastructure/config/settings.py` 和 `src/backend/engines/agent_runner/factory.py` 的组合路径中。
+- [x] `src/backend/core/use_cases/run_agent_once.py` 的 claim / worktree / verification / publish 主流程没有被复制到新的多仓库实现中。
+- [x] 没有新增 SQLAlchemy model、Alembic migration 或仓库 CRUD API。
 
 ### Behavior Acceptance
 
-- [ ] `iar labels sync --repo-id <id>` 只同步指定配置仓库的 labels。
-- [ ] `iar labels sync --repo /path/to/repo` 继续按旧 ad-hoc 路径工作。
-- [ ] `iar labels sync` 在配置了多个启用仓库时会遍历所有启用仓库。
-- [ ] `iar run-once` 在配置了多个启用仓库时会按仓库逐个执行，且单个仓库失败不会阻断后续仓库。
-- [ ] `iar daemon` 每轮会顺序处理所有启用仓库，并在整轮结束后 sleep。
-- [ ] `iar issue-from-prd <path>` 默认使用当前工作目录，行为与旧版 `--repo "."` 一致；若当前目录匹配某个已配置仓库路径，则应用该仓库的覆盖配置。
-- [ ] `iar issue-from-prd <path> --repo-id <id>` 只在指定仓库内解析 PRD 相对路径并创建 Issue。
-- [ ] `--repo` 和 `--repo-id` 同时出现时 CLI 返回参数错误。
-- [ ] 未配置 `agent_runner.repositories` 时，现有默认 `--repo "."` 行为保持可用。
+- [x] `iar labels sync --repo-id <id>` 只同步指定配置仓库的 labels。
+- [x] `iar labels sync --repo /path/to/repo` 继续按旧 ad-hoc 路径工作。
+- [x] `iar labels sync` 在配置了多个启用仓库时会遍历所有启用仓库。
+- [x] `iar run-once` 在配置了多个启用仓库时会按仓库逐个执行，且单个仓库失败不会阻断后续仓库。
+- [x] `iar daemon` 每轮会顺序处理所有启用仓库，并在整轮结束后 sleep。
+- [x] `iar issue-from-prd <path>` 默认使用当前工作目录，行为与旧版 `--repo "."` 一致；若当前目录匹配某个已配置仓库路径，则应用该仓库的覆盖配置。
+- [x] `iar issue-from-prd <path> --repo-id <id>` 只在指定仓库内解析 PRD 相对路径并创建 Issue。
+- [x] `--repo` 和 `--repo-id` 同时出现时 CLI 返回参数错误。
+- [x] 未配置 `agent_runner.repositories` 时，现有默认 `--repo "."` 行为保持可用。
 
 ### Configuration Acceptance
 
-- [ ] `config.toml` 支持 `[agent_runner.repositories.<repo_id>]`。
-- [ ] 每个 repository 至少支持 `path`、`enabled`、`display_name` 字段。
-- [ ] 仓库级 `git.base_branch` 覆盖不会影响其他仓库。
-- [ ] 仓库级 `runner.verification_commands` 覆盖不会影响其他仓库。
-- [ ] 未覆盖字段继承全局 `[agent_runner]` 默认值。
+- [x] `config.toml` 支持 `[agent_runner.repositories.<repo_id>]`。
+- [x] 每个 repository 至少支持 `path`、`enabled`、`display_name` 字段。
+- [x] 仓库级 `git.base_branch` 覆盖不会影响其他仓库。
+- [x] 仓库级 `runner.verification_commands` 覆盖不会影响其他仓库。
+- [x] 未覆盖字段继承全局 `[agent_runner]` 默认值。
 
 ### API Acceptance
 
-- [ ] `GET /api/v1/agent-runner/status` 返回 `repositories` 列表。
-- [ ] 状态端点返回每个仓库的 `repo_id`、`display_name`、`enabled`、`base_branch`、`remote` 和 runner 摘要。
-- [ ] 状态端点不触发 label sync、agent execution、git commit、git push 或 PR 创建。
-- [ ] `GET /api/v1/agent-runner/health` 保持只读，并能表达 GitHub CLI 可用性。
+- [x] `GET /api/v1/agent-runner/status` 返回 `repositories` 列表。
+- [x] 状态端点返回每个仓库的 `repo_id`、`display_name`、`enabled`、`base_branch`、`remote` 和 runner 摘要。
+- [x] 状态端点不触发 label sync、agent execution、git commit、git push 或 PR 创建。
+- [x] `GET /api/v1/agent-runner/health` 保持只读，并能表达 GitHub CLI 可用性。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 包含多仓库配置示例和命令示例。
-- [ ] `docs/guides/configuration.md` 说明 `agent_runner.repositories` 字段和继承规则。
-- [ ] `docs/api/references.md` 更新 agent-runner 状态端点响应示例。
-- [ ] `README.md` 包含启动多仓库 daemon 的最短示例。
-- [ ] 未新增 MkDocs 页面时，不需要修改 `mkdocs.yml`；如实现中新增页面，必须同步更新 `mkdocs.yml`。
+- [x] `docs/guides/agent-runner.md` 包含多仓库配置示例和命令示例。
+- [x] `docs/guides/configuration.md` 说明 `agent_runner.repositories` 字段和继承规则。
+- [x] `docs/api/references.md` 更新 agent-runner 状态端点响应示例。
+- [x] `README.md` 包含启动多仓库 daemon 的最短示例。
+- [x] 未新增 MkDocs 页面时，不需要修改 `mkdocs.yml`；如实现中新增页面，必须同步更新 `mkdocs.yml`。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_agent_runner_config.py -q` 通过。
-- [ ] `uv run pytest tests/test_agent_runner_cli.py tests/test_run_agent.py -q` 通过。
-- [ ] `uv run pytest tests/test_agent_runner_api.py -q` 通过。
-- [ ] `uv run python hooks/check_architecture.py` 通过。
-- [ ] `uv run mkdocs build` 通过。
-- [ ] `just test` 通过。
+- [x] `uv run pytest tests/test_agent_runner_config.py -q` 通过。
+- [x] `uv run pytest tests/test_agent_runner_cli.py tests/test_run_agent.py -q` 通过。
+- [x] `uv run pytest tests/test_agent_runner_api.py -q` 通过。
+- [x] `uv run python hooks/check_architecture.py` 通过。
+- [x] `uv run mkdocs build` 通过。
+- [x] `just test` 通过。
 
 ---
 

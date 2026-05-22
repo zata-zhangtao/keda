@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -97,3 +98,13 @@ class AppConfig:
     worktree: WorktreeConfig = WorktreeConfig()
     runner: RunnerConfig = RunnerConfig()
     safety: SafetyConfig = SafetyConfig()
+
+
+@dataclass(frozen=True)
+class RepositoryRunContext:
+    """Resolved target repository with merged configuration."""
+
+    repo_id: str
+    display_name: str
+    repo_path: Path
+    config: AppConfig

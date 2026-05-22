@@ -49,23 +49,40 @@ just docs-serve
 本项目内置 `iar`（issue-agent-runner）CLI，用于将 GitHub Issues 转为本地 AI Agent 队列：
 
 ```bash
-# 同步 GitHub Labels
-uv run iar labels sync --repo /path/to/target-repo
+# 同步 GitHub Labels（所有启用仓库）
+uv run iar labels sync
+
+# 同步指定仓库
+uv run iar labels sync --repo-id keda
 
 # 从 PRD 创建 GitHub Issue，并在 ready 前发布 PRD
-uv run iar issue-from-prd tasks/pending/example.md --repo /path/to/target-repo --agent codex --publish-prd --ready
+uv run iar issue-from-prd tasks/pending/example.md --repo-id keda --agent codex --publish-prd --ready
 
 # 单次执行（dry-run 预览）
-uv run iar run-once --repo /path/to/target-repo --dry-run
+uv run iar run-once --dry-run
 
-# 单次执行
-uv run iar run-once --repo /path/to/target-repo
+# 单次执行（所有启用仓库）
+uv run iar run-once
 
-# Daemon 模式轮询（默认每 600 秒轮询一次）
-uv run iar daemon --repo /path/to/target-repo
+# Daemon 模式轮询（默认每 600 秒轮询一次，所有启用仓库）
+uv run iar daemon
 ```
 
 安装后也可直接使用 `iar`（通过 `pyproject.toml` 的 `[project.scripts]` 注册）。
+
+多仓库配置示例（`config.toml`）：
+
+```toml
+[agent_runner.repositories.keda]
+path = "/Users/zata/code/keda"
+enabled = true
+display_name = "Keda"
+
+[agent_runner.repositories.backend_service]
+path = "/Users/zata/code/backend-service"
+enabled = true
+display_name = "Backend Service"
+```
 
 ## 配置说明
 

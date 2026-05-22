@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
-from backend.core.shared.models.agent_runner import AppConfig
+from backend.core.shared.models.agent_runner import RepositoryRunContext
 from backend.core.use_cases.run_agent_once import run_once
 
 _logger = logging.getLogger(__name__)
@@ -15,37 +16,46 @@ _logger = logging.getLogger(__name__)
 
 def run_agent_daemon(
     *,
-    repo_path: Path,
-    config: AppConfig,
+    contexts: list[RepositoryRunContext],
     interval: int,
     agent: str,
     max_issues: int,
-    github_client: IGitHubClient,
     process_runner: IProcessRunner,
+    github_client_factory: Callable[[Path], IGitHubClient],
 ) -> None:
-    """Run the queue poller forever.
+    """Run the queue poller forever across all target repositories.
 
     Args:
-        repo_path: Target repository path.
-        config: Application configuration.
+        contexts: Resolved repository targets with merged configurations.
         interval: Seconds between polling passes.
         agent: Agent override (auto, codex, claude).
-        max_issues: Maximum issues to process per pass.
-        github_client: Client for interacting with GitHub.
+        max_issues: Maximum issues to process per pass per repository.
         process_runner: Runner for executing subprocess commands.
+        github_client_factory: Factory that creates an IGitHubClient for a repo path.
     """
     while True:
-        try:
-            run_once(
-                repo_path=repo_path,
-                config=config,
-                dry_run=False,
-                agent=agent,
-                max_issues=max_issues,
-                github_client=github_client,
-                process_runner=process_runner,
+        for context in contexts:
+            _logger.info(
+                "Daemon pass for repository '%s' (%s).",
+                context.repo_id,
+                context.display_name,
             )
-        except Exception as exc:  # noqa: BLE001 - daemon should survive unexpected errors.
-            _logger.error("Daemon pass failed: %s", exc)
+            github_client = github_client_factory(context.repo_path)
+            try:
+                run_once(
+                    repo_path=context.repo_path,
+                    config=context.config,
+                    dry_run=False,
+                    agent=agent,
+                    max_issues=max_issues,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                )
+            except Exception as exc:  # noqa: BLE001 - daemon should survive unexpected errors.
+                _logger.error(
+                    "Daemon pass failed for repository '%s': %s",
+                    context.repo_id,
+                    exc,
+                )
         _logger.info("Sleeping for %d seconds before next poll.", interval)
         time.sleep(interval)

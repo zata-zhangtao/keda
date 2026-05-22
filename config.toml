@@ -152,3 +152,27 @@ forbidden_path_patterns = [
   "secrets/*",
   "docker-compose.prod.yml",
 ]
+
+# =============================================================================
+# Agent Runner Multi-Repository Configuration (Optional)
+# =============================================================================
+# Each repository must already be cloned locally. The runner will not clone
+# or manage credentials for remote repositories.
+
+# [agent_runner.repositories.keda-main]
+# path = "/Users/zata/code/keda"
+# enabled = true
+# display_name = "Keda Main"
+#
+# [agent_runner.repositories.keda-main.git]
+# remote = "zata"
+# base_branch = "main"
+#
+# [agent_runner.repositories.keda-worktree]
+# path = "/Users/zata/code/keda-worktrees/tasks/issue-2"
+# enabled = true
+# display_name = "Keda Worktree Issue-2"
+#
+# [agent_runner.repositories.keda-worktree.git]
+# remote = "zata"
+# base_branch = "main"
