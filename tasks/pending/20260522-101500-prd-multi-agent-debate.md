@@ -1,5 +1,7 @@
 # PRD: Multi-Agent Deliberation Session
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/15
+
 ## 1. Introduction & Goals
 
 当前 `iar` 的 Agent Runner 主要围绕 GitHub Issue 队列执行单个 agent：`run-once` / `daemon` 从 ready Issue 中选择一个 agent，在 worktree 中完成代码修改、验证和 draft PR 发布。这个路径适合执行明确任务，但不适合在编码前对一个复杂需求做多视角推演。
