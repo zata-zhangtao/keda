@@ -1,6 +1,8 @@
 # PRD: Two-Stage Agent Review And PR Supervisor
 
-- GitHub Issue: (pending)
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/12
+
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/12
 
 ## 1. Introduction & Goals
 
