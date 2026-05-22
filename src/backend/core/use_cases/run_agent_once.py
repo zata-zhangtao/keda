@@ -180,6 +180,13 @@ def resolve_prd_archive_path(prd_relative_path: str) -> str | None:
     return None
 
 
+def _format_unchecked_items(
+    unchecked_items: list[tuple[int, str]],
+) -> str:
+    """Format unchecked checklist items for error messages."""
+    return "\n".join(f"  - L{line}: {text}" for line, text in unchecked_items)
+
+
 def ensure_prd_delivery_ready(
     issue: IssueSummary,
     worktree_path: Path,
@@ -205,33 +212,31 @@ def ensure_prd_delivery_ready(
             )
 
         if checklist_result.unchecked_items:
-            unchecked_summary = "\n".join(
-                f"  - L{line}: {text}"
-                for line, text in checklist_result.unchecked_items
+            unchecked_summary = _format_unchecked_items(
+                checklist_result.unchecked_items
             )
             raise PrdDeliveryError(
                 f"Acceptance Checklist has unchecked items in {prd_relative_path}:\n"
                 f"{unchecked_summary}"
             )
 
-        if len(prd_path.parts) >= 2 and prd_path.parent.name == "pending":
-            archive_relative_path = resolve_prd_archive_path(prd_relative_path)
-            if archive_relative_path:
-                archive_path = worktree_path / archive_relative_path
-                archive_dir = archive_path.parent
-                if not archive_dir.exists():
-                    raise PrdDeliveryError(
-                        f"Archive directory does not exist: {archive_relative_path}"
-                    )
-                process_runner.run(
-                    [
-                        "git",
-                        "mv",
-                        str(prd_relative_path),
-                        str(archive_relative_path),
-                    ],
-                    cwd=worktree_path,
+        archive_relative_path = resolve_prd_archive_path(prd_relative_path)
+        if archive_relative_path:
+            archive_path = worktree_path / archive_relative_path
+            archive_dir = archive_path.parent
+            if not archive_dir.exists():
+                raise PrdDeliveryError(
+                    f"Archive directory does not exist: {archive_dir.relative_to(worktree_path).as_posix()}"
                 )
+            process_runner.run(
+                [
+                    "git",
+                    "mv",
+                    str(prd_relative_path),
+                    str(archive_relative_path),
+                ],
+                cwd=worktree_path,
+            )
         return
 
     # PRD not found at the claimed path; check if already archived.
@@ -246,9 +251,8 @@ def ensure_prd_delivery_ready(
                     f"Acceptance Checklist section missing in {archive_relative_path}"
                 )
             if checklist_result.unchecked_items:
-                unchecked_summary = "\n".join(
-                    f"  - L{line}: {text}"
-                    for line, text in checklist_result.unchecked_items
+                unchecked_summary = _format_unchecked_items(
+                    checklist_result.unchecked_items
                 )
                 raise PrdDeliveryError(
                     f"Acceptance Checklist has unchecked items in {archive_relative_path}:\n"
