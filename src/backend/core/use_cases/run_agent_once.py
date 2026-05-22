@@ -26,7 +26,7 @@ _logger = logging.getLogger(__name__)
 
 _COMMIT_REQUEST_RELATIVE_PATH = Path(".agent-runner/commit-request.json")
 _MAX_COMMIT_MESSAGE_LENGTH = 200
-_MAX_RECOVERY_OUTPUT_LENGTH = 4000
+_MAX_RECOVERY_OUTPUT_LENGTH = 12000
 
 
 class VerificationFailedError(RuntimeError):

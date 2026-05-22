@@ -734,7 +734,7 @@ sync-template flags="":
     set -euo pipefail
 
     echo "🔍 Running full lint checks..."
-    if ! SKIP=check-test-flag just lint --full >/dev/null 2>&1; then
+    if ! SKIP=check-test-flag PRE_COMMIT_COLOR=never just lint --full; then
         echo "❌ Lint failed. Fix lint errors before running tests."
         echo "   Run: just lint --full"
         exit 1
