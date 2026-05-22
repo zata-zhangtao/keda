@@ -277,37 +277,37 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] 远程同步逻辑位于 `scripts/worktree/create.sh`，没有在 `justfile` 或 `src/backend/core/use_cases/run_agent_once.py` 中复制 worktree 创建实现。
-- [ ] `src/backend/core/` 没有新增对 `infrastructure/`、shell 脚本细节或 Git remote 同步策略的依赖。
-- [ ] Agent Runner 默认 `create_command` 可以不改命令字符串就获得新的创建行为，除非实现中发现必须显式传入环境变量。
+- [x] 远程同步逻辑位于 `scripts/worktree/create.sh`，没有在 `justfile` 或 `src/backend/core/use_cases/run_agent_once.py` 中复制 worktree 创建实现。
+- [x] `src/backend/core/` 没有新增对 `infrastructure/`、shell 脚本细节或 Git remote 同步策略的依赖。
+- [x] Agent Runner 默认 `create_command` 可以不改命令字符串就获得新的创建行为，除非实现中发现必须显式传入环境变量。
 
 ### Behavior Acceptance
 
-- [ ] 当本地 `main` 落后于 `origin/main` 时，执行 `just worktree issue-123 enter_shell=false` 创建的分支 HEAD 等于最新 `origin/main`。
-- [ ] 上述场景中，本地 `refs/heads/main` 保持在创建前的 commit，不被 fast-forward 或 reset。
-- [ ] 当 `KODA_WORKTREE_SYNC_BASE=false` 时，新 worktree 继续从本地 `--base` 或 `KODA_WORKTREE_BASE_BRANCH` 指定的 branch 创建。
-- [ ] 当 remote 不存在但本地 base branch 存在时，新 worktree 可以创建，并输出 local-only fallback 提示。
-- [ ] 当 remote 存在但 fetch 指定 base branch 失败时，命令非零退出，目标 worktree 目录不应留下半成品。
-- [ ] 已存在 worktree 被 Agent Runner 复用时，不会自动 rebase 或 reset 该 worktree。
+- [x] 当本地 `main` 落后于 `origin/main` 时，执行 `just worktree issue-123 enter_shell=false` 创建的分支 HEAD 等于最新 `origin/main`。
+- [x] 上述场景中，本地 `refs/heads/main` 保持在创建前的 commit，不被 fast-forward 或 reset。
+- [x] 当 `KEDA_WORKTREE_SYNC_BASE=false` 时，新 worktree 继续从本地 `--base` 或 `KODA_WORKTREE_BASE_BRANCH` 指定的 branch 创建。
+- [x] 当 remote 不存在但本地 base branch 存在时，新 worktree 可以创建，并输出 local-only fallback 提示。
+- [x] 当 remote 存在但 fetch 指定 base branch 失败时，命令非零退出，目标 worktree 目录不应留下半成品。
+- [x] 已存在 worktree 被 Agent Runner 复用时，不会自动 rebase 或 reset 该 worktree。
 
 ### Configuration Acceptance
 
-- [ ] `KODA_WORKTREE_BASE_REMOTE` 可覆盖默认 remote。
-- [ ] 未设置 `KODA_WORKTREE_BASE_REMOTE` 时，优先使用 `branch.<base>.remote`；如果不存在，则使用 `origin`。
-- [ ] `KODA_WORKTREE_BASE_BRANCH` 和 `--base <branch>` 的既有语义保持可用。
+- [x] `KEDA_WORKTREE_BASE_REMOTE` 可覆盖默认 remote。
+- [x] 未设置 `KEDA_WORKTREE_BASE_REMOTE` 时，优先使用 `branch.<base>.remote`；如果不存在，则使用 `origin`。
+- [x] `KODA_WORKTREE_BASE_BRANCH` 和 `--base <branch>` 的既有语义保持可用。
 
 ### Documentation Acceptance
 
-- [ ] `docs/getting-started.md` 不再声称默认只从本地 `main` 创建 worktree。
-- [ ] `docs/guides/configuration.md` 记录 `KODA_WORKTREE_SYNC_BASE`、`KODA_WORKTREE_BASE_REMOTE` 和失败/回退行为。
-- [ ] `docs/guides/agent-runner.md` 说明 runner 新建 worktree 的远程基线行为，以及复用 worktree 不自动 rebase。
-- [ ] 如 `docs/guides/agent-runner.md` 的 worktree 路径示例仍使用旧路径，需同步修正为当前 `<repo>-worktrees/tasks/issue-{issue_number}` 约定。
+- [x] `docs/getting-started.md` 不再声称默认只从本地 `main` 创建 worktree。
+- [x] `docs/guides/configuration.md` 记录 `KEDA_WORKTREE_SYNC_BASE`、`KEDA_WORKTREE_BASE_REMOTE` 和失败/回退行为。
+- [x] `docs/guides/agent-runner.md` 说明 runner 新建 worktree 的远程基线行为，以及复用 worktree 不自动 rebase。
+- [x] 如 `docs/guides/agent-runner.md` 的 worktree 路径示例仍使用旧路径，需同步修正为当前 `<repo>-worktrees/tasks/issue-{issue_number}` 约定。
 
 ### Validation Acceptance
 
-- [ ] 新增或更新的 pytest 覆盖远程同步、禁用同步、无 remote fallback 和本地 base 不移动。
-- [ ] `just test` 通过。
-- [ ] `uv run mkdocs build --strict` 通过。
+- [x] 新增或更新的 pytest 覆盖远程同步、禁用同步、无 remote fallback 和本地 base 不移动。
+- [x] `just test` 通过。
+- [x] `uv run mkdocs build --strict` 通过。
 
 ## 8. Functional Requirements
 

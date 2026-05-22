@@ -204,6 +204,8 @@ uv run iar issue-from-prd tasks/pending/feature-login.md \
 
 Ready 发布要求当前分支等于 `[agent_runner.git].base_branch`，因为 runner 默认从 base branch 创建 worktree。若当前分支不是 base branch，命令会失败并提示切换到 base branch 或改用 `--no-ready`。
 
+Runner 新建 issue worktree 时，默认会同步 base branch 的远程 tracking ref 作为起点，使新分支基于最新远程提交，而非可能过期的本地 base branch。复用已存在的 worktree 时不会自动 rebase 或 reset；如需更新基线，请手动处理或删除旧 worktree 后重建。
+
 #### 4. 查看结果
 
 等待 B 电脑执行完毕后，去 GitHub 上 Review AI 生成的 Draft PR。

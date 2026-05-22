@@ -82,7 +82,7 @@ uv run mkdocs build --strict
 just worktree feature-branch
 ```
 
-默认会从本地 `main` 分支创建 worktree。需要从其他本地分支创建时，传入 `--base`：
+默认会同步 base branch 的远程 tracking ref 并作为起点创建 worktree，确保新分支基于最新远程提交。需要从其他分支创建时，传入 `--base`：
 
 ```bash
 just worktree feature-branch --base develop

@@ -13,7 +13,7 @@ Usage:
 
 Options:
   --base <base_branch>
-                    从指定本地分支创建 worktree。默认使用: main
+                    指定 base branch 名称。默认使用: main
   --cmd [code_cmd]  创建完成后自动执行: <code_cmd> --add <worktree_path>
                     不传 code_cmd 时默认使用: code
   --subdir <dir>    在 <repo>-worktrees/<dir>/ 下创建 worktree，
@@ -23,6 +23,11 @@ Options:
 Behavior:
   所有 worktree 统一集中到 <repo_parent>/<repo-name>-worktrees/ 下。
   issue-* 分支在未指定 --subdir 时，默认归入 tasks/ 子目录。
+  默认会同步 base branch 对应的远程 tracking ref 作为新 worktree 起点。
+  可通过环境变量控制远程同步行为:
+    KEDA_WORKTREE_SYNC_BASE      默认 true，设为 false 关闭远程同步
+    KEDA_WORKTREE_BASE_REMOTE    覆盖默认 remote 名
+    KODA_WORKTREE_BASE_BRANCH    覆盖默认 base branch
 
 Examples:
   ai_worktree feature-login
@@ -31,6 +36,7 @@ Examples:
   ai_worktree feature-login --cmd code-insiders
   ai_worktree issue-3
   ai_worktree issue-3 --subdir foo
+  KEDA_WORKTREE_SYNC_BASE=false ai_worktree feature-login
   ./scripts/worktree/create.sh feature-login
   ./scripts/worktree/create.sh feature-login --base develop
   ./scripts/worktree/create.sh feature-login --cmd
@@ -285,6 +291,82 @@ install_python_dependencies() {
     return 0
 }
 
+resolve_base_remote_name() {
+    local repo_root_path="$1"
+    local base_branch_name="$2"
+    local configured_remote="${KEDA_WORKTREE_BASE_REMOTE:-}"
+
+    if [ -n "$configured_remote" ]; then
+        echo "$configured_remote"
+        return 0
+    fi
+
+    local branch_remote=""
+    branch_remote="$(git -C "$repo_root_path" config --get "branch.${base_branch_name}.remote" 2>/dev/null || true)"
+
+    if [ -n "$branch_remote" ]; then
+        echo "$branch_remote"
+    else
+        echo "origin"
+    fi
+}
+
+remote_exists() {
+    local repo_root_path="$1"
+    local remote_name="$2"
+
+    git -C "$repo_root_path" remote get-url "$remote_name" >/dev/null 2>&1
+}
+
+resolve_worktree_start_point() {
+    local repo_root_path="$1"
+    local base_branch_name="$2"
+    local sync_enabled="$3"
+
+    if [ "$sync_enabled" != "true" ]; then
+        if ! git -C "$repo_root_path" show-ref --verify --quiet "refs/heads/$base_branch_name" 2>/dev/null; then
+            echo "❌ 基底分支不存在: $base_branch_name" >&2
+            return 1
+        fi
+        echo "$base_branch_name"
+        return 0
+    fi
+
+    local base_remote_name=""
+    base_remote_name="$(resolve_base_remote_name "$repo_root_path" "$base_branch_name")"
+
+    if ! remote_exists "$repo_root_path" "$base_remote_name"; then
+        echo "ℹ️ 未找到 remote '$base_remote_name'，回退到本地 base branch: $base_branch_name" >&2
+        if ! git -C "$repo_root_path" show-ref --verify --quiet "refs/heads/$base_branch_name" 2>/dev/null; then
+            echo "❌ 基底分支不存在: $base_branch_name" >&2
+            return 1
+        fi
+        echo "$base_branch_name"
+        return 0
+    fi
+
+    echo "🌐 正在从 remote '$base_remote_name' 同步 base branch '$base_branch_name' ..." >&2
+    if ! git -C "$repo_root_path" fetch --prune "$base_remote_name" \
+        "+refs/heads/${base_branch_name}:refs/remotes/${base_remote_name}/${base_branch_name}" 2>/dev/null; then
+        echo "❌ 从 remote '$base_remote_name' 获取 '$base_branch_name' 失败。" >&2
+        echo "   请检查网络连接、remote URL 和分支名称。" >&2
+        echo "   或者设置 KEDA_WORKTREE_SYNC_BASE=false 以使用本地 base branch。" >&2
+        return 1
+    fi
+
+    local remote_ref="${base_remote_name}/${base_branch_name}"
+    local fetched_sha=""
+    fetched_sha="$(git -C "$repo_root_path" rev-parse "$remote_ref" 2>/dev/null || true)"
+
+    if [ -z "$fetched_sha" ]; then
+        echo "❌ 无法解析 remote tracking ref: $remote_ref" >&2
+        return 1
+    fi
+
+    echo "✅ 已同步远程 base: $remote_ref @ ${fetched_sha:0:8}" >&2
+    echo "$remote_ref"
+}
+
 function ai_worktree() {
     local branch_name=""
     local base_branch_name="${KODA_WORKTREE_BASE_BRANCH:-main}"
@@ -404,13 +486,24 @@ function ai_worktree() {
         return 1
     fi
 
-    if ! git -C "$repo_root_path" show-ref --verify --quiet "refs/heads/$base_branch_name"; then
-        echo "❌ 基底分支不存在: $base_branch_name"
+    local sync_enabled="${KEDA_WORKTREE_SYNC_BASE:-true}"
+    local worktree_start_point=""
+    local start_sha=""
+
+    worktree_start_point="$(resolve_worktree_start_point "$repo_root_path" "$base_branch_name" "$sync_enabled")"
+    if [ $? -ne 0 ] || [ -z "$worktree_start_point" ]; then
+        return 1
+    fi
+
+    start_sha="$(git -C "$repo_root_path" rev-parse "$worktree_start_point" 2>/dev/null || true)"
+    if [ -z "$start_sha" ]; then
+        echo "❌ 无法解析起点: $worktree_start_point"
         return 1
     fi
 
     echo "🚀 正在创建 Git Worktree: $target_abs_path ..."
-    if ! git -C "$repo_root_path" worktree add -b "$branch_name" "$target_abs_path" "$base_branch_name"; then
+    echo "   起点: $worktree_start_point @ ${start_sha:0:8}"
+    if ! git -C "$repo_root_path" worktree add -b "$branch_name" "$target_abs_path" "$worktree_start_point"; then
         echo "❌ Git worktree 创建失败。"
         return 1
     fi

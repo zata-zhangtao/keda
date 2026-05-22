@@ -28,8 +28,14 @@
 `just worktree`（底层实现位于 `scripts/worktree/create.sh`）支持以下环境变量来控制新 worktree 的依赖准备行为：
 
 - `KODA_WORKTREE_BASE_BRANCH`
-  - 新 worktree 默认使用的本地基底分支，默认值为 `main`。
+  - 新 worktree 默认使用的 base branch 名称，默认值为 `main`。
   - 命令行参数 `--base <branch>` 会覆盖这个环境变量。
+- `KEDA_WORKTREE_SYNC_BASE`
+  - 默认 `true`。创建 worktree 前自动 fetch 远程 base branch 并使用最新远程提交作为起点。
+  - 设为 `false` 时关闭远程同步，保持旧行为（直接从本地 base branch 创建）。
+  - 远程不存在时会自动回退到本地 base branch；远程存在但 fetch 失败时命令会非零退出，避免静默使用过期基线。
+- `KEDA_WORKTREE_BASE_REMOTE`
+  - 覆盖默认 remote 名称。未设置时优先读取 `branch.<base>.remote`，不存在时回退到 `origin`。
 - `WORKTREE_FRONTEND_STRATEGY`
   - `install-per-worktree`：默认值。扫描 worktree 根目录和子目录中的前端项目，并在各自目录执行锁文件驱动的依赖安装。
   - `symlink-from-main`：不重新安装依赖，而是尝试把新 worktree 中的前端项目 `node_modules` 链接到源仓库对应目录。
