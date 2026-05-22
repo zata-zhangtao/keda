@@ -9,15 +9,11 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+from backend.core.shared.prd_checklist import parse_prd_checklist
+
 
 ACTIVE_PRD_PATH_RE = re.compile(r"^tasks/[^/]+-prd-[^/]+\.md$")
 ARCHIVED_PRD_PATH_RE = re.compile(r"^tasks/archive/[^/]+-prd-[^/]+\.md$")
-ACCEPTANCE_CHECKLIST_HEADING_RE = re.compile(
-    r"^##\s+(?:\d+\.\s+)?(?:Acceptance Checklist\b.*|验收清单.*)\s*$"
-)
-TOP_LEVEL_HEADING_RE = re.compile(r"^##\s+")
-CHECKBOX_RE = re.compile(r"^\s*[-*+]\s+\[(?P<mark>[ xX])\]\s*(?P<label>.*)$")
-CODE_FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
 
 
 def _repo_root() -> Path:
@@ -136,59 +132,14 @@ def _candidate_prd_paths(
     return discovered_paths
 
 
-def _section_bounds(lines: list[str]) -> tuple[int, int] | None:
-    """Return the line bounds for the Acceptance Checklist section."""
-
-    start_index: int | None = None
-    for line_index, line in enumerate(lines):
-        if ACCEPTANCE_CHECKLIST_HEADING_RE.match(line):
-            start_index = line_index
-            break
-
-    if start_index is None:
-        return None
-
-    end_index = len(lines)
-    for line_index in range(start_index + 1, len(lines)):
-        if TOP_LEVEL_HEADING_RE.match(lines[line_index]):
-            end_index = line_index
-            break
-
-    return start_index + 1, end_index
-
-
-def _unchecked_items_in_acceptance_section(file_content: str) -> list[tuple[int, str]]:
-    """Return unchecked checklist items found in the acceptance section."""
-
-    lines = file_content.splitlines()
-    section_bounds = _section_bounds(lines)
-    if section_bounds is None:
-        return [(-1, "Missing Acceptance Checklist section")]
-
-    start_index, end_index = section_bounds
-    unchecked_items: list[tuple[int, str]] = []
-    in_code_block = False
-
-    for line_index in range(start_index, end_index):
-        line = lines[line_index]
-        if CODE_FENCE_RE.match(line):
-            in_code_block = not in_code_block
-            continue
-        if in_code_block:
-            continue
-
-        checkbox_match = CHECKBOX_RE.match(line)
-        if checkbox_match and checkbox_match.group("mark") == " ":
-            unchecked_items.append((line_index + 1, line.rstrip()))
-
-    return unchecked_items
-
-
 def _validate_file(path: Path) -> list[tuple[int, str]]:
     """Read a PRD file and return any checklist issues."""
 
     file_content = path.read_text(encoding="utf-8")
-    return _unchecked_items_in_acceptance_section(file_content)
+    result = parse_prd_checklist(file_content)
+    if not result.section_found:
+        return [(-1, "Missing Acceptance Checklist section")]
+    return result.unchecked_items
 
 
 def main() -> int:

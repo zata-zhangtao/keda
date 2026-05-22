@@ -19,6 +19,7 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     IssueSummary,
 )
+from backend.core.shared.prd_checklist import parse_prd_checklist
 
 _logger = logging.getLogger(__name__)
 
@@ -33,6 +34,10 @@ class VerificationFailedError(RuntimeError):
     def __init__(self, verification_results: list[CommandResult]) -> None:
         self.verification_results = verification_results
         super().__init__(format_verification_failure(verification_results))
+
+
+class PrdDeliveryError(RuntimeError):
+    """Raised when the canonical PRD is not ready for delivery."""
 
 
 def format_command(template: str, *, issue_number: int) -> list[str]:
@@ -63,11 +68,25 @@ def extract_prd_path(issue_body: str) -> str | None:
 def build_prompt(issue: IssueSummary, worktree_path: Path) -> str:
     """Build the prompt sent to the local AI agent."""
     prd_path = extract_prd_path(issue.body)
-    prd_line = (
-        f"Also read the canonical PRD at `{prd_path}`."
-        if prd_path
-        else "If the Issue references a PRD, read it before editing."
-    )
+    if prd_path:
+        prd_path_obj = Path(prd_path)
+        move_instruction = ""
+        if (
+            len(prd_path_obj.parts) >= 2
+            and prd_path_obj.parts[0] == "tasks"
+            and prd_path_obj.parts[1] == "pending"
+        ):
+            move_instruction = (
+                " If all checklist items are complete, move the PRD from "
+                "`tasks/pending/` to `tasks/archive/`."
+            )
+        prd_line = (
+            f"Also read the canonical PRD at `{prd_path}`. "
+            "Before requesting a commit, update the PRD's Acceptance Checklist "
+            f"to reflect completed work.{move_instruction}"
+        )
+    else:
+        prd_line = "If the Issue references a PRD, read it before editing."
     return "\n".join(
         [
             f"Complete GitHub Issue #{issue.number}: {issue.title}",
@@ -150,6 +169,108 @@ def format_verification_failure(verification_results: list[CommandResult]) -> st
     )
 
 
+def resolve_prd_archive_path(prd_relative_path: str) -> str | None:
+    """Convert a pending PRD path to its archive counterpart.
+
+    Returns None when the path is not under ``tasks/pending/``.
+    """
+    path = Path(prd_relative_path)
+    if len(path.parts) >= 2 and path.parts[0] == "tasks" and path.parts[1] == "pending":
+        return str(Path("tasks") / "archive" / path.name)
+    return None
+
+
+def ensure_prd_delivery_ready(
+    issue: IssueSummary,
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+) -> None:
+    """Validate canonical PRD state and auto-archive if complete.
+
+    Raises:
+        PrdDeliveryError: When the PRD is not ready for delivery.
+    """
+    prd_relative_path = extract_prd_path(issue.body)
+    if not prd_relative_path:
+        return
+
+    prd_path = worktree_path / prd_relative_path
+    if prd_path.exists():
+        file_content = prd_path.read_text(encoding="utf-8")
+        checklist_result = parse_prd_checklist(file_content)
+
+        if not checklist_result.section_found:
+            raise PrdDeliveryError(
+                f"Acceptance Checklist section missing in {prd_relative_path}"
+            )
+
+        if checklist_result.unchecked_items:
+            unchecked_summary = "\n".join(
+                f"  - L{line}: {text}"
+                for line, text in checklist_result.unchecked_items
+            )
+            raise PrdDeliveryError(
+                f"Acceptance Checklist has unchecked items in {prd_relative_path}:\n"
+                f"{unchecked_summary}"
+            )
+
+        if len(prd_path.parts) >= 2 and prd_path.parent.name == "pending":
+            archive_relative_path = resolve_prd_archive_path(prd_relative_path)
+            if archive_relative_path:
+                archive_path = worktree_path / archive_relative_path
+                archive_dir = archive_path.parent
+                if not archive_dir.exists():
+                    raise PrdDeliveryError(
+                        f"Archive directory does not exist: {archive_relative_path}"
+                    )
+                process_runner.run(
+                    [
+                        "git",
+                        "mv",
+                        str(prd_relative_path),
+                        str(archive_relative_path),
+                    ],
+                    cwd=worktree_path,
+                )
+        return
+
+    # PRD not found at the claimed path; check if already archived.
+    archive_relative_path = resolve_prd_archive_path(prd_relative_path)
+    if archive_relative_path:
+        archive_path = worktree_path / archive_relative_path
+        if archive_path.exists():
+            file_content = archive_path.read_text(encoding="utf-8")
+            checklist_result = parse_prd_checklist(file_content)
+            if not checklist_result.section_found:
+                raise PrdDeliveryError(
+                    f"Acceptance Checklist section missing in {archive_relative_path}"
+                )
+            if checklist_result.unchecked_items:
+                unchecked_summary = "\n".join(
+                    f"  - L{line}: {text}"
+                    for line, text in checklist_result.unchecked_items
+                )
+                raise PrdDeliveryError(
+                    f"Acceptance Checklist has unchecked items in {archive_relative_path}:\n"
+                    f"{unchecked_summary}"
+                )
+            return
+
+    raise PrdDeliveryError(f"Canonical PRD not found: {prd_relative_path}")
+
+
+def format_prd_delivery_failure(message: str) -> str:
+    """Build the failure section for a PRD delivery recovery prompt."""
+    return "\n".join(
+        [
+            "PRD delivery check failed.",
+            message,
+            "Update the canonical PRD: ensure all Acceptance Checklist items are checked, "
+            "and move the PRD from tasks/pending/ to tasks/archive/ if complete.",
+        ]
+    )
+
+
 def ensure_verification_passed(verification_results: list[CommandResult]) -> None:
     """Raise when any configured verification command failed."""
     if failed_verification_results(verification_results):
@@ -166,11 +287,13 @@ def build_recovery_prompt(
 ) -> str:
     """Build a prompt that asks the agent to repair a failed attempt."""
     prd_path = extract_prd_path(issue.body)
-    prd_line = (
-        f"Also re-check the canonical PRD at `{prd_path}` if it affects the fix."
-        if prd_path
-        else "If the Issue references a PRD, re-check it if it affects the fix."
-    )
+    if prd_path:
+        prd_line = (
+            f"Also re-check the canonical PRD at `{prd_path}` if it affects the fix. "
+            "Ensure the Acceptance Checklist is updated and the PRD is archived if complete."
+        )
+    else:
+        prd_line = "If the Issue references a PRD, re-check it if it affects the fix."
     return "\n".join(
         [
             f"Repair GitHub Issue #{issue.number}: {issue.title}",
@@ -535,6 +658,21 @@ def run_agent_until_committed(
             )
             _logger.warning(
                 "Verification failed for Issue #%d; "
+                "asking agent to recover (%d/%d).",
+                issue.number,
+                attempt_index + 1,
+                max_recovery_attempts,
+            )
+            continue
+
+        try:
+            ensure_prd_delivery_ready(issue, worktree_path, process_runner)
+        except PrdDeliveryError as exc:
+            if attempt_index >= max_recovery_attempts:
+                raise
+            recovery_failure_summary = format_prd_delivery_failure(str(exc))
+            _logger.warning(
+                "PRD delivery check failed for Issue #%d; "
                 "asking agent to recover (%d/%d).",
                 issue.number,
                 attempt_index + 1,

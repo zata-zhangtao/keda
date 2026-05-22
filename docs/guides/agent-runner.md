@@ -417,6 +417,20 @@ forbidden_path_patterns = [
 - Agent CLI 非零退出或任一验证失败时，runner 最多按 `max_recovery_attempts` 重新调用同一个 Agent；每次 recovery 前会等待 `recovery_retry_delay_seconds` 秒，并把失败摘要或失败命令的 exit code、stdout、stderr 放入 recovery prompt；Agent 修复后仍只能写 commit request，不能直接提交
 - 如果 Agent 没有产生任何新 commit 且工作区也没有未提交变更，runner 仍会将 Issue 标记为 `agent/failed`
 
+### PRD-backed Issue 的强制 Closeout
+
+当 Issue body 中包含 `PRD path: \`tasks/pending/xxx.md\`` 时，runner 成功路径会强制完成 PRD closeout：
+
+1. **Prompt 引导**：`build_prompt()` 和 `build_recovery_prompt()` 会明确要求 Agent 在请求 commit 前更新 PRD 的 `Acceptance Checklist`，并在所有验收项完成后将 PRD 从 `tasks/pending/` 移动到 `tasks/archive/`。
+2. **提交前 Delivery Gate**：runner 在 `publish_changes()` 之前执行 PRD delivery gate：
+   - 无 PRD path：跳过 gate，保持现有行为。
+   - PRD 仍在 `tasks/pending/`：若 `Acceptance Checklist` 还有未勾选项，将失败原因交回 recovery prompt；若已全部勾选，runner 自动执行 `git mv tasks/pending/<name>.md tasks/archive/<name>.md`。
+   - PRD 已在 `tasks/archive/`：校验 `Acceptance Checklist` 全部完成。
+   - PRD 文件不存在、archive 目录缺失或 `Acceptance Checklist` section 缺失：进入 recovery loop，重试耗尽后标记 `agent/failed`。
+3. **归档纳入同一 Commit**：`git mv` 发生在 `git add -A` 之前，因此 PRD 归档变更会随 Agent 的代码变更一起进入同一个 commit，并包含在随后创建的 Draft PR 中，不需要 publish 后再追加 commit。
+
+> **注意**：runner 不会自动判断业务验收是否真实完成，只校验 Agent 是否已将 PRD 更新到交付完成态（checklist 全勾、文件在 archive）。
+
 ## FastAPI 状态端点
 
 Agent Runner 同时暴露只读状态端点：

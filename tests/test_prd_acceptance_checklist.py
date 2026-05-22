@@ -241,25 +241,23 @@ def test_missing_or_unchecked_acceptance_items_are_reported(tmp_path: Path) -> N
 def test_bilingual_acceptance_heading_reports_unchecked_items() -> None:
     """Bilingual checklist headings are parsed as acceptance checklist sections."""
 
-    prd_acceptance_checklist_module = load_prd_acceptance_checklist_module()
+    from backend.core.shared.prd_checklist import parse_prd_checklist
 
-    unchecked_items = (
-        prd_acceptance_checklist_module._unchecked_items_in_acceptance_section(  # noqa: SLF001
-            "\n".join(
-                [
-                    "# PRD",
-                    "",
-                    "## 7. Acceptance Checklist（验收清单）",
-                    "",
-                    "- [x] Done item",
-                    "- [ ] Undone item",
-                    "",
-                    "## 8. Notes",
-                    "",
-                    "- [ ] This is outside the acceptance section",
-                ]
-            )
+    checklist_result = parse_prd_checklist(
+        "\n".join(
+            [
+                "# PRD",
+                "",
+                "## 7. Acceptance Checklist（验收清单）",
+                "",
+                "- [x] Done item",
+                "- [ ] Undone item",
+                "",
+                "## 8. Notes",
+                "",
+                "- [ ] This is outside the acceptance section",
+            ]
         )
     )
 
-    assert unchecked_items == [(6, "- [ ] Undone item")]
+    assert checklist_result.unchecked_items == [(6, "- [ ] Undone item")]
