@@ -118,6 +118,7 @@ max_issues = 1
 [agent_runner.labels]
 ready = "agent/ready"
 running = "agent/running"
+supervising = "agent/supervising"
 review = "agent/review"
 failed = "agent/failed"
 blocked = "agent/blocked"
@@ -152,6 +153,17 @@ forbidden_path_patterns = [
   "secrets/*",
   "docker-compose.prod.yml",
 ]
+
+[agent_runner.pre_push_review]
+enabled = true
+review_agent = "auto"
+allow_same_agent = true
+max_attempts = 2
+
+[agent_runner.post_pr_supervisor]
+enabled = true
+supervisor_agent = "auto"
+max_repair_attempts = 2
 
 # =============================================================================
 # Agent Runner Prompt Templates

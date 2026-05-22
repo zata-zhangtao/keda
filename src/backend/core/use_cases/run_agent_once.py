@@ -6,7 +6,6 @@ import json
 import logging
 import re
 import shlex
-import socket
 import subprocess
 import time
 from collections.abc import Callable
@@ -421,6 +420,8 @@ def run_agent_with_prompt(
     prompt: str,
     worktree_path: Path,
     process_runner: IProcessRunner,
+    *,
+    capture_output: bool = False,
 ) -> CommandResult:
     """Run Codex or Claude Code with a prepared prompt."""
     builder = _AGENT_COMMAND_BUILDERS.get(agent_name)
@@ -428,7 +429,80 @@ def run_agent_with_prompt(
         command = builder(prompt, worktree_path)
     else:
         command = _build_codex_command(prompt, worktree_path)
-    return process_runner.run(command, cwd=worktree_path, capture_output=False)
+    return process_runner.run(
+        command,
+        cwd=worktree_path,
+        capture_output=capture_output,
+    )
+
+
+def extract_agent_response_text(result: CommandResult) -> str:
+    """Return assistant response text from direct stdout or Claude stream-json."""
+    if not result.stdout:
+        return ""
+    command_name = result.command[0] if result.command else ""
+    if command_name != "claude" or "stream-json" not in result.command:
+        return result.stdout
+
+    stream_text_parts: list[str] = []
+    assistant_text_parts: list[str] = []
+    result_parts: list[str] = []
+    for output_line in result.stdout.splitlines():
+        try:
+            event_payload = json.loads(output_line)
+        except json.JSONDecodeError:
+            stream_text_parts.append(output_line)
+            continue
+        if not isinstance(event_payload, dict):
+            continue
+        event_type = event_payload.get("type")
+        if event_type == "stream_event":
+            _append_claude_stream_event_text(event_payload, stream_text_parts)
+        elif event_type == "assistant":
+            _append_claude_assistant_text(event_payload, assistant_text_parts)
+        elif event_type == "result":
+            result_text = str(event_payload.get("result") or "").strip()
+            if result_text:
+                result_parts.append(result_text)
+
+    if stream_text_parts:
+        return "".join(stream_text_parts)
+    if assistant_text_parts:
+        return "".join(assistant_text_parts)
+    if result_parts:
+        return "\n".join(result_parts)
+    return result.stdout
+
+
+def _append_claude_stream_event_text(
+    event_payload: dict[str, object],
+    text_parts: list[str],
+) -> None:
+    event = event_payload.get("event")
+    if not isinstance(event, dict):
+        return
+    delta = event.get("delta")
+    if not isinstance(delta, dict):
+        return
+    if delta.get("type") == "text_delta":
+        text_parts.append(str(delta.get("text", "")))
+
+
+def _append_claude_assistant_text(
+    event_payload: dict[str, object],
+    text_parts: list[str],
+) -> None:
+    message = event_payload.get("message")
+    if not isinstance(message, dict):
+        return
+    content_blocks = message.get("content", [])
+    if not isinstance(content_blocks, list):
+        return
+    for content_block in content_blocks:
+        if not isinstance(content_block, dict):
+            continue
+        if content_block.get("type") == "text":
+            text_parts.append(str(content_block.get("text", "")))
 
 
 def get_head_sha(worktree_path: Path, process_runner: IProcessRunner) -> str:
@@ -908,104 +982,15 @@ def run_once(
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
 ) -> int:
-    """Run one polling pass.
+    """Compatibility entry point for the orchestrated single-pass runner."""
+    from backend.core.use_cases.agent_runner_orchestrate import run_once as _run_once
 
-    Args:
-        repo_path: Target repository path.
-        config: Application configuration.
-        dry_run: If True, only list ready issues without processing.
-        agent: Agent override (auto, codex, claude).
-        max_issues: Maximum issues to process.
-        github_client: Client for interacting with GitHub.
-        process_runner: Runner for executing subprocess commands.
-
-    Returns:
-        Exit code (0 on success, 1 if any issue failed).
-    """
-    if not dry_run:
-        try:
-            run_preflight_checks(repo_path, config, process_runner)
-        except Exception as exc:  # noqa: BLE001 - report preflight failure cleanly.
-            _logger.error("Agent runner preflight failed: %s", exc)
-            return 1
-
-    issues = github_client.list_ready_issues(config.labels.ready, max_issues)
-    if not issues:
-        _logger.info("No open Issues found with label %s.", config.labels.ready)
-        return 0
-
-    exit_code = 0
-    for issue in issues:
-        selected_agent = choose_agent(issue, config, agent)
-        if dry_run:
-            _logger.info(
-                "DRY RUN: would process Issue #%d with %s: %s",
-                issue.number,
-                selected_agent,
-                issue.title,
-            )
-            continue
-        try:
-            github_client.edit_issue_labels(
-                issue.number, add=[config.labels.running], remove=[config.labels.ready]
-            )
-            github_client.comment_issue(
-                issue.number,
-                "## Agent Runner Claimed\n\n"
-                f"- Host: `{socket.gethostname()}`\n"
-                f"- Agent: `{selected_agent}`\n",
-            )
-            worktree_path = create_or_reuse_worktree(
-                repo_path, issue, config, process_runner
-            )
-            before_sha = get_head_sha(worktree_path, process_runner)
-            expected_branch = get_current_branch(worktree_path, process_runner)
-            verification_results = run_agent_until_committed(
-                selected_agent=selected_agent,
-                issue=issue,
-                worktree_path=worktree_path,
-                config=config,
-                process_runner=process_runner,
-                before_sha=before_sha,
-                expected_branch=expected_branch,
-            )
-            branch, pr_url = publish_changes(
-                issue,
-                worktree_path,
-                config,
-                github_client,
-                process_runner,
-                expected_branch=expected_branch,
-            )
-            github_client.edit_issue_labels(
-                issue.number, add=[config.labels.review], remove=[config.labels.running]
-            )
-            verification_lines = "\n".join(
-                f"- `{' '.join(result.command)}`: exit {result.return_code}"
-                for result in verification_results
-            )
-            github_client.comment_issue(
-                issue.number,
-                "\n".join(
-                    [
-                        "## Agent Runner Result",
-                        "",
-                        f"- Branch: `{branch}`",
-                        f"- Draft PR: {pr_url}",
-                        "",
-                        "Verification:",
-                        verification_lines,
-                    ]
-                ),
-            )
-            _logger.info("Completed Issue #%d: %s", issue.number, issue.title)
-        except Exception as exc:  # noqa: BLE001 - report queue failures and continue.
-            exit_code = 1
-            github_client.edit_issue_labels(
-                issue.number, add=[config.labels.failed], remove=[config.labels.running]
-            )
-            github_client.comment_issue(
-                issue.number, f"## Agent Runner Failed\n\n```text\n{exc}\n```\n"
-            )
-            _logger.error("Failed Issue #%d: %s", issue.number, exc)
-    return exit_code
+    return _run_once(
+        repo_path=repo_path,
+        config=config,
+        dry_run=dry_run,
+        agent=agent,
+        max_issues=max_issues,
+        github_client=github_client,
+        process_runner=process_runner,
+    )

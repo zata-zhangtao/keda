@@ -20,6 +20,8 @@ from backend.core.use_cases.run_agent_daemon import run_agent_daemon
 from backend.core.use_cases.run_agent_repositories_once import (
     run_agent_repositories_once,
 )
+from backend.core.use_cases.review_daemon import run_review_daemon
+from backend.core.use_cases.review_once import review_once
 from backend.core.use_cases.sync_labels import sync_labels
 from backend.engines.agent_runner.factory import (
     create_github_client,
@@ -156,6 +158,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daemon_parser.add_argument("--max-issues", type=int)
     add_common_options(daemon_parser)
+
+    review_once_parser = subparsers.add_parser("review-once")
+    review_once_parser.add_argument("--dry-run", action="store_true")
+    review_once_parser.add_argument(
+        "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
+    )
+    review_once_parser.add_argument("--max-issues", type=int)
+    add_common_options(review_once_parser)
+
+    review_daemon_parser = subparsers.add_parser("review-daemon")
+    review_daemon_parser.add_argument("--interval", type=int, default=600)
+    review_daemon_parser.add_argument(
+        "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
+    )
+    review_daemon_parser.add_argument("--max-issues", type=int)
+    add_common_options(review_daemon_parser)
     return parser
 
 
@@ -269,6 +287,55 @@ def main(argv: list[str] | None = None) -> int:
                 repo_path_override=repo_override,
             )
             run_agent_daemon(
+                contexts=contexts,
+                interval=parsed.interval,
+                agent=parsed.agent,
+                max_issues=parsed.max_issues or runner_settings.runner.max_issues,
+                process_runner=process_runner,
+                github_client_factory=lambda rp: create_github_client(
+                    rp, process_runner
+                ),
+            )
+            return 0
+
+        if parsed.command == "review-once":
+            contexts = resolve_repository_targets(
+                runner_settings,
+                repo_id=repo_id,
+                repo_path_override=repo_override,
+            )
+            aggregated_exit_code = 0
+            for context in contexts:
+                github_client = create_github_client(context.repo_path, process_runner)
+                try:
+                    repo_exit_code = review_once(
+                        repo_path=context.repo_path,
+                        config=context.config,
+                        dry_run=parsed.dry_run,
+                        agent=parsed.agent,
+                        max_issues=parsed.max_issues
+                        or runner_settings.runner.max_issues,
+                        github_client=github_client,
+                        process_runner=process_runner,
+                    )
+                    if repo_exit_code != 0:
+                        aggregated_exit_code = 1
+                except Exception as exc:  # noqa: BLE001
+                    aggregated_exit_code = 1
+                    _logger.error(
+                        "Repository '%s' review_once failed: %s",
+                        context.repo_id,
+                        exc,
+                    )
+            return aggregated_exit_code
+
+        if parsed.command == "review-daemon":
+            contexts = resolve_repository_targets(
+                runner_settings,
+                repo_id=repo_id,
+                repo_path_override=repo_override,
+            )
+            run_review_daemon(
                 contexts=contexts,
                 interval=parsed.interval,
                 agent=parsed.agent,

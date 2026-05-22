@@ -33,6 +33,7 @@ class LabelConfig:
 
     ready: str = "agent/ready"
     running: str = "agent/running"
+    supervising: str = "agent/supervising"
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
@@ -98,6 +99,61 @@ class PromptConfig:
 
 
 @dataclass(frozen=True)
+class PrePushReviewConfig:
+    """Pre-push AI review gate configuration."""
+
+    enabled: bool = True
+    review_agent: str = "auto"
+    allow_same_agent: bool = True
+    max_attempts: int = 2
+
+
+@dataclass(frozen=True)
+class PostPrSupervisorConfig:
+    """Post-PR supervisor cycle configuration."""
+
+    enabled: bool = True
+    supervisor_agent: str = "auto"
+    max_repair_attempts: int = 2
+
+
+@dataclass(frozen=True)
+class PullRequestContext:
+    """Minimal PR context for supervisor decisions."""
+
+    pr_url: str
+    branch: str
+    head_sha: str
+    base_sha: str
+    mergeable: bool | None = None
+    checks_state: str | None = None
+
+
+@dataclass(frozen=True)
+class ReviewEventMarker:
+    """Parsed iar:event hidden marker from an Issue comment."""
+
+    version: int
+    phase: str
+    cycle: int
+    head_sha: str | None = None
+    base_sha: str | None = None
+    pr_branch: str | None = None
+    action: str | None = None
+
+
+@dataclass(frozen=True)
+class SupervisorActionResult:
+    """Outcome of a single supervisor cycle."""
+
+    action: str
+    summary: str = ""
+    findings_counts: dict[str, int] = field(default_factory=dict)
+    verification_status: str = ""
+    head_sha: str | None = None
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Application configuration."""
 
@@ -107,6 +163,8 @@ class AppConfig:
     runner: RunnerConfig = RunnerConfig()
     safety: SafetyConfig = SafetyConfig()
     prompts: PromptConfig = field(default_factory=PromptConfig)
+    pre_push_review: PrePushReviewConfig = PrePushReviewConfig()
+    post_pr_supervisor: PostPrSupervisorConfig = PostPrSupervisorConfig()
 
 
 @dataclass(frozen=True)

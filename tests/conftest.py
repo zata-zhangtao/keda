@@ -32,6 +32,11 @@ class FakeGitHubClient(IGitHubClient):
     ) -> None:
         self._issue_url = issue_url
         self.calls: list[dict] = []
+        self._issue_comments: dict[int, list[str]] = {}
+        self._pr_comments: dict[int, list[str]] = {}
+        self._pr_contexts: dict[str, object | None] = {}
+        self._open_prs: dict[str, str | None] = {}
+        self._remote_base_sha: str = "remote-base-sha"
 
     def sync_labels(self, labels: LabelConfig) -> None:
         self.calls.append({"method": "sync_labels", "labels": labels})
@@ -58,6 +63,7 @@ class FakeGitHubClient(IGitHubClient):
         self.calls.append(
             {"method": "comment_issue", "issue_number": issue_number, "body": body}
         )
+        self._issue_comments.setdefault(issue_number, []).append(body)
 
     def create_issue(self, *, title: str, body: str, labels: Sequence[str]) -> str:
         self.calls.append(
@@ -82,6 +88,46 @@ class FakeGitHubClient(IGitHubClient):
             }
         )
         return "https://github.com/example/repo/pull/1"
+
+    def list_review_candidate_issues(
+        self, labels: Sequence[str], limit: int
+    ) -> list[IssueSummary]:
+        self.calls.append(
+            {
+                "method": "list_review_candidate_issues",
+                "labels": list(labels),
+                "limit": limit,
+            }
+        )
+        return []
+
+    def get_pull_request_context(self, branch: str) -> object | None:
+        self.calls.append({"method": "get_pull_request_context", "branch": branch})
+        return self._pr_contexts.get(branch)
+
+    def list_issue_comments(self, issue_number: int) -> list[str]:
+        self.calls.append(
+            {"method": "list_issue_comments", "issue_number": issue_number}
+        )
+        return list(self._issue_comments.get(issue_number, []))
+
+    def list_pr_comments(self, pr_number: int) -> list[str]:
+        self.calls.append({"method": "list_pr_comments", "pr_number": pr_number})
+        return list(self._pr_comments.get(pr_number, []))
+
+    def find_open_pr_by_head(self, branch: str) -> str | None:
+        self.calls.append({"method": "find_open_pr_by_head", "branch": branch})
+        return self._open_prs.get(branch)
+
+    def get_remote_base_sha(self, remote: str, base_branch: str) -> str:
+        self.calls.append(
+            {
+                "method": "get_remote_base_sha",
+                "remote": remote,
+                "base_branch": base_branch,
+            }
+        )
+        return self._remote_base_sha
 
 
 class FakeProcessRunner(IProcessRunner):
@@ -108,6 +154,13 @@ class FakeProcessRunner(IProcessRunner):
             result = self.responses[key]
             if check and result.return_code != 0:
                 raise RuntimeError(f"Command failed: {command}")
+            if not capture_output:
+                return CommandResult(
+                    command=result.command,
+                    return_code=result.return_code,
+                    stdout="",
+                    stderr="",
+                )
             return result
         return CommandResult(
             command=tuple(command), return_code=0, stdout="", stderr=""
