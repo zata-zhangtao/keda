@@ -1,5 +1,7 @@
 # PRD: Agent Prompt Template & Phase System
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/14
+
 ## 1. Introduction & Goals
 
 当前 `build_prompt` 在 `run_agent_once.py` 中硬编码了完整的 AI prompt，包括：
