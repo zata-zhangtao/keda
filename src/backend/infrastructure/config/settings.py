@@ -25,7 +25,19 @@ _INFRASTRUCTURE_DIR_PATH: Path = _CONFIG_DIR_PATH.parent
 _BACKEND_DIR_PATH: Path = _INFRASTRUCTURE_DIR_PATH.parent
 _SOURCE_DIR_PATH: Path = _BACKEND_DIR_PATH.parent
 _PROJECT_ROOT_PATH: Path = _SOURCE_DIR_PATH.parent
-_TOML_CONFIG_FILE_PATH: Path = _PROJECT_ROOT_PATH / "config.toml"
+
+
+def _find_config_toml() -> Path | None:
+    """从当前工作目录向上查找 config.toml，回退到源码根目录。"""
+    cwd = Path.cwd()
+    for path in [cwd, *cwd.parents]:
+        candidate = path / "config.toml"
+        if candidate.is_file():
+            return candidate
+    fallback = _PROJECT_ROOT_PATH / "config.toml"
+    if fallback.is_file():
+        return fallback
+    return None
 
 
 def _load_toml_section_data(section_name: str) -> dict[str, Any]:
@@ -37,10 +49,11 @@ def _load_toml_section_data(section_name: str) -> dict[str, Any]:
     Returns:
         section 内容字典，文件不存在或 section 不存在时返回空 dict。
     """
-    if not _TOML_CONFIG_FILE_PATH.is_file():
+    toml_path = _find_config_toml()
+    if toml_path is None:
         return {}
     try:
-        with open(_TOML_CONFIG_FILE_PATH, "rb") as toml_file:
+        with open(toml_path, "rb") as toml_file:
             toml_data: dict[str, Any] = tomllib.load(toml_file)
         return toml_data.get(section_name, {})
     except Exception:
