@@ -90,6 +90,14 @@ class SafetyConfig:
 
 
 @dataclass(frozen=True)
+class PromptConfig:
+    """Agent prompt template configuration."""
+
+    default_phase: str = "execution"
+    phases: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Application configuration."""
 
@@ -98,6 +106,7 @@ class AppConfig:
     worktree: WorktreeConfig = WorktreeConfig()
     runner: RunnerConfig = RunnerConfig()
     safety: SafetyConfig = SafetyConfig()
+    prompts: PromptConfig = field(default_factory=PromptConfig)
 
 
 @dataclass(frozen=True)

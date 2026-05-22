@@ -12,6 +12,7 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     GitConfig,
     IssueSummary,
+    PromptConfig,
     RunnerConfig,
     WorktreeConfig,
 )
@@ -154,11 +155,63 @@ def test_build_prompt_uses_commit_request_proxy() -> None:
         body="Test body",
         labels=(),
     )
-    prompt = build_prompt(issue, Path("/worktree"))
+    prompt = build_prompt(issue, Path("/worktree"), PromptConfig())
     assert "Do not merge main, delete branches, push, or create PRs" in prompt
     assert "Do not run `git add` or `git commit`" in prompt
     assert ".agent-runner/commit-request.json" in prompt
     assert "commit_message" in prompt
+
+
+def test_build_prompt_fallback_to_default() -> None:
+    """Empty prompt config should fall back to the built-in default template."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Test body",
+        labels=(),
+    )
+    prompt = build_prompt(issue, Path("/worktree"), PromptConfig())
+    assert "Complete GitHub Issue #1: Test" in prompt
+    assert "Execution rules:" in prompt
+
+
+def test_build_prompt_uses_config_template() -> None:
+    """Custom phase template in PromptConfig should override the default."""
+    issue = IssueSummary(
+        number=42,
+        title="Custom",
+        url="https://github.com/example/repo/issues/42",
+        body="Custom body",
+        labels=(),
+    )
+    custom_template = "Issue #{issue_number}: {issue_title}\n{issue_body}"
+    prompt_config = PromptConfig(phases={"execution": custom_template})
+    prompt = build_prompt(issue, Path("/worktree"), prompt_config)
+    assert prompt == "Issue #42: Custom\nCustom body"
+
+
+def test_build_prompt_replaces_all_placeholders() -> None:
+    """All template placeholders should be replaced with issue values."""
+    issue = IssueSummary(
+        number=7,
+        title="Replace Test",
+        url="https://github.com/example/repo/issues/7",
+        body="PRD path: `docs/prd.md`",
+        labels=(),
+    )
+    template = (
+        "num={issue_number} title={issue_title} url={issue_url} "
+        "path={worktree_path} body={issue_body} prd={prd_line}"
+    )
+    prompt_config = PromptConfig(phases={"execution": template})
+    prompt = build_prompt(issue, Path("/wt"), prompt_config)
+    assert "num=7" in prompt
+    assert "title=Replace Test" in prompt
+    assert "url=https://github.com/example/repo/issues/7" in prompt
+    assert "path=/wt" in prompt
+    assert "body=PRD path: `docs/prd.md`" in prompt
+    assert "prd=Also read the canonical PRD at `docs/prd.md`" in prompt
 
 
 def test_build_recovery_prompt_includes_failure_context() -> None:
@@ -215,7 +268,7 @@ def test_build_prompt_includes_prd_closeout_for_pending_prd() -> None:
         body="PRD path: `tasks/pending/example.md`",
         labels=(),
     )
-    prompt = build_prompt(issue, Path("/worktree"))
+    prompt = build_prompt(issue, Path("/worktree"), PromptConfig())
     assert "tasks/pending/example.md" in prompt
     assert "Acceptance Checklist" in prompt
     assert "tasks/pending/" in prompt
@@ -231,7 +284,7 @@ def test_build_prompt_no_prd_path() -> None:
         body="Just a regular issue.",
         labels=(),
     )
-    prompt = build_prompt(issue, Path("/worktree"))
+    prompt = build_prompt(issue, Path("/worktree"), PromptConfig())
     assert "If the Issue references a PRD, read it before editing." in prompt
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -335,6 +335,21 @@ class AgentRunnerSafetySettings(BaseModel):
     )
 
 
+class AgentRunnerPromptSettings(BaseModel):
+    """Agent prompt template settings supporting TOML string-list syntax."""
+
+    default_phase: str = "execution"
+    phases: dict[str, str | list[str]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _join_list_templates(self) -> "AgentRunnerPromptSettings":
+        """Convert list[str] phase values to joined strings."""
+        for phase_name, phase_value in self.phases.items():
+            if isinstance(phase_value, list):
+                self.phases[phase_name] = "\n".join(phase_value)
+        return self
+
+
 class AgentRunnerRepositorySettings(BaseModel):
     """Per-repository Agent Runner configuration overrides."""
 
@@ -346,6 +361,7 @@ class AgentRunnerRepositorySettings(BaseModel):
     worktree: AgentRunnerWorktreeSettings | None = None
     runner: AgentRunnerRunnerSettings | None = None
     safety: AgentRunnerSafetySettings | None = None
+    prompts: AgentRunnerPromptSettings | None = None
 
 
 class AgentRunnerSettings(BaseSettings):
@@ -362,6 +378,9 @@ class AgentRunnerSettings(BaseSettings):
     )
     runner: AgentRunnerRunnerSettings = Field(default_factory=AgentRunnerRunnerSettings)
     safety: AgentRunnerSafetySettings = Field(default_factory=AgentRunnerSafetySettings)
+    prompts: AgentRunnerPromptSettings = Field(
+        default_factory=AgentRunnerPromptSettings
+    )
     repositories: dict[str, AgentRunnerRepositorySettings] = Field(default_factory=dict)
 
     @classmethod

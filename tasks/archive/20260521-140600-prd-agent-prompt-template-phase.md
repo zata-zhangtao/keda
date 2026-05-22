@@ -268,35 +268,35 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/shared/models/agent_runner.py` 中新增 `PromptConfig` dataclass，字段为 `default_phase: str` 和 `phases: dict[str, str]`。
-- [ ] `AppConfig` 新增 `prompts: PromptConfig` 字段，默认值为 `PromptConfig()`。
-- [ ] `src/backend/infrastructure/config/settings.py` 中新增 `AgentRunnerPromptSettings` Pydantic 模型，支持 `phases` 的 `str | list[str]` 值类型。
-- [ ] `AgentRunnerPromptSettings` 包含 `model_validator`，在加载后将 `list[str]` 值的 phase 自动 `\n`.join 为 `str`。
-- [ ] `AgentRunnerSettings` 新增 `prompts: AgentRunnerPromptSettings` 字段。
-- [ ] `config.toml` 中新增 `[agent_runner.prompts]` 和 `[agent_runner.prompts.phases]` 配置段。
-- [ ] `src/backend/engines/agent_runner/factory.py` 中 `AgentRunnerSettings` → `AppConfig` 转换包含 `prompts` 字段映射。
-- [ ] 依赖方向未被破坏：`run_agent_once.py` 不直接读取 TOML 或 env，prompt 通过 `AppConfig` 注入。
+- [x] `src/backend/core/shared/models/agent_runner.py` 中新增 `PromptConfig` dataclass，字段为 `default_phase: str` 和 `phases: dict[str, str]`。
+- [x] `AppConfig` 新增 `prompts: PromptConfig` 字段，默认值为 `PromptConfig()`。
+- [x] `src/backend/infrastructure/config/settings.py` 中新增 `AgentRunnerPromptSettings` Pydantic 模型，支持 `phases` 的 `str | list[str]` 值类型。
+- [x] `AgentRunnerPromptSettings` 包含 `model_validator`，在加载后将 `list[str]` 值的 phase 自动 `\n`.join 为 `str`。
+- [x] `AgentRunnerSettings` 新增 `prompts: AgentRunnerPromptSettings` 字段。
+- [x] `config.toml` 中新增 `[agent_runner.prompts]` 和 `[agent_runner.prompts.phases]` 配置段。
+- [x] `src/backend/engines/agent_runner/factory.py` 中 `AgentRunnerSettings` → `AppConfig` 转换包含 `prompts` 字段映射。
+- [x] 依赖方向未被破坏：`run_agent_once.py` 不直接读取 TOML 或 env，prompt 通过 `AppConfig` 注入。
 
 ### Behavior Acceptance
 
-- [ ] `build_prompt` 的 signature 包含 `prompt_config: PromptConfig` 和 `phase: str = "execution"` 参数。
-- [ ] `build_prompt` 从 `prompt_config.phases.get(phase)` 获取模板；不存在时使用内置默认模板。
-- [ ] 内置默认模板渲染后的输出与当前硬编码 `build_prompt` 的输出完全一致（字符级等价）。
-- [ ] 模板变量 `{issue_number}`、`{issue_title}`、`{issue_url}`、`{worktree_path}`、`{issue_body}`、`{prd_line}` 均被正确替换。
-- [ ] `run_agent` 调用 `build_prompt` 时传入 `prompt_config`，且 phase 为 `"execution"`。
-- [ ] 当 `config.toml` 中自定义 `agent_runner.prompts.phases.execution` 时，`build_prompt` 返回自定义模板渲染结果。
+- [x] `build_prompt` 的 signature 包含 `prompt_config: PromptConfig` 和 `phase: str = "execution"` 参数。
+- [x] `build_prompt` 从 `prompt_config.phases.get(phase)` 获取模板；不存在时使用内置默认模板。
+- [x] 内置默认模板渲染后的输出与当前硬编码 `build_prompt` 的输出完全一致（字符级等价）。
+- [x] 模板变量 `{issue_number}`、`{issue_title}`、`{issue_url}`、`{worktree_path}`、`{issue_body}`、`{prd_line}` 均被正确替换。
+- [x] `run_agent` 调用 `build_prompt` 时传入 `prompt_config`，且 phase 为 `"execution"`。
+- [x] 当 `config.toml` 中自定义 `agent_runner.prompts.phases.execution` 时，`build_prompt` 返回自定义模板渲染结果。
 
 ### Documentation Acceptance
 
-- [ ] 若 `docs/` 中有描述 runner prompt 行为的内容，同步更新以反映配置化变更。
-- [ ] `config.toml` 中的新配置段包含注释说明每个模板变量的含义。
-- [ ] PRD 自身包含完整的 Acceptance Checklist 且所有项在归档前完成。
+- [x] 若 `docs/` 中有描述 runner prompt 行为的内容，同步更新以反映配置化变更。
+- [x] `config.toml` 中的新配置段包含注释说明每个模板变量的含义。
+- [x] PRD 自身包含完整的 Acceptance Checklist 且所有项在归档前完成。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_run_agent.py -v` 全部通过。
-- [ ] `uv run pytest tests/ -v` 无回归失败。
-- [ ] `just lint` 通过。
+- [x] `uv run pytest tests/test_run_agent.py -v` 全部通过。
+- [x] `uv run pytest tests/ -v` 无回归失败。
+- [x] `just lint` 通过。
 
 ## 8. Functional Requirements
 

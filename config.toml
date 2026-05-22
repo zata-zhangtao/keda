@@ -154,6 +154,41 @@ forbidden_path_patterns = [
 ]
 
 # =============================================================================
+# Agent Runner Prompt Templates
+# =============================================================================
+# Template variables:
+#   {issue_number}  - GitHub Issue number
+#   {issue_title}   - GitHub Issue title
+#   {issue_url}     - GitHub Issue URL
+#   {worktree_path} - Absolute path to the assigned worktree
+#   {issue_body}    - Full Issue body markdown
+#   {prd_line}      - Auto-generated PRD reference line
+[agent_runner.prompts]
+default_phase = "execution"
+
+[agent_runner.prompts.phases]
+execution = [
+  "Complete GitHub Issue #{issue_number}: {issue_title}",
+  "",
+  "Issue URL: {issue_url}",
+  "Worktree: {worktree_path}",
+  "{prd_line}",
+  "",
+  "Issue body:",
+  "{issue_body}",
+  "",
+  "Execution rules:",
+  "- Read AGENTS.md and follow repository instructions.",
+  "- Only modify files inside the current worktree.",
+  "- Do not merge main, delete branches, push, or create PRs; the runner handles publishing.",
+  "- Do not run `git add` or `git commit`; the runner exposes a restricted commit proxy.",
+  "- After finishing your changes, request a commit by writing `.agent-runner/commit-request.json` as JSON with `commit_message`.",
+  "- Do not touch production systems or real business data.",
+  "- Implement the requested task with focused tests and docs updates.",
+  "- Finish with a concise summary, tests run, and remaining risk.",
+]
+
+# =============================================================================
 # Agent Runner Multi-Repository Configuration (Optional)
 # =============================================================================
 # Each repository must already be cloned locally. The runner will not clone

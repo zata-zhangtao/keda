@@ -18,6 +18,7 @@ from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
     IssueSummary,
+    PromptConfig,
 )
 from backend.core.shared.prd_checklist import parse_prd_checklist
 
@@ -65,8 +66,35 @@ def extract_prd_path(issue_body: str) -> str | None:
     return match.group(1) if match else None
 
 
-def build_prompt(issue: IssueSummary, worktree_path: Path) -> str:
-    """Build the prompt sent to the local AI agent."""
+_DEFAULT_EXECUTION_TEMPLATE = "\n".join(
+    [
+        "Complete GitHub Issue #{issue_number}: {issue_title}",
+        "",
+        "Issue URL: {issue_url}",
+        "Worktree: {worktree_path}",
+        "{prd_line}",
+        "",
+        "Issue body:",
+        "{issue_body}",
+        "",
+        "Execution rules:",
+        "- Read AGENTS.md and follow repository instructions.",
+        "- Only modify files inside the current worktree.",
+        "- Do not merge main, delete branches, push, or create PRs; "
+        "the runner handles publishing.",
+        "- Do not run `git add` or `git commit`; the runner exposes "
+        "a restricted commit proxy.",
+        "- After finishing your changes, request a commit by writing "
+        "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
+        "- Do not touch production systems or real business data.",
+        "- Implement the requested task with focused tests and docs updates.",
+        "- Finish with a concise summary, tests run, and remaining risk.",
+    ]
+)
+
+
+def _build_prd_line(issue: IssueSummary) -> str:
+    """Build the PRD reference line for a prompt template."""
     prd_path = extract_prd_path(issue.body)
     if prd_path:
         prd_path_obj = Path(prd_path)
@@ -80,37 +108,30 @@ def build_prompt(issue: IssueSummary, worktree_path: Path) -> str:
                 " If all checklist items are complete, move the PRD from "
                 "`tasks/pending/` to `tasks/archive/`."
             )
-        prd_line = (
+        return (
             f"Also read the canonical PRD at `{prd_path}`. "
             "Before requesting a commit, update the PRD's Acceptance Checklist "
             f"to reflect completed work.{move_instruction}"
         )
-    else:
-        prd_line = "If the Issue references a PRD, read it before editing."
-    return "\n".join(
-        [
-            f"Complete GitHub Issue #{issue.number}: {issue.title}",
-            "",
-            f"Issue URL: {issue.url}",
-            f"Worktree: {worktree_path}",
-            prd_line,
-            "",
-            "Issue body:",
-            issue.body,
-            "",
-            "Execution rules:",
-            "- Read AGENTS.md and follow repository instructions.",
-            "- Only modify files inside the current worktree.",
-            "- Do not merge main, delete branches, push, or create PRs; "
-            "the runner handles publishing.",
-            "- Do not run `git add` or `git commit`; the runner exposes "
-            "a restricted commit proxy.",
-            "- After finishing your changes, request a commit by writing "
-            "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
-            "- Do not touch production systems or real business data.",
-            "- Implement the requested task with focused tests and docs updates.",
-            "- Finish with a concise summary, tests run, and remaining risk.",
-        ]
+    return "If the Issue references a PRD, read it before editing."
+
+
+def build_prompt(
+    issue: IssueSummary,
+    worktree_path: Path,
+    prompt_config: PromptConfig,
+    phase: str = "execution",
+) -> str:
+    """Build the prompt sent to the local AI agent from a template."""
+    template = prompt_config.phases.get(phase, _DEFAULT_EXECUTION_TEMPLATE)
+    prd_line = _build_prd_line(issue)
+    return template.format(
+        issue_number=issue.number,
+        issue_title=issue.title,
+        issue_url=issue.url,
+        worktree_path=worktree_path,
+        issue_body=issue.body,
+        prd_line=prd_line,
     )
 
 
@@ -387,10 +408,11 @@ def run_agent(
     agent_name: str,
     issue: IssueSummary,
     worktree_path: Path,
+    config: AppConfig,
     process_runner: IProcessRunner,
 ) -> CommandResult:
     """Run Codex or Claude Code in non-interactive mode."""
-    prompt = build_prompt(issue, worktree_path)
+    prompt = build_prompt(issue, worktree_path, config.prompts, phase="execution")
     return run_agent_with_prompt(agent_name, prompt, worktree_path, process_runner)
 
 
@@ -624,7 +646,7 @@ def run_agent_until_committed(
             )
         try:
             if attempt_index == 0:
-                run_agent(selected_agent, issue, worktree_path, process_runner)
+                run_agent(selected_agent, issue, worktree_path, config, process_runner)
             else:
                 recovery_prompt = build_recovery_prompt(
                     issue,
