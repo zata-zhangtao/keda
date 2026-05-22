@@ -8,7 +8,7 @@ from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
 from backend.core.shared.models.agent_runner import RepositoryRunContext
-from backend.core.use_cases.run_agent_once import run_once
+from backend.core.use_cases.agent_runner_orchestrate import run_once
 
 _logger = logging.getLogger(__name__)
 

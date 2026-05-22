@@ -4,11 +4,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.core.shared.models.agent_runner import LabelConfig as CoreLabelConfig
+from backend.core.shared.models.agent_runner import (
+    AppConfig as CoreAppConfig,
+    LabelConfig as CoreLabelConfig,
+    PostPrSupervisorConfig,
+    PrePushReviewConfig,
+)
 from backend.core.use_cases.run_agent_once import _AGENT_COMMAND_BUILDERS
 from backend.engines.agent_runner.factory import build_app_config
 from backend.infrastructure.config import settings as settings_module
-from backend.infrastructure.config.settings import AgentRunnerLabelSettings
+from backend.infrastructure.config.settings import (
+    AgentRunnerLabelSettings,
+    AgentRunnerPostPrSupervisorSettings,
+    AgentRunnerPrePushReviewSettings,
+)
 from backend.infrastructure.github_client import LabelConfig as InfraLabelConfig
 
 
@@ -40,3 +49,42 @@ def test_every_non_default_agent_has_a_command_builder() -> None:
     assert (
         set(core_labels) <= supported
     ), f"Missing command builders for {set(core_labels) - supported}"
+
+
+def test_label_config_includes_supervising() -> None:
+    """All label configs must include the supervising label."""
+    assert CoreLabelConfig().supervising == "agent/supervising"
+    assert AgentRunnerLabelSettings().supervising == "agent/supervising"
+    assert InfraLabelConfig().supervising == "agent/supervising"
+
+
+def test_app_config_has_review_and_supervisor_settings() -> None:
+    """AppConfig must aggregate pre-push review and post-PR supervisor configs."""
+    app_config = CoreAppConfig()
+    assert isinstance(app_config.pre_push_review, PrePushReviewConfig)
+    assert isinstance(app_config.post_pr_supervisor, PostPrSupervisorConfig)
+
+
+def test_settings_review_and_supervisor_match_core() -> None:
+    """Infrastructure settings must map to core review/supervisor configs."""
+    pre_push = AgentRunnerPrePushReviewSettings()
+    post_sup = AgentRunnerPostPrSupervisorSettings()
+    core_pre = PrePushReviewConfig()
+    core_post = PostPrSupervisorConfig()
+
+    assert pre_push.enabled == core_pre.enabled
+    assert pre_push.review_agent == core_pre.review_agent
+    assert pre_push.allow_same_agent == core_pre.allow_same_agent
+    assert pre_push.max_attempts == core_pre.max_attempts
+
+    assert post_sup.enabled == core_post.enabled
+    assert post_sup.supervisor_agent == core_post.supervisor_agent
+    assert post_sup.max_repair_attempts == core_post.max_repair_attempts
+
+
+def test_factory_build_app_config_maps_supervising() -> None:
+    """Factory must map the supervising label through to AppConfig."""
+    app_config = build_app_config()
+    assert app_config.labels.supervising == "agent/supervising"
+    assert app_config.pre_push_review.enabled is True
+    assert app_config.post_pr_supervisor.enabled is True

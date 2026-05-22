@@ -10,6 +10,7 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     IssueSummary,
     LabelConfig,
+    PullRequestContext,
 )
 
 
@@ -93,4 +94,36 @@ class IGitHubClient(ABC):
         cwd: Path,
     ) -> str:
         """Create a draft pull request from the current branch."""
+        ...
+
+    @abstractmethod
+    def list_review_candidate_issues(
+        self, labels: Sequence[str], limit: int
+    ) -> list[IssueSummary]:
+        """List open Issues with any of the given labels."""
+        ...
+
+    @abstractmethod
+    def get_pull_request_context(self, branch: str) -> PullRequestContext | None:
+        """Return PR context for an open PR on the given branch."""
+        ...
+
+    @abstractmethod
+    def list_issue_comments(self, issue_number: int) -> list[str]:
+        """Return raw comment bodies for an Issue."""
+        ...
+
+    @abstractmethod
+    def list_pr_comments(self, pr_number: int) -> list[str]:
+        """Return raw comment bodies for a PR."""
+        ...
+
+    @abstractmethod
+    def find_open_pr_by_head(self, branch: str) -> str | None:
+        """Return PR URL if an open PR exists for the branch."""
+        ...
+
+    @abstractmethod
+    def get_remote_base_sha(self, remote: str, base_branch: str) -> str:
+        """Return the SHA of the remote base branch."""
         ...

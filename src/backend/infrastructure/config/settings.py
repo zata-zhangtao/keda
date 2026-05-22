@@ -274,6 +274,7 @@ class AgentRunnerLabelSettings(BaseModel):
 
     ready: str = "agent/ready"
     running: str = "agent/running"
+    supervising: str = "agent/supervising"
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
@@ -350,6 +351,23 @@ class AgentRunnerPromptSettings(BaseModel):
         return self
 
 
+class AgentRunnerPrePushReviewSettings(BaseModel):
+    """Pre-push AI review gate configuration."""
+
+    enabled: bool = True
+    review_agent: str = "auto"
+    allow_same_agent: bool = True
+    max_attempts: int = 2
+
+
+class AgentRunnerPostPrSupervisorSettings(BaseModel):
+    """Post-PR supervisor cycle configuration."""
+
+    enabled: bool = True
+    supervisor_agent: str = "auto"
+    max_repair_attempts: int = 2
+
+
 class AgentRunnerRepositorySettings(BaseModel):
     """Per-repository Agent Runner configuration overrides."""
 
@@ -362,6 +380,8 @@ class AgentRunnerRepositorySettings(BaseModel):
     runner: AgentRunnerRunnerSettings | None = None
     safety: AgentRunnerSafetySettings | None = None
     prompts: AgentRunnerPromptSettings | None = None
+    pre_push_review: AgentRunnerPrePushReviewSettings | None = None
+    post_pr_supervisor: AgentRunnerPostPrSupervisorSettings | None = None
 
 
 class AgentRunnerSettings(BaseSettings):
@@ -380,6 +400,12 @@ class AgentRunnerSettings(BaseSettings):
     safety: AgentRunnerSafetySettings = Field(default_factory=AgentRunnerSafetySettings)
     prompts: AgentRunnerPromptSettings = Field(
         default_factory=AgentRunnerPromptSettings
+    )
+    pre_push_review: AgentRunnerPrePushReviewSettings = Field(
+        default_factory=AgentRunnerPrePushReviewSettings
+    )
+    post_pr_supervisor: AgentRunnerPostPrSupervisorSettings = Field(
+        default_factory=AgentRunnerPostPrSupervisorSettings
     )
     repositories: dict[str, AgentRunnerRepositorySettings] = Field(default_factory=dict)
 

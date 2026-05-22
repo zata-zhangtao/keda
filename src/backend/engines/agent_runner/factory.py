@@ -17,6 +17,8 @@ from backend.core.shared.models.agent_runner import (
     AppConfig,
     GitConfig,
     LabelConfig,
+    PostPrSupervisorConfig,
+    PrePushReviewConfig,
     PromptConfig,
     RepositoryRunContext,
     RunnerConfig,
@@ -45,10 +47,14 @@ def build_app_config_from_settings(
     safety_settings = agent_runner_settings.safety
     prompt_settings = agent_runner_settings.prompts
 
+    pre_push = agent_runner_settings.pre_push_review
+    post_supervisor = agent_runner_settings.post_pr_supervisor
+
     return AppConfig(
         labels=LabelConfig(
             ready=label_settings.ready,
             running=label_settings.running,
+            supervising=label_settings.supervising,
             review=label_settings.review,
             failed=label_settings.failed,
             blocked=label_settings.blocked,
@@ -77,6 +83,17 @@ def build_app_config_from_settings(
         prompts=PromptConfig(
             default_phase=prompt_settings.default_phase,
             phases=dict(prompt_settings.phases),
+        ),
+        pre_push_review=PrePushReviewConfig(
+            enabled=pre_push.enabled,
+            review_agent=pre_push.review_agent,
+            allow_same_agent=pre_push.allow_same_agent,
+            max_attempts=pre_push.max_attempts,
+        ),
+        post_pr_supervisor=PostPrSupervisorConfig(
+            enabled=post_supervisor.enabled,
+            supervisor_agent=post_supervisor.supervisor_agent,
+            max_repair_attempts=post_supervisor.max_repair_attempts,
         ),
     )
 
@@ -128,12 +145,15 @@ def get_agent_runner_status_data() -> dict:
             ),
             "ready_label": app_config.labels.ready,
             "running_label": app_config.labels.running,
+            "supervising_label": app_config.labels.supervising,
             "review_label": app_config.labels.review,
             "failed_label": app_config.labels.failed,
             "base_branch": app_config.git.base_branch,
             "remote": app_config.git.remote,
             "auto_merge": app_config.safety.auto_merge,
             "forbidden_path_patterns": list(app_config.safety.forbidden_path_patterns),
+            "pre_push_review_enabled": app_config.pre_push_review.enabled,
+            "post_pr_supervisor_enabled": app_config.post_pr_supervisor.enabled,
         },
         "repositories": repositories,
     }
@@ -180,6 +200,7 @@ def _merge_label_config(
     return LabelConfig(
         ready=override_data.get("ready", base_config.ready),
         running=override_data.get("running", base_config.running),
+        supervising=override_data.get("supervising", base_config.supervising),
         review=override_data.get("review", base_config.review),
         failed=override_data.get("failed", base_config.failed),
         blocked=override_data.get("blocked", base_config.blocked),
@@ -221,6 +242,12 @@ def merge_repository_config(
     runner = _merge_optional_model(global_config.runner, repo_settings.runner)
     safety = _merge_optional_model(global_config.safety, repo_settings.safety)
     prompts = _merge_prompt_config(global_config.prompts, repo_settings.prompts)
+    pre_push_review = _merge_optional_model(
+        global_config.pre_push_review, repo_settings.pre_push_review
+    )
+    post_pr_supervisor = _merge_optional_model(
+        global_config.post_pr_supervisor, repo_settings.post_pr_supervisor
+    )
     return AppConfig(
         labels=labels,
         git=git,
@@ -228,6 +255,8 @@ def merge_repository_config(
         runner=runner,
         safety=safety,
         prompts=prompts,
+        pre_push_review=pre_push_review,
+        post_pr_supervisor=post_pr_supervisor,
     )
 
 

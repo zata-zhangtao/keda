@@ -28,6 +28,7 @@ class LabelConfig:
 
     ready: str = "agent/ready"
     running: str = "agent/running"
+    supervising: str = "agent/supervising"
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
@@ -38,6 +39,18 @@ class LabelConfig:
             "kimi": "agent/kimi",
         }
     )
+
+
+@dataclass(frozen=True)
+class PullRequestContext:
+    """PR context returned by GitHub CLI."""
+
+    pr_url: str
+    branch: str
+    head_sha: str
+    base_sha: str
+    mergeable: bool | None = None
+    checks_state: str | None = None
 
 
 class GitHubCliClient:
@@ -68,6 +81,11 @@ class GitHubCliClient:
                 "FBCA04",
                 "Issue is currently being executed by a local AI runner.",
             ),
+            (
+                "agent/supervising",
+                "C5DEF5",
+                "PR exists and automatic post-PR supervisor is reviewing or reprocessing.",
+            ),
             ("agent/review", "1D76DB", "AI runner opened work for human review."),
             ("agent/failed", "D73A4A", "AI runner failed and posted details."),
             ("agent/blocked", "000000", "AI runner needs human input."),
@@ -94,6 +112,7 @@ class GitHubCliClient:
         configured_names = {
             "agent/ready": labels.ready,
             "agent/running": labels.running,
+            "agent/supervising": labels.supervising,
             "agent/review": labels.review,
             "agent/failed": labels.failed,
             "agent/blocked": labels.blocked,
@@ -232,3 +251,153 @@ class GitHubCliClient:
                 cwd=cwd,
             )
         return result.stdout.strip().splitlines()[-1]
+
+    def list_review_candidate_issues(
+        self, labels: Sequence[str], limit: int
+    ) -> list[IssueSummary]:
+        """List open Issues with any of the given labels."""
+        label_filter = ",".join(labels)
+        result = self._runner.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--state",
+                "open",
+                "--label",
+                label_filter,
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,url,labels,body",
+            ],
+            cwd=self.repo_path,
+        )
+        raw_issues = json.loads(result.stdout or "[]")
+        return [
+            IssueSummary(
+                number=int(raw_issue["number"]),
+                title=str(raw_issue.get("title", "")),
+                url=str(raw_issue.get("url", "")),
+                body=str(raw_issue.get("body", "") or ""),
+                labels=tuple(
+                    raw_label.get("name", "")
+                    for raw_label in raw_issue.get("labels", [])
+                    if raw_label.get("name")
+                ),
+            )
+            for raw_issue in raw_issues
+        ]
+
+    def get_pull_request_context(self, branch: str) -> PullRequestContext | None:
+        """Return PR context for an open PR on the given branch."""
+        result = self._runner.run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--json",
+                "url,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollupState",
+            ],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code != 0:
+            return None
+        raw_prs = json.loads(result.stdout or "[]")
+        if not raw_prs:
+            return None
+        raw_pr = raw_prs[0]
+        return PullRequestContext(
+            pr_url=str(raw_pr.get("url", "")),
+            branch=str(raw_pr.get("headRefName", branch)),
+            head_sha=str(raw_pr.get("headRefOid", "")),
+            base_sha=str(raw_pr.get("baseRefOid", "")),
+            mergeable=raw_pr.get("mergeable"),
+            checks_state=str(raw_pr.get("statusCheckRollupState", "")) or None,
+        )
+
+    def list_issue_comments(self, issue_number: int) -> list[str]:
+        """Return raw comment bodies for an Issue."""
+        result = self._runner.run(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(issue_number),
+                "--comments",
+                "--json",
+                "body",
+            ],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code != 0:
+            return []
+        raw_data = json.loads(result.stdout or "{}")
+        comments = raw_data.get("comments", [])
+        return [str(c.get("body", "")) for c in comments if c.get("body")]
+
+    def list_pr_comments(self, pr_number: int) -> list[str]:
+        """Return raw comment bodies for a PR."""
+        result = self._runner.run(
+            [
+                "gh",
+                "pr",
+                "view",
+                str(pr_number),
+                "--comments",
+                "--json",
+                "body",
+            ],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code != 0:
+            return []
+        raw_data = json.loads(result.stdout or "{}")
+        comments = raw_data.get("comments", [])
+        return [str(c.get("body", "")) for c in comments if c.get("body")]
+
+    def find_open_pr_by_head(self, branch: str) -> str | None:
+        """Return PR URL if an open PR exists for the branch."""
+        result = self._runner.run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--json",
+                "url",
+            ],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code != 0:
+            return None
+        raw_prs = json.loads(result.stdout or "[]")
+        if not raw_prs:
+            return None
+        return str(raw_prs[0].get("url", ""))
+
+    def get_remote_base_sha(self, remote: str, base_branch: str) -> str:
+        """Return the SHA of the remote base branch."""
+        result = self._runner.run(
+            [
+                "git",
+                "rev-parse",
+                f"{remote}/{base_branch}",
+            ],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code != 0:
+            return ""
+        return result.stdout.strip()

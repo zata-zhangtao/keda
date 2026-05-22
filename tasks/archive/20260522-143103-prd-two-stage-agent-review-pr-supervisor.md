@@ -538,53 +538,53 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/use_cases/run_agent_once.py` delegates pre-push review and post-PR supervisor details to focused core helpers instead of embedding an unbounded review loop inline.
-- [ ] Core code does not import `src/backend/infrastructure/`, `src/backend/engines/`, or `src/backend/api/`.
-- [ ] `src/backend/api/cli.py` only parses `review-once` / `review-daemon` arguments and calls core use cases through existing factory/composition patterns.
-- [ ] Post-PR continuous review is implemented as finite `review-once` / `review-daemon` polling, not as an infinite loop inside `run-once`.
+- [x] `src/backend/core/use_cases/run_agent_once.py` delegates pre-push review and post-PR supervisor details to focused core helpers instead of embedding an unbounded review loop inline.
+- [x] Core code does not import `src/backend/infrastructure/`, `src/backend/engines/`, or `src/backend/api/`.
+- [x] `src/backend/api/cli.py` only parses `review-once` / `review-daemon` arguments and calls core use cases through existing factory/composition patterns.
+- [x] Post-PR continuous review is implemented as finite `review-once` / `review-daemon` polling, not as an infinite loop inside `run-once`.
 
 ### Label Acceptance
 
-- [ ] `LabelConfig` and `AgentRunnerLabelSettings` include `supervising = "agent/supervising"`.
-- [ ] `GitHubCliClient.sync_labels(...)` creates or updates `agent/supervising`.
-- [ ] `docs/guides/agent-runner.md` documents the final label semantics: `ready -> running -> supervising -> review`, with `blocked` and `failed` exits, and the post-PR rework loop `review/supervising -> running -> supervising`.
-- [ ] `docs/guides/agent-runner.md` defines `agent/running` as "code is being modified", covering both first implementation and existing PR branch rework.
-- [ ] Pre-push review does not introduce a separate durable label; it remains inside `agent/running`.
+- [x] `LabelConfig` and `AgentRunnerLabelSettings` include `supervising = "agent/supervising"`.
+- [x] `GitHubCliClient.sync_labels(...)` creates or updates `agent/supervising`.
+- [x] `docs/guides/agent-runner.md` documents the final label semantics: `ready -> running -> supervising -> review`, with `blocked` and `failed` exits, and the post-PR rework loop `review/supervising -> running -> supervising`.
+- [x] `docs/guides/agent-runner.md` defines `agent/running` as "code is being modified", covering both first implementation and existing PR branch rework.
+- [x] Pre-push review does not introduce a separate durable label; it remains inside `agent/running`.
 
 ### Behavior Acceptance
 
-- [ ] After implementation commit, `run_once(...)` writes an Issue comment summarizing the first running-stage completion before pre-push review starts.
-- [ ] Pre-push reviewer receives Issue, PRD, diff, changed files, verification results, AGENTS/AI standards context, and review workflow context.
-- [ ] If pre-push reviewer modifies files, runner commits the changes through `.agent-runner/commit-request.json` and reruns `verification_commands`.
-- [ ] `publish_changes(...)` is not called until pre-push review has passed or reached its configured successful terminal condition.
-- [ ] After Draft PR creation, Issue labels move from `agent/running` to `agent/supervising`.
-- [ ] The first post-PR supervisor cycle runs before Issue can enter `agent/review`.
-- [ ] Supervisor can classify at least approve, repair, rebase, human-input-needed, and failed outcomes.
-- [ ] When supervisor requires code changes, the Issue can move from `agent/review` or `agent/supervising` back to `agent/running` for rework on the existing PR branch.
-- [ ] `run_once(...)` only treats an `agent/running` Issue as rework when both guard conditions pass: an open PR or known PR branch exists, and the latest relevant Issue event includes `phase=post_pr_rework_requested`.
-- [ ] `run_once(...)` skips `agent/running` Issues that lack either the PR/branch guard or the rework intent marker, instead of creating a new branch or stealing an in-progress first implementation.
-- [ ] Rebase/repair outcomes produce new verification evidence and Issue comments before returning to supervisor review.
-- [ ] `agent/review` is only applied after supervisor approval for the current PR context.
+- [x] After implementation commit, `run_once(...)` writes an Issue comment summarizing the first running-stage completion before pre-push review starts.
+- [x] Pre-push reviewer receives Issue, PRD, diff, changed files, verification results, AGENTS/AI standards context, and review workflow context.
+- [x] If pre-push reviewer modifies files, runner commits the changes through `.agent-runner/commit-request.json` and reruns `verification_commands`.
+- [x] `publish_changes(...)` is not called until pre-push review has passed or reached its configured successful terminal condition.
+- [x] After Draft PR creation, Issue labels move from `agent/running` to `agent/supervising`.
+- [x] The first post-PR supervisor cycle runs before Issue can enter `agent/review`.
+- [x] Supervisor can classify at least approve, repair, rebase, human-input-needed, and failed outcomes.
+- [x] When supervisor requires code changes, the Issue can move from `agent/review` or `agent/supervising` back to `agent/running` for rework on the existing PR branch.
+- [x] `run_once(...)` only treats an `agent/running` Issue as rework when both guard conditions pass: an open PR or known PR branch exists, and the latest relevant Issue event includes `phase=post_pr_rework_requested`.
+- [x] `run_once(...)` skips `agent/running` Issues that lack either the PR/branch guard or the rework intent marker, instead of creating a new branch or stealing an in-progress first implementation.
+- [x] Rebase/repair outcomes produce new verification evidence and Issue comments before returning to supervisor review.
+- [x] `agent/review` is only applied after supervisor approval for the current PR context.
 
 ### Issue Audit Acceptance
 
-- [ ] Issue comments are written for claim, implementation complete, pre-push review result, Draft PR creation, each post-PR supervisor cycle, each rebase/repair action, blocked, and failed states.
-- [ ] Each machine-generated Issue comment includes an `<!-- iar:event ... -->` hidden marker with phase, cycle, head SHA, and enough cursor fields to support idempotent rechecks.
-- [ ] Human-readable comment body includes reviewer/supervisor name, verdict/action, summary, findings counts, verification status, and resulting head SHA when applicable.
+- [x] Issue comments are written for claim, implementation complete, pre-push review result, Draft PR creation, each post-PR supervisor cycle, each rebase/repair action, blocked, and failed states.
+- [x] Each machine-generated Issue comment includes an `<!-- iar:event ... -->` hidden marker with phase, cycle, head SHA, and enough cursor fields to support idempotent rechecks.
+- [x] Human-readable comment body includes reviewer/supervisor name, verdict/action, summary, findings counts, verification status, and resulting head SHA when applicable.
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` explains pre-push review, post-PR supervisor, new label, and review daemon usage.
-- [ ] `config.toml` examples show `[agent_runner.pre_push_review]` and `[agent_runner.post_pr_supervisor]`.
-- [ ] `docs/guides/review-workflow.md` remains the canonical review scope referenced by supervisor prompts, or is updated if the review contract changes.
+- [x] `docs/guides/agent-runner.md` explains pre-push review, post-PR supervisor, new label, and review daemon usage.
+- [x] `config.toml` examples show `[agent_runner.pre_push_review]` and `[agent_runner.post_pr_supervisor]`.
+- [x] `docs/guides/review-workflow.md` remains the canonical review scope referenced by supervisor prompts, or is updated if the review contract changes.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_run_agent.py tests/test_agent_review.py tests/test_pr_supervisor.py -q` passes.
-- [ ] `uv run pytest tests/test_pr_supervisor.py -q` includes dedicated rebase safety coverage for stale base detection, conflict-resolution verification, branch protection, and `--force-with-lease` usage.
-- [ ] `uv run pytest tests/test_sync_labels.py tests/test_agent_config_consistency.py -q` passes.
-- [ ] `uv run mkdocs build --strict` passes.
-- [ ] `just test` passes.
+- [x] `uv run pytest tests/test_run_agent.py tests/test_agent_review.py tests/test_pr_supervisor.py -q` passes.
+- [x] `uv run pytest tests/test_pr_supervisor.py -q` includes dedicated rebase safety coverage for stale base detection, conflict-resolution verification, branch protection, and `--force-with-lease` usage.
+- [x] `uv run pytest tests/test_sync_labels.py tests/test_agent_config_consistency.py -q` passes.
+- [x] `uv run mkdocs build --strict` passes.
+- [x] `just test` passes.
 
 ## 8. Functional Requirements
 

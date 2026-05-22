@@ -12,7 +12,10 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     GitConfig,
     IssueSummary,
+    PostPrSupervisorConfig,
+    PrePushReviewConfig,
     PromptConfig,
+    PullRequestContext,
     RunnerConfig,
     WorktreeConfig,
 )
@@ -23,6 +26,7 @@ from backend.core.use_cases.run_agent_once import (
     choose_agent,
     commit_requested_changes,
     ensure_prd_delivery_ready,
+    extract_agent_response_text,
     extract_prd_path,
     format_command,
     get_head_sha,
@@ -83,6 +87,63 @@ def test_run_agent_with_prompt_uses_claude_yolo_mode(tmp_path: Path) -> None:
     ]
 
 
+def test_run_agent_with_prompt_can_capture_output(tmp_path: Path) -> None:
+    """Prepared agent runs should opt into captured stdout when needed."""
+    command = (
+        "codex",
+        "--cd",
+        str(tmp_path),
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
+        "exec",
+        "Review.",
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            command: CommandResult(
+                command=command,
+                return_code=0,
+                stdout='{"verdict": "approved"}',
+                stderr="",
+            )
+        }
+    )
+
+    uncaptured = run_agent_with_prompt("codex", "Review.", tmp_path, fake_runner)
+    captured = run_agent_with_prompt(
+        "codex",
+        "Review.",
+        tmp_path,
+        fake_runner,
+        capture_output=True,
+    )
+
+    assert uncaptured.stdout == ""
+    assert captured.stdout == '{"verdict": "approved"}'
+
+
+def test_extract_agent_response_text_from_claude_stream_json() -> None:
+    """Captured Claude stream-json should be reduced to assistant text."""
+    result = CommandResult(
+        command=("claude", "--output-format", "stream-json", "-p", "Review."),
+        return_code=0,
+        stdout=(
+            '{"type":"stream_event","event":{"delta":'
+            '{"type":"text_delta","text":"```json\\n"}}}\n'
+            '{"type":"stream_event","event":{"delta":'
+            '{"type":"text_delta","text":"{\\"verdict\\": '
+            '\\"approved\\"}\\n```"}}}\n'
+        ),
+        stderr="",
+    )
+
+    assert extract_agent_response_text(result) == (
+        '```json\n{"verdict": "approved"}\n```'
+    )
+
+
 def test_run_once_dry_run() -> None:
     """Dry-run should list ready work without mutating labels."""
     fake_client = FakeGitHubClient()
@@ -98,7 +159,7 @@ def test_run_once_dry_run() -> None:
     fake_runner = FakeProcessRunner()
     config = AppConfig()
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -127,7 +188,7 @@ def test_run_once_preflight_rejects_missing_configured_remote(
     )
     caplog.set_level(logging.ERROR, logger="backend.core.use_cases.run_agent_once")
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -723,6 +784,31 @@ def _config_for_worktree(
     )
 
 
+def _config_with_review_disabled(
+    worktree_path: Path | None = None,
+    *verification_commands: str,
+    max_recovery_attempts: int = 2,
+    recovery_retry_delay_seconds: int = 0,
+) -> AppConfig:
+    """Return a config with pre-push review and post-PR supervisor disabled."""
+    commands = verification_commands or ("just test",)
+    worktree_cfg = (
+        WorktreeConfig(path_command=f"echo {worktree_path}")
+        if worktree_path
+        else WorktreeConfig()
+    )
+    return AppConfig(
+        runner=RunnerConfig(
+            max_recovery_attempts=max_recovery_attempts,
+            recovery_retry_delay_seconds=recovery_retry_delay_seconds,
+            verification_commands=commands,
+        ),
+        worktree=worktree_cfg,
+        pre_push_review=PrePushReviewConfig(enabled=False),
+        post_pr_supervisor=PostPrSupervisorConfig(enabled=False),
+    )
+
+
 def _worktree_path_response(
     worktree_path: Path,
 ) -> tuple[tuple[str, ...], CommandResult]:
@@ -866,10 +952,10 @@ def test_run_once_uncommitted_changes_runner_commits(
         ),
         _git_remote_command(): _git_remote_result("origin"),
     }
-    config = _config_for_worktree(worktree_path, "npm test")
+    config = _config_with_review_disabled(worktree_path, "npm test")
     caplog.set_level(logging.WARNING, logger="backend.core.use_cases.run_agent_once")
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -988,9 +1074,9 @@ def test_run_once_recovers_after_staged_verification_failure(
         path_command: path_result,
         _git_remote_command(): _git_remote_result("origin"),
     }
-    config = _config_for_worktree(worktree_path)
+    config = _config_with_review_disabled(worktree_path)
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -1092,10 +1178,10 @@ def test_run_once_recovers_after_agent_command_failure(
         "backend.core.use_cases.run_agent_once.time.sleep",
         lambda seconds: sleep_calls.append(seconds),
     )
-    config = _config_for_worktree(worktree_path, recovery_retry_delay_seconds=7)
+    config = _config_with_review_disabled(worktree_path, recovery_retry_delay_seconds=7)
     caplog.set_level(logging.WARNING, logger="backend.core.use_cases.run_agent_once")
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -1160,9 +1246,9 @@ def test_run_once_uncommitted_changes_validation_failure_does_not_stage(
             _git_remote_command(): _git_remote_result("origin"),
         }
     )
-    config = _config_for_worktree(worktree_path)
+    config = _config_with_review_disabled(worktree_path)
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -1228,9 +1314,9 @@ def test_run_once_uncommitted_changes_missing_request_fails(tmp_path: Path) -> N
             _git_remote_command(): _git_remote_result("origin"),
         }
     )
-    config = _config_for_worktree(worktree_path)
+    config = _config_with_review_disabled(worktree_path)
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -1289,9 +1375,9 @@ def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> No
             _git_remote_command(): _git_remote_result("origin"),
         }
     )
-    config = _config_for_worktree(worktree_path)
+    config = _config_with_review_disabled(worktree_path)
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -1417,7 +1503,7 @@ def test_run_once_no_new_commits_fails() -> None:
     )
     config = AppConfig(runner=RunnerConfig(recovery_retry_delay_seconds=0))
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -1445,36 +1531,75 @@ def test_run_once_no_new_commits_fails() -> None:
     assert len(comment_calls) == 1
 
 
-def test_run_once_success() -> None:
-    """run_once should succeed when the agent commits changes."""
+def test_run_once_success(tmp_path: Path) -> None:
+    """run_once should succeed through pre-push review and supervisor approval."""
     fake_client = FakeGitHubClient()
     issue = _make_ready_issue()
     fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    fake_client._pr_contexts["issue-123"] = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-123",
+        head_sha="after-sha",
+        base_sha="before-sha",
+    )
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
 
-    # _ShaSequenceRunner returns a different SHA on the second call to
-    # simulate a new commit.
-    class _ShaSequenceRunner(FakeProcessRunner):
+    class _SuccessRunner(FakeProcessRunner):
         def __init__(self) -> None:
             super().__init__()
             self._sha_calls = 0
+            self._agent_calls = 0
 
         def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
-            if tuple(command) == ("git", "rev-parse", "HEAD"):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple == ("git", "rev-parse", "HEAD"):
                 self._sha_calls += 1
                 sha = "after-sha" if self._sha_calls > 1 else "before-sha"
                 return CommandResult(
-                    command=tuple(command), return_code=0, stdout=f"{sha}\n", stderr=""
+                    command=command_tuple, return_code=0, stdout=f"{sha}\n", stderr=""
                 )
-            return super().run(
-                command,
-                cwd=cwd,
-                check=check,
-                timeout=timeout,
-                capture_output=capture_output,
+            if command_tuple[:1] == ("codex",):
+                self._agent_calls += 1
+                # Agent 1: implementation, Agent 2: pre-push review, Agent 3: supervisor
+                if self._agent_calls == 2:
+                    return CommandResult(
+                        command=command_tuple,
+                        return_code=0,
+                        stdout='{"verdict": "approved", "summary": "LGTM"}'
+                        if capture_output
+                        else "",
+                        stderr="",
+                    )
+                if self._agent_calls == 3:
+                    return CommandResult(
+                        command=command_tuple,
+                        return_code=0,
+                        stdout=(
+                            '{"action": "approve_for_human_review", '
+                            '"summary": "LGTM"}'
+                        )
+                        if capture_output
+                        else "",
+                        stderr="",
+                    )
+                return CommandResult(
+                    command=command_tuple, return_code=0, stdout="", stderr=""
+                )
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            return CommandResult(
+                command=command_tuple, return_code=0, stdout="", stderr=""
             )
 
-    fake_runner = _ShaSequenceRunner()
+    fake_runner = _SuccessRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
     fake_runner.responses = {
+        path_command: path_result,
         ("git", "status", "--porcelain"): CommandResult(
             command=("git", "status", "--porcelain"),
             return_code=0,
@@ -1489,12 +1614,12 @@ def test_run_once_success() -> None:
         ),
         _git_remote_command(): _git_remote_result("origin"),
     }
-    config = AppConfig()
+    config = AppConfig(worktree=WorktreeConfig(path_command=f"echo {worktree_path}"))
 
-    from backend.core.use_cases.run_agent_once import run_once
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
 
     exit_code = run_once(
-        repo_path=Path("."),
+        repo_path=tmp_path,
         config=config,
         dry_run=False,
         agent="auto",
@@ -1504,15 +1629,116 @@ def test_run_once_success() -> None:
     )
 
     assert exit_code == 0
-    review_calls = [
-        c
-        for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.review in c.get("add", [])
-    ]
-    assert len(review_calls) == 1
+    # Labels: ready -> running -> supervising -> review
+    label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
+    added_labels = [label for c in label_calls for label in c.get("add", [])]
+    assert config.labels.review in added_labels
+    assert config.labels.supervising in added_labels
     pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
     assert len(pr_calls) == 1
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    bodies = [c["body"] for c in comment_calls]
+    assert any("Implementation Complete" in b for b in bodies)
+    assert any("Pre-Push Review" in b for b in bodies)
+    assert any("Draft PR Created" in b for b in bodies)
+    assert any("Post-PR Supervisor" in b for b in bodies)
+
+
+def test_run_once_failure_removes_supervising_label(tmp_path: Path) -> None:
+    """Failure after Draft PR creation should not leave supervising with failed."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    fake_client._pr_contexts["issue-123"] = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-123",
+        head_sha="after-sha",
+        base_sha="before-sha",
+    )
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _SupervisorFailureRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sha_calls = 0
+            self._agent_calls = 0
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self._sha_calls += 1
+                sha = "after-sha" if self._sha_calls > 1 else "before-sha"
+                return CommandResult(
+                    command=command_tuple, return_code=0, stdout=f"{sha}\n", stderr=""
+                )
+            if command_tuple[:1] == ("codex",):
+                self._agent_calls += 1
+                if self._agent_calls == 2:
+                    return CommandResult(
+                        command=command_tuple,
+                        return_code=0,
+                        stdout='{"verdict": "approved", "summary": "LGTM"}',
+                        stderr="",
+                    )
+                if self._agent_calls == 3:
+                    raise RuntimeError("supervisor crashed")
+                return CommandResult(
+                    command=command_tuple, return_code=0, stdout="", stderr=""
+                )
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            return CommandResult(
+                command=command_tuple, return_code=0, stdout="", stderr=""
+            )
+
+    fake_runner = _SupervisorFailureRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        ("git", "status", "--porcelain"): CommandResult(
+            command=("git", "status", "--porcelain"),
+            return_code=0,
+            stdout="",
+            stderr="",
+        ),
+        ("git", "branch", "--show-current"): CommandResult(
+            command=("git", "branch", "--show-current"),
+            return_code=0,
+            stdout="issue-123\n",
+            stderr="",
+        ),
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = AppConfig(worktree=WorktreeConfig(path_command=f"echo {worktree_path}"))
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    exit_code = run_once(
+        repo_path=tmp_path,
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 1
+    failed_calls = [
+        call
+        for call in fake_client.calls
+        if call["method"] == "edit_issue_labels"
+        and config.labels.failed in call.get("add", [])
+    ]
+    assert len(failed_calls) == 1
+    assert config.labels.supervising in failed_calls[0]["remove"]
+    assert config.labels.running in failed_calls[0]["remove"]
+    assert config.labels.agent_labels["codex"] not in failed_calls[0]["remove"]
 
 
 def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
@@ -1593,7 +1819,7 @@ def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
         ),
         _git_remote_command(): _git_remote_result("origin"),
     }
-    config = _config_for_worktree(worktree_path, "npm test")
+    config = _config_with_review_disabled(worktree_path, "npm test")
 
     from backend.core.use_cases.run_agent_once import run_once
 
@@ -1680,7 +1906,7 @@ def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
         path_command: path_result,
         _git_remote_command(): _git_remote_result("origin"),
     }
-    config = _config_for_worktree(worktree_path)
+    config = _config_with_review_disabled(worktree_path)
 
     from backend.core.use_cases.run_agent_once import run_once
 

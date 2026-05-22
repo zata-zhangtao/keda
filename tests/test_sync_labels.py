@@ -16,3 +16,9 @@ def test_sync_labels_calls_client() -> None:
     sync_calls = [c for c in fake_client.calls if c["method"] == "sync_labels"]
     assert len(sync_calls) == 1
     assert sync_calls[0]["labels"] == labels_config
+
+
+def test_sync_labels_includes_supervising() -> None:
+    """LabelConfig must include the supervising label."""
+    labels_config = LabelConfig()
+    assert labels_config.supervising == "agent/supervising"

@@ -1,4 +1,4 @@
-"""Local Issue queue runner — daemon mode."""
+"""Post-PR review daemon — continuous polling across all targets."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
 from backend.core.shared.models.agent_runner import RepositoryRunContext
-from backend.core.use_cases.agent_runner_orchestrate import run_once
+from backend.core.use_cases.review_once import review_once
 
 _logger = logging.getLogger(__name__)
 
 
-def run_agent_daemon(
+def run_review_daemon(
     *,
     contexts: list[RepositoryRunContext],
     interval: int,
@@ -23,7 +23,7 @@ def run_agent_daemon(
     process_runner: IProcessRunner,
     github_client_factory: Callable[[Path], IGitHubClient],
 ) -> None:
-    """Run the queue poller forever across all target repositories.
+    """Run the review poller forever across all target repositories.
 
     Args:
         contexts: Resolved repository targets with merged configurations.
@@ -36,13 +36,13 @@ def run_agent_daemon(
     while True:
         for context in contexts:
             _logger.info(
-                "Daemon pass for repository '%s' (%s).",
+                "Review daemon pass for repository '%s' (%s).",
                 context.repo_id,
                 context.display_name,
             )
             github_client = github_client_factory(context.repo_path)
             try:
-                run_once(
+                review_once(
                     repo_path=context.repo_path,
                     config=context.config,
                     dry_run=False,
@@ -53,9 +53,9 @@ def run_agent_daemon(
                 )
             except Exception as exc:  # noqa: BLE001 - daemon should survive unexpected errors.
                 _logger.error(
-                    "Daemon pass failed for repository '%s': %s",
+                    "Review daemon pass failed for repository '%s': %s",
                     context.repo_id,
                     exc,
                 )
-        _logger.info("Sleeping for %d seconds before next poll.", interval)
+        _logger.info("Sleeping for %d seconds before next review poll.", interval)
         time.sleep(interval)
