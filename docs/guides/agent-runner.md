@@ -400,9 +400,45 @@ forbidden_path_patterns = [
   "secrets/*",
   "docker-compose.prod.yml",
 ]
+
+[agent_runner.prompts]
+default_phase = "execution"
+
+[agent_runner.prompts.phases]
+execution = [
+  "Complete GitHub Issue #{issue_number}: {issue_title}",
+  "",
+  "Issue URL: {issue_url}",
+  "Worktree: {worktree_path}",
+  "{prd_line}",
+  "",
+  "Issue body:",
+  "{issue_body}",
+  "",
+  "Execution rules:",
+  "- Read AGENTS.md and follow repository instructions.",
+  "- Only modify files inside the current worktree.",
+  "- Do not merge main, delete branches, push, or create PRs; the runner handles publishing.",
+  "- Do not run `git add` or `git commit`; the runner exposes a restricted commit proxy.",
+  "- After finishing your changes, request a commit by writing `.agent-runner/commit-request.json` as JSON with `commit_message`.",
+  "- Do not touch production systems or real business data.",
+  "- Implement the requested task with focused tests and docs updates.",
+  "- Finish with a concise summary, tests run, and remaining risk.",
+]
 ```
 
 配置优先级：环境变量 > `config.toml` > 代码默认值。
+
+Prompt 模板支持以下变量占位符：
+
+| 变量 | 说明 |
+|---|---|
+| `{issue_number}` | GitHub Issue 编号 |
+| `{issue_title}` | GitHub Issue 标题 |
+| `{issue_url}` | GitHub Issue URL |
+| `{worktree_path}` | 当前 worktree 的绝对路径 |
+| `{issue_body}` | Issue 完整正文 |
+| `{prd_line}` | 自动生成的 PRD 引用行（有 PRD 时提示读取，无 PRD 时给出通用建议） |
 
 ## 安全边界
 
@@ -421,7 +457,7 @@ forbidden_path_patterns = [
 
 当 Issue body 中包含 `PRD path: \`tasks/pending/xxx.md\`` 时，runner 成功路径会强制完成 PRD closeout：
 
-1. **Prompt 引导**：`build_prompt()` 和 `build_recovery_prompt()` 会明确要求 Agent 在请求 commit 前更新 PRD 的 `Acceptance Checklist`，并在所有验收项完成后将 PRD 从 `tasks/pending/` 移动到 `tasks/archive/`。
+1. **Prompt 引导**：`build_prompt()` 从 `config.toml` 的 `[agent_runner.prompts.phases]` 模板渲染 prompt，默认模板会明确要求 Agent 在请求 commit 前更新 PRD 的 `Acceptance Checklist`，并在所有验收项完成后将 PRD 从 `tasks/pending/` 移动到 `tasks/archive/`。`build_recovery_prompt()` 也在 recovery 阶段给出同样的 closeout 提醒。
 2. **提交前 Delivery Gate**：runner 在 `publish_changes()` 之前执行 PRD delivery gate：
    - 无 PRD path：跳过 gate，保持现有行为。
    - PRD 仍在 `tasks/pending/`：若 `Acceptance Checklist` 还有未勾选项，将失败原因交回 recovery prompt；若已全部勾选，runner 自动执行 `git mv tasks/pending/<name>.md tasks/archive/<name>.md`。

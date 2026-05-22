@@ -17,6 +17,7 @@ from backend.core.shared.models.agent_runner import (
     AppConfig,
     GitConfig,
     LabelConfig,
+    PromptConfig,
     RepositoryRunContext,
     RunnerConfig,
     SafetyConfig,
@@ -24,6 +25,7 @@ from backend.core.shared.models.agent_runner import (
 )
 from backend.infrastructure.config.settings import (
     AgentRunnerLabelSettings,
+    AgentRunnerPromptSettings,
     AgentRunnerRepositorySettings,
     AgentRunnerSettings,
     config,
@@ -41,6 +43,7 @@ def build_app_config_from_settings(
     worktree_settings = agent_runner_settings.worktree
     runner_settings = agent_runner_settings.runner
     safety_settings = agent_runner_settings.safety
+    prompt_settings = agent_runner_settings.prompts
 
     return AppConfig(
         labels=LabelConfig(
@@ -70,6 +73,10 @@ def build_app_config_from_settings(
         safety=SafetyConfig(
             auto_merge=safety_settings.auto_merge,
             forbidden_path_patterns=tuple(safety_settings.forbidden_path_patterns),
+        ),
+        prompts=PromptConfig(
+            default_phase=prompt_settings.default_phase,
+            phases=dict(prompt_settings.phases),
         ),
     )
 
@@ -180,6 +187,22 @@ def _merge_label_config(
     )
 
 
+def _merge_prompt_config(
+    base_config: PromptConfig, override: AgentRunnerPromptSettings | None
+) -> PromptConfig:
+    """Merge repository-specific prompt overrides into a base ``PromptConfig``."""
+    if override is None:
+        return base_config
+    override_data = _pydantic_override_dict(override)
+    phases = dict(base_config.phases)
+    if "phases" in override_data:
+        phases.update(override_data["phases"])
+    return PromptConfig(
+        default_phase=override_data.get("default_phase", base_config.default_phase),
+        phases=phases,
+    )
+
+
 def merge_repository_config(
     global_config: AppConfig, repo_settings: AgentRunnerRepositorySettings
 ) -> AppConfig:
@@ -197,8 +220,14 @@ def merge_repository_config(
     worktree = _merge_optional_model(global_config.worktree, repo_settings.worktree)
     runner = _merge_optional_model(global_config.runner, repo_settings.runner)
     safety = _merge_optional_model(global_config.safety, repo_settings.safety)
+    prompts = _merge_prompt_config(global_config.prompts, repo_settings.prompts)
     return AppConfig(
-        labels=labels, git=git, worktree=worktree, runner=runner, safety=safety
+        labels=labels,
+        git=git,
+        worktree=worktree,
+        runner=runner,
+        safety=safety,
+        prompts=prompts,
     )
 
 
