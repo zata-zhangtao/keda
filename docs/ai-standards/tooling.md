@@ -35,6 +35,19 @@
 
 这条规则的目标是让“归档”代表交付完成，同时避免历史归档文档被新标准批量翻旧账。
 
+### Pre-commit Hook 与 Runner Gate 的职责边界
+
+PRD 交付状态由三层机制共同维护，彼此不互相替代：
+
+1. **Prompt 引导**：Agent Runner 的 `build_prompt()` 明确要求 Agent 在完成任务前更新 PRD 的 `Acceptance Checklist` 并归档 PRD。这是行为引导，依赖 Agent 自觉执行。
+2. **Runner PRD Delivery Gate**：在 `publish_changes()` 之前，runner 对 PRD-backed Issue 做机器级校验。若 pending PRD 的 checklist 已全部完成，runner 自动执行 `git mv` 将其归档；若仍有未完成项，则阻断发布并进入 recovery loop。这是成功路径的交付门禁。
+3. **Pre-commit Hook**：`hooks/check_prd_acceptance_checklist.py` 在本地提交时检查 root-level active PRD 和**新进入** `tasks/archive/` 的 PRD。hook 没有 Issue 上下文，因此不扫描 `tasks/pending/` 中尚未执行的 backlog PRD，避免误伤。
+
+**关键区别**：
+- Runner gate 只在 Issue 执行成功路径时检查**该 Issue 对应的 canonical PRD**，并可在 checklist 完成时自动移动文件。
+- Pre-commit hook 是通用本地提交防线，检查所有 staged 的 active/archive PRD，但不处理 pending PRD。
+- `archive_tasks.py` 的 root-level active PRD 自动归档职责保持不变，不扩大到 `tasks/pending/`。
+
 ### Codex macOS 通知
 
 macOS 用户可以把 Codex CLI 的 `notify` 事件转发到系统快捷指令：

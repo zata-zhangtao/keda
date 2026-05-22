@@ -260,40 +260,40 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/use_cases/run_agent_once.py` 不直接导入 `hooks/`，而是复用 `src/backend/core/shared/prd_checklist.py` 中的纯 helper。
-- [ ] `hooks/check_prd_acceptance_checklist.py` 使用同一套 checklist parser，不再维护独立重复解析逻辑。
-- [ ] PRD delivery gate 只通过 `IProcessRunner` 执行 Git 操作，不直接依赖 GitHub client 或 infrastructure。
-- [ ] `archive_tasks.py` 的 root-level active PRD 归档职责保持不变，不扩大到 `tasks/pending/`。
+- [x] `src/backend/core/use_cases/run_agent_once.py` 不直接导入 `hooks/`，而是复用 `src/backend/core/shared/prd_checklist.py` 中的纯 helper。
+- [x] `hooks/check_prd_acceptance_checklist.py` 使用同一套 checklist parser，不再维护独立重复解析逻辑。
+- [x] PRD delivery gate 只通过 `IProcessRunner` 执行 Git 操作，不直接依赖 GitHub client 或 infrastructure。
+- [x] `archive_tasks.py` 的 root-level active PRD 归档职责保持不变，不扩大到 `tasks/pending/`。
 
 ### Behavior Acceptance
 
-- [ ] `build_prompt()` 在 Issue body 包含 `PRD path: \`tasks/pending/example.md\`` 时，输出包含该精确路径、`Acceptance Checklist` 更新要求和 `tasks/pending/` -> `tasks/archive/` 归档要求。
-- [ ] `build_recovery_prompt()` 在 recovery 中继续提醒检查 canonical PRD closeout 状态。
-- [ ] 当 PRD path 缺失时，PRD delivery gate 跳过，不改变现有非 PRD Issue 行为。
-- [ ] 当 `tasks/pending/<name>.md` 存在未勾选 Acceptance Checklist 条目时，runner 不执行 `publish_changes()`，而是把失败原因交回 recovery prompt。
-- [ ] 当 `tasks/pending/<name>.md` 的 Acceptance Checklist 全部完成时，runner 在 `git add -A` 前执行 `git mv tasks/pending/<name>.md tasks/archive/<name>.md`。
-- [ ] 当 canonical PRD 已位于 `tasks/archive/<name>.md` 且 Acceptance Checklist 全部完成时，runner gate 通过。
-- [ ] 当 canonical PRD 文件不存在、archive 目标不存在或 Acceptance Checklist section 缺失时，runner 进入 recovery 或最终标记 failed。
-- [ ] 成功创建 Draft PR 的分支包含 PRD checklist 更新和 archive move，不需要 publish 后追加 commit。
+- [x] `build_prompt()` 在 Issue body 包含 `PRD path: \`tasks/pending/example.md\`` 时，输出包含该精确路径、`Acceptance Checklist` 更新要求和 `tasks/pending/` -> `tasks/archive/` 归档要求。
+- [x] `build_recovery_prompt()` 在 recovery 中继续提醒检查 canonical PRD closeout 状态。
+- [x] 当 PRD path 缺失时，PRD delivery gate 跳过，不改变现有非 PRD Issue 行为。
+- [x] 当 `tasks/pending/<name>.md` 存在未勾选 Acceptance Checklist 条目时，runner 不执行 `publish_changes()`，而是把失败原因交回 recovery prompt。
+- [x] 当 `tasks/pending/<name>.md` 的 Acceptance Checklist 全部完成时，runner 在 `git add -A` 前执行 `git mv tasks/pending/<name>.md tasks/archive/<name>.md`。
+- [x] 当 canonical PRD 已位于 `tasks/archive/<name>.md` 且 Acceptance Checklist 全部完成时，runner gate 通过。
+- [x] 当 canonical PRD 文件不存在、archive 目标不存在或 Acceptance Checklist section 缺失时，runner 进入 recovery 或最终标记 failed。
+- [x] 成功创建 Draft PR 的分支包含 PRD checklist 更新和 archive move，不需要 publish 后追加 commit。
 
 ### Dependency Acceptance
 
-- [ ] 新增 shared helper 只使用 Python 标准库，不引入新的第三方依赖。
-- [ ] `src/backend/core/` 仍不导入 `src/backend/infrastructure/` 或 `src/backend/api/`。
-- [ ] `hooks/check_prd_acceptance_checklist.py` 的导入路径在 `uv run python hooks/check_prd_acceptance_checklist.py` 下可用。
+- [x] 新增 shared helper 只使用 Python 标准库，不引入新的第三方依赖。
+- [x] `src/backend/core/` 仍不导入 `src/backend/infrastructure/` 或 `src/backend/api/`。
+- [x] `hooks/check_prd_acceptance_checklist.py` 的导入路径在 `uv run python hooks/check_prd_acceptance_checklist.py` 下可用。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 说明 PRD-backed Issue 的 runner 成功路径会强制 PRD closeout。
-- [ ] `docs/ai-standards/tooling.md` 说明 pre-commit hook 与 runner PRD delivery gate 的职责边界。
-- [ ] 如新增长期文档页，`mkdocs.yml` 同步加入导航；若只更新既有页面则无需新增 nav。
+- [x] `docs/guides/agent-runner.md` 说明 PRD-backed Issue 的 runner 成功路径会强制 PRD closeout。
+- [x] `docs/ai-standards/tooling.md` 说明 pre-commit hook 与 runner PRD delivery gate 的职责边界。
+- [x] 如新增长期文档页，`mkdocs.yml` 同步加入导航；若只更新既有页面则无需新增 nav。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_run_agent.py tests/test_prd_acceptance_checklist.py tests/test_archive_tasks.py` 通过。
-- [ ] `uv run python hooks/check_prd_acceptance_checklist.py tasks/archive/<completed-prd>.md` 能校验新归档 PRD。
-- [ ] `just test` 通过。
-- [ ] `uv run mkdocs build --strict` 通过。
+- [x] `uv run pytest tests/test_run_agent.py tests/test_prd_acceptance_checklist.py tests/test_archive_tasks.py` 通过。
+- [x] `uv run python hooks/check_prd_acceptance_checklist.py tasks/archive/<completed-prd>.md` 能校验新归档 PRD。
+- [x] `just test` 通过。
+- [x] `uv run mkdocs build --strict` 通过。
 
 ## 8. Functional Requirements
 

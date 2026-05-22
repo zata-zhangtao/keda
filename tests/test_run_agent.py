@@ -16,13 +16,17 @@ from backend.core.shared.models.agent_runner import (
     WorktreeConfig,
 )
 from backend.core.use_cases.run_agent_once import (
+    PrdDeliveryError,
     build_recovery_prompt,
     build_prompt,
     choose_agent,
     commit_requested_changes,
+    ensure_prd_delivery_ready,
+    extract_prd_path,
     format_command,
     get_head_sha,
     publish_changes,
+    resolve_prd_archive_path,
     run_agent_with_prompt,
     validate_safe_changes,
 )
@@ -189,6 +193,256 @@ def test_build_recovery_prompt_includes_failure_context() -> None:
     assert "failing stderr" in prompt
     assert "Do not run `git add` or `git commit`" in prompt
     assert ".agent-runner/commit-request.json" in prompt
+
+
+def test_extract_prd_path_finds_backtick_path() -> None:
+    """PRD path should be extracted from Issue body backtick syntax."""
+    body = "Some text\nPRD path: `tasks/pending/example.md`\nMore text"
+    assert extract_prd_path(body) == "tasks/pending/example.md"
+
+
+def test_extract_prd_path_returns_none_when_missing() -> None:
+    """None should be returned when no PRD path is present."""
+    assert extract_prd_path("No PRD here.") is None
+
+
+def test_build_prompt_includes_prd_closeout_for_pending_prd() -> None:
+    """Prompt should instruct the agent to update checklist and archive pending PRDs."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prompt = build_prompt(issue, Path("/worktree"))
+    assert "tasks/pending/example.md" in prompt
+    assert "Acceptance Checklist" in prompt
+    assert "tasks/pending/" in prompt
+    assert "tasks/archive/" in prompt
+
+
+def test_build_prompt_no_prd_path() -> None:
+    """Prompt should give generic PRD advice when no canonical path is present."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Just a regular issue.",
+        labels=(),
+    )
+    prompt = build_prompt(issue, Path("/worktree"))
+    assert "If the Issue references a PRD, read it before editing." in prompt
+
+
+def test_build_recovery_prompt_includes_prd_closeout() -> None:
+    """Recovery prompt should remind the agent about PRD closeout state."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prompt = build_recovery_prompt(
+        issue,
+        Path("/worktree"),
+        recovery_attempt=1,
+        max_recovery_attempts=2,
+        failure_summary="Something broke.",
+    )
+    assert "tasks/pending/example.md" in prompt
+    assert "Acceptance Checklist" in prompt
+    assert "archived if complete" in prompt
+
+
+def test_resolve_prd_archive_path_converts_pending() -> None:
+    """Pending PRD paths should map to the archive directory."""
+    assert (
+        resolve_prd_archive_path("tasks/pending/example.md")
+        == "tasks/archive/example.md"
+    )
+
+
+def test_resolve_prd_archive_path_returns_none_for_non_pending() -> None:
+    """Non-pending paths should not resolve to an archive path."""
+    assert resolve_prd_archive_path("tasks/archive/example.md") is None
+    assert resolve_prd_archive_path("docs/example.md") is None
+
+
+def test_ensure_prd_delivery_ready_skips_when_no_prd_path(tmp_path: Path) -> None:
+    """Gate should be a no-op when the Issue has no canonical PRD path."""
+    issue = IssueSummary(number=1, title="T", url="U", body="No PRD.", labels=())
+    fake_runner = FakeProcessRunner()
+    ensure_prd_delivery_ready(issue, tmp_path, fake_runner)
+    assert fake_runner.calls == []
+
+
+def test_ensure_prd_delivery_ready_raises_when_pending_incomplete(
+    tmp_path: Path,
+) -> None:
+    """Pending PRD with unchecked items should raise PrdDeliveryError."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prd_path = tmp_path / "tasks" / "pending" / "example.md"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(
+        "\n".join(
+            [
+                "# PRD",
+                "",
+                "## Acceptance Checklist",
+                "",
+                "- [x] done",
+                "- [ ] undone",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_runner = FakeProcessRunner()
+    with pytest.raises(PrdDeliveryError, match="unchecked items"):
+        ensure_prd_delivery_ready(issue, tmp_path, fake_runner)
+
+
+def test_ensure_prd_delivery_ready_git_mv_when_pending_complete(
+    tmp_path: Path,
+) -> None:
+    """Complete pending PRD should be moved to archive by git mv."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prd_path = tmp_path / "tasks" / "pending" / "example.md"
+    archive_dir = tmp_path / "tasks" / "archive"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(
+        "\n".join(
+            [
+                "# PRD",
+                "",
+                "## Acceptance Checklist",
+                "",
+                "- [x] done",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_runner = FakeProcessRunner()
+    ensure_prd_delivery_ready(issue, tmp_path, fake_runner)
+    assert [
+        "git",
+        "mv",
+        "tasks/pending/example.md",
+        "tasks/archive/example.md",
+    ] in fake_runner.calls
+
+
+def test_ensure_prd_delivery_ready_passes_when_archive_complete(
+    tmp_path: Path,
+) -> None:
+    """Archived PRD with all items checked should pass the gate."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    archive_path = tmp_path / "tasks" / "archive" / "example.md"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_text(
+        "\n".join(
+            [
+                "# PRD",
+                "",
+                "## Acceptance Checklist",
+                "",
+                "- [x] done",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_runner = FakeProcessRunner()
+    ensure_prd_delivery_ready(issue, tmp_path, fake_runner)
+    assert fake_runner.calls == []
+
+
+def test_ensure_prd_delivery_ready_raises_when_missing_section(
+    tmp_path: Path,
+) -> None:
+    """PRD without Acceptance Checklist section should raise PrdDeliveryError."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prd_path = tmp_path / "tasks" / "pending" / "example.md"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text("# PRD\n", encoding="utf-8")
+    fake_runner = FakeProcessRunner()
+    with pytest.raises(PrdDeliveryError, match="Acceptance Checklist section missing"):
+        ensure_prd_delivery_ready(issue, tmp_path, fake_runner)
+
+
+def test_ensure_prd_delivery_ready_raises_when_prd_missing(
+    tmp_path: Path,
+) -> None:
+    """Missing canonical PRD should raise PrdDeliveryError."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    fake_runner = FakeProcessRunner()
+    with pytest.raises(PrdDeliveryError, match="Canonical PRD not found"):
+        ensure_prd_delivery_ready(issue, tmp_path, fake_runner)
+
+
+def test_ensure_prd_delivery_ready_raises_when_archive_dir_missing(
+    tmp_path: Path,
+) -> None:
+    """Pending PRD ready for archive but missing archive dir should raise PrdDeliveryError."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prd_path = tmp_path / "tasks" / "pending" / "example.md"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(
+        "\n".join(
+            [
+                "# PRD",
+                "",
+                "## Acceptance Checklist",
+                "",
+                "- [x] done",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake_runner = FakeProcessRunner()
+    with pytest.raises(PrdDeliveryError, match="Archive directory does not exist"):
+        ensure_prd_delivery_ready(issue, tmp_path, fake_runner)
 
 
 def test_get_head_sha() -> None:
@@ -382,7 +636,19 @@ def _make_ready_issue() -> IssueSummary:
         number=123,
         title="Example",
         url="https://github.com/example/repo/issues/123",
-        body="PRD path: `tasks/example.md`",
+        body="Example body",
+        labels=("agent/ready", "agent/codex"),
+    )
+
+
+def _make_prd_issue(
+    prd_path: str = "tasks/pending/example.md",
+) -> IssueSummary:
+    return IssueSummary(
+        number=123,
+        title="Example",
+        url="https://github.com/example/repo/issues/123",
+        body=f"PRD path: `{prd_path}`",
         labels=("agent/ready", "agent/codex"),
     )
 
@@ -435,6 +701,48 @@ def _write_commit_request(worktree_path: Path, commit_message: str) -> None:
     request_path.parent.mkdir(parents=True, exist_ok=True)
     request_path.write_text(
         f'{{"commit_message": "{commit_message}"}}\n',
+        encoding="utf-8",
+    )
+
+
+def _write_complete_prd(
+    worktree_path: Path, relative_path: str = "tasks/example.md"
+) -> None:
+    prd_path = worktree_path / relative_path
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(
+        "\n".join(
+            [
+                "# PRD: Example",
+                "",
+                "## 7. Acceptance Checklist",
+                "",
+                "- [x] item 1",
+                "- [x] item 2",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_incomplete_prd(
+    worktree_path: Path, relative_path: str = "tasks/example.md"
+) -> None:
+    prd_path = worktree_path / relative_path
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(
+        "\n".join(
+            [
+                "# PRD: Example",
+                "",
+                "## 7. Acceptance Checklist",
+                "",
+                "- [x] item 1",
+                "- [ ] item 2",
+                "",
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -772,6 +1080,7 @@ def test_run_once_uncommitted_changes_validation_failure_does_not_stage(
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
     _write_commit_request(worktree_path, "agent: implement example")
+    _write_complete_prd(worktree_path)
 
     path_command, path_result = _worktree_path_response(worktree_path)
     fake_runner = FakeProcessRunner(
@@ -839,6 +1148,7 @@ def test_run_once_uncommitted_changes_missing_request_fails(tmp_path: Path) -> N
     fake_client.list_ready_issues = lambda ready_label, limit: [issue]
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
+    _write_complete_prd(worktree_path)
 
     path_command, path_result = _worktree_path_response(worktree_path)
     fake_runner = FakeProcessRunner(
@@ -899,6 +1209,7 @@ def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> No
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
     _write_commit_request(worktree_path, "[Agent] Issue #123: Example")
+    _write_complete_prd(worktree_path)
 
     path_command, path_result = _worktree_path_response(worktree_path)
     fake_runner = FakeProcessRunner(
@@ -1149,6 +1460,204 @@ def test_run_once_success() -> None:
     assert len(review_calls) == 1
     pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
     assert len(pr_calls) == 1
+
+
+def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
+    """run_once should git mv a complete pending PRD before staging and committing."""
+    fake_client = FakeGitHubClient()
+    issue = _make_prd_issue("tasks/pending/example.md")
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: implement example")
+    _write_complete_prd(worktree_path, "tasks/pending/example.md")
+    (worktree_path / "tasks" / "archive").mkdir(parents=True, exist_ok=True)
+    src_file = worktree_path / "src" / "file.py"
+    src_file.parent.mkdir(parents=True, exist_ok=True)
+    src_file.write_text("# code\n", encoding="utf-8")
+
+    class _PrdSuccessRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sha_calls = 0
+            self._status_calls = 0
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self.calls.append(list(command))
+                self._sha_calls += 1
+                sha = "after-sha" if self._sha_calls > 1 else "before-sha"
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout=f"{sha}\n",
+                    stderr="",
+                )
+            if command_tuple == ("git", "status", "--porcelain"):
+                self.calls.append(list(command))
+                self._status_calls += 1
+                status_stdout = (
+                    " M src/file.py\n?? .agent-runner/commit-request.json\n"
+                    if self._status_calls == 1
+                    else " M src/file.py\nR  tasks/pending/example.md -> tasks/archive/example.md\n"
+                    if self._status_calls == 2
+                    else ""
+                )
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout=status_stdout,
+                    stderr="",
+                )
+            if command_tuple == (
+                "git",
+                "mv",
+                "tasks/pending/example.md",
+                "tasks/archive/example.md",
+            ):
+                self.calls.append(list(command))
+                return CommandResult(
+                    command=command_tuple, return_code=0, stdout="", stderr=""
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _PrdSuccessRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        ("git", "branch", "--show-current"): CommandResult(
+            command=("git", "branch", "--show-current"),
+            return_code=0,
+            stdout="issue-123\n",
+            stderr="",
+        ),
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_for_worktree(worktree_path, "npm test")
+
+    from backend.core.use_cases.run_agent_once import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    commands = [tuple(command) for command in fake_runner.calls]
+    mv_index = commands.index(
+        ("git", "mv", "tasks/pending/example.md", "tasks/archive/example.md")
+    )
+    add_index = commands.index(("git", "add", "-A"))
+    commit_index = commands.index(("git", "commit", "-m", "agent: implement example"))
+    assert mv_index < add_index < commit_index
+    pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
+    assert len(pr_calls) == 1
+
+
+def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
+    """run_once should recover when the pending PRD checklist is initially incomplete."""
+    fake_client = FakeGitHubClient()
+    issue = _make_prd_issue("tasks/pending/example.md")
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_incomplete_prd(worktree_path, "tasks/pending/example.md")
+    (worktree_path / "tasks" / "archive").mkdir(parents=True, exist_ok=True)
+
+    class _PrdRecoveryRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sha_calls = 0
+            self._agent_calls = 0
+            self._committed = False
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple[:1] == ("codex",):
+                self._agent_calls += 1
+                prompt = command_tuple[-1]
+                if "Recovery attempt: 1/2" in prompt:
+                    assert "PRD delivery check failed" in prompt
+                    assert "unchecked items" in prompt
+                    _write_commit_request(worktree_path, "agent: recovered fix")
+                    _write_complete_prd(worktree_path, "tasks/pending/example.md")
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self._sha_calls += 1
+                sha = "after-sha" if self._sha_calls > 1 else "before-sha"
+                return CommandResult(command_tuple, 0, f"{sha}\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                stdout = "" if self._committed else " M file.txt\n"
+                return CommandResult(command_tuple, 0, stdout, "")
+            if command_tuple == ("git", "commit", "-m", "agent: recovered fix"):
+                self._committed = True
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == (
+                "git",
+                "mv",
+                "tasks/pending/example.md",
+                "tasks/archive/example.md",
+            ):
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _PrdRecoveryRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_for_worktree(worktree_path)
+
+    from backend.core.use_cases.run_agent_once import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    commands = [tuple(command) for command in fake_runner.calls]
+    agent_commands = [command for command in commands if command[:1] == ("codex",)]
+    assert len(agent_commands) == 2
+    mv_index = commands.index(
+        ("git", "mv", "tasks/pending/example.md", "tasks/archive/example.md")
+    )
+    add_index = commands.index(("git", "add", "-A"))
+    commit_index = commands.index(("git", "commit", "-m", "agent: recovered fix"))
+    assert mv_index < add_index < commit_index
+    failed_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "edit_issue_labels"
+        and config.labels.failed in c.get("add", [])
+    ]
+    assert len(failed_calls) == 0
 
 
 def test_run_agent_repositories_once_aggregates_exit_code() -> None:
