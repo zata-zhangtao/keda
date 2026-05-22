@@ -60,7 +60,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
 
       - name: Sync dependencies from lock file
-        run: uv sync --all-groups --frozen
+        run: uv sync --all-extras --all-groups --frozen
 
       - name: Run pre-commit checks
         run: uv run pre-commit run --all-files --show-diff-on-failure
