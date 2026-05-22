@@ -47,6 +47,11 @@ def _git_init(path: Path) -> Path:
         capture_output=True,
     )
     subprocess.run(
+        ["git", "-C", str(path), "branch", "-M", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
         ["git", "-C", str(path), "config", "user.email", "test@example.com"],
         check=True,
         capture_output=True,
@@ -222,7 +227,7 @@ def test_local_base_branch_not_moved(tmp_path: Path) -> None:
 
 
 def test_sync_disabled_uses_local_base(tmp_path: Path) -> None:
-    """KODA_WORKTREE_SYNC_BASE=false keeps old local-base behavior."""
+    """KEDA_WORKTREE_SYNC_BASE=false keeps old local-base behavior."""
     remote_path = tmp_path / "remote.git"
     local_path = tmp_path / "local"
 
@@ -280,7 +285,7 @@ def test_sync_disabled_uses_local_base(tmp_path: Path) -> None:
         "feature-y",
         extra_env={
             "KODA_WORKTREE_BASE_BRANCH": "main",
-            "KODA_WORKTREE_SYNC_BASE": "false",
+            "KEDA_WORKTREE_SYNC_BASE": "false",
         },
     )
 
@@ -353,7 +358,7 @@ def test_fetch_failure_exits_before_creating_worktree(tmp_path: Path) -> None:
 
 
 def test_custom_remote_via_env(tmp_path: Path) -> None:
-    """KODA_WORKTREE_BASE_REMOTE overrides remote name."""
+    """KEDA_WORKTREE_BASE_REMOTE overrides remote name."""
     remote_path = tmp_path / "remote.git"
     local_path = tmp_path / "local"
 
@@ -427,7 +432,7 @@ def test_custom_remote_via_env(tmp_path: Path) -> None:
         "feature-custom",
         extra_env={
             "KODA_WORKTREE_BASE_BRANCH": "main",
-            "KODA_WORKTREE_BASE_REMOTE": "upstream",
+            "KEDA_WORKTREE_BASE_REMOTE": "upstream",
         },
     )
 

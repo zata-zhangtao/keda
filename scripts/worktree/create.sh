@@ -25,8 +25,8 @@ Behavior:
   issue-* 分支在未指定 --subdir 时，默认归入 tasks/ 子目录。
   默认会同步 base branch 对应的远程 tracking ref 作为新 worktree 起点。
   可通过环境变量控制远程同步行为:
-    KODA_WORKTREE_SYNC_BASE      默认 true，设为 false 关闭远程同步
-    KODA_WORKTREE_BASE_REMOTE    覆盖默认 remote 名
+    KEDA_WORKTREE_SYNC_BASE      默认 true，设为 false 关闭远程同步
+    KEDA_WORKTREE_BASE_REMOTE    覆盖默认 remote 名
     KODA_WORKTREE_BASE_BRANCH    覆盖默认 base branch
 
 Examples:
@@ -36,7 +36,7 @@ Examples:
   ai_worktree feature-login --cmd code-insiders
   ai_worktree issue-3
   ai_worktree issue-3 --subdir foo
-  KODA_WORKTREE_SYNC_BASE=false ai_worktree feature-login
+  KEDA_WORKTREE_SYNC_BASE=false ai_worktree feature-login
   ./scripts/worktree/create.sh feature-login
   ./scripts/worktree/create.sh feature-login --base develop
   ./scripts/worktree/create.sh feature-login --cmd
@@ -294,7 +294,7 @@ install_python_dependencies() {
 resolve_base_remote_name() {
     local repo_root_path="$1"
     local base_branch_name="$2"
-    local configured_remote="${KODA_WORKTREE_BASE_REMOTE:-}"
+    local configured_remote="${KEDA_WORKTREE_BASE_REMOTE:-}"
 
     if [ -n "$configured_remote" ]; then
         echo "$configured_remote"
@@ -350,7 +350,7 @@ resolve_worktree_start_point() {
         "+refs/heads/${base_branch_name}:refs/remotes/${base_remote_name}/${base_branch_name}" 2>/dev/null; then
         echo "❌ 从 remote '$base_remote_name' 获取 '$base_branch_name' 失败。" >&2
         echo "   请检查网络连接、remote URL 和分支名称。" >&2
-        echo "   或者设置 KODA_WORKTREE_SYNC_BASE=false 以使用本地 base branch。" >&2
+        echo "   或者设置 KEDA_WORKTREE_SYNC_BASE=false 以使用本地 base branch。" >&2
         return 1
     fi
 
@@ -486,7 +486,7 @@ function ai_worktree() {
         return 1
     fi
 
-    local sync_enabled="${KODA_WORKTREE_SYNC_BASE:-true}"
+    local sync_enabled="${KEDA_WORKTREE_SYNC_BASE:-true}"
     local worktree_start_point=""
     local start_sha=""
 
