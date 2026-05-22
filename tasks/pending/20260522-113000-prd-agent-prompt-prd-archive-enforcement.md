@@ -1,6 +1,8 @@
 # PRD: Agent Runner PRD Archive Enforcement
 
-- GitHub Issue: (pending)
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/11
+
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/11
 
 ## 1. Introduction & Goals
 
