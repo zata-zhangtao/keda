@@ -1,5 +1,7 @@
 # PRD: Configurable Generated Issue And PR Content
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/19
+
 ## 1. Introduction & Goals
 
 `iar issue-from-prd` 目前会用静态 Markdown 模板创建 GitHub Issue。`iar run-once` 在发布 draft PR 时也只写入非常简短的正文，核心内容是 `Closes #<issue-number>` 和生成器标记。这些内容对自动化流程足够可用，但对人类 Review 不够友好，因为它们没有总结需求背景、实现意图、验证重点、风险和 Reviewer 应重点关注的内容。
