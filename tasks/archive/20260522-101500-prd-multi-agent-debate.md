@@ -448,59 +448,59 @@ No external web validation was used. Repository structure and existing runner co
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/api/cli.py` 只负责解析 `deliberate` 参数、构建 request、调用 use case，不直接导入 `backend.infrastructure.*`。
-- [ ] `src/backend/core/use_cases/run_agent_deliberation.py` 不导入 `backend.engines.*`、`backend.infrastructure.*` 或 `backend.api.*`。
-- [ ] agent subprocess 执行通过 core 层接口完成，不在 core 中直接调用 `subprocess`。
-- [ ] 合议流程不复用 Issue Runner 的 worktree、commit、publish 或 GitHub label 流程。
-- [ ] 新增配置仍通过 `settings.py` -> `factory.py` -> core dataclass 映射。
+- [x] `src/backend/api/cli.py` 只负责解析 `deliberate` 参数、构建 request、调用 use case，不直接导入 `backend.infrastructure.*`。
+- [x] `src/backend/core/use_cases/run_agent_deliberation.py` 不导入 `backend.engines.*`、`backend.infrastructure.*` 或 `backend.api.*`。
+- [x] agent subprocess 执行通过 core 层接口完成，不在 core 中直接调用 `subprocess`。
+- [x] 合议流程不复用 Issue Runner 的 worktree、commit、publish 或 GitHub label 流程。
+- [x] 新增配置仍通过 `settings.py` -> `factory.py` -> core dataclass 映射。
 
 ### Security And Read-Only Acceptance
 
-- [ ] `iar deliberate` 不执行 `git add`、`git commit`、`git push`、`gh issue` 或 `gh pr` 命令。
-- [ ] agent 的 cwd 位于 `logs/agent-runner/deliberations/<session_id>/workspaces/<profile_id>/`，不是目标仓库根目录。
-- [ ] 每次 agent 运行前后检查目标仓库 `git status --porcelain`；若发生变化，会话失败并写入 error event。
-- [ ] 合议 prompt 明确禁止文件修改、提交、推送、创建 PR 和触碰真实业务数据。
-- [ ] 输出文件只写入配置的 deliberation output 目录，默认位于已忽略的 `logs/` 下。
+- [x] `iar deliberate` 不执行 `git add`、`git commit`、`git push`、`gh issue` 或 `gh pr` 命令。
+- [x] agent 的 cwd 位于 `logs/agent-runner/deliberations/<session_id>/workspaces/<profile_id>/`，不是目标仓库根目录。
+- [x] 每次 agent 运行前后检查目标仓库 `git status --porcelain`；若发生变化，会话失败并写入 error event。
+- [x] 合议 prompt 明确禁止文件修改、提交、推送、创建 PR 和触碰真实业务数据。
+- [x] 输出文件只写入配置的 deliberation output 目录，默认位于已忽略的 `logs/` 下。
 
 ### Behavior Acceptance
 
-- [ ] `uv run iar deliberate "测试需求" --rounds 2` 能启动默认 profile 并生成完整输出。
-- [ ] 第一轮每个 agent 的 prompt 只包含原始用户输入、自己的 profile 指令和只读规则。
-- [ ] 第二轮及后续每个 agent 的 prompt 包含截至上一轮的公开 transcript。
-- [ ] synthesizer prompt 包含完整公开 transcript，并要求输出推荐结论、共识、分歧、风险和下一步。
-- [ ] 终端实时输出包含 `session_id`、`round`、`agent`、`event_type`。
-- [ ] 并发 agent 输出不会互相穿插成不可读文本；终端 renderer 按事件串行显示。
+- [x] `uv run iar deliberate "测试需求" --rounds 2` 能启动默认 profile 并生成完整输出。
+- [x] 第一轮每个 agent 的 prompt 只包含原始用户输入、自己的 profile 指令和只读规则。
+- [x] 第二轮及后续每个 agent 的 prompt 包含截至上一轮的公开 transcript。
+- [x] synthesizer prompt 包含完整公开 transcript，并要求输出推荐结论、共识、分歧、风险和下一步。
+- [x] 终端实时输出包含 `session_id`、`round`、`agent`、`event_type`。
+- [x] 并发 agent 输出不会互相穿插成不可读文本；终端 renderer 按事件串行显示。
 
 ### Output Acceptance
 
-- [ ] `events.jsonl` 为 UTF-8 JSON Lines，每行包含 `session_id`、`round`、`agent`、`event_type`、`message`、`timestamp`。
-- [ ] `transcript.md` 按 session、round、agent 分组展示公开讨论记录。
-- [ ] `result.md` 包含 `Recommendation`、`Consensus`、`Disagreements`、`Risks`、`Next Actions`。
-- [ ] `session.json` 记录原始 prompt、profile 配置、rounds、synthesizer、输出路径和开始/结束时间。
-- [ ] `--output <path>` 可以覆盖默认输出根目录。
+- [x] `events.jsonl` 为 UTF-8 JSON Lines，每行包含 `session_id`、`round`、`agent`、`event_type`、`message`、`timestamp`。
+- [x] `transcript.md` 按 session、round、agent 分组展示公开讨论记录。
+- [x] `result.md` 包含 `Recommendation`、`Consensus`、`Disagreements`、`Risks`、`Next Actions`。
+- [x] `session.json` 记录原始 prompt、profile 配置、rounds、synthesizer、输出路径和开始/结束时间。
+- [x] `--output <path>` 可以覆盖默认输出根目录。
 
 ### Configuration Acceptance
 
-- [ ] `config.toml` 支持 `[agent_runner.deliberation]`。
-- [ ] 默认 profile 至少包含 `architect`、`skeptic`、`implementer`。
-- [ ] 每个 profile 支持配置 `agent`、`role`、`behavior_prompt`。
-- [ ] CLI `--agents claude:architect,kimi:skeptic` 可以覆盖默认参与者列表。
-- [ ] `--synthesizer <agent>` 可以覆盖默认 synthesizer。
+- [x] `config.toml` 支持 `[agent_runner.deliberation]`。
+- [x] 默认 profile 至少包含 `architect`、`skeptic`、`implementer`。
+- [x] 每个 profile 支持配置 `agent`、`role`、`behavior_prompt`。
+- [x] CLI `--agents claude:architect,kimi:skeptic` 可以覆盖默认参与者列表。
+- [x] `--synthesizer <agent>` 可以覆盖默认 synthesizer。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 增加 `iar deliberate` 使用说明。
-- [ ] `docs/guides/configuration.md` 增加 `[agent_runner.deliberation]` 配置说明。
-- [ ] 文档明确说明本功能不展示隐藏 chain-of-thought，只展示可审计 transcript。
-- [ ] 文档明确说明第一版只读，不会修改仓库代码。
-- [ ] 如新增文档页面，`mkdocs.yml` 已同步导航。
+- [x] `docs/guides/agent-runner.md` 增加 `iar deliberate` 使用说明。
+- [x] `docs/guides/configuration.md` 增加 `[agent_runner.deliberation]` 配置说明。
+- [x] 文档明确说明本功能不展示隐藏 chain-of-thought，只展示可审计 transcript。
+- [x] 文档明确说明第一版只读，不会修改仓库代码。
+- [x] 如新增文档页面，`mkdocs.yml` 已同步导航。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_agent_runner_cli.py tests/test_run_agent_deliberation.py tests/test_process_runner.py tests/test_agent_config_consistency.py -q` 通过。
-- [ ] `uv run mkdocs build --strict` 通过。
-- [ ] `just test` 通过。
-- [ ] 新增或修改的 Python 文本文件 I/O 均显式使用 `encoding="utf-8"`。
+- [x] `uv run pytest tests/test_agent_runner_cli.py tests/test_run_agent_deliberation.py tests/test_process_runner.py tests/test_agent_config_consistency.py -q` 通过。
+- [x] `uv run mkdocs build --strict` 通过。
+- [x] `just test` 通过。
+- [x] 新增或修改的 Python 文本文件 I/O 均显式使用 `encoding="utf-8"`。
 
 ## 8. Functional Requirements
 
