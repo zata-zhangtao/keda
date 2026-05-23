@@ -193,7 +193,10 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     from unittest.mock import MagicMock, patch
 
     from backend.api.cli import main
-    from backend.core.shared.models.agent_deliberation import DeliberationResult
+    from backend.core.shared.models.agent_deliberation import (
+        DeliberationAgentProfile,
+        DeliberationResult,
+    )
 
     output_root = tmp_path / "deliberations"
     expected_output_path = output_root / "sid-1"
@@ -211,7 +214,12 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
             risks="low",
             next_actions="next",
             events=(),
-            agent_outputs={},
+            agent_outputs={
+                "round_1": {
+                    "skeptic": "skeptic out",
+                    "architect": "architect out",
+                }
+            },
             output_dir=request.output_dir,
             started_at="2026-05-23T00:00:00+00:00",
             finished_at="2026-05-23T00:01:00+00:00",
@@ -230,7 +238,20 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
         mock_settings.return_value.deliberation.default_output_dir = str(output_root)
         mock_settings.return_value.deliberation.default_rounds = 2
         mock_settings.return_value.deliberation.default_synthesizer = "claude"
-        mock_config.return_value.profiles = ()
+        mock_config.return_value.profiles = (
+            DeliberationAgentProfile(
+                profile_id="architect",
+                agent="claude",
+                role="architect",
+                behavior_prompt="be an architect",
+            ),
+            DeliberationAgentProfile(
+                profile_id="skeptic",
+                agent="kimi",
+                role="skeptic",
+                behavior_prompt="be a skeptic",
+            ),
+        )
         mock_event_sink.return_value = MagicMock()
 
         exit_code = main(["deliberate", "test prompt", "--session-id", "sid-1"])
@@ -241,3 +262,9 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     mock_event_sink.assert_called_once_with(expected_output_path)
     mock_write.assert_called_once()
     assert mock_write.call_args.args[2] == expected_output_path
+    assert tuple(
+        profile.profile_id for profile in mock_write.call_args.args[1].profiles
+    ) == (
+        "skeptic",
+        "architect",
+    )

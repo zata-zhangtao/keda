@@ -25,6 +25,18 @@
 - AI 内容生成必须是只读行为，不能修改仓库文件。
 - 现有确定性行为仍可作为默认路径或回退路径使用。
 
+### Realistic Validation
+
+除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证生成内容行为，确保配置、渲染、校验和 fallback 在真实 CLI 路径中生效，而非仅在隔离的 test fixture 中通过。
+
+- [ ] **Issue 内容生成真实验证**：在本地测试仓库中，执行 `uv run iar issue-from-prd <prd-path>`，分别启用 `mode = "template"` 和 `mode = "agent"`，验证终端输出和生成的 Issue Markdown 包含正确的 `PRD path` 锚点、非空 title/body，且 fallback 在锚点缺失时正确触发。真实验证不必须创建到 GitHub 的远端 Issue；可通过 `--dry-run` 或本地拦截 `github_client.create_issue(...)` 输出到文件完成。
+- [ ] **PR 内容生成真实验证**：在本地测试仓库中，执行 `uv run iar run-once` 完成一个完整的实现-验证-发布流程，验证 `publish_changes(...)` 在 push 后生成的 draft PR Markdown 包含正确的 `Closes #<issue_number>` 锚点，且 template/agent 模式切换、校验失败 fallback 均在真实 CLI 路径中生效。同样不必须发布到真实 GitHub；可通过 dry-run 或本地文件输出验证。
+  - **特别要求（AI 生成模式）**：生成的 PR 内容必须包含本次改动的**实现路径说明**——即具体改了哪些文件、为什么这样改、关键决策是什么。描述需通俗易懂、简单明了，避免空泛的总结，使 Reviewer 能快速理解改动的来龙去脉。
+- [ ] **配置真实验证**：修改 `config.toml` 中的 `[agent_runner.generated_content]` 后，执行 `uv run iar` 相关子命令，验证配置加载、repository-specific override 和 list prompt/template joining 在真实 settings 解析路径中正确工作。
+- [ ] **为什么单元测试不够**：Issue/PR 内容生成的核心变化点是**真实 use case 路径中的内容选择、校验和 fallback 顺序**。Fake generator 和 mock GitHub client 只能验证分支逻辑，无法覆盖真实 `.format()` 渲染、真实 PRD 文件读取、真实 commit log / diff stat 命令输出、以及真实 Agent 进程返回的解析和校验交互。真实入口点验证是证明”配置启用后，人类用户实际执行 CLI 能得到预期 Markdown 输出”的唯一方式。
+
+真实 GitHub 创建或真实 AI 调用应保持可选，默认通过 dry-run / 本地文件输出完成。若执行 sandbox 手工验证，必须使用非生产测试仓库，并在归档 PRD 前记录确切命令和验证结果。
+
 ## 2. Requirement Shape
 
 - **Actor**：使用 `iar issue-from-prd` 的本地维护者，或在 Agent 实现完成后自动创建 draft PR 的 Agent Runner。
@@ -459,38 +471,23 @@ flowchart TD
 
 ### Realistic Validation Plan
 
-最高保真验证应通过真实 CLI use case 路径证明行为，但默认不依赖真实 GitHub 或真实 AI 凭证。
+最高保真验证必须通过**真实 CLI 入口点**证明行为，默认不依赖真实 GitHub 或真实 AI 凭证。单元和集成测试仅作为分支逻辑和边界条件的补充验证。
 
-- **Generated Issue content path**：
-  - 真实入口：通过 `uv run pytest tests/test_create_issue_from_prd.py -q` 覆盖 `create_issue_from_prd(...)`。
-  - 可 mock 依赖：`IGitHubClient`、process runner 和 content generator。
-  - 保留真实依赖：PRD 文件读写、相对路径解析、label 构造、fallback 模板构造。
-  - 所需测试数据：临时 Git 仓库、`tasks/pending/` 下的 PRD 文件、template mode 配置、返回合法和非法输出的 fake generator。
-  - 为什么单元级入口足够：GitHub 网络创建已经被 `IGitHubClient` 隔离；本次变化点是 GitHub 调用前的内容选择和校验。
+| Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
+|---|---|---|---|---|---|---|
+| Generated Issue content — real CLI | `uv run iar issue-from-prd <prd-path>` | sandbox/manual | `IGitHubClient.create_issue` 可 mock 或 dry-run 输出到文件；content generator 保持真实（template 用真实 `.format()`，agent 用真实本地 Agent 进程） | 本地测试仓库、`tasks/pending/` 下的 PRD 文件、启用 template 和 agent 的 `config.toml` | `uv run iar issue-from-prd tasks/pending/example.md`（配合 `--dry-run` 或本地输出拦截） | Yes |
+| Generated PR content — real CLI | `uv run iar run-once` 完整流程 | sandbox/manual | `IGitHubClient.create_draft_pr` 可 mock 或 dry-run 输出到文件；commit log / diff stat 使用真实 `git` 命令 | 本地测试仓库、fake issue、fake branch、启用 template 和 agent 的 `config.toml` | `uv run iar run-once --issue <number>`（配合 `--dry-run` 或本地文件输出验证）。AI 生成模式下需检查 PR 内容是否包含通俗易懂、简单明了的**实现路径说明**（改了哪些文件、为什么这样改、关键决策是什么） | Yes |
+| Configuration loading — real CLI | `uv run iar` 任意子命令 | sandbox/manual | 无需 mock；settings 使用真实 TOML 解析 | 包含 `[agent_runner.generated_content]` 和 repository override 的 `config.toml` | `uv run iar issue-from-prd --help` 或实际执行验证配置生效 | Yes |
+| Generated Issue content — unit | `uv run pytest tests/test_create_issue_from_prd.py -q` | unit | `IGitHubClient`、process runner 和 content generator 使用 fake | 临时 Git 仓库、PRD 文件、fake generator 输出 | `uv run pytest tests/test_create_issue_from_prd.py -q` | Yes |
+| Generated PR content — unit | `uv run pytest tests/test_run_agent.py -q` | unit | `IGitHubClient`、process runner 和 content generator 使用 fake | fake issue、fake branch、fake commit log / diff stat | `uv run pytest tests/test_run_agent.py -q` | Yes |
+| Content helper logic | `uv run pytest tests/test_generated_content.py -q` | unit | content generator 或 transcript runner 使用 fake | fixture PRD 文件、fake generator 输出 | `uv run pytest tests/test_generated_content.py -q` | Yes |
+| Config loading | `uv run pytest tests/test_agent_runner_config.py -q` | unit | 无需外部 mock | fixture settings object | `uv run pytest tests/test_agent_runner_config.py -q` | Yes |
+| Full regression | `just test` | integration | 按现有测试约定 mock 外部服务 | 现有测试 fixture | `just test` | Yes |
 
-- **Generated PR content path**：
-  - 真实入口：通过 `uv run pytest tests/test_run_agent.py -q` 覆盖 `publish_changes(...)`。
-  - 可 mock 依赖：`IGitHubClient`、process runner 和 content generator。
-  - 保留真实依赖：branch 校验流程、remote 校验流程、传入 `create_draft_pr` 的 PR body。
-  - 所需测试数据：fake issue、fake branch、fake remote list、template mode 配置、fake generator 输出、fake commit log 和 diff stat 命令输出。
-  - 为什么只测低层 helper 不够：PR body 必须通过真实 `publish_changes(...)` 路径验证，因为这里同时组装 push、PR title 和 PR body。
+**为什么真实 CLI 入口点是必需的**：
 
-- **Generated content helper path**：
-  - 真实入口：通过 `uv run pytest tests/test_generated_content.py -q` 覆盖 `generated_content.py`。
-  - 可 mock 依赖：content generator 或 transcript runner。
-  - 保留真实依赖：`.format()` 渲染、JSON/Markdown 解析、锚点校验、fallback 选择。
-  - 必要断言：PRD section 缺失时返回空字符串；Issue template 变量可渲染；PR template 变量可渲染；agent 输出非法时 fallback metadata 正确。
-
-- **Configuration path**：
-  - 真实入口：通过 `uv run pytest tests/test_agent_runner_config.py -q` 覆盖 `build_app_config_from_settings(...)` 和 repository merge。
-  - 可 mock 依赖：除构造 settings object 外无需额外 mock。
-  - 必要断言：global defaults、target enabled config、list prompt joining、list template joining、repository override merge。
-
-- **Full regression**：
-  - 命令：`just test`。
-  - 目的：验证架构、lint、docs-linked tests 和现有 runner 行为不回归。
-
-真实 GitHub 或真实 AI 验证应保持可选，并通过显式本地凭证启用。如果执行 sandbox 手工验证，必须使用非生产测试仓库，并在归档 PRD 前记录确切命令和生成的 Issue/PR URL。
+- Issue/PR 内容生成的核心变化点是**真实 use case 路径中的内容选择、校验和 fallback 顺序**。Fake generator 和 mock GitHub client 只能验证分支逻辑，无法覆盖真实 `.format()` 渲染、真实 PRD 文件读取、真实 commit log / diff stat 命令输出、以及真实 Agent 进程返回的解析和校验交互。真实入口点验证是证明"配置启用后，人类用户实际执行 CLI 能得到预期 Markdown 输出"的唯一方式。
+- 真实 GitHub 创建或真实 AI 调用应保持可选，默认通过 dry-run / 本地文件输出完成。若执行 sandbox 手工验证，必须使用非生产测试仓库，并在归档 PRD 前记录确切命令和验证结果。
 
 ### Low-Fidelity Prototype
 
@@ -582,6 +579,10 @@ flowchart TD
 - [ ] `uv run pytest tests/test_run_agent.py -q` 通过。
 - [ ] `uv run mkdocs build --strict` 通过。
 - [ ] `just test` 通过。
+- [ ] 在本地测试仓库中执行 `uv run iar issue-from-prd <prd-path>`（启用 `mode = "template"` 和 `mode = "agent"`），终端输出和生成的 Issue Markdown 包含正确的 `PRD path` 锚点，且 fallback 在锚点缺失时正确触发；可通过 `--dry-run` 或本地拦截输出完成，不必须发布到真实 GitHub。
+- [ ] 在本地测试仓库中执行 `uv run iar run-once` 完成完整实现-验证-发布流程，生成的 draft PR Markdown 包含正确的 `Closes #<issue_number>` 锚点，且 template/agent 切换和校验失败 fallback 在真实 CLI 路径中生效；可通过 dry-run 或本地文件输出验证。
+  - **特别要求（AI 生成模式）**：PR 内容必须包含本次改动的**实现路径说明**——具体改了哪些文件、为什么这样改、关键决策是什么。描述需通俗易懂、简单明了，使 Reviewer 能快速理解改动的来龙去脉，避免空泛的总结。
+- [ ] 修改 `config.toml` 中的 `[agent_runner.generated_content]` 后，执行 `uv run iar` 相关子命令，验证配置加载、repository-specific override 和 list prompt/template joining 在真实 settings 解析路径中正确工作。
 
 ## 8. Functional Requirements
 

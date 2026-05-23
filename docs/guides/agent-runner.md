@@ -647,6 +647,10 @@ uv run iar deliberate "设计缓存策略" \
 - `transcript.md`：按轮次和 agent 分组的人类可读讨论记录
 - `result.md`：最终结论（Recommendation、Consensus、Disagreements、Risks、Next Actions）
 - `session.json`：会话元数据、profile 配置、命令参数
+- `workspaces/<profile_id>/round-<n>-output.md`：单个参与 agent 在对应轮次的原始输出
+- `workspaces/synthesizer/synthesis-output.md`：synthesizer 的原始结构化输出
+
+若任一参与 agent 或 synthesizer 子进程返回非 0 退出码，`iar deliberate` 会整体失败并返回非 0 退出码；已发生的事件仍保留在 `events.jsonl` 便于排查。
 
 ### 终端实时输出
 

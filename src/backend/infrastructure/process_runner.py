@@ -48,9 +48,11 @@ class SubprocessRunner:
             )
             stdout = completed.stdout
             stderr = completed.stderr
-        elif _should_filter_claude_stream(command):
-            completed = _run_filtered_claude_stream(command, cwd=cwd, timeout=timeout)
-            stdout = ""
+        elif should_filter_claude_stream(command):
+            completed = run_filtered_claude_stream(
+                command, cwd=cwd, timeout=timeout, collect_stdout=True
+            )
+            stdout = completed.stdout
             stderr = ""
         else:
             completed = subprocess.run(
@@ -80,7 +82,7 @@ class SubprocessRunner:
         return result
 
 
-class _ClaudeStreamRenderer:
+class ClaudeStreamRenderer:
     """Render Claude stream-json output into concise terminal messages."""
 
     def __init__(self) -> None:
@@ -148,7 +150,7 @@ class _ClaudeStreamRenderer:
         return f"\n{prefix}{result_text}\n"
 
 
-def _should_filter_claude_stream(command: Sequence[str]) -> bool:
+def should_filter_claude_stream(command: Sequence[str]) -> bool:
     """Return whether this command is Claude stream-json output."""
     command_parts = list(command)
     return (
@@ -159,27 +161,46 @@ def _should_filter_claude_stream(command: Sequence[str]) -> bool:
     )
 
 
-def _run_filtered_claude_stream(
+def run_filtered_claude_stream(
     command: Sequence[str],
     *,
     cwd: Path,
     timeout: int | None,
+    collect_stdout: bool = False,
+    prompt_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run Claude stream-json and print a filtered live view."""
-    renderer = _ClaudeStreamRenderer()
+    import threading
+
+    renderer = ClaudeStreamRenderer()
     process = subprocess.Popen(
         list(command),
         cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=None,
+        stdin=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         bufsize=1,
     )
+    if prompt_text is not None:
+        # Write stdin in a background thread to avoid deadlock
+        # when the pipe buffer fills up before the child reads.
+        def _write_stdin() -> None:
+            if process.stdin is not None:
+                process.stdin.write(prompt_text)
+                process.stdin.close()
+
+        threading.Thread(target=_write_stdin, daemon=True).start()
+    else:
+        process.stdin.close()
+    stdout_lines: list[str] = []
     try:
         if process.stdout is not None:
             for output_line in process.stdout:
                 rendered_text = renderer.render_line(output_line)
+                if collect_stdout and rendered_text:
+                    stdout_lines.append(rendered_text)
                 if rendered_text:
                     print(rendered_text, end="", flush=True)
         return_code = process.wait(timeout=timeout)
@@ -190,7 +211,7 @@ def _run_filtered_claude_stream(
     return subprocess.CompletedProcess(
         args=list(command),
         returncode=return_code,
-        stdout="",
+        stdout="".join(stdout_lines),
         stderr="",
     )
 

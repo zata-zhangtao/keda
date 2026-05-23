@@ -9,6 +9,7 @@ cases.
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -42,7 +43,11 @@ from backend.infrastructure.config.settings import (
     config,
 )
 from backend.infrastructure.github_client import GitHubCliClient
-from backend.infrastructure.process_runner import SubprocessRunner
+from backend.infrastructure.process_runner import (
+    SubprocessRunner,
+    run_filtered_claude_stream,
+    should_filter_claude_stream,
+)
 
 
 def build_app_config_from_settings(
@@ -465,10 +470,108 @@ class SubprocessTranscriptRunner:
         cwd: Path,
         event_sink: "Callable[[DeliberationEvent], None]",
     ) -> "CommandResult":
-        """Run an agent and emit events."""
+        """Run an agent and emit events.
+
+        Streams agent stdout to the terminal in real time while
+        collecting it for the deliberation transcript.
+        """
         command = _build_deliberation_command(agent_name, prompt, cwd)
         _ = event_sink
-        return self._process_runner.run(command, cwd=cwd, capture_output=True)
+        if should_filter_claude_stream(command):
+            # Pass the prompt via stdin to avoid "Argument list too long"
+            # when the transcript grows across rounds.
+            command_no_prompt = [arg for arg in command if arg != "-p"]
+            if command_no_prompt and command_no_prompt[-1] == prompt:
+                command_no_prompt = command_no_prompt[:-1]
+            completed = run_filtered_claude_stream(
+                command_no_prompt,
+                cwd=cwd,
+                timeout=None,
+                collect_stdout=True,
+                prompt_text=prompt,
+            )
+            return CommandResult(
+                command=tuple(command_no_prompt),
+                return_code=completed.returncode,
+                stdout=completed.stdout,
+                stderr="",
+            )
+        if agent_name in ("kimi", "codex"):
+            # Pass the prompt via stdin to avoid "Argument list too long"
+            # when the transcript grows across rounds.
+            return _run_agent_with_stdin_prompt(command, prompt, cwd)
+        process = subprocess.Popen(
+            list(command),
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=None,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+        )
+        stdout_lines: list[str] = []
+        try:
+            if process.stdout is not None:
+                for line in process.stdout:
+                    stdout_lines.append(line)
+                    print(line, end="")
+            return_code = process.wait(timeout=None)
+        except Exception:
+            process.kill()
+            process.wait()
+            raise
+        return CommandResult(
+            command=tuple(command),
+            return_code=return_code,
+            stdout="".join(stdout_lines),
+            stderr="",
+        )
+
+
+def _run_agent_with_stdin_prompt(
+    command: list[str], prompt: str, cwd: Path
+) -> CommandResult:
+    """Run an agent subprocess, passing the prompt via stdin."""
+    import threading
+
+    process = subprocess.Popen(
+        list(command),
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=None,
+        stdin=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        bufsize=1,
+    )
+
+    def _write_stdin() -> None:
+        if process.stdin is not None:
+            try:
+                process.stdin.write(prompt)
+            except BrokenPipeError:
+                pass
+            process.stdin.close()
+
+    threading.Thread(target=_write_stdin, daemon=True).start()
+    stdout_lines: list[str] = []
+    try:
+        if process.stdout is not None:
+            for line in process.stdout:
+                stdout_lines.append(line)
+                print(line, end="")
+        return_code = process.wait(timeout=None)
+    except Exception:
+        process.kill()
+        process.wait()
+        raise
+    return CommandResult(
+        command=tuple(command),
+        return_code=return_code,
+        stdout="".join(stdout_lines),
+        stderr="",
+    )
 
 
 def _build_deliberation_command(agent_name: str, prompt: str, cwd: Path) -> list[str]:
@@ -484,17 +587,16 @@ def _build_deliberation_command(agent_name: str, prompt: str, cwd: Path) -> list
             prompt,
         ]
     if agent_name == "kimi":
-        return ["kimi", "--prompt", prompt]
+        return ["kimi", "--quiet", "--input-format", "text"]
     return [
         "codex",
         "--cd",
-        str(cwd),
+        str(cwd.resolve()),
         "--sandbox",
         "read-only",
         "--ask-for-approval",
         "never",
         "exec",
-        prompt,
     ]
 
 
@@ -562,12 +664,7 @@ def write_deliberation_outputs(
     for round_key, outputs in result.agent_outputs.items():
         transcript_lines.append(f"## {round_key}")
         transcript_lines.append("")
-        for idx, output in enumerate(outputs):
-            profile_id = (
-                session.profiles[idx].profile_id
-                if idx < len(session.profiles)
-                else f"agent-{idx}"
-            )
+        for profile_id, output in outputs.items():
             transcript_lines.append(f"### {profile_id}")
             transcript_lines.append("")
             transcript_lines.append(output)

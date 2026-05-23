@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 
 from backend.core.shared.interfaces.agent_runner import IAgentTranscriptRunner
 from backend.core.shared.models.agent_deliberation import (
@@ -28,8 +29,13 @@ from backend.core.use_cases.run_agent_deliberation import (
 class FakeTranscriptRunner(IAgentTranscriptRunner):
     """In-memory transcript runner for tests."""
 
-    def __init__(self, responses: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        responses: dict[str, str] | None = None,
+        return_codes: dict[str, int] | None = None,
+    ) -> None:
         self.responses = responses or {}
+        self.return_codes = return_codes or {}
         self.calls: list[dict] = []
 
     def run(
@@ -44,7 +50,7 @@ class FakeTranscriptRunner(IAgentTranscriptRunner):
         output = self.responses.get(agent_name, "default output")
         return CommandResult(
             command=(agent_name,),
-            return_code=0,
+            return_code=self.return_codes.get(agent_name, 0),
             stdout=output,
             stderr="",
         )
@@ -265,6 +271,15 @@ def test_run_agent_deliberation_output_files_written(
     output_dir = Path(result.output_dir)
     assert output_dir == tmp_path
     assert (output_dir / "workspaces").is_dir()
+    assert (output_dir / "workspaces" / "architect" / "round-1-output.md").read_text(
+        encoding="utf-8"
+    ) == "architect out\n"
+    assert (output_dir / "workspaces" / "skeptic" / "round-1-output.md").read_text(
+        encoding="utf-8"
+    ) == "skeptic out\n"
+    assert (
+        output_dir / "workspaces" / "synthesizer" / "synthesis-output.md"
+    ).read_text(encoding="utf-8") == "architect out\n"
 
 
 def test_run_agent_deliberation_synthesizer_produces_result(
@@ -323,3 +338,83 @@ Start coding."""
     assert result.recommendation == "Build it."
     assert result.consensus == "All agree."
     assert result.next_actions == "Start coding."
+
+
+def test_run_agent_deliberation_preserves_profile_ids_in_outputs(
+    tmp_path: Path,
+) -> None:
+    """Round outputs should keep profile IDs for transcript rendering."""
+    request = _make_request(agents=("skeptic",), rounds=1)
+    config = _make_config()
+    fake_runner = FakeTranscriptRunner(
+        responses={"kimi": "skeptic output", "claude": "summary"}
+    )
+
+    result = run_agent_deliberation(
+        request=request,
+        config=config,
+        transcript_runner=fake_runner,
+        event_sink=lambda _: None,
+        target_repo_path=tmp_path,
+    )
+
+    assert result.agent_outputs["round_1"] == {"skeptic": "skeptic output"}
+    assert "### skeptic" in fake_runner.calls[-1]["prompt"]
+
+
+def test_run_agent_deliberation_raises_on_agent_failure(
+    tmp_path: Path,
+) -> None:
+    """A failed participant should fail the deliberation instead of producing blanks."""
+    request = _make_request(agents=("skeptic",), rounds=1)
+    config = _make_config()
+    events: list[DeliberationEvent] = []
+    fake_runner = FakeTranscriptRunner(
+        responses={"kimi": "tool failed"},
+        return_codes={"kimi": 7},
+    )
+
+    with pytest.raises(RuntimeError, match="skeptic.*exit code 7"):
+        run_agent_deliberation(
+            request=request,
+            config=config,
+            transcript_runner=fake_runner,
+            event_sink=events.append,
+            target_repo_path=tmp_path,
+        )
+
+    assert any(
+        event.agent == "skeptic"
+        and event.event_type == "agent_finished"
+        and event.message == "exit=7"
+        for event in events
+    )
+
+
+def test_run_agent_deliberation_raises_on_synthesizer_failure(
+    tmp_path: Path,
+) -> None:
+    """A failed synthesizer should fail the whole deliberation."""
+    request = _make_request(agents=("skeptic",), rounds=1, synthesizer="synth")
+    config = _make_config()
+    events: list[DeliberationEvent] = []
+    fake_runner = FakeTranscriptRunner(
+        responses={"kimi": "skeptic output", "synth": "synth failed"},
+        return_codes={"synth": 9},
+    )
+
+    with pytest.raises(RuntimeError, match="synthesizer.*exit code 9"):
+        run_agent_deliberation(
+            request=request,
+            config=config,
+            transcript_runner=fake_runner,
+            event_sink=events.append,
+            target_repo_path=tmp_path,
+        )
+
+    assert any(
+        event.agent == "synthesizer"
+        and event.event_type == "agent_finished"
+        and event.message == "exit=9"
+        for event in events
+    )

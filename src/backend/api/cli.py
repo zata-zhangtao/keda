@@ -419,10 +419,25 @@ def main(argv: list[str] | None = None) -> int:
                 event_sink=event_sink,
                 target_repo_path=Path.cwd(),
             )
+            selected_profile_ids = tuple(
+                dict.fromkeys(
+                    profile_id
+                    for outputs in result.agent_outputs.values()
+                    for profile_id in outputs
+                )
+            )
+            profiles_by_id = {
+                profile.profile_id: profile for profile in deliberation_config.profiles
+            }
+            session_profiles = tuple(
+                profiles_by_id[profile_id]
+                for profile_id in selected_profile_ids
+                if profile_id in profiles_by_id
+            )
             session = DeliberationSession(
                 session_id=result.session_id,
                 prompt=result.prompt,
-                profiles=deliberation_config.profiles,
+                profiles=session_profiles,
                 rounds=request.rounds,
                 synthesizer=request.synthesizer,
                 output_dir=output_path,

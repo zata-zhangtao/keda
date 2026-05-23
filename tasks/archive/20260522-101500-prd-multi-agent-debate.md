@@ -1,6 +1,7 @@
 # PRD: Multi-Agent Deliberation Session
 
 - GitHub Issue: https://github.com/zata-zhangtao/keda/issues/15
+- Follow-up Issue: https://github.com/zata-zhangtao/keda/issues/18
 
 ## 1. Introduction & Goals
 
@@ -30,6 +31,18 @@
   - `result.md`
   - `session.json`
 - 第一版不允许修改目标仓库代码，不创建 commit、branch、Issue、PR 或 worktree。
+
+### Post-Archive Maintenance Update
+
+2026-05-24 的当前实现已经补齐 Issue 18 中暴露的多个运行期问题：
+
+- Codex 子进程在默认相对输出目录下运行时，`--cd` 使用绝对 workspace 路径，并通过 stdin 传入 prompt，避免相对 cwd 解析失败和长 prompt 参数问题。
+- participant 或 synthesizer 子进程返回非 0 时，合议会话会失败并向外冒泡，CLI 不再把失败误报为成功。
+- 每个 participant 输出会写入 `workspaces/<profile_id>/round-<n>-output.md`，synthesizer 输出会写入 `workspaces/synthesizer/synthesis-output.md`。
+- `transcript.md` 按真实 `profile_id` 渲染 agent 标题，不再因为只选择单个 agent 而显示成错误 profile。
+- Claude `stream-json` 输出进入 transcript-safe 文本前会先经过渲染器，不再把 raw JSON 事件写入人类可读 transcript。
+
+这些修复不改变本 PRD 的原始范围：本 PRD 仍是已归档的 Issue 15 交付记录。后续“运行中按 chunk 实时落盘”和“交互式终端按 agent 数动态分栏”的展示增强，已拆到 `tasks/pending/20260524-005848-prd-deliberation-live-agent-output.md` 跟踪。
 
 ## 2. Requirement Shape
 
@@ -502,6 +515,17 @@ No external web validation was used. Repository structure and existing runner co
 - [x] `just test` 通过。
 - [x] 新增或修改的 Python 文本文件 I/O 均显式使用 `encoding="utf-8"`。
 
+### Follow-Up Regression Acceptance
+
+- [x] Codex deliberate 命令使用绝对 `--cd` workspace 路径，且 prompt 不再作为末尾 argv 传入。
+- [x] participant 子进程非 0 退出时，`run_agent_deliberation(...)` 抛出失败，而不是生成空白成功结果。
+- [x] synthesizer 子进程非 0 退出时，`run_agent_deliberation(...)` 抛出失败。
+- [x] participant 输出写入 `workspaces/<profile_id>/round-<n>-output.md`。
+- [x] synthesizer 输出写入 `workspaces/synthesizer/synthesis-output.md`。
+- [x] `DeliberationResult.agent_outputs` 保留 `profile_id -> output` 映射，`transcript.md` 使用真实 profile 标题。
+- [x] Claude stream-json 收集结果是渲染后的可读文本，不包含 raw stream-json 事件、hidden thinking delta 或 signature delta。
+- [x] `docs/guides/agent-runner.md` 说明新增 workspace 输出文件和子进程失败冒泡行为。
+
 ## 8. Functional Requirements
 
 - **FR-1**: CLI must support `iar deliberate <prompt>`.
@@ -516,6 +540,12 @@ No external web validation was used. Repository structure and existing runner co
 - **FR-10**: The implementation must treat hidden chain-of-thought as out of scope and must not claim to expose it.
 - **FR-11**: Agent profile behavior must be configurable through `config.toml`.
 - **FR-12**: The system must fail the session if target repository status changes during deliberation.
+- **FR-13**: Participant or synthesizer subprocess non-zero exit codes must fail the deliberation session.
+- **FR-14**: Participant outputs must be persisted under `workspaces/<profile_id>/round-<n>-output.md`.
+- **FR-15**: Synthesizer raw structured output must be persisted under `workspaces/synthesizer/synthesis-output.md`.
+- **FR-16**: Transcript rendering must preserve real `profile_id` values instead of deriving headings from list positions.
+- **FR-17**: Claude stream-json output used for transcript-safe files must be rendered human-readable text, not raw provider events.
+- **FR-18**: Codex deliberate execution must use an absolute workspace path and avoid passing the full prompt as a trailing argv argument.
 
 ## 9. Non-Goals
 
@@ -538,6 +568,10 @@ No external web validation was used. Repository structure and existing runner co
 | prompt 历史在多轮后过长 | agent 上下文溢出或输出质量下降 | 第一版限制默认 rounds=2；后续可增加 transcript 摘要策略 |
 | 只读安全依赖执行策略和状态检测 | 某些 agent CLI 仍可能尝试写临时文件 | agent cwd 放在 session workspace；目标仓库 pre/post status 检测兜底 |
 | profile prompt 设计过于相似 | 多 agent 输出同质化 | 默认 profile 明确区分架构、质疑、实现三个角色；允许用户配置 |
+| 子进程失败没有冒泡 | 外层 CLI 可能误报成功 | 已在 Issue 18 follow-up 中修复：participant 和 synthesizer 非 0 退出都会失败 |
+| transcript profile 标题与真实 agent 不一致 | 用户无法判断输出来源 | 已在 Issue 18 follow-up 中修复：`agent_outputs` 使用 `profile_id -> output` 映射 |
+| provider raw stream 泄露到可读文件 | transcript 可读性差，且可能包含噪声事件 | 已在 Issue 18 follow-up 中修复：Claude stream-json 先渲染为 transcript-safe 文本 |
+| 运行中无法按 agent 分栏观察输出 | 并发输出仍难以同步阅读 | 不属于本 archived PRD 的完成范围，已拆到 live output PRD 继续跟踪 |
 
 ## 11. Decision Log
 
@@ -550,3 +584,5 @@ No external web validation was used. Repository structure and existing runner co
 | D-05 | 配置位置 | `[agent_runner.deliberation]` | 顶层 `[debate]` 或独立配置文件 | 该能力属于 Agent Runner，放在现有配置树下可避免平行配置体系 |
 | D-06 | agent 执行目录 | session output 下的 per-agent workspace | 目标 repo 根目录或 Git worktree | 只读合议不需要分支语义，隔离 workspace 能降低误改仓库风险 |
 | D-07 | streaming 输出抽象 | 新增 transcript runner/event sink | 直接让多个 subprocess stdout 打到终端 | 并发 stdout 直接混排不可审计，也无法稳定生成 events.jsonl |
+| D-08 | Issue 18 follow-up 是否重新打开本 PRD | 保持归档状态，只追加维护更新和回归验收 | 将 archived PRD 移回 pending | Issue 15 的原始范围已完成；Issue 18 是已交付功能的缺陷修复，不需要重新打开原 PRD |
+| D-09 | 运行中实时分栏输出放在哪里跟踪 | 拆到独立 pending PRD | 混入本 archived PRD 的完成标准 | 分栏 live view 是新展示增强，不应改变本 PRD 已归档的完成语义 |

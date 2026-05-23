@@ -112,6 +112,14 @@ def _emit(
     )
 
 
+def _write_workspace_output(output_path: Path, output_text: str) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        output_text + ("\n" if output_text and not output_text.endswith("\n") else ""),
+        encoding="utf-8",
+    )
+
+
 def _run_single_agent(
     agent_name: str,
     prompt: str,
@@ -137,6 +145,7 @@ def _run_single_agent(
         event_sink=event_sink,
     )
     output_text = result.stdout.strip()
+    _write_workspace_output(cwd / f"round-{round_number}-output.md", output_text)
     _emit(
         event_sink,
         session_id,
@@ -145,6 +154,11 @@ def _run_single_agent(
         "agent_finished",
         f"exit={result.return_code}",
     )
+    if result.return_code != 0:
+        raise RuntimeError(
+            f"Deliberation agent '{agent_label}' failed with exit code "
+            f"{result.return_code}."
+        )
     return output_text
 
 
@@ -334,6 +348,10 @@ def run_agent_deliberation(
         cwd=synthesizer_workspace,
         event_sink=_record_event,
     )
+    synthesis_output = synthesis_result.stdout.strip()
+    _write_workspace_output(
+        synthesizer_workspace / "synthesis-output.md", synthesis_output
+    )
     _emit(
         _record_event,
         session_id,
@@ -342,8 +360,13 @@ def run_agent_deliberation(
         "agent_finished",
         f"exit={synthesis_result.return_code}",
     )
+    if synthesis_result.return_code != 0:
+        raise RuntimeError(
+            "Deliberation synthesizer failed with exit code "
+            f"{synthesis_result.return_code}."
+        )
 
-    parsed = _parse_synthesis(synthesis_result.stdout)
+    parsed = _parse_synthesis(synthesis_output)
 
     finished_at = _now_iso()
     _emit(
@@ -365,7 +388,7 @@ def run_agent_deliberation(
         next_actions=parsed["next_actions"],
         events=tuple(emitted_events),
         agent_outputs={
-            f"round_{round_number}": list(outputs.values())
+            f"round_{round_number}": dict(outputs)
             for round_number, outputs in round_outputs.items()
         },
         output_dir=str(output_dir),

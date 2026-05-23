@@ -95,7 +95,7 @@ class DeliberationResult:
     risks: str
     next_actions: str
     events: tuple[DeliberationEvent, ...]
-    agent_outputs: dict[str, list[str]]
+    agent_outputs: dict[str, dict[str, str]]
     output_dir: str
     started_at: str
     finished_at: str
