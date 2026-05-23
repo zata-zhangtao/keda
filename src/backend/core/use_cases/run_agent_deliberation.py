@@ -11,7 +11,6 @@ from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
     IAgentTranscriptRunner,
-    IProcessRunner,
 )
 from backend.core.shared.models.agent_deliberation import (
     DeliberationAgentProfile,
@@ -234,7 +233,6 @@ def run_agent_deliberation(
     transcript_runner: IAgentTranscriptRunner,
     event_sink: Callable[[DeliberationEvent], None],
     target_repo_path: Path,
-    process_runner: IProcessRunner,
 ) -> DeliberationResult:
     """Run a multi-agent deliberation session.
 
@@ -244,7 +242,6 @@ def run_agent_deliberation(
         transcript_runner: Runner that executes agents and emits events.
         event_sink: Callback for structured events.
         target_repo_path: Path to the target repository for read-only safety checks.
-        process_runner: Function to run git status checks.
 
     Returns:
         DeliberationResult with the final report.
@@ -280,9 +277,6 @@ def run_agent_deliberation(
     if not selected_profiles:
         selected_profiles = config.profiles
 
-    # Verify target repo is clean before starting.
-    _verify_repo_clean(target_repo_path, process_runner, _record_event, session_id)
-
     transcript_parts: list[str] = []
     round_outputs: dict[int, dict[str, str]] = {}
 
@@ -299,8 +293,6 @@ def run_agent_deliberation(
     )
     round_outputs[1] = isolation_outputs
     transcript_parts.append(_format_round_transcript(1, isolation_outputs))
-
-    _verify_repo_clean(target_repo_path, process_runner, _record_event, session_id)
 
     # Discussion rounds
     for round_number in range(2, request.rounds + 1):
@@ -321,7 +313,6 @@ def run_agent_deliberation(
         transcript_parts.append(
             _format_round_transcript(round_number, discussion_outputs)
         )
-        _verify_repo_clean(target_repo_path, process_runner, _record_event, session_id)
 
     # Synthesis
     full_transcript = "\n\n".join(transcript_parts)
@@ -392,34 +383,3 @@ def create_default_session_id() -> str:
 
 def _default_session_id() -> str:
     return create_default_session_id()
-
-
-def _verify_repo_clean(
-    repo_path: Path,
-    process_runner: IProcessRunner,
-    event_sink: Callable[[DeliberationEvent], None],
-    session_id: str,
-) -> None:
-    result = process_runner.run(
-        ["git", "status", "--porcelain"], cwd=repo_path, check=False
-    )
-    if result.return_code != 0:
-        _emit(
-            event_sink,
-            session_id,
-            0,
-            "system",
-            "repo_status_failed",
-            result.stderr.strip() or "Unable to verify target repository status.",
-        )
-        raise RuntimeError("Unable to verify target repository status.")
-    if result.stdout.strip():
-        _emit(
-            event_sink,
-            session_id,
-            0,
-            "system",
-            "repo_changed",
-            "Target repository status changed during deliberation.",
-        )
-        raise RuntimeError("Target repository status changed during deliberation.")

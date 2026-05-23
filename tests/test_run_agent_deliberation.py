@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-import pytest
 
 from backend.core.shared.interfaces.agent_runner import IAgentTranscriptRunner
 from backend.core.shared.models.agent_deliberation import (
@@ -22,10 +21,8 @@ from backend.core.use_cases.run_agent_deliberation import (
     _build_synthesis_prompt,
     _default_session_id,
     _parse_synthesis,
-    _verify_repo_clean,
     run_agent_deliberation,
 )
-from tests.conftest import FakeProcessRunner
 
 
 class FakeTranscriptRunner(IAgentTranscriptRunner):
@@ -185,63 +182,6 @@ def test_parse_synthesis_empty_for_missing_sections() -> None:
     assert parsed["consensus"] == ""
 
 
-def test_verify_repo_clean_raises_on_dirty_repo() -> None:
-    """Should raise when the target repo has uncommitted changes."""
-    fake_runner = FakeProcessRunner(
-        responses={
-            ("git", "status", "--porcelain"): CommandResult(
-                command=("git", "status", "--porcelain"),
-                return_code=0,
-                stdout=" M file.py\n",
-                stderr="",
-            ),
-        }
-    )
-    events: list[DeliberationEvent] = []
-
-    with pytest.raises(RuntimeError, match="Target repository status changed"):
-        _verify_repo_clean(Path("."), fake_runner, events.append, "sid")
-
-    assert any(e.event_type == "repo_changed" for e in events)
-
-
-def test_verify_repo_clean_passes_on_clean_repo() -> None:
-    """Should not raise when the target repo is clean."""
-    fake_runner = FakeProcessRunner(
-        responses={
-            ("git", "status", "--porcelain"): CommandResult(
-                command=("git", "status", "--porcelain"),
-                return_code=0,
-                stdout="",
-                stderr="",
-            ),
-        }
-    )
-    events: list[DeliberationEvent] = []
-    _verify_repo_clean(Path("."), fake_runner, events.append, "sid")
-    assert not any(e.event_type == "repo_changed" for e in events)
-
-
-def test_verify_repo_clean_raises_on_git_status_failure() -> None:
-    """Should fail closed when repo status cannot be verified."""
-    fake_runner = FakeProcessRunner(
-        responses={
-            ("git", "status", "--porcelain"): CommandResult(
-                command=("git", "status", "--porcelain"),
-                return_code=128,
-                stdout="",
-                stderr="fatal: not a git repository",
-            ),
-        }
-    )
-    events: list[DeliberationEvent] = []
-
-    with pytest.raises(RuntimeError, match="Unable to verify target repository status"):
-        _verify_repo_clean(Path("."), fake_runner, events.append, "sid")
-
-    assert any(e.event_type == "repo_status_failed" for e in events)
-
-
 def test_run_agent_deliberation_isolation_round_only(
     tmp_path: Path,
 ) -> None:
@@ -252,7 +192,6 @@ def test_run_agent_deliberation_isolation_round_only(
         responses={"claude": "architect output", "kimi": "skeptic output"}
     )
     events: list[DeliberationEvent] = []
-    process_runner = FakeProcessRunner()
 
     result = run_agent_deliberation(
         request=request,
@@ -260,7 +199,6 @@ def test_run_agent_deliberation_isolation_round_only(
         transcript_runner=fake_runner,
         event_sink=events.append,
         target_repo_path=tmp_path,
-        process_runner=process_runner,
     )
 
     assert isinstance(result, DeliberationResult)
@@ -289,7 +227,6 @@ def test_run_agent_deliberation_two_rounds_injects_transcript(
         responses={"claude": "architect output", "kimi": "skeptic output"}
     )
     events: list[DeliberationEvent] = []
-    process_runner = FakeProcessRunner()
 
     result = run_agent_deliberation(
         request=request,
@@ -297,7 +234,6 @@ def test_run_agent_deliberation_two_rounds_injects_transcript(
         transcript_runner=fake_runner,
         event_sink=events.append,
         target_repo_path=tmp_path,
-        process_runner=process_runner,
     )
 
     assert isinstance(result, DeliberationResult)
@@ -317,7 +253,6 @@ def test_run_agent_deliberation_output_files_written(
         responses={"claude": "architect out", "kimi": "skeptic out"}
     )
     events: list[DeliberationEvent] = []
-    process_runner = FakeProcessRunner()
 
     result = run_agent_deliberation(
         request=request,
@@ -325,7 +260,6 @@ def test_run_agent_deliberation_output_files_written(
         transcript_runner=fake_runner,
         event_sink=events.append,
         target_repo_path=tmp_path,
-        process_runner=process_runner,
     )
 
     output_dir = Path(result.output_dir)
@@ -377,7 +311,6 @@ Start coding."""
     )
 
     events: list[DeliberationEvent] = []
-    process_runner = FakeProcessRunner()
 
     result = run_agent_deliberation(
         request=request,
@@ -385,7 +318,6 @@ Start coding."""
         transcript_runner=fake_runner,
         event_sink=events.append,
         target_repo_path=tmp_path,
-        process_runner=process_runner,
     )
 
     assert result.recommendation == "Build it."

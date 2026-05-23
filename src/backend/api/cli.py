@@ -418,7 +418,6 @@ def main(argv: list[str] | None = None) -> int:
                 transcript_runner=transcript_runner,
                 event_sink=event_sink,
                 target_repo_path=Path.cwd(),
-                process_runner=process_runner,
             )
             session = DeliberationSession(
                 session_id=result.session_id,
