@@ -200,6 +200,26 @@ execution = [
   "- Finish with a concise summary, tests run, and remaining risk.",
 ]
 
+[agent_runner.deliberation]
+default_rounds = 2
+default_synthesizer = "claude"
+default_output_dir = "logs/agent-runner/deliberations"
+
+[agent_runner.deliberation.profiles.architect]
+agent = "claude"
+role = "architect"
+behavior_prompt = "You are an experienced software architect. Analyze the requirement from a system design perspective. Focus on modularity, scalability, and maintainability."
+
+[agent_runner.deliberation.profiles.skeptic]
+agent = "kimi"
+role = "skeptic"
+behavior_prompt = "You are a skeptical reviewer. Challenge assumptions, identify risks, and point out edge cases. Ask hard questions that others might miss."
+
+[agent_runner.deliberation.profiles.implementer]
+agent = "codex"
+role = "implementer"
+behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concrete steps, and implementation details. Highlight what can be built and what resources are needed."
+
 # =============================================================================
 # Agent Runner Multi-Repository Configuration (Optional)
 # =============================================================================

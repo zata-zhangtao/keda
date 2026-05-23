@@ -92,6 +92,37 @@ verification_commands = [
 
 未覆盖的字段自动继承全局 `[agent_runner]` 默认值。环境变量仍可对全局段生效，但暂不支持通过环境变量覆盖单个仓库的字段。
 
+## Agent Runner Deliberation 配置
+
+`config.toml` 的 `[agent_runner.deliberation]` 段配置多 Agent 合议：
+
+```toml
+[agent_runner.deliberation]
+default_rounds = 2
+default_synthesizer = "claude"
+default_output_dir = "logs/agent-runner/deliberations"
+
+[agent_runner.deliberation.profiles.architect]
+agent = "claude"
+role = "architect"
+behavior_prompt = "You are an experienced software architect..."
+
+[agent_runner.deliberation.profiles.skeptic]
+agent = "kimi"
+role = "skeptic"
+behavior_prompt = "You are a skeptical reviewer..."
+
+[agent_runner.deliberation.profiles.implementer]
+agent = "codex"
+role = "implementer"
+behavior_prompt = "You are a pragmatic implementer..."
+```
+
+- `default_rounds`：默认讨论轮数（不含综合轮）。
+- `default_synthesizer`：默认综合 agent 名称。
+- `default_output_dir`：默认输出根目录。
+- `profiles.<profile_id>`：自定义参与者 profile，至少包含 `agent`、`role`、`behavior_prompt`。
+
 ## 日志相关配置
 
 日志位于 `logs/` 目录，默认文件为 `logs/app.log`，并通过 `TimedRotatingFileHandler` 按天切分。

@@ -9,12 +9,21 @@ cases.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import BaseModel
 
+from backend.core.shared.models.agent_deliberation import (
+    DeliberationAgentProfile,
+    DeliberationConfig,
+    DeliberationEvent,
+    DeliberationResult,
+    DeliberationSession,
+)
 from backend.core.shared.models.agent_runner import (
     AppConfig,
+    CommandResult,
     GitConfig,
     LabelConfig,
     PostPrSupervisorConfig,
@@ -415,6 +424,207 @@ def resolve_issue_from_prd_target(
 def create_process_runner() -> SubprocessRunner:
     """Create a new subprocess runner instance."""
     return SubprocessRunner()
+
+
+def build_deliberation_config_from_settings(
+    agent_runner_settings: AgentRunnerSettings,
+) -> DeliberationConfig:
+    """Convert pydantic-settings deliberation config to frozen core config."""
+    deliberation_settings = agent_runner_settings.deliberation
+    profiles = tuple(
+        DeliberationAgentProfile(
+            profile_id=profile_id,
+            agent=profile.agent,
+            role=profile.role,
+            behavior_prompt=profile.behavior_prompt,
+        )
+        for profile_id, profile in deliberation_settings.profiles.items()
+    )
+    return DeliberationConfig(
+        default_rounds=deliberation_settings.default_rounds,
+        default_synthesizer=deliberation_settings.default_synthesizer,
+        default_output_dir=deliberation_settings.default_output_dir,
+        profiles=profiles,
+    )
+
+
+class SubprocessTranscriptRunner:
+    """Run agents and emit deliberation events.
+
+    Implements ``IAgentTranscriptRunner`` via duck typing.
+    """
+
+    def __init__(self, process_runner: SubprocessRunner) -> None:
+        self._process_runner = process_runner
+
+    def run(
+        self,
+        agent_name: str,
+        prompt: str,
+        *,
+        cwd: Path,
+        event_sink: "Callable[[DeliberationEvent], None]",
+    ) -> "CommandResult":
+        """Run an agent and emit events."""
+        command = _build_deliberation_command(agent_name, prompt, cwd)
+        _ = event_sink
+        return self._process_runner.run(command, cwd=cwd, capture_output=True)
+
+
+def _build_deliberation_command(agent_name: str, prompt: str, cwd: Path) -> list[str]:
+    if agent_name == "claude":
+        return [
+            "claude",
+            "--dangerously-skip-permissions",
+            "--verbose",
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            prompt,
+        ]
+    if agent_name == "kimi":
+        return ["kimi", "--prompt", prompt]
+    return [
+        "codex",
+        "--cd",
+        str(cwd),
+        "--sandbox",
+        "read-only",
+        "--ask-for-approval",
+        "never",
+        "exec",
+        prompt,
+    ]
+
+
+def create_transcript_runner(
+    process_runner: SubprocessRunner | None = None,
+) -> SubprocessTranscriptRunner:
+    """Create a transcript runner instance."""
+    return SubprocessTranscriptRunner(process_runner or SubprocessRunner())
+
+
+def create_event_sink(
+    output_dir: Path,
+) -> "Callable[[DeliberationEvent], None]":
+    """Create an event sink that writes to events.jsonl and prints to terminal."""
+    events_path = output_dir / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    import threading
+
+    lock = threading.Lock()
+
+    def _sink(event: "DeliberationEvent") -> None:
+        line = json.dumps(
+            {
+                "session_id": event.session_id,
+                "round": event.round,
+                "agent": event.agent,
+                "event_type": event.event_type,
+                "message": event.message,
+                "timestamp": event.timestamp,
+            },
+            ensure_ascii=False,
+        )
+        with lock:
+            with open(events_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        print(
+            f"[{event.session_id}] round={event.round} agent={event.agent} "
+            f"event={event.event_type}"
+        )
+
+    return _sink
+
+
+def write_deliberation_outputs(
+    result: "DeliberationResult",
+    session: "DeliberationSession",
+    output_dir: Path,
+) -> None:
+    """Write transcript.md, result.md, and session.json."""
+    import json
+
+    # transcript.md
+    transcript_path = output_dir / "transcript.md"
+    transcript_lines = [
+        "# Deliberation Transcript",
+        "",
+        "## Session",
+        "",
+        f"- Session ID: `{session.session_id}`",
+        f"- Prompt: {session.prompt}",
+        f"- Agents: {', '.join(p.profile_id for p in session.profiles)}",
+        "",
+    ]
+    for round_key, outputs in result.agent_outputs.items():
+        transcript_lines.append(f"## {round_key}")
+        transcript_lines.append("")
+        for idx, output in enumerate(outputs):
+            profile_id = (
+                session.profiles[idx].profile_id
+                if idx < len(session.profiles)
+                else f"agent-{idx}"
+            )
+            transcript_lines.append(f"### {profile_id}")
+            transcript_lines.append("")
+            transcript_lines.append(output)
+            transcript_lines.append("")
+    transcript_path.write_text("\n".join(transcript_lines), encoding="utf-8")
+
+    # result.md
+    result_path = output_dir / "result.md"
+    result_lines = [
+        "# Deliberation Result",
+        "",
+        "## Recommendation",
+        "",
+        result.recommendation,
+        "",
+        "## Consensus",
+        "",
+        result.consensus,
+        "",
+        "## Disagreements",
+        "",
+        result.disagreements,
+        "",
+        "## Risks",
+        "",
+        result.risks,
+        "",
+        "## Next Actions",
+        "",
+        result.next_actions,
+        "",
+    ]
+    result_path.write_text("\n".join(result_lines), encoding="utf-8")
+
+    # session.json
+    session_path = output_dir / "session.json"
+    session_data = {
+        "session_id": session.session_id,
+        "prompt": session.prompt,
+        "profiles": [
+            {
+                "profile_id": p.profile_id,
+                "agent": p.agent,
+                "role": p.role,
+            }
+            for p in session.profiles
+        ],
+        "rounds": session.rounds,
+        "synthesizer": session.synthesizer,
+        "output_dir": str(session.output_dir),
+        "started_at": session.started_at,
+        "finished_at": session.finished_at,
+    }
+    session_path.write_text(
+        json.dumps(session_data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def create_github_client(
