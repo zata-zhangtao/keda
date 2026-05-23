@@ -10,6 +10,8 @@ import pytest
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
+    GeneratedContentConfig,
+    GeneratedContentTargetConfig,
     GitConfig,
     IssueSummary,
     PostPrSupervisorConfig,
@@ -2039,3 +2041,170 @@ def test_run_agent_repositories_once_isolates_failures() -> None:
     )
 
     assert exit_code == 1
+
+
+def test_publish_changes_generated_pr_template_mode() -> None:
+    """Template mode should render PR title and body when enabled."""
+    issue = IssueSummary(
+        number=42,
+        title="Test Feature",
+        url="https://github.com/example/repo/issues/42",
+        body="Test body",
+        labels=(),
+    )
+    fake_client = FakeGitHubClient()
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-42\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            _git_remote_command(): _git_remote_result("origin"),
+            ("git", "log", "main..HEAD", "--pretty=format:%s"): CommandResult(
+                command=("git", "log", "main..HEAD", "--pretty=format:%s"),
+                return_code=0,
+                stdout="feat: implement feature\n",
+                stderr="",
+            ),
+            ("git", "diff", "--stat", "main...HEAD"): CommandResult(
+                command=("git", "diff", "--stat", "main...HEAD"),
+                return_code=0,
+                stdout="1 file changed, 10 insertions\n",
+                stderr="",
+            ),
+        }
+    )
+    gc_config = GeneratedContentConfig(
+        enabled=True,
+        draft_pr=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="template",
+            title_template="[Agent] {issue_title}",
+            body_template="Closes #{issue_number}\n\n{commit_log}\n\n{diff_stat}",
+            include_commit_log=True,
+            include_diff_stat=True,
+        ),
+    )
+    from backend.core.shared.models.agent_runner import AppConfig, GitConfig
+
+    app_config = AppConfig(
+        git=GitConfig(remote="origin", base_branch="main"),
+        generated_content=gc_config,
+    )
+
+    branch, pr_url = publish_changes(
+        issue, Path("."), app_config, fake_client, fake_runner
+    )
+
+    assert branch == "issue-42"
+    pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
+    assert len(pr_calls) == 1
+    assert pr_calls[0]["title"] == "[Agent] Test Feature"
+    assert "Closes #42" in pr_calls[0]["body"]
+    assert "feat: implement feature" in pr_calls[0]["body"]
+
+
+def test_publish_changes_generated_pr_fallback_on_missing_closes() -> None:
+    """Generated PR missing Closes anchor should fallback to deterministic template."""
+    issue = IssueSummary(
+        number=42,
+        title="Test Feature",
+        url="https://github.com/example/repo/issues/42",
+        body="Test body",
+        labels=(),
+    )
+    fake_client = FakeGitHubClient()
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-42\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            _git_remote_command(): _git_remote_result("origin"),
+        }
+    )
+    gc_config = GeneratedContentConfig(
+        enabled=True,
+        draft_pr=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="template",
+            title_template="Title",
+            body_template="No closes here.",
+        ),
+    )
+    from backend.core.shared.models.agent_runner import AppConfig, GitConfig
+
+    app_config = AppConfig(
+        git=GitConfig(remote="origin", base_branch="main"),
+        generated_content=gc_config,
+    )
+
+    branch, pr_url = publish_changes(
+        issue, Path("."), app_config, fake_client, fake_runner
+    )
+
+    pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
+    assert len(pr_calls) == 1
+    assert pr_calls[0]["title"] == "[Agent] Test Feature"
+    assert "Closes #42" in pr_calls[0]["body"]
+
+
+def test_publish_changes_disabled_uses_fallback() -> None:
+    """When generated content is disabled, deterministic PR body should be used."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Test body",
+        labels=(),
+    )
+    fake_client = FakeGitHubClient()
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            _git_remote_command(): _git_remote_result("origin"),
+        }
+    )
+    gc_config = GeneratedContentConfig(enabled=False)
+    from backend.core.shared.models.agent_runner import AppConfig, GitConfig
+
+    app_config = AppConfig(
+        git=GitConfig(remote="origin", base_branch="main"),
+        generated_content=gc_config,
+    )
+
+    branch, pr_url = publish_changes(
+        issue, Path("."), app_config, fake_client, fake_runner
+    )
+
+    pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
+    assert len(pr_calls) == 1
+    assert pr_calls[0]["title"] == "[Agent] Test"
+    assert "Closes #1" in pr_calls[0]["body"]

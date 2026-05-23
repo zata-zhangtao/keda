@@ -7,8 +7,19 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
-from backend.core.shared.models.agent_runner import LabelConfig
+from backend.core.shared.interfaces.agent_runner import (
+    IContentGenerator,
+    IGitHubClient,
+    IProcessRunner,
+)
+from backend.core.shared.models.agent_runner import (
+    GeneratedContentConfig,
+    LabelConfig,
+)
+from backend.core.use_cases.generated_content import (
+    build_issue_context,
+    generate_issue_content,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -31,6 +42,7 @@ class IssueFromPrdRequest:
     publish_prd: bool = False
     git_remote: str = "origin"
     git_base_branch: str = "main"
+    generated_content_config: GeneratedContentConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -326,6 +338,7 @@ def create_issue_from_prd(
     request: IssueFromPrdRequest,
     github_client: IGitHubClient,
     process_runner: IProcessRunner | None = None,
+    content_generator: IContentGenerator | None = None,
 ) -> str:
     """Create a GitHub Issue from a PRD and write the URL back to the PRD.
 
@@ -333,6 +346,7 @@ def create_issue_from_prd(
         request: Issue creation request.
         github_client: Client for interacting with GitHub.
         process_runner: Optional runner for PRD publishing Git commands.
+        content_generator: Optional content generator for AI-generated Issue content.
 
     Returns:
         URL of the created GitHub Issue.
@@ -356,7 +370,7 @@ def create_issue_from_prd(
     fallback_title = absolute_prd_path.stem.split("-prd-", maxsplit=1)[-1].replace(
         "-", " "
     )
-    title = (
+    fallback_title = (
         request.title_override
         or f"[{request.issue_type.title()}] {extract_title(prd_text, fallback_title)}"
     )
@@ -383,11 +397,35 @@ def create_issue_from_prd(
             current_branch=current_branch,
         )
 
-    body = build_issue_body(
+    fallback_body = build_issue_body(
         relative_prd_path=relative_prd_path,
-        title=title,
+        title=fallback_title,
         acceptance_items=extract_acceptance_items(prd_text),
     )
+
+    title = fallback_title
+    body = fallback_body
+    gc_config = request.generated_content_config
+    if gc_config is not None and gc_config.enabled:
+        gc_context = build_issue_context(
+            issue_type=request.issue_type,
+            title=fallback_title,
+            relative_prd_path=relative_prd_path,
+            prd_text=prd_text,
+            acceptance_items=extract_acceptance_items(prd_text),
+        )
+        gc_cwd = request.repo_path if content_generator is not None else None
+        generated = generate_issue_content(
+            config=gc_config,
+            context=gc_context,
+            fallback_title=fallback_title,
+            fallback_body=fallback_body,
+            generator=content_generator,
+            cwd=gc_cwd,
+        )
+        title = generated.title
+        body = generated.body
+
     issue_url = github_client.create_issue(title=title, body=body, labels=labels)
     write_issue_link(
         prd_text=prd_text,

@@ -6,7 +6,11 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
+from backend.core.shared.interfaces.agent_runner import (
+    IContentGenerator,
+    IGitHubClient,
+    IProcessRunner,
+)
 from backend.core.shared.models.agent_runner import (
     CommandResult,
     IssueSummary,
@@ -128,6 +132,30 @@ class FakeGitHubClient(IGitHubClient):
             }
         )
         return self._remote_base_sha
+
+
+class FakeContentGenerator(IContentGenerator):
+    """In-memory content generator for tests."""
+
+    def __init__(self, response: str = "") -> None:
+        self.response = response
+        self.calls: list[list[str]] = []
+
+    def generate(
+        self,
+        agent_name: str,
+        prompt: str,
+        *,
+        cwd: Path,
+        timeout: int | None = None,
+    ) -> CommandResult:
+        self.calls.append([agent_name, prompt[:50]])
+        return CommandResult(
+            command=("generate", agent_name),
+            return_code=0,
+            stdout=self.response,
+            stderr="",
+        )
 
 
 class FakeProcessRunner(IProcessRunner):

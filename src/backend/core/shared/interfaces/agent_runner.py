@@ -74,6 +74,32 @@ class IAgentTranscriptRunner(ABC):
         ...
 
 
+class IContentGenerator(ABC):
+    """Generate human-readable Markdown content via local read-only agent."""
+
+    @abstractmethod
+    def generate(
+        self,
+        agent_name: str,
+        prompt: str,
+        *,
+        cwd: Path,
+        timeout: int | None = None,
+    ) -> CommandResult:
+        """Run a read-only content generator and return its output.
+
+        Args:
+            agent_name: Agent to run (claude, kimi, codex).
+            prompt: Full prompt text.
+            cwd: Working directory for the agent process.
+            timeout: Optional timeout in seconds.
+
+        Returns:
+            CommandResult with captured output.
+        """
+        ...
+
+
 class IGitHubClient(ABC):
     """Interact with GitHub."""
 

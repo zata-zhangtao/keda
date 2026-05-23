@@ -6,7 +6,11 @@ import logging
 import socket
 from pathlib import Path
 
-from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
+from backend.core.shared.interfaces.agent_runner import (
+    IContentGenerator,
+    IGitHubClient,
+    IProcessRunner,
+)
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
@@ -162,6 +166,7 @@ def _process_ready_issue(
     agent: str,
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
+    content_generator: IContentGenerator | None = None,
 ) -> None:
     """Process a ready Issue through the full first-implementation path."""
     selected_agent = choose_agent(issue, config, agent)
@@ -217,6 +222,7 @@ def _process_ready_issue(
         github_client,
         process_runner,
         expected_branch=expected_branch,
+        content_generator=content_generator,
     )
 
     github_client.edit_issue_labels(
@@ -551,6 +557,7 @@ def run_once(
     max_issues: int,
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
+    content_generator: IContentGenerator | None = None,
 ) -> int:
     """Run one polling pass.
 
@@ -562,6 +569,7 @@ def run_once(
         max_issues: Maximum issues to process.
         github_client: Client for interacting with GitHub.
         process_runner: Runner for executing subprocess commands.
+        content_generator: Optional content generator for AI-generated PR content.
 
     Returns:
         Exit code (0 on success, 1 if any issue failed).
@@ -627,6 +635,7 @@ def run_once(
                     agent=agent,
                     github_client=github_client,
                     process_runner=process_runner,
+                    content_generator=content_generator,
                 )
             else:
                 # running_rework

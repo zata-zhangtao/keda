@@ -154,6 +154,56 @@ class SupervisorActionResult:
 
 
 @dataclass(frozen=True)
+class GeneratedContentTargetConfig:
+    """Configuration for a single generated-content target."""
+
+    enabled: bool = False
+    mode: str = "template"
+    output: str = "json"
+    title_template: str = ""
+    body_template: str = ""
+    agent: str = "auto"
+    timeout_seconds: int = 60
+    prompt: str = ""
+    include_commit_log: bool = True
+    include_diff_stat: bool = True
+
+
+@dataclass(frozen=True)
+class GeneratedContentConfig:
+    """Generated-content configuration for Issues and PRs."""
+
+    enabled: bool = False
+    fallback: str = "template"
+    max_input_chars: int = 20000
+    default_agent: str = "auto"
+    issue_from_prd: GeneratedContentTargetConfig = field(
+        default_factory=GeneratedContentTargetConfig
+    )
+    draft_pr: GeneratedContentTargetConfig = field(
+        default_factory=GeneratedContentTargetConfig
+    )
+
+
+@dataclass(frozen=True)
+class GeneratedIssueContent:
+    """Result of generated Issue content."""
+
+    title: str
+    body: str
+    source: str = "fallback"
+
+
+@dataclass(frozen=True)
+class GeneratedPrContent:
+    """Result of generated PR content."""
+
+    title: str
+    body: str
+    source: str = "fallback"
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Application configuration."""
 
@@ -165,6 +215,9 @@ class AppConfig:
     prompts: PromptConfig = field(default_factory=PromptConfig)
     pre_push_review: PrePushReviewConfig = PrePushReviewConfig()
     post_pr_supervisor: PostPrSupervisorConfig = PostPrSupervisorConfig()
+    generated_content: GeneratedContentConfig = field(
+        default_factory=GeneratedContentConfig
+    )
 
 
 @dataclass(frozen=True)
