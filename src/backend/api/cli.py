@@ -17,18 +17,28 @@ from backend.core.use_cases.create_issue_from_prd import (
     resolve_prd_paths,
 )
 from backend.core.use_cases.run_agent_daemon import run_agent_daemon
+from backend.core.use_cases.run_agent_deliberation import (
+    DeliberationRequest,
+    create_default_session_id,
+    run_agent_deliberation,
+)
 from backend.core.use_cases.run_agent_repositories_once import (
     run_agent_repositories_once,
 )
 from backend.core.use_cases.review_daemon import run_review_daemon
 from backend.core.use_cases.review_once import review_once
 from backend.core.use_cases.sync_labels import sync_labels
+from backend.core.shared.models.agent_deliberation import DeliberationSession
 from backend.engines.agent_runner.factory import (
+    build_deliberation_config_from_settings,
+    create_event_sink,
     create_github_client,
     create_process_runner,
+    create_transcript_runner,
     get_agent_runner_settings,
     resolve_issue_from_prd_target,
     resolve_repository_targets,
+    write_deliberation_outputs,
 )
 
 if TYPE_CHECKING:
@@ -174,6 +184,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     review_daemon_parser.add_argument("--max-issues", type=int)
     add_common_options(review_daemon_parser)
+
+    deliberate_parser = subparsers.add_parser(
+        "deliberate", help="Run a multi-agent deliberation session."
+    )
+    deliberate_parser.add_argument(
+        "prompt", help="The requirement or question to deliberate."
+    )
+    deliberate_parser.add_argument(
+        "--agents",
+        default="architect,skeptic,implementer",
+        help="Comma-separated participant profile IDs.",
+    )
+    deliberate_parser.add_argument(
+        "--rounds", type=int, default=None, help="Number of discussion rounds."
+    )
+    deliberate_parser.add_argument(
+        "--synthesizer", default=None, help="Agent to run synthesis."
+    )
+    deliberate_parser.add_argument(
+        "--output",
+        default=None,
+        help="Output directory for deliberation files.",
+    )
+    deliberate_parser.add_argument(
+        "--session-id", default=None, help="Optional session ID for reproducibility."
+    )
+    add_common_options(deliberate_parser)
     return parser
 
 
@@ -345,6 +382,56 @@ def main(argv: list[str] | None = None) -> int:
                     rp, process_runner
                 ),
             )
+            return 0
+
+        if parsed.command == "deliberate":
+            deliberation_settings = runner_settings.deliberation
+            output_dir = parsed.output or deliberation_settings.default_output_dir
+            rounds = (
+                parsed.rounds
+                if parsed.rounds is not None
+                else deliberation_settings.default_rounds
+            )
+            synthesizer = (
+                parsed.synthesizer or deliberation_settings.default_synthesizer
+            )
+            agents = tuple(a.strip() for a in parsed.agents.split(",") if a.strip())
+            session_id = parsed.session_id or create_default_session_id()
+            output_path = Path(output_dir) / session_id
+            request = DeliberationRequest(
+                prompt=parsed.prompt,
+                agents=agents,
+                rounds=rounds,
+                synthesizer=synthesizer,
+                output_dir=str(output_path),
+                session_id=session_id,
+            )
+            deliberation_config = build_deliberation_config_from_settings(
+                runner_settings
+            )
+            transcript_runner = create_transcript_runner(process_runner)
+            output_path.mkdir(parents=True, exist_ok=True)
+            event_sink = create_event_sink(output_path)
+            result = run_agent_deliberation(
+                request=request,
+                config=deliberation_config,
+                transcript_runner=transcript_runner,
+                event_sink=event_sink,
+                target_repo_path=Path.cwd(),
+                process_runner=process_runner,
+            )
+            session = DeliberationSession(
+                session_id=result.session_id,
+                prompt=result.prompt,
+                profiles=deliberation_config.profiles,
+                rounds=request.rounds,
+                synthesizer=request.synthesizer,
+                output_dir=output_path,
+                started_at=result.started_at,
+                finished_at=result.finished_at,
+            )
+            write_deliberation_outputs(result, session, output_path)
+            print(f"\nDeliberation complete: {output_path}")
             return 0
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
         _logger.error("iar failed: %s", exc)

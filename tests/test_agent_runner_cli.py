@@ -145,3 +145,99 @@ def test_main_issue_from_prd_defaults_to_cwd() -> None:
     ), patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False):
         exit_code = main(["issue-from-prd", "tasks/example.md"])
         assert exit_code == 0
+
+
+def test_cli_parser_deliberate_defaults() -> None:
+    """deliberate should have sensible defaults."""
+    parser = build_parser()
+    parsed = parser.parse_args(["deliberate", "test prompt"])
+    assert parsed.command == "deliberate"
+    assert parsed.prompt == "test prompt"
+    assert parsed.agents == "architect,skeptic,implementer"
+    assert parsed.rounds is None
+    assert parsed.synthesizer is None
+    assert parsed.output is None
+    assert parsed.session_id is None
+
+
+def test_cli_parser_deliberate_custom_agents() -> None:
+    """deliberate should accept custom agents and rounds."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        [
+            "deliberate",
+            "test prompt",
+            "--agents",
+            "architect,skeptic",
+            "--rounds",
+            "3",
+            "--synthesizer",
+            "kimi",
+            "--output",
+            "/tmp/out",
+            "--session-id",
+            "sid-1",
+        ]
+    )
+    assert parsed.command == "deliberate"
+    assert parsed.prompt == "test prompt"
+    assert parsed.agents == "architect,skeptic"
+    assert parsed.rounds == 3
+    assert parsed.synthesizer == "kimi"
+    assert parsed.output == "/tmp/out"
+    assert parsed.session_id == "sid-1"
+
+
+def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
+    """deliberate should pass the finalized session directory to all writers."""
+    from unittest.mock import MagicMock, patch
+
+    from backend.api.cli import main
+    from backend.core.shared.models.agent_deliberation import DeliberationResult
+
+    output_root = tmp_path / "deliberations"
+    expected_output_path = output_root / "sid-1"
+    captured = {}
+
+    def fake_run_agent_deliberation(**kwargs):
+        request = kwargs["request"]
+        captured["request"] = request
+        return DeliberationResult(
+            session_id=request.session_id,
+            prompt=request.prompt,
+            recommendation="do it",
+            consensus="agree",
+            disagreements="none",
+            risks="low",
+            next_actions="next",
+            events=(),
+            agent_outputs={},
+            output_dir=request.output_dir,
+            started_at="2026-05-23T00:00:00+00:00",
+            finished_at="2026-05-23T00:01:00+00:00",
+        )
+
+    with patch("backend.api.cli.create_process_runner"), patch(
+        "backend.api.cli.get_agent_runner_settings"
+    ) as mock_settings, patch(
+        "backend.api.cli.build_deliberation_config_from_settings"
+    ) as mock_config, patch("backend.api.cli.create_transcript_runner"), patch(
+        "backend.api.cli.create_event_sink"
+    ) as mock_event_sink, patch(
+        "backend.api.cli.run_agent_deliberation",
+        side_effect=fake_run_agent_deliberation,
+    ), patch("backend.api.cli.write_deliberation_outputs") as mock_write:
+        mock_settings.return_value.deliberation.default_output_dir = str(output_root)
+        mock_settings.return_value.deliberation.default_rounds = 2
+        mock_settings.return_value.deliberation.default_synthesizer = "claude"
+        mock_config.return_value.profiles = ()
+        mock_event_sink.return_value = MagicMock()
+
+        exit_code = main(["deliberate", "test prompt", "--session-id", "sid-1"])
+
+    assert exit_code == 0
+    assert captured["request"].session_id == "sid-1"
+    assert captured["request"].output_dir == str(expected_output_path)
+    mock_event_sink.assert_called_once_with(expected_output_path)
+    mock_write.assert_called_once()
+    assert mock_write.call_args.args[2] == expected_output_path

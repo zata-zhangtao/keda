@@ -617,13 +617,86 @@ Agent Runner 同时暴露只读状态端点：
 - `GET /api/v1/agent-runner/status` — 返回 runner 配置摘要与仓库列表
 - `GET /api/v1/agent-runner/health` — 返回 runner 健康状态（GitHub CLI 可用性等）
 
+## deliberate 多 Agent 合议
+
+`iar deliberate` 启动一次只读的多 Agent 合议会话，适合在编码前对复杂需求做多视角推演。
+
+### 基本用法
+
+```bash
+# 使用默认 3 个 agent（architect、skeptic、implementer）合议 2 轮
+uv run iar deliberate "实现一个用户认证系统"
+
+# 指定参与 agent 和轮数
+uv run iar deliberate "优化数据库查询性能" \
+  --agents architect,implementer \
+  --rounds 3 \
+  --synthesizer claude
+
+# 指定输出目录和 session ID（便于复现或测试）
+uv run iar deliberate "设计缓存策略" \
+  --output /tmp/deliberations \
+  --session-id cache-strategy-001
+```
+
+### 输出文件
+
+每次会话默认写入 `logs/agent-runner/deliberations/<session_id>/`：
+
+- `events.jsonl`：机器可读事件流，每行一个 JSON 对象
+- `transcript.md`：按轮次和 agent 分组的人类可读讨论记录
+- `result.md`：最终结论（Recommendation、Consensus、Disagreements、Risks、Next Actions）
+- `session.json`：会话元数据、profile 配置、命令参数
+
+### 终端实时输出
+
+合议过程中终端会实时显示结构化事件：
+
+```
+[session-id] round=1 agent=architect event=agent_started
+[session-id] round=1 agent=skeptic event=agent_started
+[session-id] round=1 agent=architect event=agent_finished
+[session-id] round=1 agent=skeptic event=agent_finished
+[session-id] round=0 agent=synthesizer event=agent_started
+[session-id] round=0 agent=synthesizer event=agent_finished
+```
+
+### 安全边界
+
+- `iar deliberate` 不执行 `git add`、`git commit`、`git push`、`gh issue` 或 `gh pr`
+- 每个 agent 在 `logs/agent-runner/deliberations/<session_id>/workspaces/<profile_id>/` 下获得独立工作目录
+- 每次 agent 运行前后检查目标仓库 `git status --porcelain`；若发生变化，会话失败并写入 error event
+- 合议 prompt 明确禁止文件修改、提交、推送、创建 PR 和触碰真实业务数据
+- 本功能不展示模型隐藏 chain-of-thought；所谓“全过程”指可审计的公开回复、工具调用摘要、状态事件和报告
+
+### 配置
+
+在 `config.toml` 的 `[agent_runner.deliberation]` 段配置默认值和自定义 profile：
+
+```toml
+[agent_runner.deliberation]
+default_rounds = 2
+default_synthesizer = "claude"
+default_output_dir = "logs/agent-runner/deliberations"
+
+[agent_runner.deliberation.profiles.architect]
+agent = "claude"
+role = "architect"
+behavior_prompt = "You are an experienced software architect..."
+
+[agent_runner.deliberation.profiles.skeptic]
+agent = "kimi"
+role = "skeptic"
+behavior_prompt = "You are a skeptical reviewer..."
+```
+
 ## 架构说明
 
 Agent Runner 的代码分布在四层架构中：
 
-- `core/shared/models/agent_runner.py` — 领域模型（frozen dataclasses）
-- `core/shared/interfaces/agent_runner.py` — 抽象端口（`IGitHubClient`、`IProcessRunner`）
-- `core/use_cases/` — 业务用例（`sync_labels`、`create_issue_from_prd`、`run_agent_once`、`run_agent_repositories_once`、`run_agent_daemon`、`agent_review`、`pr_supervisor`、`review_once`、`review_daemon`）
+- `core/shared/models/agent_runner.py` / `agent_deliberation.py` — 领域模型（frozen dataclasses）
+- `core/shared/interfaces/agent_runner.py` — 抽象端口（`IGitHubClient`、`IProcessRunner`、`IAgentTranscriptRunner`）
+- `core/use_cases/` — 业务用例（`sync_labels`、`create_issue_from_prd`、`run_agent_once`、`run_agent_repositories_once`、`run_agent_daemon`、`agent_review`、`pr_supervisor`、`review_once`、`review_daemon`、`run_agent_deliberation`）
 - `engines/agent_runner/factory.py` — 基础设施适配层（实例化实现并注入用例）
 - `infrastructure/github_client.py` / `infrastructure/process_runner.py` — 外部系统实现
 - `api/cli.py` — CLI 入口

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 from typing import Sequence
 
@@ -11,6 +12,9 @@ from backend.core.shared.models.agent_runner import (
     IssueSummary,
     LabelConfig,
     PullRequestContext,
+)
+from backend.core.shared.models.agent_deliberation import (
+    DeliberationEvent,
 )
 
 
@@ -37,6 +41,32 @@ class IProcessRunner(ABC):
             capture_output: Whether to capture stdout/stderr. When False,
                 output streams directly to the terminal and returned
                 CommandResult contains empty strings.
+
+        Returns:
+            CommandResult with captured output.
+        """
+        ...
+
+
+class IAgentTranscriptRunner(ABC):
+    """Run an AI agent and emit structured deliberation events."""
+
+    @abstractmethod
+    def run(
+        self,
+        agent_name: str,
+        prompt: str,
+        *,
+        cwd: Path,
+        event_sink: Callable[[DeliberationEvent], None],
+    ) -> CommandResult:
+        """Run an agent and emit events.
+
+        Args:
+            agent_name: Agent to run (claude, kimi, codex).
+            prompt: Full prompt text.
+            cwd: Working directory for the agent process.
+            event_sink: Callback invoked for each event.
 
         Returns:
             CommandResult with captured output.

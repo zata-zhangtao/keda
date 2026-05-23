@@ -368,6 +368,53 @@ class AgentRunnerPostPrSupervisorSettings(BaseModel):
     max_repair_attempts: int = 2
 
 
+class AgentRunnerDeliberationProfileSettings(BaseModel):
+    """Participant profile for deliberation sessions."""
+
+    agent: str = "claude"
+    role: str = "participant"
+    behavior_prompt: str = "Analyze requirements carefully."
+
+
+class AgentRunnerDeliberationSettings(BaseModel):
+    """Multi-agent deliberation configuration."""
+
+    default_rounds: int = 2
+    default_synthesizer: str = "claude"
+    default_output_dir: str = "logs/agent-runner/deliberations"
+    profiles: dict[str, AgentRunnerDeliberationProfileSettings] = Field(
+        default_factory=lambda: {
+            "architect": AgentRunnerDeliberationProfileSettings(
+                agent="claude",
+                role="architect",
+                behavior_prompt=(
+                    "You are an experienced software architect. "
+                    "Analyze the requirement from a system design perspective. "
+                    "Focus on modularity, scalability, and maintainability."
+                ),
+            ),
+            "skeptic": AgentRunnerDeliberationProfileSettings(
+                agent="kimi",
+                role="skeptic",
+                behavior_prompt=(
+                    "You are a skeptical reviewer. "
+                    "Challenge assumptions, identify risks, and point out edge cases. "
+                    "Ask hard questions that others might miss."
+                ),
+            ),
+            "implementer": AgentRunnerDeliberationProfileSettings(
+                agent="codex",
+                role="implementer",
+                behavior_prompt=(
+                    "You are a pragmatic implementer. "
+                    "Focus on feasibility, concrete steps, and implementation details. "
+                    "Highlight what can be built and what resources are needed."
+                ),
+            ),
+        }
+    )
+
+
 class AgentRunnerRepositorySettings(BaseModel):
     """Per-repository Agent Runner configuration overrides."""
 
@@ -406,6 +453,9 @@ class AgentRunnerSettings(BaseSettings):
     )
     post_pr_supervisor: AgentRunnerPostPrSupervisorSettings = Field(
         default_factory=AgentRunnerPostPrSupervisorSettings
+    )
+    deliberation: AgentRunnerDeliberationSettings = Field(
+        default_factory=AgentRunnerDeliberationSettings
     )
     repositories: dict[str, AgentRunnerRepositorySettings] = Field(default_factory=dict)
 

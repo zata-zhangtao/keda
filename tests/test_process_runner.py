@@ -103,3 +103,37 @@ def test_claude_stream_renderer_prints_concise_progress() -> None:
     assert renderer.render_line(text_line) == "done"
     assert renderer.render_line(stop_line) == "\n"
     assert renderer.render_line(error_line) == "\n[agent error] API Error: 400\n"
+
+
+def test_transcript_runner_builds_claude_command() -> None:
+    """Transcript runner should build claude deliberation command."""
+    from pathlib import Path
+
+    from backend.engines.agent_runner.factory import _build_deliberation_command
+
+    cmd = _build_deliberation_command("claude", "hello", Path("/tmp"))
+    assert cmd[0] == "claude"
+    assert "--dangerously-skip-permissions" in cmd
+    assert "hello" in cmd
+
+
+def test_transcript_runner_builds_kimi_command() -> None:
+    """Transcript runner should build kimi deliberation command."""
+    from pathlib import Path
+
+    from backend.engines.agent_runner.factory import _build_deliberation_command
+
+    cmd = _build_deliberation_command("kimi", "hello", Path("/tmp"))
+    assert cmd == ["kimi", "--prompt", "hello"]
+
+
+def test_transcript_runner_builds_codex_command() -> None:
+    """Transcript runner should build codex deliberation command."""
+    from pathlib import Path
+
+    from backend.engines.agent_runner.factory import _build_deliberation_command
+
+    cmd = _build_deliberation_command("codex", "hello", Path("/tmp"))
+    assert cmd[0] == "codex"
+    assert "--cd" in cmd
+    assert "read-only" in cmd

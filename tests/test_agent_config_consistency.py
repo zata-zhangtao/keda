@@ -14,6 +14,7 @@ from backend.core.use_cases.run_agent_once import _AGENT_COMMAND_BUILDERS
 from backend.engines.agent_runner.factory import build_app_config
 from backend.infrastructure.config import settings as settings_module
 from backend.infrastructure.config.settings import (
+    AgentRunnerDeliberationSettings,
     AgentRunnerLabelSettings,
     AgentRunnerPostPrSupervisorSettings,
     AgentRunnerPrePushReviewSettings,
@@ -88,3 +89,14 @@ def test_factory_build_app_config_maps_supervising() -> None:
     assert app_config.labels.supervising == "agent/supervising"
     assert app_config.pre_push_review.enabled is True
     assert app_config.post_pr_supervisor.enabled is True
+
+
+def test_deliberation_profiles_reference_runnable_agents() -> None:
+    """Default deliberation profiles must reference agents with command builders."""
+
+    deliberation = AgentRunnerDeliberationSettings()
+    supported = set(_AGENT_COMMAND_BUILDERS) | {"codex"}
+    for profile_id, profile in deliberation.profiles.items():
+        assert (
+            profile.agent in supported
+        ), f"Deliberation profile '{profile_id}' references unrunnable agent '{profile.agent}'"
