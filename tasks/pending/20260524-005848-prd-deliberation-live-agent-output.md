@@ -1,5 +1,7 @@
 # PRD: Deliberation Live Agent Output
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/29
+
 ## 1. Introduction & Goals
 
 `iar deliberate` 现在已经会并发启动默认参与者 profile，但运行中的可观察性仍然不符合预期。当前终端输出会交错在一起，用户很难判断某段内容来自哪个 agent；同时每个 agent 的 workspace 输出文件是在子进程结束后才一次性写入，因此运行中查看 `workspaces/<profile_id>/` 会短暂看到空目录。
