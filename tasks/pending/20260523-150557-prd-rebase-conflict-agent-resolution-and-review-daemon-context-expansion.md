@@ -18,6 +18,32 @@ PRD #12 (Two-Stage Agent Review And PR Supervisor) 已归档，但其 Acceptance
 - `review_once` 在 context changed 时重新进入 supervisor cycle，行为与 PRD #12 承诺一致。
 - `just test` 通过后归档本 PRD。
 
+### Real-World Validation Checklist
+
+以下 checklist 必须在真实 GitHub 仓库环境中逐一手动验证，不依赖 mock 或 fake runner：
+
+#### Rebase 冲突自动解决
+
+- [ ] **创建冲突场景**：在测试仓库创建一条 PR branch，向同一文件同一行 push 一个冲突 commit 到 base branch，确保 `git rebase` 会失败。
+- [ ] **触发 rebase**：通过 supervisor 或 CLI 触发 `execute_rebase`，观察日志中进入冲突解决循环而非直接 abort。
+- [ ] **Agent 解决冲突**：确认 agent 收到冲突上下文 prompt，修改冲突文件并写 `.agent-runner/commit-request.json`。
+- [ ] **Commit + 验证 + Push**：确认 runner 按 commit proxy 提交修改，运行 verification commands，最终成功 `git push --force-with-lease`。
+- [ ] **验证 PR 状态**：打开 GitHub PR 页面，确认 force-pushed commit 存在且无冲突，CI 正常触发。
+- [ ] **耗尽场景**：创建一个 agent 无法自动解决的冲突（如二进制文件冲突），确认达到 `max_repair_attempts` 后执行 `git rebase --abort` 并抛出 `RuntimeError`，PR 保持原状态不被破坏。
+
+#### Review-daemon 上下文变化检测
+
+- [ ] **Checks state 变化**：在 supervising 的 Issue 对应 PR 上，制造 CI 从 PENDING → FAILURE（或 SUCCESS → FAILURE）的翻转，运行 `review-once` 或等待 daemon tick，确认触发 supervisor cycle 并在日志中记录 context changed reason。
+- [ ] **新 Issue comment**：在 supervising Issue 下发表一条人类评论，确认 `review_once` 检测到 `issue_comments_count` 增加并触发 supervisor cycle。
+- [ ] **新 PR comment**：在 PR 下发表一条 review comment，确认 `review_once` 检测到 `pr_comments_count` 增加并触发 supervisor cycle。
+- [ ] **Mergeable 状态变化**：制造 PR 从冲突（mergeable=false）变为可合并（mergeable=true）或反向变化，确认 daemon 检测到并触发 supervisor cycle。
+- [ ] **无变化时 skip**：在上下文无任何变化时运行 `review_once`，确认日志中显示 skip，不调用 supervisor，不修改 label。
+- [ ] **Label 流转**：确认带有 `agent/review` label 的 Issue 在检测到 context changed 后，先被移回 `agent/supervising`，再进入 supervisor cycle。
+
+#### 回归验证
+
+- [ ] **完整回归**：在真实仓库上运行至少一次完整的 `run-agent` 或 `review-daemon` 周期，确认没有引入未预期的 side effect（如误触发、循环重评、marker 解析失败）。
+
 ## 2. Requirement Shape
 
 | Dimension | Requirement |

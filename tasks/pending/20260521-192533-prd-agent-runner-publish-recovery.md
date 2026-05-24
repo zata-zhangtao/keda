@@ -14,6 +14,23 @@
 - 为“已有本地 commit，但发布阶段失败”的任务提供显式恢复命令。
 - 恢复命令必须幂等、安全，不重复创建 PR，不误推 base branch，不处理未提交脏变更。
 
+### Final Live Integration Test Checklist
+
+最终交付必须做真实环境验收，不能用 mock、pytest 或 `just test` 替代。以下清单必须实际操作一个可丢弃的 GitHub Issue、真实 Git remote、真实 GitHub CLI 认证和真实本地 worktree：
+
+- [ ] 用 `gh issue create` 或 GitHub 页面创建一个真实测试 Issue，打上 `agent/ready`，记录 Issue URL、Issue number、测试 repo path、配置 remote 名称和当前 `gh auth status` 结果。
+- [ ] 临时把 `[agent_runner.git].remote` 配成一个本仓库不存在的 remote，执行 `uv run iar run-once --max-issues 1`，然后用 `gh issue view <number> --json labels,comments` 确认 runner 没有领取 Issue、labels/comments 未变化，并确认命令输出包含配置 remote 和实际可用 remote 列表。
+- [ ] 恢复正确 remote 后，使用真实 `run-once` 让 runner 处理该 Issue，并在 publish 阶段制造真实失败，例如使用不可 push 的 remote、临时失效的 GitHub CLI auth、或真实网络断开；失败后用本地 `git -C <issue_worktree> log -1 --oneline` 确认已有本地 commit。
+- [ ] 继续用 `gh issue view <number> --json labels,comments` 确认 Issue 进入 `agent/failed`，并确认失败 comment 明确包含 worktree path、失败类别、失败命令上下文和 `iar recover-publish --issue <number>`。
+- [ ] 修复真实 publish 环境后，执行 `uv run iar recover-publish --issue <number>`，并用本地 shell history 或 runner 日志确认该命令没有启动 Agent、没有执行 `git add`、没有执行 `git commit`，只进行了 publish 收尾。
+- [ ] 用 `git ls-remote <configured_remote> <issue_branch>` 或 GitHub 页面确认远程 issue branch 已存在，且远程 head SHA 等于本地 issue worktree 的 `git rev-parse HEAD`。
+- [ ] 用 `gh pr list --head <issue_branch> --state open --json number,url,isDraft,body,headRefName` 确认只存在一个 open draft PR，PR body 包含 `Closes #<issue_number>`。
+- [ ] 用 `gh issue view <number> --json labels,comments` 确认 Issue 已移除 `agent/failed`、`agent/running`、`agent/ready`，已添加 `agent/review`，且成功 comment 记录 branch、HEAD SHA、PR URL、是否复用已有 PR。
+- [ ] 对同一个 Issue 再执行一次 `uv run iar recover-publish --issue <number>`，再次用 `gh pr list --head <issue_branch> --state open` 确认没有创建第二个 PR，且命令成功复用现有 PR。
+- [ ] 在真实 issue worktree 制造未提交变更后执行 `uv run iar recover-publish --issue <number>`，确认命令拒绝继续；随后用 `gh issue view` 和 `gh pr list` 确认没有新的 label、comment、push 或 PR 变化。
+- [ ] 在真实 issue worktree 切到 base branch 后执行 `uv run iar recover-publish --issue <number>`，确认拒绝发布 base branch；再切到不含 Issue number 的分支，确认无 `--branch` 时拒绝，带不匹配 `--branch` 时也拒绝。
+- [ ] 真实验收完成后，关闭或清理测试 Issue、测试 PR 和测试 branch，并把实际执行命令、Issue URL、PR URL、关键 `gh`/`git` 验证输出摘要记录到实现 PR 或交付说明中。
+
 ## 2. Requirement Shape
 
 - **Actor**：本地操作者或自动化 runner 运维者。
