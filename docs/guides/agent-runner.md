@@ -175,12 +175,15 @@ uv run iar review-daemon --interval 600
 
 `review-once` / `review-daemon` 会：
 - 扫描 `agent/supervising` 和 `agent/review` 的 open Issues
-- 加载 linked PR context 和最新 `iar:event` marker
-- 检测 head SHA 和 base SHA 变化
-- 变化时先移回 `agent/supervising`，运行 supervisor cycle
-- 根据 supervisor 结果移动 label
-
-当前 supervisor cycle 会读取 PR checks、Issue comments、PR comments 和 mergeability 作为 review 输入；但 `review-once` / `review-daemon` 的“是否重新触发”判断基础版只比较 head/base。checks、comments 和 mergeability 变化触发重新评估的能力仍在待办 PRD 中。
+- 加载 linked PR context、Issue comments、PR comments 和最新 `iar:event` marker
+- 检测以下维度变化：
+  - `head_sha` 或 `base_sha` 变化
+  - `checks_state` 变化（如 CI 从 `PENDING` 变为 `FAILURE`）
+  - `mergeable` 状态变化（如冲突出现或消失）
+  - Issue comments 数量增加
+  - PR review comments 数量增加
+- 任一维度变化时，先移回 `agent/supervising`，运行 supervisor cycle
+- 无变化时直接 skip，避免无意义重评
 
 ### Rework Guard
 
@@ -707,6 +710,7 @@ Marker 是幂等 cursor，不依赖本地状态文件。可读正文用于人类
 - Pre-push reviewer 的修改同样必须通过 `verification_commands` 才能发布
 - Post-PR supervisor 的 rebase 操作使用 `--force-with-lease` 且仅作用于 PR branch，不会推送 base branch
 - 自动化 rebase 前会校验 HEAD 和 branch 名称，发现不匹配时中止，防止误操作
+- rebase 遇到冲突时，runner 会调用 agent 进入有限次数的冲突解决循环（复用 `max_repair_attempts`）；agent 修改冲突文件并通过 commit proxy 提交后，runner 重新尝试 `git rebase --continue`；耗尽后安全 abort 并转人工
 
 ### PRD-backed Issue 的强制 Closeout
 

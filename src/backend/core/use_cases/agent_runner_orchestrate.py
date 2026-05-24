@@ -405,11 +405,13 @@ def _run_supervisor_with_repair_loop(
                 remove=[config.labels.supervising],
             )
             execute_rebase(
+                issue=issue,
                 worktree_path=worktree_path,
                 config=config,
                 process_runner=process_runner,
                 pr_branch=current_pr_context.branch,
                 expected_head=current_pr_context.head_sha,
+                supervisor_agent=supervisor_agent,
             )
             rebase_sha = get_head_sha(worktree_path, process_runner)
             github_client.comment_issue(
@@ -479,11 +481,13 @@ def _process_running_rework(
 
     if action == "rebase_pr_branch":
         execute_rebase(
+            issue=issue,
             worktree_path=worktree_path,
             config=config,
             process_runner=process_runner,
             pr_branch=pr_branch,
             expected_head=expected_head,
+            supervisor_agent=supervisor_agent,
         )
         rebase_sha = get_head_sha(worktree_path, process_runner)
         github_client.comment_issue(
