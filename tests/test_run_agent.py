@@ -2586,7 +2586,10 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
             if command_tuple[:1] == ("codex",):
                 prompt = command_tuple[-1]
                 if "Recovery attempt: 1/2" in prompt:
-                    assert "Verification after runner staged changes with git add -A failed" in prompt
+                    assert (
+                        "Verification after runner staged changes with git add -A failed"
+                        in prompt
+                    )
                     assert "lint stdout" in prompt
                     assert "lint stderr" in prompt
                     _write_commit_request(worktree_path, "agent: fix lint")
@@ -2656,7 +2659,10 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
     assert len(lint_indices) == 4
     assert add_indices[0] < lint_indices[1] < reset_index
     assert reset_index < add_indices[1] < lint_indices[3]
-    assert "Verification after runner staged changes with git add -A failed" in recovery_prompt
+    assert (
+        "Verification after runner staged changes with git add -A failed"
+        in recovery_prompt
+    )
     assert "lint stdout" in recovery_prompt
     assert "lint stderr" in recovery_prompt
     assert ("git", "commit", "-m", "agent: fix lint") in commands
@@ -2718,9 +2724,7 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
             if command_tuple == ("git", "status", "--porcelain"):
                 return CommandResult(command_tuple, 0, " M file.txt\n", "")
             if command_tuple == ("just", "lint"):
-                return CommandResult(
-                    command_tuple, 1, "lint stdout\n", "lint stderr\n"
-                )
+                return CommandResult(command_tuple, 1, "lint stdout\n", "lint stderr\n")
             return CommandResult(command_tuple, 0, "", "")
 
     fake_runner = _LintExhaustedRunner()
