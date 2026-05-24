@@ -1,5 +1,7 @@
 # PRD: Rebase Conflict Agent Resolution And Review Daemon Context Expansion
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/23
+
 - GitHub Issue: (to be created)
 
 ## 1. Introduction & Goals
