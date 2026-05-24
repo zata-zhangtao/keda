@@ -10,8 +10,10 @@ from backend.core.shared.models.agent_runner import (
     IssueSummary,
     PullRequestContext,
 )
+from backend.core.use_cases.agent_runner_events import format_event_marker
 from backend.core.use_cases.review_once import (
     _process_review_candidate,
+    review_once,
 )
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
@@ -323,3 +325,74 @@ def test_review_once_moves_review_label_to_supervising_on_change() -> None:
     # First label call must be review -> supervising (before supervisor)
     assert label_calls[0]["add"] == ["agent/supervising"]
     assert label_calls[0]["remove"] == ["agent/review"]
+
+
+def test_review_once_recovers_branch_from_draft_pr_comment(tmp_path: Path) -> None:
+    """Review polling should use the original Draft PR branch comment."""
+    config = AppConfig()
+    issue = IssueSummary(
+        number=23,
+        title="Feature",
+        url="https://github.com/example/repo/issues/23",
+        body="Do the work.",
+        labels=(config.labels.review,),
+    )
+    fake_client = FakeGitHubClient()
+    fake_client.list_review_candidate_issues = lambda labels, limit: [issue]
+    fake_client._issue_comments[issue.number] = [
+        "\n".join(
+            [
+                format_event_marker(
+                    phase="draft_pr_created",
+                    cycle=1,
+                    head_sha="abc123",
+                    pr_branch="issue-23",
+                ),
+                "",
+                "## Agent Runner Draft PR Created",
+                "",
+                "- Branch: `issue-23`",
+                "- Draft PR: https://github.com/example/repo/pull/23",
+                "- Head SHA: `abc123`",
+            ]
+        ),
+        "\n".join(
+            [
+                format_event_marker(
+                    phase="post_pr_supervisor",
+                    cycle=2,
+                    head_sha="abc123",
+                    base_sha="remote-base-sha",
+                ),
+                "",
+                "## Agent Runner Post-PR Supervisor",
+                "",
+                "- Action: approve_for_human_review",
+            ]
+        ),
+    ]
+    fake_client._pr_contexts["issue-23"] = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/23",
+        branch="issue-23",
+        head_sha="abc123",
+        base_sha="remote-base-sha",
+    )
+
+    exit_code = review_once(
+        repo_path=tmp_path,
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=FakeProcessRunner(),
+    )
+
+    assert exit_code == 0
+    assert {
+        "method": "get_pull_request_context",
+        "branch": "issue-23",
+    } in fake_client.calls
+    assert not any(
+        call["method"] == "find_open_pr_by_head" for call in fake_client.calls
+    )

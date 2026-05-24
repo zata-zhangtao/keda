@@ -65,6 +65,24 @@ def _context_changed_wide(
     return False
 
 
+def _extract_pr_branch_from_comments(comments: list[str]) -> str | None:
+    """Extract the latest known PR branch from Issue comments."""
+    for comment_body in reversed(comments):
+        marker = parse_latest_event_marker([comment_body])
+        if marker is not None and marker.pr_branch:
+            return marker.pr_branch
+
+        branch_patterns = (
+            r"PR Branch:\s*`([^`]+)`",
+            r"Branch:\s*`([^`]+)`",
+        )
+        for branch_pattern in branch_patterns:
+            branch_match = re.search(branch_pattern, comment_body)
+            if branch_match:
+                return branch_match.group(1)
+    return None
+
+
 def _process_review_candidate(
     *,
     issue: IssueSummary,
@@ -79,20 +97,7 @@ def _process_review_candidate(
     last_marker = parse_latest_event_marker(comments)
 
     # Find the linked PR context
-    pr_branch: str | None = None
-    for comment in reversed(comments):
-        url_match = re.search(r"Draft PR:\s*(https://github\.com/[^\s]+)", comment)
-        if url_match:
-            break
-        branch_match = re.search(r"PR Branch:\s*`([^`]+)`", comment)
-        if branch_match:
-            pr_branch = branch_match.group(1)
-
-    if pr_branch is None:
-        # Fallback: look for branch in draft_pr_created marker
-        if last_marker is not None and last_marker.pr_branch:
-            pr_branch = last_marker.pr_branch
-
+    pr_branch = _extract_pr_branch_from_comments(comments)
     if pr_branch is None:
         _logger.warning(
             "Issue #%d has no identifiable PR branch; skipping.", issue.number
