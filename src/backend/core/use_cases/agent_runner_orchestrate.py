@@ -13,6 +13,7 @@ from backend.core.shared.interfaces.agent_runner import (
 )
 from backend.core.shared.models.agent_runner import (
     AppConfig,
+    AttemptResult,
     CommandResult,
     IssueSummary,
     PullRequestContext,
@@ -33,6 +34,7 @@ from backend.core.use_cases.pr_supervisor import (
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
+    format_attempt_history,
     format_command,
     get_current_branch,
     get_head_sha,
@@ -50,8 +52,10 @@ def build_implementation_complete_comment(
     branch: str,
     head_sha: str,
     verification_results: list[CommandResult],
+    attempt_results: list[AttemptResult] | None = None,
 ) -> str:
     """Build the Issue comment after implementation agent finishes."""
+
     marker = format_event_marker(
         phase="implementation_complete",
         cycle=1,
@@ -61,20 +65,22 @@ def build_implementation_complete_comment(
         f"- `{' '.join(result.command)}`: exit {result.return_code}"
         for result in verification_results
     )
-    return "\n".join(
-        [
-            marker,
-            "",
-            "## Agent Runner Implementation Complete",
-            "",
-            f"- Agent: `{agent}`",
-            f"- Branch: `{branch}`",
-            f"- Head SHA: `{head_sha}`",
-            "",
-            "Verification:",
-            verification_lines,
-        ]
-    )
+    lines = [
+        marker,
+        "",
+        "## Agent Runner Implementation Complete",
+        "",
+        f"- Agent: `{agent}`",
+        f"- Branch: `{branch}`",
+        f"- Head SHA: `{head_sha}`",
+        "",
+        "Verification:",
+        verification_lines,
+    ]
+    if attempt_results:
+        lines.append("")
+        lines.append(format_attempt_history(attempt_results))
+    return "\n".join(lines)
 
 
 def build_draft_pr_created_comment(
@@ -182,7 +188,7 @@ def _process_ready_issue(
     worktree_path = create_or_reuse_worktree(repo_path, issue, config, process_runner)
     before_sha = get_head_sha(worktree_path, process_runner)
     expected_branch = get_current_branch(worktree_path, process_runner)
-    verification_results = run_agent_until_committed(
+    commit_result = run_agent_until_committed(
         selected_agent=selected_agent,
         issue=issue,
         worktree_path=worktree_path,
@@ -191,6 +197,8 @@ def _process_ready_issue(
         before_sha=before_sha,
         expected_branch=expected_branch,
     )
+    verification_results = commit_result.verification_results
+    attempt_results = commit_result.attempt_results
     after_sha = get_head_sha(worktree_path, process_runner)
 
     github_client.comment_issue(
@@ -200,6 +208,7 @@ def _process_ready_issue(
             branch=expected_branch,
             head_sha=after_sha,
             verification_results=verification_results,
+            attempt_results=attempt_results,
         ),
     )
 
@@ -659,8 +668,13 @@ def run_once(
                 add=[config.labels.failed],
                 remove=_workflow_state_labels(config),
             )
-            github_client.comment_issue(
-                issue.number, f"## Agent Runner Failed\n\n```text\n{exc}\n```\n"
-            )
+            attempt_results = getattr(exc, "attempt_results", None)
+            if attempt_results is not None:
+                from backend.core.use_cases.run_agent_once import format_failure_comment
+
+                comment_body = format_failure_comment(exc, attempt_results)
+            else:
+                comment_body = f"## Agent Runner Failed\n\n```text\n{exc}\n```\n"
+            github_client.comment_issue(issue.number, comment_body)
             _logger.error("Failed Issue #%d: %s", issue.number, exc)
     return exit_code

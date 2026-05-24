@@ -18,8 +18,11 @@ from backend.core.shared.interfaces.agent_runner import (
     IProcessRunner,
 )
 from backend.core.shared.models.agent_runner import (
+    AgentCommitResult,
     AppConfig,
+    AttemptResult,
     CommandResult,
+    FailureType,
     IssueSummary,
     PromptConfig,
 )
@@ -46,6 +49,39 @@ class VerificationFailedError(RuntimeError):
 
 class PrdDeliveryError(RuntimeError):
     """Raised when the canonical PRD is not ready for delivery."""
+
+
+class AgentRunnerAttemptError(RuntimeError):
+    """Base error that carries attempt history."""
+
+    def __init__(
+        self,
+        message: str,
+        attempt_results: list[AttemptResult],
+    ) -> None:
+        super().__init__(message)
+        self.attempt_results = attempt_results
+
+
+class MaxRetriesExceededError(AgentRunnerAttemptError):
+    """Raised when all recovery attempts are exhausted."""
+
+    def __init__(self, attempt_results: list[AttemptResult]) -> None:
+        super().__init__(
+            f"Failed after {len(attempt_results)} attempts.",
+            attempt_results,
+        )
+
+
+class UnrecoverableError(AgentRunnerAttemptError):
+    """Raised when an unrecoverable failure is encountered."""
+
+    def __init__(
+        self,
+        message: str,
+        attempt_results: list[AttemptResult],
+    ) -> None:
+        super().__init__(message, attempt_results)
 
 
 def format_command(template: str, *, issue_number: int) -> list[str]:
@@ -628,6 +664,100 @@ def is_recoverable_commit_request_error(exc: RuntimeError) -> bool:
     )
 
 
+def classify_failure(
+    *,
+    before_sha: str,
+    after_sha: str,
+    has_uncommitted: bool,
+    agent_result: CommandResult,
+    verification_results: list[CommandResult],
+    exc: BaseException | None = None,
+) -> FailureType:
+    """Classify the failure type of an agent execution attempt.
+
+    Priority:
+    1. UNRECOVERABLE (security/branch violations)
+    2. UNCOMMITTED_CHANGES
+    3. NO_COMMITS
+    4. VERIFICATION_FAILED
+    5. AGENT_ERROR
+    6. SUCCESS
+
+    Args:
+        before_sha: SHA before the agent run.
+        after_sha: SHA after the agent run.
+        has_uncommitted: Whether the worktree has uncommitted changes.
+        agent_result: Result of the agent CLI invocation.
+        verification_results: Results of verification commands.
+        exc: Optional exception raised during the attempt.
+
+    Returns:
+        The classified failure type.
+    """
+    if exc is not None:
+        if isinstance(exc, RuntimeError):
+            exc_message = str(exc)
+            if "Refusing to publish forbidden paths" in exc_message:
+                return FailureType.UNRECOVERABLE
+            if "Refusing to commit on unexpected branch" in exc_message:
+                return FailureType.UNRECOVERABLE
+            if is_recoverable_commit_request_error(exc):
+                return FailureType.UNCOMMITTED_CHANGES
+        return FailureType.AGENT_ERROR
+
+    if has_uncommitted:
+        return FailureType.UNCOMMITTED_CHANGES
+
+    if before_sha == after_sha:
+        return FailureType.NO_COMMITS
+
+    if any(result.return_code != 0 for result in verification_results):
+        return FailureType.VERIFICATION_FAILED
+
+    if agent_result.return_code != 0:
+        return FailureType.AGENT_ERROR
+
+    return FailureType.SUCCESS
+
+
+def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
+    """Format attempt results as a Markdown table."""
+    if not attempt_results:
+        return ""
+
+    lines = [
+        "### Attempt History",
+        "",
+        "| Attempt | Failure Type | Recovered | Detail |",
+        "|---------|-------------|-----------|--------|",
+    ]
+    for result in attempt_results:
+        detail = result.detail.replace("\n", " ")[:100]
+        recovered = "Yes" if result.recovered else "No"
+        lines.append(
+            f"| {result.attempt_number} | {result.failure_type.value} | {recovered} | {detail} |"
+        )
+    return "\n".join(lines)
+
+
+def format_failure_comment(
+    exc: BaseException,
+    attempt_results: list[AttemptResult] | None = None,
+) -> str:
+    """Build a failure comment with optional attempt history."""
+    lines = ["## Agent Runner Failed", ""]
+
+    if attempt_results:
+        lines.append(format_attempt_history(attempt_results))
+        lines.append("")
+
+    lines.extend(["```text", str(exc)])
+    if exc.__cause__ is not None:
+        lines.append(str(exc.__cause__))
+    lines.extend(["```", ""])
+    return "\n".join(lines)
+
+
 def format_recovery_failure_summary(
     heading: str,
     verification_results: list[CommandResult],
@@ -711,12 +841,13 @@ def run_agent_until_committed(
     process_runner: IProcessRunner,
     before_sha: str,
     expected_branch: str,
-) -> list[CommandResult]:
+) -> AgentCommitResult:
     """Run the agent, recover failed verification, and return final checks."""
     max_recovery_attempts = max(0, config.runner.max_recovery_attempts)
     recovery_retry_delay_seconds = max(0, config.runner.recovery_retry_delay_seconds)
     recovery_failure_summary = ""
     final_verification_results: list[CommandResult] = []
+    attempt_results: list[AttemptResult] = []
 
     for attempt_index in range(max_recovery_attempts + 1):
         if attempt_index > 0:
@@ -741,8 +872,26 @@ def run_agent_until_committed(
                     selected_agent, recovery_prompt, worktree_path, process_runner
                 )
         except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            failure_type = classify_failure(
+                before_sha=before_sha,
+                after_sha=before_sha,
+                has_uncommitted=False,
+                agent_result=CommandResult(("",), 0, "", ""),
+                verification_results=[],
+                exc=exc,
+            )
+            attempt_results.append(
+                AttemptResult(
+                    attempt_number=attempt_index + 1,
+                    failure_type=failure_type,
+                    recovered=False,
+                    detail=format_agent_execution_failure(exc),
+                )
+            )
+            if failure_type == FailureType.UNRECOVERABLE:
+                raise UnrecoverableError(str(exc), attempt_results) from exc
             if attempt_index >= max_recovery_attempts:
-                raise
+                raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_agent_execution_failure(exc)
             _logger.warning(
                 "Agent command failed for Issue #%d; "
@@ -758,8 +907,27 @@ def run_agent_until_committed(
         try:
             ensure_verification_passed(verification_results)
         except VerificationFailedError as exc:
+            failure_type = classify_failure(
+                before_sha=before_sha,
+                after_sha=before_sha,
+                has_uncommitted=False,
+                agent_result=CommandResult(("",), 0, "", ""),
+                verification_results=exc.verification_results,
+                exc=None,
+            )
+            attempt_results.append(
+                AttemptResult(
+                    attempt_number=attempt_index + 1,
+                    failure_type=failure_type,
+                    recovered=False,
+                    detail=format_recovery_failure_summary(
+                        "Verification before staging failed.",
+                        exc.verification_results,
+                    ),
+                )
+            )
             if attempt_index >= max_recovery_attempts:
-                raise
+                raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_recovery_failure_summary(
                 "Verification before staging failed.",
                 exc.verification_results,
@@ -776,8 +944,24 @@ def run_agent_until_committed(
         try:
             ensure_prd_delivery_ready(issue, worktree_path, process_runner)
         except PrdDeliveryError as exc:
+            failure_type = classify_failure(
+                before_sha=before_sha,
+                after_sha=before_sha,
+                has_uncommitted=False,
+                agent_result=CommandResult(("",), 0, "", ""),
+                verification_results=verification_results,
+                exc=exc,
+            )
+            attempt_results.append(
+                AttemptResult(
+                    attempt_number=attempt_index + 1,
+                    failure_type=failure_type,
+                    recovered=False,
+                    detail=format_prd_delivery_failure(str(exc)),
+                )
+            )
             if attempt_index >= max_recovery_attempts:
-                raise
+                raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_prd_delivery_failure(str(exc))
             _logger.warning(
                 "PRD delivery check failed for Issue #%d; "
@@ -804,8 +988,27 @@ def run_agent_until_committed(
                 )
             except VerificationFailedError as exc:
                 unstage_changes(worktree_path, process_runner)
+                failure_type = classify_failure(
+                    before_sha=before_sha,
+                    after_sha=before_sha,
+                    has_uncommitted=False,
+                    agent_result=CommandResult(("",), 0, "", ""),
+                    verification_results=exc.verification_results,
+                    exc=None,
+                )
+                attempt_results.append(
+                    AttemptResult(
+                        attempt_number=attempt_index + 1,
+                        failure_type=failure_type,
+                        recovered=False,
+                        detail=format_recovery_failure_summary(
+                            "Verification after runner staged changes with git add -A failed.",
+                            exc.verification_results,
+                        ),
+                    )
+                )
                 if attempt_index >= max_recovery_attempts:
-                    raise
+                    raise MaxRetriesExceededError(attempt_results) from exc
                 recovery_failure_summary = format_recovery_failure_summary(
                     "Verification after runner staged changes with git add -A failed.",
                     exc.verification_results,
@@ -823,7 +1026,45 @@ def run_agent_until_committed(
                     attempt_index >= max_recovery_attempts
                     or not is_recoverable_commit_request_error(exc)
                 ):
+                    failure_type = classify_failure(
+                        before_sha=before_sha,
+                        after_sha=before_sha,
+                        has_uncommitted=True,
+                        agent_result=CommandResult(("",), 0, "", ""),
+                        verification_results=final_verification_results,
+                        exc=exc,
+                    )
+                    attempt_results.append(
+                        AttemptResult(
+                            attempt_number=attempt_index + 1,
+                            failure_type=failure_type,
+                            recovered=False,
+                            detail=str(exc),
+                        )
+                    )
+                    if failure_type == FailureType.UNRECOVERABLE:
+                        raise UnrecoverableError(str(exc), attempt_results) from exc
+                    if attempt_index >= max_recovery_attempts:
+                        raise MaxRetriesExceededError(attempt_results) from exc
                     raise
+                failure_type = classify_failure(
+                    before_sha=before_sha,
+                    after_sha=before_sha,
+                    has_uncommitted=True,
+                    agent_result=CommandResult(("",), 0, "", ""),
+                    verification_results=final_verification_results,
+                    exc=None,
+                )
+                attempt_results.append(
+                    AttemptResult(
+                        attempt_number=attempt_index + 1,
+                        failure_type=failure_type,
+                        recovered=False,
+                        detail=f"The runner could not process the commit request.\n{exc}",
+                    )
+                )
+                if attempt_index >= max_recovery_attempts:
+                    raise MaxRetriesExceededError(attempt_results) from exc
                 recovery_failure_summary = "\n".join(
                     [
                         "The runner could not process the commit request.",
@@ -842,10 +1083,35 @@ def run_agent_until_committed(
 
         after_sha = get_head_sha(worktree_path, process_runner)
         if before_sha != after_sha:
-            return final_verification_results
+            attempt_results.append(
+                AttemptResult(
+                    attempt_number=attempt_index + 1,
+                    failure_type=FailureType.SUCCESS,
+                    recovered=attempt_index > 0,
+                    detail="Agent produced commits and passed verification.",
+                )
+            )
+            return AgentCommitResult(final_verification_results, attempt_results)
 
+        has_uncommitted = has_changes(worktree_path, process_runner)
+        failure_type = classify_failure(
+            before_sha=before_sha,
+            after_sha=after_sha,
+            has_uncommitted=has_uncommitted,
+            agent_result=CommandResult(("",), 0, "", ""),
+            verification_results=verification_results,
+            exc=None,
+        )
+        attempt_results.append(
+            AttemptResult(
+                attempt_number=attempt_index + 1,
+                failure_type=failure_type,
+                recovered=False,
+                detail="Agent produced no git commits.",
+            )
+        )
         if attempt_index >= max_recovery_attempts:
-            raise RuntimeError("Agent produced no git commits.")
+            raise MaxRetriesExceededError(attempt_results)
         recovery_failure_summary = "\n".join(
             [
                 "The previous attempt produced no git commits.",
@@ -860,7 +1126,7 @@ def run_agent_until_committed(
             max_recovery_attempts,
         )
 
-    raise RuntimeError("Agent produced no git commits.")
+    raise MaxRetriesExceededError(attempt_results)
 
 
 def has_changes(worktree_path: Path, process_runner: IProcessRunner) -> bool:

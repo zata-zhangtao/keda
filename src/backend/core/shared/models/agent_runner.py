@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class AgentCommitResult:
+    """Result of a successful agent execution with attempt history."""
+
+    verification_results: list[CommandResult]
+    attempt_results: list[AttemptResult]
 
 
 @dataclass(frozen=True)
@@ -14,6 +23,27 @@ class CommandResult:
     return_code: int
     stdout: str
     stderr: str
+
+
+class FailureType(Enum):
+    """Categorized failure reason from an agent execution attempt."""
+
+    SUCCESS = "success"
+    UNCOMMITTED_CHANGES = "uncommitted_changes"
+    NO_COMMITS = "no_commits"
+    VERIFICATION_FAILED = "verification_failed"
+    AGENT_ERROR = "agent_error"
+    UNRECOVERABLE = "unrecoverable"
+
+
+@dataclass(frozen=True)
+class AttemptResult:
+    """Record of a single agent execution attempt."""
+
+    attempt_number: int
+    failure_type: FailureType
+    recovered: bool
+    detail: str
 
 
 @dataclass(frozen=True)
