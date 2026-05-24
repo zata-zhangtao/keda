@@ -907,9 +907,10 @@ def run_agent_until_committed(
         try:
             ensure_verification_passed(verification_results)
         except VerificationFailedError as exc:
+            after_sha = get_head_sha(worktree_path, process_runner)
             failure_type = classify_failure(
                 before_sha=before_sha,
-                after_sha=before_sha,
+                after_sha=after_sha,
                 has_uncommitted=False,
                 agent_result=CommandResult(("",), 0, "", ""),
                 verification_results=exc.verification_results,
@@ -944,9 +945,10 @@ def run_agent_until_committed(
         try:
             ensure_prd_delivery_ready(issue, worktree_path, process_runner)
         except PrdDeliveryError as exc:
+            after_sha = get_head_sha(worktree_path, process_runner)
             failure_type = classify_failure(
                 before_sha=before_sha,
-                after_sha=before_sha,
+                after_sha=after_sha,
                 has_uncommitted=False,
                 agent_result=CommandResult(("",), 0, "", ""),
                 verification_results=verification_results,
@@ -988,9 +990,10 @@ def run_agent_until_committed(
                 )
             except VerificationFailedError as exc:
                 unstage_changes(worktree_path, process_runner)
+                after_sha = get_head_sha(worktree_path, process_runner)
                 failure_type = classify_failure(
                     before_sha=before_sha,
-                    after_sha=before_sha,
+                    after_sha=after_sha,
                     has_uncommitted=False,
                     agent_result=CommandResult(("",), 0, "", ""),
                     verification_results=exc.verification_results,
@@ -1022,13 +1025,14 @@ def run_agent_until_committed(
                 )
                 continue
             except RuntimeError as exc:
+                after_sha = get_head_sha(worktree_path, process_runner)
                 if (
                     attempt_index >= max_recovery_attempts
                     or not is_recoverable_commit_request_error(exc)
                 ):
                     failure_type = classify_failure(
                         before_sha=before_sha,
-                        after_sha=before_sha,
+                        after_sha=after_sha,
                         has_uncommitted=True,
                         agent_result=CommandResult(("",), 0, "", ""),
                         verification_results=final_verification_results,
@@ -1049,7 +1053,7 @@ def run_agent_until_committed(
                     raise
                 failure_type = classify_failure(
                     before_sha=before_sha,
-                    after_sha=before_sha,
+                    after_sha=after_sha,
                     has_uncommitted=True,
                     agent_result=CommandResult(("",), 0, "", ""),
                     verification_results=final_verification_results,
