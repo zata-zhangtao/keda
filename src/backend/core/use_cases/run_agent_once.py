@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import shlex
 import subprocess
 import time
@@ -18,12 +17,28 @@ from backend.core.shared.interfaces.agent_runner import (
     IProcessRunner,
 )
 from backend.core.shared.models.agent_runner import (
+    AgentCommitResult,
     AppConfig,
+    AttemptResult,
     CommandResult,
+    FailureType,
     IssueSummary,
-    PromptConfig,
 )
-from backend.core.shared.prd_checklist import parse_prd_checklist
+from backend.core.use_cases.agent_runner_feedback import (
+    PrdDeliveryError,
+    VerificationFailedError,
+    build_prompt,
+    build_recovery_prompt,
+    ensure_prd_delivery_ready,
+    ensure_verification_passed,
+    extract_prd_path,
+    failed_verification_results,
+    format_prd_delivery_failure,
+    format_result_for_recovery,
+    format_verification_failure,
+    resolve_prd_archive_path,
+    truncate_recovery_output,
+)
 from backend.core.use_cases.generated_content import (
     build_pr_context,
     generate_pr_content,
@@ -33,19 +48,87 @@ _logger = logging.getLogger(__name__)
 
 _COMMIT_REQUEST_RELATIVE_PATH = Path(".agent-runner/commit-request.json")
 _MAX_COMMIT_MESSAGE_LENGTH = 200
-_MAX_RECOVERY_OUTPUT_LENGTH = 12000
+
+__all__ = [
+    "AgentRunnerAttemptError",
+    "MaxRetriesExceededError",
+    "PrdDeliveryError",
+    "UnrecoverableError",
+    "VerificationFailedError",
+    "build_prompt",
+    "build_recovery_prompt",
+    "choose_agent",
+    "classify_failure",
+    "commit_requested_changes",
+    "create_or_reuse_worktree",
+    "ensure_prd_delivery_ready",
+    "ensure_verification_passed",
+    "extract_agent_response_text",
+    "extract_prd_path",
+    "failed_verification_results",
+    "format_agent_execution_failure",
+    "format_attempt_history",
+    "format_command",
+    "format_failure_comment",
+    "format_prd_delivery_failure",
+    "format_recovery_failure_summary",
+    "format_result_for_recovery",
+    "format_verification_failure",
+    "get_current_branch",
+    "get_head_sha",
+    "has_changes",
+    "list_changed_paths",
+    "list_git_remotes",
+    "publish_changes",
+    "read_commit_request",
+    "remove_commit_request",
+    "resolve_prd_archive_path",
+    "run_agent",
+    "run_agent_until_committed",
+    "run_agent_with_prompt",
+    "run_once",
+    "run_preflight_checks",
+    "run_verification",
+    "sanitize_commit_message",
+    "truncate_recovery_output",
+    "unstage_changes",
+    "validate_publish_remote",
+    "validate_safe_changes",
+    "wait_before_recovery_attempt",
+]
 
 
-class VerificationFailedError(RuntimeError):
-    """Raised when configured verification commands do not pass."""
+class AgentRunnerAttemptError(RuntimeError):
+    """Base error that carries attempt history."""
 
-    def __init__(self, verification_results: list[CommandResult]) -> None:
-        self.verification_results = verification_results
-        super().__init__(format_verification_failure(verification_results))
+    def __init__(
+        self,
+        message: str,
+        attempt_results: list[AttemptResult],
+    ) -> None:
+        super().__init__(message)
+        self.attempt_results = attempt_results
 
 
-class PrdDeliveryError(RuntimeError):
-    """Raised when the canonical PRD is not ready for delivery."""
+class MaxRetriesExceededError(AgentRunnerAttemptError):
+    """Raised when all recovery attempts are exhausted."""
+
+    def __init__(self, attempt_results: list[AttemptResult]) -> None:
+        super().__init__(
+            f"Failed after {len(attempt_results)} attempts.",
+            attempt_results,
+        )
+
+
+class UnrecoverableError(AgentRunnerAttemptError):
+    """Raised when an unrecoverable failure is encountered."""
+
+    def __init__(
+        self,
+        message: str,
+        attempt_results: list[AttemptResult],
+    ) -> None:
+        super().__init__(message, attempt_results)
 
 
 def format_command(template: str, *, issue_number: int) -> list[str]:
@@ -64,289 +147,6 @@ def choose_agent(issue: IssueSummary, config: AppConfig, override_agent: str) ->
         config.runner.default_agent
         if config.runner.default_agent != "auto"
         else "codex"
-    )
-
-
-def extract_prd_path(issue_body: str) -> str | None:
-    """Extract a PRD path from an Issue body."""
-    match = re.search(r"PRD path:\s*`([^`]+)`", issue_body)
-    return match.group(1) if match else None
-
-
-_DEFAULT_EXECUTION_TEMPLATE = "\n".join(
-    [
-        "Complete GitHub Issue #{issue_number}: {issue_title}",
-        "",
-        "Issue URL: {issue_url}",
-        "Worktree: {worktree_path}",
-        "{prd_line}",
-        "",
-        "Issue body:",
-        "{issue_body}",
-        "",
-        "Execution rules:",
-        "- Read AGENTS.md and follow repository instructions.",
-        "- Only modify files inside the current worktree.",
-        "- Do not merge main, delete branches, push, or create PRs; "
-        "the runner handles publishing.",
-        "- Do not run `git add` or `git commit`; the runner exposes "
-        "a restricted commit proxy.",
-        "- After finishing your changes, request a commit by writing "
-        "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
-        "- Do not touch production systems or real business data.",
-        "- Implement the requested task with focused tests and docs updates.",
-        "- Finish with a concise summary, tests run, and remaining risk.",
-    ]
-)
-
-
-def _build_prd_line(issue: IssueSummary) -> str:
-    """Build the PRD reference line for a prompt template."""
-    prd_path = extract_prd_path(issue.body)
-    if prd_path:
-        prd_path_obj = Path(prd_path)
-        move_instruction = ""
-        if (
-            len(prd_path_obj.parts) >= 2
-            and prd_path_obj.parts[0] == "tasks"
-            and prd_path_obj.parts[1] == "pending"
-        ):
-            move_instruction = (
-                " If all checklist items are complete, move the PRD from "
-                "`tasks/pending/` to `tasks/archive/`."
-            )
-        return (
-            f"Also read the canonical PRD at `{prd_path}`. "
-            "Before requesting a commit, update the PRD's Acceptance Checklist "
-            f"to reflect completed work.{move_instruction}"
-        )
-    return "If the Issue references a PRD, read it before editing."
-
-
-def build_prompt(
-    issue: IssueSummary,
-    worktree_path: Path,
-    prompt_config: PromptConfig,
-    phase: str = "execution",
-) -> str:
-    """Build the prompt sent to the local AI agent from a template."""
-    template = prompt_config.phases.get(phase, _DEFAULT_EXECUTION_TEMPLATE)
-    prd_line = _build_prd_line(issue)
-    return template.format(
-        issue_number=issue.number,
-        issue_title=issue.title,
-        issue_url=issue.url,
-        worktree_path=worktree_path,
-        issue_body=issue.body,
-        prd_line=prd_line,
-    )
-
-
-def truncate_recovery_output(output_text: str) -> str:
-    """Limit command output included in recovery prompts and failure comments."""
-    if len(output_text) <= _MAX_RECOVERY_OUTPUT_LENGTH:
-        return output_text
-    return "\n".join(
-        [
-            "[output truncated; showing tail]",
-            output_text[-_MAX_RECOVERY_OUTPUT_LENGTH:],
-        ]
-    )
-
-
-def format_result_for_recovery(result: CommandResult) -> str:
-    """Format one command result for a recovery prompt."""
-    return "\n".join(
-        [
-            f"Command: `{shlex.join(result.command)}`",
-            f"Exit code: {result.return_code}",
-            "stdout:",
-            "```text",
-            truncate_recovery_output(result.stdout),
-            "```",
-            "stderr:",
-            "```text",
-            truncate_recovery_output(result.stderr),
-            "```",
-        ]
-    )
-
-
-def failed_verification_results(
-    verification_results: list[CommandResult],
-) -> list[CommandResult]:
-    """Return failed command results from a verification run."""
-    return [result for result in verification_results if result.return_code != 0]
-
-
-def format_verification_failure(verification_results: list[CommandResult]) -> str:
-    """Format configured verification failures for logs and Issue comments."""
-    failed_results = failed_verification_results(verification_results)
-    if not failed_results:
-        return "Verification failed without a captured failing command."
-    first_failed_result = failed_results[0]
-    return "\n".join(
-        [
-            f"Command failed: {shlex.join(first_failed_result.command)}",
-            f"Exit code: {first_failed_result.return_code}",
-            "stdout:",
-            truncate_recovery_output(first_failed_result.stdout),
-            "stderr:",
-            truncate_recovery_output(first_failed_result.stderr),
-        ]
-    )
-
-
-def resolve_prd_archive_path(prd_relative_path: str) -> str | None:
-    """Convert a pending PRD path to its archive counterpart.
-
-    Returns None when the path is not under ``tasks/pending/``.
-    """
-    path = Path(prd_relative_path)
-    if len(path.parts) >= 2 and path.parts[0] == "tasks" and path.parts[1] == "pending":
-        return str(Path("tasks") / "archive" / path.name)
-    return None
-
-
-def _format_unchecked_items(
-    unchecked_items: list[tuple[int, str]],
-) -> str:
-    """Format unchecked checklist items for error messages."""
-    return "\n".join(f"  - L{line}: {text}" for line, text in unchecked_items)
-
-
-def ensure_prd_delivery_ready(
-    issue: IssueSummary,
-    worktree_path: Path,
-    process_runner: IProcessRunner,
-) -> None:
-    """Validate canonical PRD state and auto-archive if complete.
-
-    Raises:
-        PrdDeliveryError: When the PRD is not ready for delivery.
-    """
-    prd_relative_path = extract_prd_path(issue.body)
-    if not prd_relative_path:
-        return
-
-    prd_path = worktree_path / prd_relative_path
-    if prd_path.exists():
-        file_content = prd_path.read_text(encoding="utf-8")
-        checklist_result = parse_prd_checklist(file_content)
-
-        if not checklist_result.section_found:
-            raise PrdDeliveryError(
-                f"Acceptance Checklist section missing in {prd_relative_path}"
-            )
-
-        if checklist_result.unchecked_items:
-            unchecked_summary = _format_unchecked_items(
-                checklist_result.unchecked_items
-            )
-            raise PrdDeliveryError(
-                f"Acceptance Checklist has unchecked items in {prd_relative_path}:\n"
-                f"{unchecked_summary}"
-            )
-
-        archive_relative_path = resolve_prd_archive_path(prd_relative_path)
-        if archive_relative_path:
-            archive_path = worktree_path / archive_relative_path
-            archive_dir = archive_path.parent
-            if not archive_dir.exists():
-                raise PrdDeliveryError(
-                    f"Archive directory does not exist: {archive_dir.relative_to(worktree_path).as_posix()}"
-                )
-            process_runner.run(
-                [
-                    "git",
-                    "mv",
-                    str(prd_relative_path),
-                    str(archive_relative_path),
-                ],
-                cwd=worktree_path,
-            )
-        return
-
-    # PRD not found at the claimed path; check if already archived.
-    archive_relative_path = resolve_prd_archive_path(prd_relative_path)
-    if archive_relative_path:
-        archive_path = worktree_path / archive_relative_path
-        if archive_path.exists():
-            file_content = archive_path.read_text(encoding="utf-8")
-            checklist_result = parse_prd_checklist(file_content)
-            if not checklist_result.section_found:
-                raise PrdDeliveryError(
-                    f"Acceptance Checklist section missing in {archive_relative_path}"
-                )
-            if checklist_result.unchecked_items:
-                unchecked_summary = _format_unchecked_items(
-                    checklist_result.unchecked_items
-                )
-                raise PrdDeliveryError(
-                    f"Acceptance Checklist has unchecked items in {archive_relative_path}:\n"
-                    f"{unchecked_summary}"
-                )
-            return
-
-    raise PrdDeliveryError(f"Canonical PRD not found: {prd_relative_path}")
-
-
-def format_prd_delivery_failure(message: str) -> str:
-    """Build the failure section for a PRD delivery recovery prompt."""
-    return "\n".join(
-        [
-            "PRD delivery check failed.",
-            message,
-            "Update the canonical PRD: ensure all Acceptance Checklist items are checked, "
-            "and move the PRD from tasks/pending/ to tasks/archive/ if complete.",
-        ]
-    )
-
-
-def ensure_verification_passed(verification_results: list[CommandResult]) -> None:
-    """Raise when any configured verification command failed."""
-    if failed_verification_results(verification_results):
-        raise VerificationFailedError(verification_results)
-
-
-def build_recovery_prompt(
-    issue: IssueSummary,
-    worktree_path: Path,
-    *,
-    recovery_attempt: int,
-    max_recovery_attempts: int,
-    failure_summary: str,
-) -> str:
-    """Build a prompt that asks the agent to repair a failed attempt."""
-    prd_path = extract_prd_path(issue.body)
-    if prd_path:
-        prd_line = (
-            f"Also re-check the canonical PRD at `{prd_path}` if it affects the fix. "
-            "Ensure the Acceptance Checklist is updated and the PRD is archived if complete."
-        )
-    else:
-        prd_line = "If the Issue references a PRD, re-check it if it affects the fix."
-    return "\n".join(
-        [
-            f"Repair GitHub Issue #{issue.number}: {issue.title}",
-            "",
-            f"Issue URL: {issue.url}",
-            f"Worktree: {worktree_path}",
-            f"Recovery attempt: {recovery_attempt}/{max_recovery_attempts}",
-            prd_line,
-            "",
-            "The runner could not finish the previous attempt:",
-            failure_summary,
-            "",
-            "Recovery rules:",
-            "- Inspect the current worktree and fix the failure.",
-            "- Only modify files inside the current worktree.",
-            "- Do not switch branches, merge main, push, or create PRs.",
-            "- Do not run `git add` or `git commit`; the runner handles commits.",
-            "- After fixing the issue, write or update "
-            "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
-            "- Finish with a concise summary, tests run, and remaining risk.",
-        ]
     )
 
 
@@ -628,6 +428,100 @@ def is_recoverable_commit_request_error(exc: RuntimeError) -> bool:
     )
 
 
+def classify_failure(
+    *,
+    before_sha: str,
+    after_sha: str,
+    has_uncommitted: bool,
+    agent_result: CommandResult,
+    verification_results: list[CommandResult],
+    exc: BaseException | None = None,
+) -> FailureType:
+    """Classify the failure type of an agent execution attempt.
+
+    Priority:
+    1. UNRECOVERABLE (security/branch violations)
+    2. UNCOMMITTED_CHANGES
+    3. NO_COMMITS
+    4. VERIFICATION_FAILED
+    5. AGENT_ERROR
+    6. SUCCESS
+
+    Args:
+        before_sha: SHA before the agent run.
+        after_sha: SHA after the agent run.
+        has_uncommitted: Whether the worktree has uncommitted changes.
+        agent_result: Result of the agent CLI invocation.
+        verification_results: Results of verification commands.
+        exc: Optional exception raised during the attempt.
+
+    Returns:
+        The classified failure type.
+    """
+    if exc is not None:
+        if isinstance(exc, RuntimeError):
+            exc_message = str(exc)
+            if "Refusing to publish forbidden paths" in exc_message:
+                return FailureType.UNRECOVERABLE
+            if "Refusing to commit on unexpected branch" in exc_message:
+                return FailureType.UNRECOVERABLE
+            if is_recoverable_commit_request_error(exc):
+                return FailureType.UNCOMMITTED_CHANGES
+        return FailureType.AGENT_ERROR
+
+    if has_uncommitted:
+        return FailureType.UNCOMMITTED_CHANGES
+
+    if before_sha == after_sha:
+        return FailureType.NO_COMMITS
+
+    if any(result.return_code != 0 for result in verification_results):
+        return FailureType.VERIFICATION_FAILED
+
+    if agent_result.return_code != 0:
+        return FailureType.AGENT_ERROR
+
+    return FailureType.SUCCESS
+
+
+def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
+    """Format attempt results as a Markdown table."""
+    if not attempt_results:
+        return ""
+
+    lines = [
+        "### Attempt History",
+        "",
+        "| Attempt | Failure Type | Recovered | Detail |",
+        "|---------|-------------|-----------|--------|",
+    ]
+    for result in attempt_results:
+        detail = result.detail.replace("\n", " ")[:100]
+        recovered = "Yes" if result.recovered else "No"
+        lines.append(
+            f"| {result.attempt_number} | {result.failure_type.value} | {recovered} | {detail} |"
+        )
+    return "\n".join(lines)
+
+
+def format_failure_comment(
+    exc: BaseException,
+    attempt_results: list[AttemptResult] | None = None,
+) -> str:
+    """Build a failure comment with optional attempt history."""
+    lines = ["## Agent Runner Failed", ""]
+
+    if attempt_results:
+        lines.append(format_attempt_history(attempt_results))
+        lines.append("")
+
+    lines.extend(["```text", str(exc)])
+    if exc.__cause__ is not None:
+        lines.append(str(exc.__cause__))
+    lines.extend(["```", ""])
+    return "\n".join(lines)
+
+
 def format_recovery_failure_summary(
     heading: str,
     verification_results: list[CommandResult],
@@ -711,12 +605,13 @@ def run_agent_until_committed(
     process_runner: IProcessRunner,
     before_sha: str,
     expected_branch: str,
-) -> list[CommandResult]:
+) -> AgentCommitResult:
     """Run the agent, recover failed verification, and return final checks."""
     max_recovery_attempts = max(0, config.runner.max_recovery_attempts)
     recovery_retry_delay_seconds = max(0, config.runner.recovery_retry_delay_seconds)
     recovery_failure_summary = ""
     final_verification_results: list[CommandResult] = []
+    attempt_results: list[AttemptResult] = []
 
     for attempt_index in range(max_recovery_attempts + 1):
         if attempt_index > 0:
@@ -741,8 +636,26 @@ def run_agent_until_committed(
                     selected_agent, recovery_prompt, worktree_path, process_runner
                 )
         except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            failure_type = classify_failure(
+                before_sha=before_sha,
+                after_sha=before_sha,
+                has_uncommitted=False,
+                agent_result=CommandResult(("",), 0, "", ""),
+                verification_results=[],
+                exc=exc,
+            )
+            attempt_results.append(
+                AttemptResult(
+                    attempt_number=attempt_index + 1,
+                    failure_type=failure_type,
+                    recovered=False,
+                    detail=format_agent_execution_failure(exc),
+                )
+            )
+            if failure_type == FailureType.UNRECOVERABLE:
+                raise UnrecoverableError(str(exc), attempt_results) from exc
             if attempt_index >= max_recovery_attempts:
-                raise
+                raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_agent_execution_failure(exc)
             _logger.warning(
                 "Agent command failed for Issue #%d; "
@@ -758,8 +671,28 @@ def run_agent_until_committed(
         try:
             ensure_verification_passed(verification_results)
         except VerificationFailedError as exc:
+            after_sha = get_head_sha(worktree_path, process_runner)
+            failure_type = classify_failure(
+                before_sha=before_sha,
+                after_sha=after_sha,
+                has_uncommitted=False,
+                agent_result=CommandResult(("",), 0, "", ""),
+                verification_results=exc.verification_results,
+                exc=None,
+            )
+            attempt_results.append(
+                AttemptResult(
+                    attempt_number=attempt_index + 1,
+                    failure_type=failure_type,
+                    recovered=False,
+                    detail=format_recovery_failure_summary(
+                        "Verification before staging failed.",
+                        exc.verification_results,
+                    ),
+                )
+            )
             if attempt_index >= max_recovery_attempts:
-                raise
+                raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_recovery_failure_summary(
                 "Verification before staging failed.",
                 exc.verification_results,
@@ -776,8 +709,25 @@ def run_agent_until_committed(
         try:
             ensure_prd_delivery_ready(issue, worktree_path, process_runner)
         except PrdDeliveryError as exc:
+            after_sha = get_head_sha(worktree_path, process_runner)
+            failure_type = classify_failure(
+                before_sha=before_sha,
+                after_sha=after_sha,
+                has_uncommitted=False,
+                agent_result=CommandResult(("",), 0, "", ""),
+                verification_results=verification_results,
+                exc=exc,
+            )
+            attempt_results.append(
+                AttemptResult(
+                    attempt_number=attempt_index + 1,
+                    failure_type=failure_type,
+                    recovered=False,
+                    detail=format_prd_delivery_failure(str(exc)),
+                )
+            )
             if attempt_index >= max_recovery_attempts:
-                raise
+                raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_prd_delivery_failure(str(exc))
             _logger.warning(
                 "PRD delivery check failed for Issue #%d; "
@@ -804,8 +754,28 @@ def run_agent_until_committed(
                 )
             except VerificationFailedError as exc:
                 unstage_changes(worktree_path, process_runner)
+                after_sha = get_head_sha(worktree_path, process_runner)
+                failure_type = classify_failure(
+                    before_sha=before_sha,
+                    after_sha=after_sha,
+                    has_uncommitted=False,
+                    agent_result=CommandResult(("",), 0, "", ""),
+                    verification_results=exc.verification_results,
+                    exc=None,
+                )
+                attempt_results.append(
+                    AttemptResult(
+                        attempt_number=attempt_index + 1,
+                        failure_type=failure_type,
+                        recovered=False,
+                        detail=format_recovery_failure_summary(
+                            "Verification after runner staged changes with git add -A failed.",
+                            exc.verification_results,
+                        ),
+                    )
+                )
                 if attempt_index >= max_recovery_attempts:
-                    raise
+                    raise MaxRetriesExceededError(attempt_results) from exc
                 recovery_failure_summary = format_recovery_failure_summary(
                     "Verification after runner staged changes with git add -A failed.",
                     exc.verification_results,
@@ -819,11 +789,50 @@ def run_agent_until_committed(
                 )
                 continue
             except RuntimeError as exc:
+                after_sha = get_head_sha(worktree_path, process_runner)
                 if (
                     attempt_index >= max_recovery_attempts
                     or not is_recoverable_commit_request_error(exc)
                 ):
+                    failure_type = classify_failure(
+                        before_sha=before_sha,
+                        after_sha=after_sha,
+                        has_uncommitted=True,
+                        agent_result=CommandResult(("",), 0, "", ""),
+                        verification_results=final_verification_results,
+                        exc=exc,
+                    )
+                    attempt_results.append(
+                        AttemptResult(
+                            attempt_number=attempt_index + 1,
+                            failure_type=failure_type,
+                            recovered=False,
+                            detail=str(exc),
+                        )
+                    )
+                    if failure_type == FailureType.UNRECOVERABLE:
+                        raise UnrecoverableError(str(exc), attempt_results) from exc
+                    if attempt_index >= max_recovery_attempts:
+                        raise MaxRetriesExceededError(attempt_results) from exc
                     raise
+                failure_type = classify_failure(
+                    before_sha=before_sha,
+                    after_sha=after_sha,
+                    has_uncommitted=True,
+                    agent_result=CommandResult(("",), 0, "", ""),
+                    verification_results=final_verification_results,
+                    exc=None,
+                )
+                attempt_results.append(
+                    AttemptResult(
+                        attempt_number=attempt_index + 1,
+                        failure_type=failure_type,
+                        recovered=False,
+                        detail=f"The runner could not process the commit request.\n{exc}",
+                    )
+                )
+                if attempt_index >= max_recovery_attempts:
+                    raise MaxRetriesExceededError(attempt_results) from exc
                 recovery_failure_summary = "\n".join(
                     [
                         "The runner could not process the commit request.",
@@ -842,10 +851,35 @@ def run_agent_until_committed(
 
         after_sha = get_head_sha(worktree_path, process_runner)
         if before_sha != after_sha:
-            return final_verification_results
+            attempt_results.append(
+                AttemptResult(
+                    attempt_number=attempt_index + 1,
+                    failure_type=FailureType.SUCCESS,
+                    recovered=attempt_index > 0,
+                    detail="Agent produced commits and passed verification.",
+                )
+            )
+            return AgentCommitResult(final_verification_results, attempt_results)
 
+        has_uncommitted = has_changes(worktree_path, process_runner)
+        failure_type = classify_failure(
+            before_sha=before_sha,
+            after_sha=after_sha,
+            has_uncommitted=has_uncommitted,
+            agent_result=CommandResult(("",), 0, "", ""),
+            verification_results=verification_results,
+            exc=None,
+        )
+        attempt_results.append(
+            AttemptResult(
+                attempt_number=attempt_index + 1,
+                failure_type=failure_type,
+                recovered=False,
+                detail="Agent produced no git commits.",
+            )
+        )
         if attempt_index >= max_recovery_attempts:
-            raise RuntimeError("Agent produced no git commits.")
+            raise MaxRetriesExceededError(attempt_results)
         recovery_failure_summary = "\n".join(
             [
                 "The previous attempt produced no git commits.",
@@ -860,7 +894,7 @@ def run_agent_until_committed(
             max_recovery_attempts,
         )
 
-    raise RuntimeError("Agent produced no git commits.")
+    raise MaxRetriesExceededError(attempt_results)
 
 
 def has_changes(worktree_path: Path, process_runner: IProcessRunner) -> bool:

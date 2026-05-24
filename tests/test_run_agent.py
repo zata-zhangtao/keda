@@ -9,7 +9,9 @@ import pytest
 
 from backend.core.shared.models.agent_runner import (
     AppConfig,
+    AttemptResult,
     CommandResult,
+    FailureType,
     GeneratedContentConfig,
     GeneratedContentTargetConfig,
     GitConfig,
@@ -26,10 +28,12 @@ from backend.core.use_cases.run_agent_once import (
     build_recovery_prompt,
     build_prompt,
     choose_agent,
+    classify_failure,
     commit_requested_changes,
     ensure_prd_delivery_ready,
     extract_agent_response_text,
     extract_prd_path,
+    format_attempt_history,
     format_command,
     get_head_sha,
     publish_changes,
@@ -2208,3 +2212,575 @@ def test_publish_changes_disabled_uses_fallback() -> None:
     assert len(pr_calls) == 1
     assert pr_calls[0]["title"] == "[Agent] Test"
     assert "Closes #1" in pr_calls[0]["body"]
+
+
+def test_classify_failure_uncommitted() -> None:
+    """classify_failure should return UNCOMMITTED_CHANGES when worktree is dirty."""
+    agent_result = CommandResult(("codex",), 0, "", "")
+    failure_type = classify_failure(
+        before_sha="abc",
+        after_sha="abc",
+        has_uncommitted=True,
+        agent_result=agent_result,
+        verification_results=[],
+        exc=None,
+    )
+    assert failure_type == FailureType.UNCOMMITTED_CHANGES
+
+
+def test_classify_failure_no_commits() -> None:
+    """classify_failure should return NO_COMMITS when SHA did not change."""
+    agent_result = CommandResult(("codex",), 0, "", "")
+    failure_type = classify_failure(
+        before_sha="abc",
+        after_sha="abc",
+        has_uncommitted=False,
+        agent_result=agent_result,
+        verification_results=[],
+        exc=None,
+    )
+    assert failure_type == FailureType.NO_COMMITS
+
+
+def test_classify_failure_verification_failed() -> None:
+    """classify_failure should return VERIFICATION_FAILED when a check fails."""
+    agent_result = CommandResult(("codex",), 0, "", "")
+    verification_results = [
+        CommandResult(("just", "test"), 1, "", "tests failed"),
+    ]
+    failure_type = classify_failure(
+        before_sha="abc",
+        after_sha="def",
+        has_uncommitted=False,
+        agent_result=agent_result,
+        verification_results=verification_results,
+        exc=None,
+    )
+    assert failure_type == FailureType.VERIFICATION_FAILED
+
+
+def test_classify_failure_agent_error() -> None:
+    """classify_failure should return AGENT_ERROR when agent exits non-zero."""
+    agent_result = CommandResult(("codex",), 1, "", "API error")
+    failure_type = classify_failure(
+        before_sha="abc",
+        after_sha="def",
+        has_uncommitted=False,
+        agent_result=agent_result,
+        verification_results=[CommandResult(("just", "test"), 0, "", "")],
+        exc=None,
+    )
+    assert failure_type == FailureType.AGENT_ERROR
+
+
+def test_classify_failure_unrecoverable_forbidden_paths() -> None:
+    """classify_failure should return UNRECOVERABLE for forbidden path violations."""
+    agent_result = CommandResult(("codex",), 0, "", "")
+    exc = RuntimeError("Refusing to publish forbidden paths: .env")
+    failure_type = classify_failure(
+        before_sha="abc",
+        after_sha="abc",
+        has_uncommitted=False,
+        agent_result=agent_result,
+        verification_results=[],
+        exc=exc,
+    )
+    assert failure_type == FailureType.UNRECOVERABLE
+
+
+def test_classify_failure_success() -> None:
+    """classify_failure should return SUCCESS when everything passes."""
+    agent_result = CommandResult(("codex",), 0, "", "")
+    failure_type = classify_failure(
+        before_sha="abc",
+        after_sha="def",
+        has_uncommitted=False,
+        agent_result=agent_result,
+        verification_results=[CommandResult(("just", "test"), 0, "", "")],
+        exc=None,
+    )
+    assert failure_type == FailureType.SUCCESS
+
+
+def test_recovery_loop_success_on_second_attempt(tmp_path: Path) -> None:
+    """Runner should succeed when recovery agent fixes the issue on attempt 2."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _RecoverySuccessRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sha_calls = 0
+            self._agent_calls = 0
+            self._committed = False
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple[:1] == ("codex",):
+                self._agent_calls += 1
+                if self._agent_calls == 1:
+                    # First attempt: produce no commits
+                    return CommandResult(command_tuple, 0, "", "")
+                if self._agent_calls == 2:
+                    # Recovery: write commit request and succeed
+                    _write_commit_request(worktree_path, "agent: recovered")
+                    return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self._sha_calls += 1
+                sha = "after-sha" if self._sha_calls > 1 else "before-sha"
+                return CommandResult(command_tuple, 0, f"{sha}\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                stdout = "" if self._committed else " M file.txt\n"
+                return CommandResult(command_tuple, 0, stdout, "")
+            if command_tuple == ("git", "commit", "-m", "agent: recovered"):
+                self._committed = True
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _RecoverySuccessRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_with_review_disabled(worktree_path)
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    commands = [tuple(command) for command in fake_runner.calls]
+    agent_commands = [command for command in commands if command[:1] == ("codex",)]
+    assert len(agent_commands) == 2
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    implementation_comment = [
+        c for c in comment_calls if "Implementation Complete" in c.get("body", "")
+    ]
+    assert len(implementation_comment) == 1
+    assert "Attempt History" in implementation_comment[0]["body"]
+
+
+def test_recovery_loop_exhausted_raises_max_retries(tmp_path: Path) -> None:
+    """Runner should fail with MaxRetriesExceededError when all attempts fail."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _ExhaustedRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sha_calls = 0
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                return self.responses[command_tuple]
+            if command_tuple[:1] == ("codex",):
+                # Always produce no commits
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self._sha_calls += 1
+                return CommandResult(command_tuple, 0, "same-sha\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _ExhaustedRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_with_review_disabled(
+        worktree_path, max_recovery_attempts=1, recovery_retry_delay_seconds=0
+    )
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 1
+    failed_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "edit_issue_labels"
+        and config.labels.failed in c.get("add", [])
+    ]
+    assert len(failed_calls) == 1
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    failure_comment = comment_calls[-1]
+    assert "Attempt History" in failure_comment["body"]
+    assert "Failed after 2 attempts" in failure_comment["body"]
+    assert "no_commits" in failure_comment["body"]
+
+
+def test_attempt_history_in_issue_comment(tmp_path: Path) -> None:
+    """Successful run should include Attempt History in the implementation comment."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _HistoryRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sha_calls = 0
+            self._agent_calls = 0
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple[:1] == ("codex",):
+                self._agent_calls += 1
+                if self._agent_calls == 1:
+                    # First attempt fails verification
+                    return CommandResult(command_tuple, 0, "", "")
+                if self._agent_calls == 2:
+                    # Recovery succeeds
+                    _write_commit_request(worktree_path, "agent: fix")
+                    return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self._sha_calls += 1
+                sha = "after-sha" if self._sha_calls > 1 else "before-sha"
+                return CommandResult(command_tuple, 0, f"{sha}\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                stdout = " M file.txt\n" if self._agent_calls < 2 else ""
+                return CommandResult(command_tuple, 0, stdout, "")
+            if command_tuple == ("git", "commit", "-m", "agent: fix"):
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _HistoryRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_with_review_disabled(worktree_path, "echo ok")
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    implementation_comment = [
+        c for c in comment_calls if "Implementation Complete" in c.get("body", "")
+    ]
+    assert len(implementation_comment) == 1
+    body = implementation_comment[0]["body"]
+    assert "Attempt History" in body
+    assert "success" in body
+    assert "| 1 |" in body
+    assert "| 2 |" in body
+
+
+def test_format_attempt_history_empty() -> None:
+    """format_attempt_history should return empty string for empty results."""
+    assert format_attempt_history([]) == ""
+
+
+def test_format_attempt_history_table() -> None:
+    """format_attempt_history should render a markdown table."""
+    results = [
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.NO_COMMITS,
+            recovered=False,
+            detail="No commits produced.",
+        ),
+        AttemptResult(
+            attempt_number=2,
+            failure_type=FailureType.SUCCESS,
+            recovered=True,
+            detail="Agent fixed the issue.",
+        ),
+    ]
+    table = format_attempt_history(results)
+    assert "| Attempt | Failure Type | Recovered | Detail |" in table
+    assert "| 1 | no_commits | No | No commits produced. |" in table
+    assert "| 2 | success | Yes | Agent fixed the issue. |" in table
+
+
+def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
+    """Scene B: Agent committed, just lint failed, recovery fixed, 2nd pass.
+
+    Steps:
+    1. Agent writes commit-request (runner will stage and commit on its behalf).
+    2. Runner stages with ``git add -A``.
+    3. ``just lint`` returns non-zero -> VERIFICATION_FAILED.
+    4. Runner injects stderr into recovery prompt.
+    5. Recovery agent fixes and writes new commit-request.
+    6. Runner re-stages, re-runs ``just lint`` -> passes.
+    7. Runner commits and publishes.
+    """
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: initial attempt")
+
+    class _LintRecoveryRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sha_calls = 0
+            self._lint_calls = 0
+            self._committed = False
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple[:1] == ("codex",):
+                prompt = command_tuple[-1]
+                if "Recovery attempt: 1/2" in prompt:
+                    assert (
+                        "Verification after runner staged changes with git add -A failed"
+                        in prompt
+                    )
+                    assert "lint stdout" in prompt
+                    assert "lint stderr" in prompt
+                    _write_commit_request(worktree_path, "agent: fix lint")
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self._sha_calls += 1
+                sha = "after-sha" if self._sha_calls > 1 else "before-sha"
+                return CommandResult(command_tuple, 0, f"{sha}\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                stdout = "" if self._committed else " M file.txt\n"
+                return CommandResult(command_tuple, 0, stdout, "")
+            if command_tuple == ("just", "lint"):
+                self._lint_calls += 1
+                if self._lint_calls == 2:
+                    return CommandResult(
+                        command_tuple,
+                        1,
+                        "lint stdout\n",
+                        "lint stderr\n",
+                    )
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "commit", "-m", "agent: fix lint"):
+                self._committed = True
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _LintRecoveryRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_with_review_disabled(worktree_path, "just lint")
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    commands = [tuple(command) for command in fake_runner.calls]
+    add_indices = [
+        index
+        for index, command in enumerate(commands)
+        if command == ("git", "add", "-A")
+    ]
+    lint_indices = [
+        index for index, command in enumerate(commands) if command == ("just", "lint")
+    ]
+    reset_index = commands.index(("git", "reset", "--mixed"))
+    recovery_prompt = [
+        command[-1] for command in commands if command[:1] == ("codex",)
+    ][1]
+
+    # Two staging rounds (initial + recovery)
+    assert len(add_indices) == 2
+    # just lint runs: pre-stage attempt 0, staged attempt 0, pre-stage recovery, staged recovery
+    assert len(lint_indices) == 4
+    assert add_indices[0] < lint_indices[1] < reset_index
+    assert reset_index < add_indices[1] < lint_indices[3]
+    assert (
+        "Verification after runner staged changes with git add -A failed"
+        in recovery_prompt
+    )
+    assert "lint stdout" in recovery_prompt
+    assert "lint stderr" in recovery_prompt
+    assert ("git", "commit", "-m", "agent: fix lint") in commands
+
+    # Verify attempt history records the failed attempt then success.
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    implementation_comment = [
+        c for c in comment_calls if "Implementation Complete" in c.get("body", "")
+    ]
+    assert len(implementation_comment) == 1
+    body = implementation_comment[0]["body"]
+    assert "Attempt History" in body
+    assert "verification_failed" in body
+    assert "success" in body
+
+
+def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
+    """Scene E: staged verification fails on all 3 attempts, MaxRetriesExceededError.
+
+    Steps:
+    1. Attempt 0: Agent writes commit-request, runner stages, ``just lint`` fails.
+    2. Attempt 1 (recovery): Agent fixes, runner re-stages, ``just lint`` still fails.
+    3. Attempt 2 (recovery): Agent fixes again, runner re-stages, ``just lint`` still fails.
+    4. All attempts exhausted → runner marks issue as failed.
+    5. Issue comment contains Attempt History with 3 rows of ``verification_failed``.
+    """
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _LintExhaustedRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._sha_calls = 0
+            self._agent_calls = 0
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple[:1] == ("codex",):
+                self._agent_calls += 1
+                _write_commit_request(
+                    worktree_path, f"agent: attempt {self._agent_calls}"
+                )
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self._sha_calls += 1
+                sha = "after-sha" if self._sha_calls > 1 else "before-sha"
+                return CommandResult(command_tuple, 0, f"{sha}\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                return CommandResult(command_tuple, 0, " M file.txt\n", "")
+            if command_tuple == ("just", "lint"):
+                return CommandResult(command_tuple, 1, "lint stdout\n", "lint stderr\n")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _LintExhaustedRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_with_review_disabled(worktree_path, "just lint")
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 1
+    commands = [tuple(command) for command in fake_runner.calls]
+    lint_indices = [
+        index for index, command in enumerate(commands) if command == ("just", "lint")
+    ]
+    add_indices = [
+        index
+        for index, command in enumerate(commands)
+        if command == ("git", "add", "-A")
+    ]
+    reset_indices = [
+        index
+        for index, command in enumerate(commands)
+        if command == ("git", "reset", "--mixed")
+    ]
+
+    # just lint always fails at pre-staging verification, so never reaches staged
+    # verification or commit_requested_changes.
+    assert len(lint_indices) == 3
+    assert len(add_indices) == 0
+    assert len(reset_indices) == 0
+
+    failed_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "edit_issue_labels"
+        and config.labels.failed in c.get("add", [])
+    ]
+    assert len(failed_calls) == 1
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    failure_comment = comment_calls[-1]
+    assert "Attempt History" in failure_comment["body"]
+    assert "Failed after 3 attempts" in failure_comment["body"]
+    assert "verification_failed" in failure_comment["body"]
+    assert "| 1 |" in failure_comment["body"]
+    assert "| 2 |" in failure_comment["body"]
+    assert "| 3 |" in failure_comment["body"]

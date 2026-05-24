@@ -256,38 +256,45 @@ class GitHubCliClient:
         self, labels: Sequence[str], limit: int
     ) -> list[IssueSummary]:
         """List open Issues with any of the given labels."""
-        label_filter = ",".join(labels)
-        result = self._runner.run(
-            [
-                "gh",
-                "issue",
-                "list",
-                "--state",
-                "open",
-                "--label",
-                label_filter,
-                "--limit",
-                str(limit),
-                "--json",
-                "number,title,url,labels,body",
-            ],
-            cwd=self.repo_path,
-        )
-        raw_issues = json.loads(result.stdout or "[]")
-        return [
-            IssueSummary(
-                number=int(raw_issue["number"]),
-                title=str(raw_issue.get("title", "")),
-                url=str(raw_issue.get("url", "")),
-                body=str(raw_issue.get("body", "") or ""),
-                labels=tuple(
-                    raw_label.get("name", "")
-                    for raw_label in raw_issue.get("labels", [])
-                    if raw_label.get("name")
-                ),
+        seen_numbers: set[int] = set()
+        candidates: list[IssueSummary] = []
+        for label in labels:
+            result = self._runner.run(
+                [
+                    "gh",
+                    "issue",
+                    "list",
+                    "--state",
+                    "open",
+                    "--label",
+                    label,
+                    "--limit",
+                    str(limit),
+                    "--json",
+                    "number,title,url,labels,body",
+                ],
+                cwd=self.repo_path,
             )
-            for raw_issue in raw_issues
-        ]
+            raw_issues = json.loads(result.stdout or "[]")
+            for raw_issue in raw_issues:
+                number = int(raw_issue["number"])
+                if number in seen_numbers:
+                    continue
+                seen_numbers.add(number)
+                candidates.append(
+                    IssueSummary(
+                        number=number,
+                        title=str(raw_issue.get("title", "")),
+                        url=str(raw_issue.get("url", "")),
+                        body=str(raw_issue.get("body", "") or ""),
+                        labels=tuple(
+                            raw_label.get("name", "")
+                            for raw_label in raw_issue.get("labels", [])
+                            if raw_label.get("name")
+                        ),
+                    )
+                )
+        return candidates
 
     def get_pull_request_context(self, branch: str) -> PullRequestContext | None:
         """Return PR context for an open PR on the given branch."""
