@@ -1,5 +1,7 @@
 # PRD: Surgical Failure Recovery & Retry Loop
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/24
+
 ## 1. Introduction & Goals
 
 当前 `run_once` 的失败处理是「一锤子买卖」：只要 `run_agent` 或 `run_verification` 出现异常，整个 Issue 立即标为 `failed`。这与 commit handoff 的设计愿景矛盾——我们把 commit 职责交给了 AI，却没给 AI「犯错后修正」的机会。
@@ -12,6 +14,16 @@
 - **零产出**：AI 读完 issue 觉得「不用改」，结果没有产生任何 commit，一次重试 prompt 往往就能解决。
 
 本 PRD 的目标是引入**分层失败识别 + 定向恢复策略**，把「硬失败」变成「可恢复失败」，在 runner 层构建一个轻量级 retry loop。
+
+### 真实测试 Checklist
+
+以下场景基于实际 runner 日志与 issue 处理记录提炼，用于验证本机制是否达到设计目标：
+
+- [ ] **场景 A — 忘 commit（可恢复）**：Agent 修改了 `src/backend/core/use_cases/foo.py` 但未执行 `git commit` → runner 识别为 `UNCOMMITTED_CHANGES` → 启动 recovery agent 提示 stage 并 commit → 若成功提交则继续 `publish_changes`。
+- [ ] **场景 B — pre-commit 失败（可恢复）**：Agent 已 commit，但 `run_verification` 中的 `just lint` 返回非零 → runner 识别为 `VERIFICATION_FAILED` → 将 stderr 注入 recovery prompt → recovery agent 修复并重新 commit → 第二轮 verification 通过。
+- [ ] **场景 C — 零产出（可恢复）**：Agent 读完 issue 认为「无需修改」直接退出，无 commit → runner 识别为 `NO_COMMITS` → 启动 recovery agent 提示重新实现变更 → 若第二轮产生 commit 则正常发布。
+- [ ] **场景 D — 安全路径拦截（不可恢复）**：Agent 尝试修改 `.github/workflows/ci.yml` 触发 `validate_safe_changes` 异常 → runner 识别为 `UNRECOVERABLE` → **不进入 retry loop** → 立即标 `failed` 并记录原因。
+- [ ] **场景 E — 第二次 recovery 仍失败（耗尽）**：同场景 B，但 recovery agent 两次尝试均未修复 lint → 两轮 recovery 后仍返回 `VERIFICATION_FAILED` → runner 抛出 `MaxRetriesExceededError` → Issue comment 包含 Attempt History 表格，列出 3 轮 failure_type 与 detail。
 
 ## 2. Requirement Shape
 
