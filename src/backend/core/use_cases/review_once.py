@@ -28,10 +28,12 @@ from backend.core.use_cases.run_agent_once import (
 _logger = logging.getLogger(__name__)
 
 
-def _context_changed(
+def _context_changed_wide(
     pr_context: PullRequestContext,
     last_marker,
     base_sha_remote: str,
+    issue_comments_count: int,
+    pr_comments_count: int,
 ) -> bool:
     """Return whether PR context has changed since the last supervisor event."""
     if last_marker is None:
@@ -39,6 +41,26 @@ def _context_changed(
     if last_marker.head_sha != pr_context.head_sha:
         return True
     if last_marker.base_sha != base_sha_remote:
+        return True
+    if (
+        last_marker.checks_state is not None
+        and last_marker.checks_state != pr_context.checks_state
+    ):
+        return True
+    if (
+        last_marker.mergeable is not None
+        and last_marker.mergeable != pr_context.mergeable
+    ):
+        return True
+    if (
+        last_marker.issue_comments_count is not None
+        and last_marker.issue_comments_count != issue_comments_count
+    ):
+        return True
+    if (
+        last_marker.pr_comments_count is not None
+        and last_marker.pr_comments_count != pr_comments_count
+    ):
         return True
     return False
 
@@ -95,11 +117,22 @@ def _process_review_candidate(
             )
             return
 
+    pr_number_match = re.search(r"/pull/(\d+)", pr_context.pr_url)
+    pr_comments: list[str] = []
+    if pr_number_match:
+        pr_comments = github_client.list_pr_comments(int(pr_number_match.group(1)))
+
     base_sha_remote = github_client.get_remote_base_sha(
         config.git.remote, config.git.base_branch
     )
 
-    if not _context_changed(pr_context, last_marker, base_sha_remote):
+    if not _context_changed_wide(
+        pr_context,
+        last_marker,
+        base_sha_remote,
+        issue_comments_count=len(comments),
+        pr_comments_count=len(pr_comments),
+    ):
         _logger.info(
             "Issue #%d context unchanged since last supervisor event; skipping.",
             issue.number,

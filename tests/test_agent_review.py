@@ -69,6 +69,127 @@ def test_parse_latest_event_marker_returns_none_when_missing() -> None:
     assert parse_latest_event_marker(["no marker here"]) is None
 
 
+def test_parse_event_marker_with_new_fields() -> None:
+    """Parser should extract new optional fields from marker."""
+    comment = (
+        "<!-- iar:event version=1 phase=post_pr_supervisor cycle=3 "
+        "head=abc123 base=def456 checks_state=FAILURE mergeable=true "
+        "issue_comments_count=5 pr_comments_count=2 -->"
+    )
+    from backend.core.shared.models.agent_runner import ReviewEventMarker
+
+    marker = parse_latest_event_marker([comment])
+    assert marker is not None
+    assert isinstance(marker, ReviewEventMarker)
+    assert marker.checks_state == "FAILURE"
+    assert marker.mergeable is True
+    assert marker.issue_comments_count == 5
+    assert marker.pr_comments_count == 2
+
+
+def test_parse_event_marker_backward_compatible() -> None:
+    """Old markers without new fields should parse without error."""
+    comment = (
+        "<!-- iar:event version=1 phase=post_pr_supervisor cycle=1 head=abc123 -->"
+    )
+    from backend.core.shared.models.agent_runner import ReviewEventMarker
+
+    marker = parse_latest_event_marker([comment])
+    assert marker is not None
+    assert isinstance(marker, ReviewEventMarker)
+    assert marker.checks_state is None
+    assert marker.mergeable is None
+    assert marker.issue_comments_count is None
+    assert marker.pr_comments_count is None
+
+
+def test_format_event_marker_with_new_fields() -> None:
+    """Formatter should include new fields when provided."""
+    marker = format_event_marker(
+        phase="post_pr_supervisor",
+        cycle=1,
+        checks_state="PENDING",
+        mergeable=False,
+        issue_comments_count=3,
+        pr_comments_count=1,
+    )
+    assert "checks_state=PENDING" in marker
+    assert "mergeable=false" in marker
+    assert "issue_comments_count=3" in marker
+    assert "pr_comments_count=1" in marker
+
+
+def test_context_changed_wide_detects_all_dimensions() -> None:
+    """_context_changed_wide should detect changes in all six dimensions."""
+    from dataclasses import replace
+
+    from backend.core.shared.models.agent_runner import (
+        PullRequestContext,
+        ReviewEventMarker,
+    )
+    from backend.core.use_cases.review_once import _context_changed_wide
+
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        checks_state="PENDING",
+        mergeable=True,
+    )
+    marker = ReviewEventMarker(
+        version=1,
+        phase="post_pr_supervisor",
+        cycle=1,
+        head_sha="abc123",
+        base_sha="def456",
+        checks_state="PENDING",
+        mergeable=True,
+        issue_comments_count=2,
+        pr_comments_count=1,
+    )
+    # No change
+    assert _context_changed_wide(pr_context, marker, "def456", 2, 1) is False
+
+    # head_sha changed
+    assert (
+        _context_changed_wide(
+            pr_context, replace(marker, head_sha="different"), "def456", 2, 1
+        )
+        is True
+    )
+
+    # base_sha changed
+    assert (
+        _context_changed_wide(
+            pr_context, replace(marker, base_sha="different"), "def456", 2, 1
+        )
+        is True
+    )
+
+    # checks_state changed
+    assert (
+        _context_changed_wide(
+            pr_context, replace(marker, checks_state="FAILURE"), "def456", 2, 1
+        )
+        is True
+    )
+
+    # mergeable changed
+    assert (
+        _context_changed_wide(
+            pr_context, replace(marker, mergeable=False), "def456", 2, 1
+        )
+        is True
+    )
+
+    # issue_comments_count changed
+    assert _context_changed_wide(pr_context, marker, "def456", 3, 1) is True
+
+    # pr_comments_count changed
+    assert _context_changed_wide(pr_context, marker, "def456", 2, 2) is True
+
+
 def test_build_review_packet_includes_diff_and_verification() -> None:
     """Review packet should contain diff and verification results."""
     issue = IssueSummary(

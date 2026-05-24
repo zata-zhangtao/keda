@@ -170,6 +170,10 @@ class ReviewEventMarker:
     base_sha: str | None = None
     pr_branch: str | None = None
     action: str | None = None
+    checks_state: str | None = None
+    mergeable: bool | None = None
+    issue_comments_count: int | None = None
+    pr_comments_count: int | None = None
 
 
 @dataclass(frozen=True)

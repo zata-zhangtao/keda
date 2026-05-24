@@ -366,36 +366,36 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/use_cases/pr_supervisor.py` 的冲突解决逻辑复用现有 agent commit proxy，不引入新的提交协议。
-- [ ] `src/backend/core/shared/models/agent_runner.py` 的 `ReviewEventMarker` 新增字段均有默认值，保持 frozen dataclass 语义。
-- [ ] `review_once.py` 的 `_context_changed` 扩展不破坏现有 SHA-only 检测语义，新维度是增量检测。
-- [ ] `core/` 未引入对 `infrastructure/` 或 `engines/` 的直接依赖。
+- [x] `src/backend/core/use_cases/pr_supervisor.py` 的冲突解决逻辑复用现有 agent commit proxy，不引入新的提交协议。
+- [x] `src/backend/core/shared/models/agent_runner.py` 的 `ReviewEventMarker` 新增字段均有默认值，保持 frozen dataclass 语义。
+- [x] `review_once.py` 的 `_context_changed` 扩展不破坏现有 SHA-only 检测语义，新维度是增量检测。
+- [x] `core/` 未引入对 `infrastructure/` 或 `engines/` 的直接依赖。
 
 ### Behavior Acceptance
 
-- [ ] `execute_rebase` 在 `git rebase` 返回非零时进入冲突解决循环，而非直接 abort。
-- [ ] 冲突解决循环最大尝试次数由 `config.post_pr_supervisor.max_repair_attempts` 控制。
-- [ ] 冲突解决成功后运行 `verification_commands` 并通过 `--force-with-lease` push。
-- [ ] 冲突解决耗尽后执行 `git rebase --abort` 并 raise `RuntimeError`。
-- [ ] `_context_changed_wide` 检测以下维度变化：`head_sha`、`base_sha`、`checks_state`、`issue_comments_count`、`pr_comments_count`、`mergeable`。
-- [ ] 任一维度变化时，`review_once` 正常进入 supervisor cycle；无变化时 skip。
-- [ ] `agent/review` 的 Issue 在 context changed 时先移回 `agent/supervising` 再运行 supervisor，行为不变。
+- [x] `execute_rebase` 在 `git rebase` 返回非零时进入冲突解决循环，而非直接 abort。
+- [x] 冲突解决循环最大尝试次数由 `config.post_pr_supervisor.max_repair_attempts` 控制。
+- [x] 冲突解决成功后运行 `verification_commands` 并通过 `--force-with-lease` push。
+- [x] 冲突解决耗尽后执行 `git rebase --abort` 并 raise `RuntimeError`。
+- [x] `_context_changed_wide` 检测以下维度变化：`head_sha`、`base_sha`、`checks_state`、`issue_comments_count`、`pr_comments_count`、`mergeable`。
+- [x] 任一维度变化时，`review_once` 正常进入 supervisor cycle；无变化时 skip。
+- [x] `agent/review` 的 Issue 在 context changed 时先移回 `agent/supervising` 再运行 supervisor，行为不变。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 更新 `execute_rebase` 的冲突解决行为描述。
-- [ ] `docs/guides/agent-runner.md` 更新 `review-daemon` 检测维度说明，列出 checks、comments、mergeability。
+- [x] `docs/guides/agent-runner.md` 更新 `execute_rebase` 的冲突解决行为描述。
+- [x] `docs/guides/agent-runner.md` 更新 `review-daemon` 检测维度说明，列出 checks、comments、mergeability。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_resolves_conflict_via_agent -q` 通过：agent 成功解决冲突后完成 rebase、验证并 force-with-lease push。
-- [ ] `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_conflict_exhaustion -q` 通过：冲突解决耗尽后执行 `git rebase --abort` 并抛出 `RuntimeError`。
-- [ ] `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_conflict_agent_no_commit_request -q` 通过：agent 修改文件但未写 commit request 时正确报错。
-- [ ] `uv run pytest tests/test_agent_review.py::test_parse_event_marker_with_new_fields -q` 通过：新字段被正确解析。
-- [ ] `uv run pytest tests/test_agent_review.py::test_parse_event_marker_backward_compatible -q` 通过：旧 marker 无新字段时不抛异常。
-- [ ] `uv run pytest tests/test_agent_review.py::test_context_changed_wide_detects_all_dimensions -q` 通过：六个维度变化均被正确检测。
-- [ ] `uv run pytest tests/test_review_once.py -q` 通过：所有 review-daemon 场景（checks_state、comments、mergeable、skip、label 流转）测试通过。
-- [ ] `just test` 通过。
+- [x] `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_resolves_conflict_via_agent -q` 通过：agent 成功解决冲突后完成 rebase、验证并 force-with-lease push。
+- [x] `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_conflict_exhaustion -q` 通过：冲突解决耗尽后执行 `git rebase --abort` 并抛出 `RuntimeError`。
+- [x] `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_conflict_agent_no_commit_request -q` 通过：agent 修改文件但未写 commit request 时正确报错。
+- [x] `uv run pytest tests/test_agent_review.py::test_parse_event_marker_with_new_fields -q` 通过：新字段被正确解析。
+- [x] `uv run pytest tests/test_agent_review.py::test_parse_event_marker_backward_compatible -q` 通过：旧 marker 无新字段时不抛异常。
+- [x] `uv run pytest tests/test_agent_review.py::test_context_changed_wide_detects_all_dimensions -q` 通过：六个维度变化均被正确检测。
+- [x] `uv run pytest tests/test_review_once.py -q` 通过：所有 review-daemon 场景（checks_state、comments、mergeable、skip、label 流转）测试通过。
+- [x] `just test` 通过。
 
 ## 8. Functional Requirements
 

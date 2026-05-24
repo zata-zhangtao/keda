@@ -25,8 +25,11 @@ from backend.core.use_cases.run_agent_once import (
     get_current_branch,
     get_head_sha,
     has_changes,
+    read_commit_request,
+    remove_commit_request,
     run_agent_with_prompt,
     run_verification,
+    validate_safe_changes,
 )
 
 _logger = logging.getLogger(__name__)
@@ -170,12 +173,20 @@ def build_supervisor_result_comment(
     verification_status: str,
     head_sha: str | None,
     cycle: int,
+    checks_state: str | None = None,
+    mergeable: bool | None = None,
+    issue_comments_count: int | None = None,
+    pr_comments_count: int | None = None,
 ) -> str:
     """Build the human-readable comment for a supervisor cycle result."""
     marker = format_event_marker(
         phase="post_pr_supervisor",
         cycle=cycle,
         head_sha=head_sha,
+        checks_state=checks_state,
+        mergeable=mergeable,
+        issue_comments_count=issue_comments_count,
+        pr_comments_count=pr_comments_count,
     )
     high = findings_counts.get("high", 0)
     medium = findings_counts.get("medium", 0)
@@ -249,22 +260,55 @@ def build_rebase_repair_complete_comment(
     )
 
 
+def build_conflict_resolution_prompt(
+    issue: IssueSummary,
+    pr_branch: str,
+    expected_head: str,
+    conflicted_files: list[str],
+) -> str:
+    """Build the prompt for the rebase conflict resolution agent."""
+    files_text = "\n".join(f"- {f}" for f in conflicted_files) or "(none)"
+    return "\n".join(
+        [
+            f"Resolve rebase conflicts for Issue #{issue.number}: {issue.title}",
+            "",
+            f"Issue URL: {issue.url}",
+            f"PR Branch: `{pr_branch}`",
+            f"Expected HEAD: `{expected_head}`",
+            "",
+            "The rebase onto the remote base branch encountered conflicts in these files:",
+            files_text,
+            "",
+            "Resolve all conflicts and request a commit.",
+            "- Only modify conflicted files inside the current worktree.",
+            "- Do not switch branches, push, or abort the rebase.",
+            "- Do not run `git add` or `git commit`; the runner handles staging.",
+            "- After resolving conflicts, write `.agent-runner/commit-request.json` "
+            "as JSON with `commit_message`.",
+        ]
+    )
+
+
 def execute_rebase(
     *,
+    issue: IssueSummary,
     worktree_path: Path,
     config: AppConfig,
     process_runner: IProcessRunner,
     pr_branch: str,
     expected_head: str,
+    supervisor_agent: str,
 ) -> list[CommandResult]:
     """Rebase the PR branch onto the latest remote base safely.
 
     Args:
+        issue: The Issue being rebased.
         worktree_path: Path to the worktree.
         config: Application configuration.
         process_runner: Process runner for git commands.
         pr_branch: Name of the PR branch.
         expected_head: Expected current HEAD SHA before rebase.
+        supervisor_agent: Agent to run for conflict resolution.
 
     Returns:
         Verification results after rebase.
@@ -298,15 +342,87 @@ def execute_rebase(
     )
 
     if rebase_result.return_code != 0:
-        # Abort rebase and raise for agent to handle
+        max_attempts = max(0, config.post_pr_supervisor.max_repair_attempts)
+        for attempt in range(1, max_attempts + 1):
+            diff_names_result = process_runner.run(
+                ["git", "diff", "--name-only", "--diff-filter=U"],
+                cwd=worktree_path,
+                check=False,
+            )
+            conflicted_files = [
+                line.strip()
+                for line in diff_names_result.stdout.splitlines()
+                if line.strip()
+            ]
+            prompt = build_conflict_resolution_prompt(
+                issue, pr_branch, expected_head, conflicted_files
+            )
+            run_agent_with_prompt(
+                supervisor_agent, prompt, worktree_path, process_runner
+            )
+
+            request_path = worktree_path / ".agent-runner" / "commit-request.json"
+            if request_path.is_file():
+                current_branch = get_current_branch(worktree_path, process_runner)
+                if current_branch != pr_branch:
+                    raise RuntimeError(
+                        f"Refusing to commit on unexpected branch: {current_branch}"
+                    )
+                _ = read_commit_request(worktree_path, issue)
+                remove_commit_request(worktree_path)
+                if not has_changes(worktree_path, process_runner):
+                    raise RuntimeError(
+                        "Agent requested a commit but produced no file changes."
+                    )
+                validate_safe_changes(worktree_path, config, process_runner)
+                process_runner.run(["git", "add", "-A"], cwd=worktree_path)
+                verification_results = run_verification(
+                    worktree_path, config, process_runner
+                )
+                ensure_verification_passed(verification_results)
+                continue_result = process_runner.run(
+                    ["git", "rebase", "--continue"],
+                    cwd=worktree_path,
+                    check=False,
+                )
+                if continue_result.return_code == 0:
+                    verification_results = run_verification(
+                        worktree_path, config, process_runner
+                    )
+                    ensure_verification_passed(verification_results)
+                    process_runner.run(
+                        ["git", "push", "--force-with-lease", remote, pr_branch],
+                        cwd=worktree_path,
+                    )
+                    return verification_results
+            else:
+                if has_changes(worktree_path, process_runner):
+                    raise RuntimeError(
+                        "Rebase conflict agent changed files without writing "
+                        ".agent-runner/commit-request.json."
+                    )
+                continue_result = process_runner.run(
+                    ["git", "rebase", "--continue"],
+                    cwd=worktree_path,
+                    check=False,
+                )
+                if continue_result.return_code == 0:
+                    verification_results = run_verification(
+                        worktree_path, config, process_runner
+                    )
+                    ensure_verification_passed(verification_results)
+                    process_runner.run(
+                        ["git", "push", "--force-with-lease", remote, pr_branch],
+                        cwd=worktree_path,
+                    )
+                    return verification_results
+
         process_runner.run(
             ["git", "rebase", "--abort"],
             cwd=worktree_path,
             check=False,
         )
-        raise RuntimeError(
-            f"Rebase failed: {rebase_result.stdout}\n{rebase_result.stderr}"
-        )
+        raise RuntimeError("Rebase conflict resolution exhausted")
 
     # Verify after rebase
     verification_results = run_verification(worktree_path, config, process_runner)
@@ -469,6 +585,10 @@ def run_post_pr_supervisor_cycle(
         verification_status=action_result.verification_status,
         head_sha=action_result.head_sha or pr_context.head_sha,
         cycle=cycle,
+        checks_state=pr_context.checks_state,
+        mergeable=pr_context.mergeable,
+        issue_comments_count=len(issue_comments),
+        pr_comments_count=len(pr_comments),
     )
     github_client.comment_issue(issue.number, comment_body)
 

@@ -13,6 +13,7 @@ from backend.core.shared.models.agent_runner import (
     PullRequestContext,
 )
 from backend.core.use_cases.pr_supervisor import (
+    build_conflict_resolution_prompt,
     build_rework_intent_comment,
     build_supervisor_prompt,
     execute_rebase,
@@ -117,14 +118,17 @@ def test_execute_rebase_safety_checks() -> None:
             ),
         }
     )
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     config = AppConfig()
     with pytest.raises(RuntimeError, match="HEAD wrong-sha does not match expected"):
         execute_rebase(
+            issue=issue,
             worktree_path=Path("."),
             config=config,
             process_runner=fake_runner,
             pr_branch="issue-1",
             expected_head="abc123",
+            supervisor_agent="codex",
         )
 
 
@@ -170,13 +174,16 @@ def test_execute_rebase_fetches_and_rebases_safely() -> None:
             ),
         }
     )
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     config = AppConfig()
     execute_rebase(
+        issue=issue,
         worktree_path=Path("."),
         config=config,
         process_runner=fake_runner,
         pr_branch="issue-1",
         expected_head="abc123",
+        supervisor_agent="codex",
     )
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "fetch", "origin", "main") in commands
@@ -222,14 +229,19 @@ def test_execute_rebase_aborts_on_conflict() -> None:
             ),
         }
     )
-    config = AppConfig()
-    with pytest.raises(RuntimeError, match="Rebase failed"):
+    from backend.core.shared.models.agent_runner import PostPrSupervisorConfig
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    config = AppConfig(post_pr_supervisor=PostPrSupervisorConfig(max_repair_attempts=0))
+    with pytest.raises(RuntimeError, match="exhausted"):
         execute_rebase(
+            issue=issue,
             worktree_path=Path("."),
             config=config,
             process_runner=fake_runner,
             pr_branch="issue-1",
             expected_head="abc123",
+            supervisor_agent="codex",
         )
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "rebase", "--abort") in commands
@@ -437,3 +449,245 @@ def test_run_post_pr_supervisor_cycle_parses_action() -> None:
     assert result.action == "approve_for_human_review"
     assert result.summary == "LGTM"
     assert fake_runner.agent_capture_output == [True]
+
+
+def test_build_conflict_resolution_prompt_includes_context() -> None:
+    """Conflict resolution prompt should include issue, branch, head, and files."""
+    issue = IssueSummary(
+        number=42,
+        title="Fix bug",
+        url="https://github.com/example/repo/issues/42",
+        body="B",
+        labels=(),
+    )
+    prompt = build_conflict_resolution_prompt(
+        issue=issue,
+        pr_branch="issue-42",
+        expected_head="abc123",
+        conflicted_files=["src/a.py", "src/b.py"],
+    )
+    assert "Issue #42: Fix bug" in prompt
+    assert "issue-42" in prompt
+    assert "abc123" in prompt
+    assert "src/a.py" in prompt
+    assert "src/b.py" in prompt
+    assert ".agent-runner/commit-request.json" in prompt
+
+
+def test_execute_rebase_resolves_conflict_via_agent(tmp_path: Path) -> None:
+    """Rebase conflict should be resolved by agent, then continue, verify, and push."""
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "resolve conflict"}),
+        encoding="utf-8",
+    )
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "HEAD"),
+                return_code=0,
+                stdout="abc123\n",
+                stderr="",
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "fetch", "origin", "main"): CommandResult(
+                command=("git", "fetch", "origin", "main"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "origin/main"): CommandResult(
+                command=("git", "rebase", "origin/main"),
+                return_code=1,
+                stdout="",
+                stderr="CONFLICT",
+            ),
+            ("git", "diff", "--name-only", "--diff-filter=U"): CommandResult(
+                command=("git", "diff", "--name-only", "--diff-filter=U"),
+                return_code=0,
+                stdout="file.py\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M file.py\n",
+                stderr="",
+            ),
+            ("git", "rebase", "--continue"): CommandResult(
+                command=("git", "rebase", "--continue"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "push", "--force-with-lease", "origin", "issue-1"): CommandResult(
+                command=("git", "push", "--force-with-lease", "origin", "issue-1"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    config = AppConfig()
+    execute_rebase(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=fake_runner,
+        pr_branch="issue-1",
+        expected_head="abc123",
+        supervisor_agent="codex",
+    )
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "push", "--force-with-lease", "origin", "issue-1") in commands
+
+
+def test_execute_rebase_conflict_exhaustion(tmp_path: Path) -> None:
+    """Rebase conflict resolution should exhaust and abort after max attempts."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "HEAD"),
+                return_code=0,
+                stdout="abc123\n",
+                stderr="",
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "fetch", "origin", "main"): CommandResult(
+                command=("git", "fetch", "origin", "main"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "origin/main"): CommandResult(
+                command=("git", "rebase", "origin/main"),
+                return_code=1,
+                stdout="",
+                stderr="CONFLICT",
+            ),
+            ("git", "diff", "--name-only", "--diff-filter=U"): CommandResult(
+                command=("git", "diff", "--name-only", "--diff-filter=U"),
+                return_code=0,
+                stdout="file.py\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "--continue"): CommandResult(
+                command=("git", "rebase", "--continue"),
+                return_code=1,
+                stdout="",
+                stderr="still conflicted",
+            ),
+            ("git", "rebase", "--abort"): CommandResult(
+                command=("git", "rebase", "--abort"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    from backend.core.shared.models.agent_runner import PostPrSupervisorConfig
+
+    config = AppConfig(post_pr_supervisor=PostPrSupervisorConfig(max_repair_attempts=2))
+    with pytest.raises(RuntimeError, match="exhausted"):
+        execute_rebase(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            process_runner=fake_runner,
+            pr_branch="issue-1",
+            expected_head="abc123",
+            supervisor_agent="codex",
+        )
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "rebase", "--abort") in commands
+    assert commands.count(("git", "rebase", "--continue")) == 2
+
+
+def test_execute_rebase_conflict_agent_no_commit_request(tmp_path: Path) -> None:
+    """Agent that changes files without writing commit request should raise immediately."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "HEAD"),
+                return_code=0,
+                stdout="abc123\n",
+                stderr="",
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "fetch", "origin", "main"): CommandResult(
+                command=("git", "fetch", "origin", "main"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "origin/main"): CommandResult(
+                command=("git", "rebase", "origin/main"),
+                return_code=1,
+                stdout="",
+                stderr="CONFLICT",
+            ),
+            ("git", "diff", "--name-only", "--diff-filter=U"): CommandResult(
+                command=("git", "diff", "--name-only", "--diff-filter=U"),
+                return_code=0,
+                stdout="file.py\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M file.py\n",
+                stderr="",
+            ),
+        }
+    )
+    config = AppConfig()
+    with pytest.raises(RuntimeError, match="without writing"):
+        execute_rebase(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            process_runner=fake_runner,
+            pr_branch="issue-1",
+            expected_head="abc123",
+            supervisor_agent="codex",
+        )
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "rebase", "--abort") not in commands
+    assert ("git", "rebase", "--continue") not in commands
