@@ -196,15 +196,58 @@ Tests
 │   [修改]
 │   【总结】补充 rebase 冲突解决的测试覆盖
 │
-│   ├── test_execute_rebase_resolves_conflict_via_agent：mock 冲突后 agent 修复成功
-│   ├── test_execute_rebase_conflict_exhaustion：mock 冲突后多次尝试均失败
-│   └── 验证冲突解决后通过 verification 和 force-with-lease push
+│   ├── test_execute_rebase_resolves_conflict_via_agent
+│   │   - mock git rebase 返回非零，agent 调用后写 commit-request.json
+│   │   - mock git rebase --continue 成功，验证和 push 正常执行
+│   │   - 断言 force-with-lease push 被调用，返回 verification_results
+│   ├── test_execute_rebase_conflict_exhaustion
+│   │   - mock git rebase 始终冲突，agent 多次尝试均无法解决
+│   │   - 断言最终执行 git rebase --abort 并抛出 RuntimeError("exhausted")
+│   ├── test_execute_rebase_conflict_agent_no_commit_request
+│   │   - mock 冲突后 agent 修改文件但未写 commit-request.json
+│   │   - 断言抛出 RuntimeError("without writing")，且不进入下一次重试
+│   └── test_build_conflict_resolution_prompt_includes_context
+│       - 断言 prompt 包含 issue number、pr_branch、expected_head、冲突文件列表
 │
-├── tests/test_run_agent.py
-│   [修改/确认]
-│   【总结】确认 review-daemon 扩展不破坏现有 runner 行为
+├── tests/test_agent_review.py
+│   [修改]
+│   【总结】补充 review-daemon 上下文变化检测的单元测试
 │
-│   └── 无新增测试需求，但需确保现有测试通过
+│   ├── test_parse_event_marker_with_new_fields
+│   │   - 解析包含 checks_state、mergeable、issue_comments_count、pr_comments_count 的 marker
+│   │   - 断言所有新字段被正确提取为对应类型
+│   ├── test_parse_event_marker_backward_compatible
+│   │   - 解析旧版 marker（无新字段），断言新字段为 None，不抛异常
+│   ├── test_format_event_marker_with_new_fields
+│   │   - 传入所有新字段，断言输出字符串包含各字段键值对
+│   └── test_context_changed_wide_detects_all_dimensions
+│       - 构造带新字段的 marker 和 PR context，分别验证
+│         head_sha / base_sha / checks_state / mergeable / issue_comments_count / pr_comments_count
+│         任一维度变化均返回 True，全部一致返回 False
+│
+├── tests/test_review_once.py（新增文件）
+│   [新增]
+│   【总结】review_once 端到端行为测试（FakeGitHubClient + FakeProcessRunner）
+│
+│   ├── test_review_once_detects_checks_state_change_and_triggers_supervisor
+│   │   - marker checks_state=PENDING，PR context checks_state=FAILURE
+│   │   - 断言 _context_changed 返回 True，edit_issue_labels 移入 supervising
+│   │   - 断言 run_post_pr_supervisor_cycle 被调用
+│   ├── test_review_once_detects_new_issue_comments_and_triggers_supervisor
+│   │   - marker issue_comments_count=2，实际 list_issue_comments 返回 3 条
+│   │   - 断言触发 supervisor cycle
+│   ├── test_review_once_detects_new_pr_comments_and_triggers_supervisor
+│   │   - marker pr_comments_count=1，实际 list_pr_comments 返回 2 条
+│   │   - 断言触发 supervisor cycle
+│   ├── test_review_once_detects_mergeable_change_and_triggers_supervisor
+│   │   - marker mergeable=False，PR context mergeable=True
+│   │   - 断言触发 supervisor cycle
+│   ├── test_review_once_skips_when_no_context_change
+│   │   - marker 与当前 PR context、comments 数量完全一致
+│   │   - 断言不调用 supervisor cycle，直接 skip
+│   └── test_review_once_moves_review_label_to_supervising_on_change
+│       - Issue 当前标签含 agent/review，context 发生变化
+│       - 断言先 edit_issue_labels add=supervising remove=review，再进入 supervisor
 │
 └── tests/test_agent_runner_cli.py (if exists)
     [确认]
@@ -252,10 +295,18 @@ flowchart TD
 
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
 |---|---|---|---|---|---|---|
-| Rebase conflict resolved by agent | `execute_rebase` unit test | unit | Fake process runner with conflict then success sequence | Fake worktree, fake commit request | `uv run pytest tests/test_pr_supervisor.py -q` | Yes |
-| Rebase conflict exhaustion aborts safely | `execute_rebase` unit test | unit | Fake process runner with persistent conflict | Fake worktree | `uv run pytest tests/test_pr_supervisor.py -q` | Yes |
-| Review daemon detects checks_state change | `review_once` unit test | unit | Fake GitHub client returning different checks_state | Fake Issue with marker | `uv run pytest tests/test_run_agent.py -q` | Yes |
-| Review daemon detects new comments | `review_once` unit test | unit | Fake GitHub client returning more comments than marker recorded | Fake Issue with marker | `uv run pytest tests/test_run_agent.py -q` | Yes |
+| Rebase conflict resolved by agent | `execute_rebase` unit test | unit | Fake process runner with conflict then success sequence | Fake worktree, fake commit request | `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_resolves_conflict_via_agent -q` | Yes |
+| Rebase conflict exhaustion aborts safely | `execute_rebase` unit test | unit | Fake process runner with persistent conflict | Fake worktree | `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_conflict_exhaustion -q` | Yes |
+| Rebase conflict agent missing commit request raises | `execute_rebase` unit test | unit | Fake process runner with conflict, agent edits but no commit request | Fake worktree | `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_conflict_agent_no_commit_request -q` | Yes |
+| ReviewEventMarker parses new fields correctly | `parse_latest_event_marker` unit test | unit | String marker comments | None | `uv run pytest tests/test_agent_review.py::test_parse_event_marker_with_new_fields -q` | Yes |
+| ReviewEventMarker backward compatible with old markers | `parse_latest_event_marker` unit test | unit | Old-format marker comments | None | `uv run pytest tests/test_agent_review.py::test_parse_event_marker_backward_compatible -q` | Yes |
+| `_context_changed_wide` detects checks_state change | `_context_changed` unit test | unit | Frozen dataclass instances | None | `uv run pytest tests/test_agent_review.py::test_context_changed_wide_detects_all_dimensions -q` | Yes |
+| `review_once` triggers supervisor on checks_state flip | `review_once` integration test | unit | FakeGitHubClient + FakeProcessRunner | Fake Issue with marker | `uv run pytest tests/test_review_once.py::test_review_once_detects_checks_state_change_and_triggers_supervisor -q` | Yes |
+| `review_once` triggers supervisor on new Issue comments | `review_once` integration test | unit | FakeGitHubClient + FakeProcessRunner | Fake Issue with marker | `uv run pytest tests/test_review_once.py::test_review_once_detects_new_issue_comments_and_triggers_supervisor -q` | Yes |
+| `review_once` triggers supervisor on new PR comments | `review_once` integration test | unit | FakeGitHubClient + FakeProcessRunner | Fake Issue with marker | `uv run pytest tests/test_review_once.py::test_review_once_detects_new_pr_comments_and_triggers_supervisor -q` | Yes |
+| `review_once` triggers supervisor on mergeable change | `review_once` integration test | unit | FakeGitHubClient + FakeProcessRunner | Fake Issue with marker | `uv run pytest tests/test_review_once.py::test_review_once_detects_mergeable_change_and_triggers_supervisor -q` | Yes |
+| `review_once` skips when context unchanged | `review_once` integration test | unit | FakeGitHubClient + FakeProcessRunner | Fake Issue with marker | `uv run pytest tests/test_review_once.py::test_review_once_skips_when_no_context_change -q` | Yes |
+| `review_once` moves review→supervising label on change | `review_once` integration test | unit | FakeGitHubClient + FakeProcessRunner | Fake Issue with review label | `uv run pytest tests/test_review_once.py::test_review_once_moves_review_label_to_supervising_on_change -q` | Yes |
 | Full repo remains healthy | repository command | regression | Normal project mocks | Local dev environment | `just test` | Yes |
 
 ### Low-Fidelity Prototype
@@ -309,9 +360,13 @@ No external validation required; repository evidence was sufficient.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_pr_supervisor.py -q` 包含 rebase 冲突 agent 解决的成功路径测试。
-- [ ] `uv run pytest tests/test_pr_supervisor.py -q` 包含 rebase 冲突解决耗尽后安全 abort 的测试。
-- [ ] `uv run pytest tests/test_run_agent.py -q` 确认 review-daemon 扩展无回归。
+- [ ] `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_resolves_conflict_via_agent -q` 通过：agent 成功解决冲突后完成 rebase、验证并 force-with-lease push。
+- [ ] `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_conflict_exhaustion -q` 通过：冲突解决耗尽后执行 `git rebase --abort` 并抛出 `RuntimeError`。
+- [ ] `uv run pytest tests/test_pr_supervisor.py::test_execute_rebase_conflict_agent_no_commit_request -q` 通过：agent 修改文件但未写 commit request 时正确报错。
+- [ ] `uv run pytest tests/test_agent_review.py::test_parse_event_marker_with_new_fields -q` 通过：新字段被正确解析。
+- [ ] `uv run pytest tests/test_agent_review.py::test_parse_event_marker_backward_compatible -q` 通过：旧 marker 无新字段时不抛异常。
+- [ ] `uv run pytest tests/test_agent_review.py::test_context_changed_wide_detects_all_dimensions -q` 通过：六个维度变化均被正确检测。
+- [ ] `uv run pytest tests/test_review_once.py -q` 通过：所有 review-daemon 场景（checks_state、comments、mergeable、skip、label 流转）测试通过。
 - [ ] `just test` 通过。
 
 ## 8. Functional Requirements
