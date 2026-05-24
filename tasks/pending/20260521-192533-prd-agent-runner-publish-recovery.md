@@ -1,5 +1,7 @@
 # PRD: Agent Runner Publish Failure Recovery & Resume
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/28
+
 ## 1. Introduction & Goals
 
 `iar run-once` 当前把 Agent 执行、runner 提交、Git push、PR 创建和 label 收尾串在同一次流程里。实际故障中，Agent 已经完成代码修改、runner 已经生成本地 commit、验证也通过，但最后 `git push` 因配置 remote 不存在而失败，Issue 被标记为 `agent/failed`。
