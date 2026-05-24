@@ -22,9 +22,12 @@ from backend.core.shared.models.agent_deliberation import (
     DeliberationResult,
     DeliberationSession,
 )
+from backend.core.shared.interfaces.agent_runner import IContentGenerator
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
+    GeneratedContentConfig,
+    GeneratedContentTargetConfig,
     GitConfig,
     LabelConfig,
     PostPrSupervisorConfig,
@@ -36,6 +39,8 @@ from backend.core.shared.models.agent_runner import (
     WorktreeConfig,
 )
 from backend.infrastructure.config.settings import (
+    AgentRunnerGeneratedContentSettings,
+    AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerLabelSettings,
     AgentRunnerPromptSettings,
     AgentRunnerRepositorySettings,
@@ -48,6 +53,40 @@ from backend.infrastructure.process_runner import (
     run_filtered_claude_stream,
     should_filter_claude_stream,
 )
+
+
+def _build_generated_content_target_config(
+    target_settings: AgentRunnerGeneratedContentTargetSettings,
+) -> GeneratedContentTargetConfig:
+    """Convert pydantic target settings to frozen core config."""
+    return GeneratedContentTargetConfig(
+        enabled=target_settings.enabled,
+        mode=target_settings.mode,
+        output=target_settings.output,
+        title_template=target_settings.title_template,
+        body_template=target_settings.body_template,
+        agent=target_settings.agent,
+        timeout_seconds=target_settings.timeout_seconds,
+        prompt=target_settings.prompt,
+        include_commit_log=target_settings.include_commit_log,
+        include_diff_stat=target_settings.include_diff_stat,
+    )
+
+
+def _build_generated_content_config(
+    gc_settings: AgentRunnerGeneratedContentSettings,
+) -> GeneratedContentConfig:
+    """Convert pydantic generated-content settings to frozen core config."""
+    return GeneratedContentConfig(
+        enabled=gc_settings.enabled,
+        fallback=gc_settings.fallback,
+        max_input_chars=gc_settings.max_input_chars,
+        default_agent=gc_settings.default_agent,
+        issue_from_prd=_build_generated_content_target_config(
+            gc_settings.issue_from_prd
+        ),
+        draft_pr=_build_generated_content_target_config(gc_settings.draft_pr),
+    )
 
 
 def build_app_config_from_settings(
@@ -63,6 +102,9 @@ def build_app_config_from_settings(
 
     pre_push = agent_runner_settings.pre_push_review
     post_supervisor = agent_runner_settings.post_pr_supervisor
+    generated_content = _build_generated_content_config(
+        agent_runner_settings.generated_content
+    )
 
     return AppConfig(
         labels=LabelConfig(
@@ -109,6 +151,7 @@ def build_app_config_from_settings(
             supervisor_agent=post_supervisor.supervisor_agent,
             max_repair_attempts=post_supervisor.max_repair_attempts,
         ),
+        generated_content=generated_content,
     )
 
 
@@ -238,6 +281,60 @@ def _merge_prompt_config(
     )
 
 
+def _merge_generated_content_target_config(
+    base_config: GeneratedContentTargetConfig,
+    override: AgentRunnerGeneratedContentTargetSettings | None,
+) -> GeneratedContentTargetConfig:
+    """Merge repository-specific generated-content target overrides."""
+    if override is None:
+        return base_config
+    override_data = _pydantic_override_dict(override)
+    return GeneratedContentTargetConfig(
+        enabled=override_data.get("enabled", base_config.enabled),
+        mode=override_data.get("mode", base_config.mode),
+        output=override_data.get("output", base_config.output),
+        title_template=override_data.get("title_template", base_config.title_template),
+        body_template=override_data.get("body_template", base_config.body_template),
+        agent=override_data.get("agent", base_config.agent),
+        timeout_seconds=override_data.get(
+            "timeout_seconds", base_config.timeout_seconds
+        ),
+        prompt=override_data.get("prompt", base_config.prompt),
+        include_commit_log=override_data.get(
+            "include_commit_log", base_config.include_commit_log
+        ),
+        include_diff_stat=override_data.get(
+            "include_diff_stat", base_config.include_diff_stat
+        ),
+    )
+
+
+def _merge_generated_content_config(
+    base_config: GeneratedContentConfig,
+    override: AgentRunnerGeneratedContentSettings | None,
+) -> GeneratedContentConfig:
+    """Merge repository-specific generated-content overrides."""
+    if override is None:
+        return base_config
+    override_data = _pydantic_override_dict(override)
+    return GeneratedContentConfig(
+        enabled=override_data.get("enabled", base_config.enabled),
+        fallback=override_data.get("fallback", base_config.fallback),
+        max_input_chars=override_data.get(
+            "max_input_chars", base_config.max_input_chars
+        ),
+        default_agent=override_data.get("default_agent", base_config.default_agent),
+        issue_from_prd=_merge_generated_content_target_config(
+            base_config.issue_from_prd,
+            override.issue_from_prd if "issue_from_prd" in override_data else None,
+        ),
+        draft_pr=_merge_generated_content_target_config(
+            base_config.draft_pr,
+            override.draft_pr if "draft_pr" in override_data else None,
+        ),
+    )
+
+
 def merge_repository_config(
     global_config: AppConfig, repo_settings: AgentRunnerRepositorySettings
 ) -> AppConfig:
@@ -262,6 +359,9 @@ def merge_repository_config(
     post_pr_supervisor = _merge_optional_model(
         global_config.post_pr_supervisor, repo_settings.post_pr_supervisor
     )
+    generated_content = _merge_generated_content_config(
+        global_config.generated_content, repo_settings.generated_content
+    )
     return AppConfig(
         labels=labels,
         git=git,
@@ -271,6 +371,7 @@ def merge_repository_config(
         prompts=prompts,
         pre_push_review=pre_push_review,
         post_pr_supervisor=post_pr_supervisor,
+        generated_content=generated_content,
     )
 
 
@@ -352,6 +453,62 @@ def resolve_repository_targets(
             config=global_config,
         )
     ]
+
+
+class SubprocessContentGenerator(IContentGenerator):
+    """Generate content via a read-only local agent subprocess.
+
+    Implements ``IContentGenerator`` via duck typing.
+    """
+
+    def __init__(self, process_runner: SubprocessRunner) -> None:
+        self._process_runner = process_runner
+
+    def generate(
+        self,
+        agent_name: str,
+        prompt: str,
+        *,
+        cwd: Path,
+        timeout: int | None = None,
+    ) -> CommandResult:
+        """Run a read-only content generator and return its output."""
+        command = _build_content_generation_command(agent_name, prompt, cwd)
+        return self._process_runner.run(
+            command, cwd=cwd, capture_output=True, timeout=timeout, check=False
+        )
+
+
+def _build_content_generation_command(
+    agent_name: str, prompt: str, cwd: Path
+) -> list[str]:
+    if agent_name == "claude":
+        return [
+            "claude",
+            "--dangerously-skip-permissions",
+            "-p",
+            prompt,
+        ]
+    if agent_name == "kimi":
+        return ["kimi", "--prompt", prompt]
+    return [
+        "codex",
+        "--cd",
+        str(cwd),
+        "--sandbox",
+        "read-only",
+        "--ask-for-approval",
+        "never",
+        "exec",
+        prompt,
+    ]
+
+
+def create_content_generator(
+    process_runner: SubprocessRunner | None = None,
+) -> SubprocessContentGenerator:
+    """Create a content generator instance."""
+    return SubprocessContentGenerator(process_runner or SubprocessRunner())
 
 
 def resolve_issue_from_prd_target(

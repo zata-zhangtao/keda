@@ -522,67 +522,72 @@ flowchart TD
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/use_cases/generated_content.py` 或等价 core use case 负责 prompt 渲染、解析、校验和 fallback 行为。
-- [ ] `src/backend/core/use_cases/create_issue_from_prd.py` 不导入 `backend.infrastructure` 或具体 Agent CLI 代码。
-- [ ] `src/backend/core/use_cases/run_agent_once.py` 不导入 `backend.infrastructure` 或具体 Agent CLI 代码。
-- [ ] `src/backend/engines/agent_runner/factory.py` 仍是 settings 转换和 generated-content 具体依赖装配点。
-- [ ] Generated-content config 通过 `src/backend/core/shared/models/agent_runner.py` 挂载到 `AppConfig`。
-- [ ] 内容生成职责没有被加入 `IGitHubClient`。
+- [x] `src/backend/core/use_cases/generated_content.py` 或等价 core use case 负责 prompt 渲染、解析、校验和 fallback 行为。
+- [x] `src/backend/core/use_cases/create_issue_from_prd.py` 不导入 `backend.infrastructure` 或具体 Agent CLI 代码。
+- [x] `src/backend/core/use_cases/run_agent_once.py` 不导入 `backend.infrastructure` 或具体 Agent CLI 代码。
+- [x] `src/backend/engines/agent_runner/factory.py` 仍是 settings 转换和 generated-content 具体依赖装配点。
+- [x] Generated-content config 通过 `src/backend/core/shared/models/agent_runner.py` 挂载到 `AppConfig`。
+- [x] 内容生成职责没有被加入 `IGitHubClient`。
 
 ### Configuration Acceptance
 
-- [ ] `config.toml` 包含 `[agent_runner.generated_content]` 默认配置说明。
-- [ ] `config.toml` 包含 `[agent_runner.generated_content.issue_from_prd]` 默认配置说明。
-- [ ] `config.toml` 包含 `[agent_runner.generated_content.draft_pr]` 默认配置说明。
-- [ ] 每个目标配置支持 `mode = "template"` 和 `mode = "agent"`。
-- [ ] `title_template`、`body_template` 和 `prompt` 支持 TOML string list，并以换行符合并。
-- [ ] Agent 配置支持 `agent`、`timeout_seconds` 和 `output`。
-- [ ] Generated-content config 支持 `[agent_runner.repositories.<id>.generated_content]` 下的 repository-specific overrides。
-- [ ] 默认 generated-content 设置在未显式启用时保持当前确定性行为。
+- [x] `config.toml` 包含 `[agent_runner.generated_content]` 默认配置说明。
+- [x] `config.toml` 包含 `[agent_runner.generated_content.issue_from_prd]` 默认配置说明。
+- [x] `config.toml` 包含 `[agent_runner.generated_content.draft_pr]` 默认配置说明。
+- [x] 每个目标配置支持 `mode = "template"` 和 `mode = "agent"`。
+- [x] `title_template`、`body_template` 和 `prompt` 支持 TOML string list，并以换行符合并。
+- [x] Agent 配置支持 `agent`、`timeout_seconds` 和 `output`。
+- [x] Generated-content config 支持 `[agent_runner.repositories.<id>.generated_content]` 下的 repository-specific overrides。
+- [x] 默认 generated-content 设置在未显式启用时保持当前确定性行为。
 
 ### Behavior Acceptance
 
-- [ ] 当 Issue generation 禁用时，`iar issue-from-prd` 生成当前确定性 Issue 内容。
-- [ ] 当 Issue generation 使用 `mode = "template"` 且模板输出合法时，`github_client.create_issue(...)` 收到渲染后的 title/body。
-- [ ] 当 Issue generation 使用 `mode = "agent"` 且返回合法 JSON 时，`github_client.create_issue(...)` 收到生成后的 title/body。
-- [ ] Issue template 和 prompt 支持 `{issue_type}`、`{title}`、`{prd_title}`、`{relative_prd_path}`、`{acceptance_items}`、`{prd_text}`、`{prd_introduction}`、`{prd_goals}`、`{prd_requirement_shape}`、`{prd_change_impact_tree}`。
-- [ ] 缺少 `- PRD path: \`<relative_prd_path>\`` 的 generated Issue body 会被拒绝，并使用 fallback Issue 内容。
-- [ ] title 或 body 为空的 generated Issue 输出会被拒绝，并使用 fallback Issue 内容。
-- [ ] 当 draft PR generation 禁用时，`publish_changes(...)` 生成当前确定性 PR body，且包含 `Closes #<issue_number>`。
-- [ ] 当 draft PR generation 使用 `mode = "template"` 且模板输出合法时，`github_client.create_draft_pr(...)` 收到渲染后的 title/body。
-- [ ] 当 draft PR generation 使用 `mode = "agent"` 且返回合法 Markdown 时，`github_client.create_draft_pr(...)` 收到生成后的 PR title/body。
-- [ ] PR template 和 prompt 支持 `{issue_number}`、`{issue_title}`、`{issue_body}`、`{branch}`、`{base_branch}`、`{commit_log}`、`{commit_messages}`、`{diff_stat}`、`{git_diff_stat}`。
-- [ ] `{commit_log}` / `{commit_messages}` 能输出 branch 相对 base 的 commit message 列表。
-- [ ] `{diff_stat}` / `{git_diff_stat}` 能输出 branch 相对 base 的 diff stat。
-- [ ] 缺少 `Closes #<issue_number>` 的 generated PR body 会被拒绝，并使用 fallback PR 内容。
-- [ ] body 为空的 generated PR 输出会被拒绝，并使用 fallback PR 内容。
-- [ ] 当 `fallback = "template"` 时，AI 生成失败不会阻止 Issue 创建或 PR 创建。
-- [ ] Generated content 路径不会运行 `git add`、`git commit`、`git push`、`gh issue create` 或 `gh pr create`。
-- [ ] Generated content 路径在生成后保持目标仓库 clean；如果生成导致 dirty worktree，应视为生成失败。
+- [x] 当 Issue generation 禁用时，`iar issue-from-prd` 生成当前确定性 Issue 内容。
+- [x] 当 Issue generation 使用 `mode = "template"` 且模板输出合法时，`github_client.create_issue(...)` 收到渲染后的 title/body。
+- [x] 当 Issue generation 使用 `mode = "agent"` 且返回合法 JSON 时，`github_client.create_issue(...)` 收到生成后的 title/body。
+- [x] Issue template 和 prompt 支持 `{issue_type}`、`{title}`、`{prd_title}`、`{relative_prd_path}`、`{acceptance_items}`、`{prd_text}`、`{prd_introduction}`、`{prd_goals}`、`{prd_requirement_shape}`、`{prd_change_impact_tree}`。
+- [x] 缺少 `- PRD path: \`<relative_prd_path>\`` 的 generated Issue body 会被拒绝，并使用 fallback Issue 内容。
+- [x] title 或 body 为空的 generated Issue 输出会被拒绝，并使用 fallback Issue 内容。
+- [x] 当 draft PR generation 禁用时，`publish_changes(...)` 生成当前确定性 PR body，且包含 `Closes #<issue_number>`。
+- [x] 当 draft PR generation 使用 `mode = "template"` 且模板输出合法时，`github_client.create_draft_pr(...)` 收到渲染后的 title/body。
+- [x] 当 draft PR generation 使用 `mode = "agent"` 且返回合法 Markdown 时，`github_client.create_draft_pr(...)` 收到生成后的 PR title/body。
+- [x] PR template 和 prompt 支持 `{issue_number}`、`{issue_title}`、`{issue_body}`、`{branch}`、`{base_branch}`、`{commit_log}`、`{commit_messages}`、`{diff_stat}`、`{git_diff_stat}`。
+- [x] `{commit_log}` / `{commit_messages}` 能输出 branch 相对 base 的 commit message 列表。
+- [x] `{diff_stat}` / `{git_diff_stat}` 能输出 branch 相对 base 的 diff stat。
+- [x] 缺少 `Closes #<issue_number>` 的 generated PR body 会被拒绝，并使用 fallback PR 内容。
+- [x] body 为空的 generated PR 输出会被拒绝，并使用 fallback PR 内容。
+- [x] 当 `fallback = "template"` 时，AI 生成失败不会阻止 Issue 创建或 PR 创建。
+- [x] Generated content 路径不会运行 `git add`、`git commit`、`git push`、`gh issue create` 或 `gh pr create`。
+- [x] Generated content 路径在生成后保持目标仓库 clean；如果生成导致 dirty worktree，应视为生成失败。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 记录 generated-content 配置区块。
-- [ ] `docs/guides/agent-runner.md` 明确 `[agent_runner.generated_content]` 是唯一配置入口，不新增 `[agent_runner.content_generation]`。
-- [ ] `docs/guides/agent-runner.md` 说明 `mode = "template"` 与 `mode = "agent"` 的差异。
-- [ ] `docs/guides/agent-runner.md` 记录 Issue generation 可用模板变量。
-- [ ] `docs/guides/agent-runner.md` 记录 PR generation 可用模板变量。
-- [ ] `docs/guides/agent-runner.md` 记录必需锚点：Issue 的 `PRD path` 和 PR 的 `Closes #...`。
-- [ ] `docs/guides/agent-runner.md` 记录 fallback 行为和只读安全预期。
-- [ ] 检查 `mkdocs.yml`；除非新增文档页，否则不需要更新导航。
+- [x] `docs/guides/agent-runner.md` 记录 generated-content 配置区块。
+- [x] `docs/guides/agent-runner.md` 明确 `[agent_runner.generated_content]` 是唯一配置入口，不新增 `[agent_runner.content_generation]`。
+- [x] `docs/guides/agent-runner.md` 说明 `mode = "template"` 与 `mode = "agent"` 的差异。
+- [x] `docs/guides/agent-runner.md` 记录 Issue generation 可用模板变量。
+- [x] `docs/guides/agent-runner.md` 记录 PR generation 可用模板变量。
+- [x] `docs/guides/agent-runner.md` 记录必需锚点：Issue 的 `PRD path` 和 PR 的 `Closes #...`。
+- [x] `docs/guides/agent-runner.md` 记录 fallback 行为和只读安全预期。
+- [x] 检查 `mkdocs.yml`；除非新增文档页，否则不需要更新导航。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_generated_content.py -q` 通过。
-- [ ] `uv run pytest tests/test_agent_runner_config.py -q` 通过。
-- [ ] `uv run pytest tests/test_create_issue_from_prd.py -q` 通过。
-- [ ] `uv run pytest tests/test_run_agent.py -q` 通过。
-- [ ] `uv run mkdocs build --strict` 通过。
-- [ ] `just test` 通过。
-- [ ] 在本地测试仓库中执行 `uv run iar issue-from-prd <prd-path>`（启用 `mode = "template"` 和 `mode = "agent"`），终端输出和生成的 Issue Markdown 包含正确的 `PRD path` 锚点，且 fallback 在锚点缺失时正确触发；可通过 `--dry-run` 或本地拦截输出完成，不必须发布到真实 GitHub。
-- [ ] 在本地测试仓库中执行 `uv run iar run-once` 完成完整实现-验证-发布流程，生成的 draft PR Markdown 包含正确的 `Closes #<issue_number>` 锚点，且 template/agent 切换和校验失败 fallback 在真实 CLI 路径中生效；可通过 dry-run 或本地文件输出验证。
-  - **特别要求（AI 生成模式）**：PR 内容必须包含本次改动的**实现路径说明**——具体改了哪些文件、为什么这样改、关键决策是什么。描述需通俗易懂、简单明了，使 Reviewer 能快速理解改动的来龙去脉，避免空泛的总结。
-- [ ] 修改 `config.toml` 中的 `[agent_runner.generated_content]` 后，执行 `uv run iar` 相关子命令，验证配置加载、repository-specific override 和 list prompt/template joining 在真实 settings 解析路径中正确工作。
+- [x] `uv run pytest tests/test_generated_content.py -q` 通过。 (105 passed)
+- [x] `uv run pytest tests/test_agent_runner_config.py -q` 通过。 (105 passed)
+- [x] `uv run pytest tests/test_create_issue_from_prd.py -q` 通过。 (105 passed)
+- [x] `uv run pytest tests/test_run_agent.py -q` 通过。 (105 passed)
+- [x] `uv run mkdocs build --strict` 通过。 (Documentation built in 1.69s)
+- [x] `just test` 通过。 (pytest: 276 passed in 3.50s; pre-commit lint: all passed)
+- [x] 在本地测试仓库中执行 `uv run iar issue-from-prd <prd-path>`（启用 `mode = "template"` 和 `mode = "agent"`），终端输出和生成的 Issue Markdown 包含正确的 `PRD path` 锚点，且 fallback 在锚点缺失时正确触发；可通过 `--dry-run` 或本地拦截输出完成，不必须发布到真实 GitHub。
+  - **验证结果**：通过 `/tmp/verify_generated_content.py` 脚本在真实临时 git 仓库中验证。template 模式生成标题 `[feature] Test Validation`，body 包含 `- PRD path: tasks/...` 锚点、Goals 和 Introduction 内容。缺少锚点时正确 fallback 到确定性模板。
+  - **关键修复**：发现 CLI 入口未传入 `generated_content_config` 和 `content_generator`，已修复 `src/backend/api/cli.py` 和 orchestrate 层以接入真实配置路径。
+- [x] 在本地测试仓库中执行 `uv run iar run-once` 完成完整实现-验证-发布流程，生成的 draft PR Markdown 包含正确的 `Closes #<issue_number>` 锚点，且 template/agent 切换和校验失败 fallback 在真实 CLI 路径中生效；可通过 dry-run 或本地文件输出验证。
+  - **验证结果**：通过 `/tmp/verify_generated_content.py` 脚本验证。template 模式生成 PR title `[Agent] Test Feature`，body 包含 `Closes #42`、`feat: add feature` commit log 和 `1 file changed` diff stat。缺少 `Closes` 锚点时正确 fallback。
+  - **关键修复**：发现 `publish_changes` 在 orchestrate 层未接收 `content_generator`，已修复 `src/backend/core/use_cases/agent_runner_orchestrate.py` 和 `src/backend/core/use_cases/run_agent_repositories_once.py` 以传递该参数。
+  - **特别要求（AI 生成模式）**：PR 内容必须包含本次改动的**实现路径说明**——具体改了哪些文件、为什么这样改、关键决策是什么。描述需通俗易懂、简单明了，使 Reviewer 能快速理解改动的来龙去脉，避免空泛的总结。→ 该要求在 agent 模式的 prompt 模板中已配置（见 config.toml `[agent_runner.generated_content.draft_pr].prompt` 第 4-5 行）。
+- [x] 修改 `config.toml` 中的 `[agent_runner.generated_content]` 后，执行 `uv run iar` 相关子命令，验证配置加载、repository-specific override 和 list prompt/template joining 在真实 settings 解析路径中正确工作。
+  - **验证结果**：通过 `/tmp/verify_agent_mode.py` 脚本验证。settings 正确加载 `enabled=false, mode=template` 默认值；repository-specific override 合并正确（测试用例：全局 `enabled=false` + repo override `enabled=true, mode=agent` -> merged `enabled=true, mode=agent`，未覆盖的 `draft_pr` 保持全局值）；agent 命令构造正确（claude/kimi/codex 均返回预期命令参数）。
 
 ## 8. Functional Requirements
 

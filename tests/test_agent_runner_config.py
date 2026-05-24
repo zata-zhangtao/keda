@@ -12,6 +12,8 @@ from backend.engines.agent_runner.factory import (
     resolve_repository_targets,
 )
 from backend.infrastructure.config.settings import (
+    AgentRunnerGeneratedContentSettings,
+    AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerGitSettings,
     AgentRunnerLabelSettings,
     AgentRunnerRepositorySettings,
@@ -198,3 +200,79 @@ def test_resolve_issue_from_prd_fallback() -> None:
     context = resolve_issue_from_prd_target(settings, cwd=cwd)
     assert context.repo_id == "fallback"
     assert context.config.git.base_branch == "main"
+
+
+def test_build_generated_content_config_from_settings() -> None:
+    """_build_generated_content_config should map settings to core config correctly."""
+    from backend.engines.agent_runner.factory import _build_generated_content_config
+
+    gc_settings = AgentRunnerGeneratedContentSettings(
+        enabled=True,
+        max_input_chars=15000,
+        issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
+            enabled=True,
+            mode="agent",
+            title_template="{prd_title}",
+        ),
+    )
+    gc_config = _build_generated_content_config(gc_settings)
+    assert gc_config.enabled is True
+    assert gc_config.max_input_chars == 15000
+    assert gc_config.issue_from_prd.enabled is True
+    assert gc_config.issue_from_prd.mode == "agent"
+    assert gc_config.issue_from_prd.title_template == "{prd_title}"
+
+
+def test_merge_repository_config_overrides_generated_content() -> None:
+    """Repository-level generated_content settings should override global defaults."""
+    from backend.engines.agent_runner.factory import merge_repository_config
+
+    global_config = AppConfig(
+        generated_content=AgentRunnerGeneratedContentSettings(
+            enabled=False,
+            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
+                enabled=False, mode="template"
+            ),
+        )
+    )
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        generated_content=AgentRunnerGeneratedContentSettings(
+            enabled=True,
+            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
+                enabled=True, mode="agent"
+            ),
+        ),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.generated_content.enabled is True
+    assert merged.generated_content.issue_from_prd.enabled is True
+    assert merged.generated_content.issue_from_prd.mode == "agent"
+
+
+def test_merge_repository_config_inherits_generated_content() -> None:
+    """Unoverridden generated_content fields should inherit from global config."""
+    from backend.engines.agent_runner.factory import merge_repository_config
+
+    global_config = AppConfig(
+        generated_content=AgentRunnerGeneratedContentSettings(
+            enabled=True,
+            max_input_chars=10000,
+            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
+                enabled=True, mode="template", title_template="global"
+            ),
+        )
+    )
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        generated_content=AgentRunnerGeneratedContentSettings(
+            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
+                title_template="repo"
+            ),
+        ),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.generated_content.enabled is True
+    assert merged.generated_content.max_input_chars == 10000
+    assert merged.generated_content.issue_from_prd.title_template == "repo"
+    assert merged.generated_content.issue_from_prd.mode == "template"

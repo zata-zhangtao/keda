@@ -415,6 +415,45 @@ class AgentRunnerDeliberationSettings(BaseModel):
     )
 
 
+class AgentRunnerGeneratedContentTargetSettings(BaseModel):
+    """Generated-content target configuration supporting TOML string-list syntax."""
+
+    enabled: bool = False
+    mode: str = "template"
+    output: str = "json"
+    title_template: str | list[str] = ""
+    body_template: str | list[str] = ""
+    agent: str = "auto"
+    timeout_seconds: int = 60
+    prompt: str | list[str] = ""
+    include_commit_log: bool = True
+    include_diff_stat: bool = True
+
+    @model_validator(mode="after")
+    def _join_list_templates(self) -> "AgentRunnerGeneratedContentTargetSettings":
+        """Convert list[str] template values to joined strings."""
+        for field_name in ("title_template", "body_template", "prompt"):
+            value = getattr(self, field_name)
+            if isinstance(value, list):
+                setattr(self, field_name, "\n".join(value))
+        return self
+
+
+class AgentRunnerGeneratedContentSettings(BaseModel):
+    """Generated-content configuration for Issues and PRs."""
+
+    enabled: bool = False
+    fallback: str = "template"
+    max_input_chars: int = 20000
+    default_agent: str = "auto"
+    issue_from_prd: AgentRunnerGeneratedContentTargetSettings = Field(
+        default_factory=AgentRunnerGeneratedContentTargetSettings
+    )
+    draft_pr: AgentRunnerGeneratedContentTargetSettings = Field(
+        default_factory=AgentRunnerGeneratedContentTargetSettings
+    )
+
+
 class AgentRunnerRepositorySettings(BaseModel):
     """Per-repository Agent Runner configuration overrides."""
 
@@ -429,6 +468,7 @@ class AgentRunnerRepositorySettings(BaseModel):
     prompts: AgentRunnerPromptSettings | None = None
     pre_push_review: AgentRunnerPrePushReviewSettings | None = None
     post_pr_supervisor: AgentRunnerPostPrSupervisorSettings | None = None
+    generated_content: AgentRunnerGeneratedContentSettings | None = None
 
 
 class AgentRunnerSettings(BaseSettings):
@@ -456,6 +496,9 @@ class AgentRunnerSettings(BaseSettings):
     )
     deliberation: AgentRunnerDeliberationSettings = Field(
         default_factory=AgentRunnerDeliberationSettings
+    )
+    generated_content: AgentRunnerGeneratedContentSettings = Field(
+        default_factory=AgentRunnerGeneratedContentSettings
     )
     repositories: dict[str, AgentRunnerRepositorySettings] = Field(default_factory=dict)
 

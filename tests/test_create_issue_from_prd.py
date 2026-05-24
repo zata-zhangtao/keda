@@ -11,13 +11,18 @@ import pytest
 from unittest.mock import patch
 
 from backend.api.cli import _prompt_and_publish_prd_if_needed
-from backend.core.shared.models.agent_runner import CommandResult, LabelConfig
+from backend.core.shared.models.agent_runner import (
+    CommandResult,
+    GeneratedContentConfig,
+    GeneratedContentTargetConfig,
+    LabelConfig,
+)
 from backend.core.use_cases.create_issue_from_prd import (
     IssueFromPrdRequest,
     create_issue_from_prd,
 )
 from backend.infrastructure.process_runner import SubprocessRunner
-from tests.conftest import FakeGitHubClient, FakeProcessRunner
+from tests.conftest import FakeContentGenerator, FakeGitHubClient, FakeProcessRunner
 
 
 def _run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -498,3 +503,161 @@ def test_prompt_publish_clean_worktree(tmp_path: Path) -> None:
     assert [
         call for call in fake_client.calls if call["method"] == "edit_issue_labels"
     ] == []
+
+
+def test_create_issue_from_prd_with_generated_content_template(tmp_path: Path) -> None:
+    """Template mode generated content should be used when valid."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "tasks" / "20260516-120000-prd-example.md"
+    prd.parent.mkdir()
+    prd.write_text(
+        "# PRD: Example\n\n## Acceptance Checklist\n\n- [x] One\n- [ ] Two\n",
+        encoding="utf-8",
+    )
+
+    gc_config = GeneratedContentConfig(
+        enabled=True,
+        issue_from_prd=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="template",
+            title_template="[{issue_type}] {prd_title}",
+            body_template=(
+                "## Summary\n\n{prd_introduction}\n\n"
+                "- PRD path: `{relative_prd_path}`\n\n"
+                "{acceptance_items}"
+            ),
+        ),
+    )
+
+    issue_url = create_issue_from_prd(
+        request=_request(
+            repo,
+            Path("tasks/20260516-120000-prd-example.md"),
+            generated_content_config=gc_config,
+        ),
+        github_client=fake_client,
+    )
+
+    assert issue_url == "https://github.com/example/repo/issues/42"
+    create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
+    assert len(create_calls) == 1
+    assert create_calls[0]["title"] == "[feature] Example"
+    assert (
+        "- PRD path: `tasks/20260516-120000-prd-example.md`" in create_calls[0]["body"]
+    )
+
+
+def test_create_issue_from_prd_generated_content_fallback_on_invalid(
+    tmp_path: Path,
+) -> None:
+    """Invalid generated content should fallback to deterministic template."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "tasks" / "20260516-120000-prd-example.md"
+    prd.parent.mkdir()
+    prd.write_text(
+        "# PRD: Example\n\n## Acceptance Checklist\n\n- [x] One\n- [ ] Two\n",
+        encoding="utf-8",
+    )
+
+    gc_config = GeneratedContentConfig(
+        enabled=True,
+        issue_from_prd=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="template",
+            title_template="Title",
+            body_template="Missing anchor.",
+        ),
+    )
+
+    issue_url = create_issue_from_prd(
+        request=_request(
+            repo,
+            Path("tasks/20260516-120000-prd-example.md"),
+            generated_content_config=gc_config,
+        ),
+        github_client=fake_client,
+    )
+
+    assert issue_url == "https://github.com/example/repo/issues/42"
+    create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
+    assert len(create_calls) == 1
+    assert (
+        "- PRD path: `tasks/20260516-120000-prd-example.md`" in create_calls[0]["body"]
+    )
+
+
+def test_create_issue_from_prd_agent_mode_generates_content(tmp_path: Path) -> None:
+    """Agent mode should generate Issue content and use it when valid."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+    generator = FakeContentGenerator(
+        response='{"title": "AI Title", "body": "- PRD path: `tasks/example.md`\\n\\nAI body."}'
+    )
+
+    prd = repo / "tasks" / "example.md"
+    prd.parent.mkdir()
+    prd.write_text("# PRD: Example\n", encoding="utf-8")
+
+    gc_config = GeneratedContentConfig(
+        enabled=True,
+        issue_from_prd=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="agent",
+            output="json",
+            prompt="Generate Issue for {relative_prd_path}",
+        ),
+    )
+
+    issue_url = create_issue_from_prd(
+        request=_request(
+            repo,
+            Path("tasks/example.md"),
+            generated_content_config=gc_config,
+        ),
+        github_client=fake_client,
+        content_generator=generator,
+    )
+
+    assert issue_url == "https://github.com/example/repo/issues/42"
+    create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
+    assert len(create_calls) == 1
+    assert create_calls[0]["title"] == "AI Title"
+    assert create_calls[0]["body"] == "- PRD path: `tasks/example.md`\n\nAI body."
+
+
+def test_create_issue_from_prd_disabled_uses_fallback(tmp_path: Path) -> None:
+    """When generated content is disabled, deterministic template should be used."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "tasks" / "example.md"
+    prd.parent.mkdir()
+    prd.write_text("# PRD: Example\n", encoding="utf-8")
+
+    gc_config = GeneratedContentConfig(enabled=False)
+
+    issue_url = create_issue_from_prd(
+        request=_request(
+            repo,
+            Path("tasks/example.md"),
+            generated_content_config=gc_config,
+        ),
+        github_client=fake_client,
+    )
+
+    assert issue_url == "https://github.com/example/repo/issues/42"
+    create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
+    assert len(create_calls) == 1
+    assert "- PRD path: `tasks/example.md`" in create_calls[0]["body"]

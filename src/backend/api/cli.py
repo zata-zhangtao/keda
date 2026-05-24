@@ -31,6 +31,7 @@ from backend.core.use_cases.sync_labels import sync_labels
 from backend.core.shared.models.agent_deliberation import DeliberationSession
 from backend.engines.agent_runner.factory import (
     build_deliberation_config_from_settings,
+    create_content_generator,
     create_event_sink,
     create_github_client,
     create_process_runner,
@@ -263,6 +264,11 @@ def main(argv: list[str] | None = None) -> int:
             _, relative_prd_path = resolve_prd_paths(
                 context.repo_path, Path(parsed.prd_path)
             )
+            gc_config = context.config.generated_content
+            content_generator = None
+            if gc_config.enabled and gc_config.issue_from_prd.enabled:
+                if gc_config.issue_from_prd.mode == "agent":
+                    content_generator = create_content_generator(process_runner)
             issue_url = create_issue_from_prd(
                 request=IssueFromPrdRequest(
                     repo_path=context.repo_path,
@@ -276,9 +282,11 @@ def main(argv: list[str] | None = None) -> int:
                     publish_prd=parsed.publish_prd,
                     git_remote=context.config.git.remote,
                     git_base_branch=context.config.git.base_branch,
+                    generated_content_config=gc_config,
                 ),
                 github_client=github_client,
                 process_runner=process_runner,
+                content_generator=content_generator,
             )
             if not parsed.publish_prd:
                 _prompt_and_publish_prd_if_needed(
@@ -306,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo_id=repo_id,
                 repo_path_override=repo_override,
             )
+            content_generator = create_content_generator(process_runner)
             return run_agent_repositories_once(
                 contexts=contexts,
                 dry_run=parsed.dry_run,
@@ -315,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
                 github_client_factory=lambda rp: create_github_client(
                     rp, process_runner
                 ),
+                content_generator=content_generator,
             )
 
         if parsed.command == "daemon":
