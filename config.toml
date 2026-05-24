@@ -243,7 +243,7 @@ body_template = [
   "- PR should include: `Closes #<issue-number>`",
 ]
 agent = "auto"
-timeout_seconds = 60
+timeout_seconds = 120
 prompt = [
   "Generate a readable GitHub Issue from this PRD.",
   "Return strict JSON with keys: title, body.",
