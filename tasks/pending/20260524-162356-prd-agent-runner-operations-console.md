@@ -1,5 +1,7 @@
 # PRD: Agent Runner Monitoring Dashboard
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/30
+
 ## 1. Introduction & Goals
 
 Agent Runner 已经可以通过 GitHub Issue labels、Issue comments、PR 状态和本地 worktree 串起自动实现、pre-push review、Draft PR 创建、post-PR supervisor、rebase/repair 和失败收尾。但这些状态分散在 GitHub、CLI 输出和本地文件系统中，运维者需要反复执行 CLI 命令、查看 Issue comments、检查 worktree 才能知道当前发生了什么。
