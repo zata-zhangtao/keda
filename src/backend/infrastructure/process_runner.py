@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from backend.infrastructure.logging.logger import logger
 
@@ -221,8 +221,21 @@ def run_filtered_claude_stream(
     timeout: int | None,
     collect_stdout: bool = False,
     prompt_text: str | None = None,
+    output_sink: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run Claude stream-json and print a filtered live view."""
+    """Run Claude stream-json and print a filtered live view.
+
+    Args:
+        command: Command to run.
+        cwd: Working directory.
+        timeout: Optional timeout in seconds.
+        collect_stdout: Whether to collect rendered output.
+        prompt_text: Optional prompt to pass via stdin.
+        output_sink: Optional callback for rendered text chunks.
+
+    Returns:
+        CompletedProcess with collected stdout if requested.
+    """
     import threading
 
     renderer = ClaudeStreamRenderer()
@@ -258,6 +271,8 @@ def run_filtered_claude_stream(
                 if rendered_text:
                     timestamped = _format_timestamped_line(rendered_text)
                     print(timestamped, end="", flush=True)
+                    if output_sink is not None:
+                        output_sink(rendered_text.rstrip("\n"))
 
                     # Structured events go straight to logger
                     if (
