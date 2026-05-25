@@ -53,6 +53,7 @@ __all__ = [
     "AgentRunnerAttemptError",
     "MaxRetriesExceededError",
     "PrdDeliveryError",
+    "PublishFailureError",
     "UnrecoverableError",
     "VerificationFailedError",
     "build_prompt",
@@ -71,6 +72,7 @@ __all__ = [
     "format_command",
     "format_failure_comment",
     "format_prd_delivery_failure",
+    "format_publish_failure_comment",
     "format_recovery_failure_summary",
     "format_result_for_recovery",
     "format_verification_failure",
@@ -129,6 +131,21 @@ class UnrecoverableError(AgentRunnerAttemptError):
         attempt_results: list[AttemptResult],
     ) -> None:
         super().__init__(message, attempt_results)
+
+
+class PublishFailureError(RuntimeError):
+    """Raised when the publish phase fails after a local commit exists."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        worktree_path: Path | None = None,
+        failure_category: str = "unknown",
+    ) -> None:
+        super().__init__(message)
+        self.worktree_path = worktree_path
+        self.failure_category = failure_category
 
 
 def format_command(template: str, *, issue_number: int) -> list[str]:
@@ -1063,3 +1080,63 @@ def run_once(
         github_client=github_client,
         process_runner=process_runner,
     )
+
+
+def format_publish_failure_comment(
+    exc: BaseException,
+    issue_number: int,
+    *,
+    worktree_path: Path | None = None,
+    failure_category: str = "unknown",
+) -> str:
+    """Build a failure comment for publish phase failures.
+
+    The comment includes recovery command and failure category for
+    publish failures where a local commit already exists.
+
+    Args:
+        exc: The exception that caused the failure.
+        issue_number: GitHub Issue number.
+        worktree_path: Path to the worktree, if available.
+        failure_category: Category of the publish failure (push, pr_lookup,
+            pr_create, label_update, comment_update, or unknown).
+
+    Returns:
+        Markdown comment body.
+    """
+    lines = [
+        "## Agent Runner Publish Failed",
+        "",
+        "The agent produced a local commit but publishing failed.",
+        "",
+        f"- Failure category: `{failure_category}`",
+    ]
+
+    if worktree_path is not None:
+        lines.append(f"- Worktree: `{worktree_path}`")
+
+    lines.extend(
+        [
+            "",
+            "```text",
+            str(exc),
+            "",
+        ]
+    )
+
+    if exc.__cause__ is not None:
+        lines.append(str(exc.__cause__))
+
+    lines.extend(
+        [
+            "```",
+            "",
+            "To resume publishing without re-running the agent:",
+            "",
+            "```bash",
+            f"uv run iar recover-publish --issue {issue_number}",
+            "```",
+        ]
+    )
+
+    return "\n".join(lines)

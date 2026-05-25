@@ -220,6 +220,12 @@ iar review-once
 
 # Review daemon 模式
 iar review-daemon --interval 600
+
+# 恢复发布失败（Agent 已完成但 push/PR 失败）
+iar recover-publish --issue 5
+
+# 恢复发布失败（显式确认分支名）
+iar recover-publish --issue 5 --branch issue-5
 ```
 
 ## 失败重跑
@@ -276,6 +282,87 @@ agent/ready  →  agent/running  →  agent/supervising  →  agent/review  → 
               （人工修复后改回 ready）
 
 agent/supervising ── supervisor 要求 rework ──→ agent/running ── 修复/rebase ──→ agent/supervising
+```
+
+## 发布失败恢复
+
+当 Agent 已完成代码修改并生成本地 commit，但在发布阶段（push、PR 创建、label 更新等）失败时，Issue 会被标记为 `agent/failed`。此时重新运行 Agent 是浪费且可能引入不必要代码变更的。
+
+`iar recover-publish` 命令用于安全、幂等地完成发布收尾，无需重新启动 Agent。
+
+### 何时使用 recover-publish
+
+- Agent 已执行完毕，本地 commit 已存在
+- 发布阶段因网络错误、GitHub CLI 认证过期、API 限流等原因失败
+- Issue 失败 comment 中包含 `iar recover-publish --issue <number>` 提示
+
+### 不适用的情况
+
+- Agent 未产生任何 commit
+- 工作区有未提交变更
+- 需要修改 Agent 已生成的代码
+- 当前分支是 base branch
+
+> **注意**：`iar labels sync` 只同步 GitHub labels，**不**校验发布环境。`iar run-once` 在领取 Issue 前会检查 `[agent_runner.git].remote` 是否存在。
+
+### 使用方法
+
+```bash
+# 恢复 Issue #5 的发布
+uv run iar recover-publish --issue 5
+
+# 如果当前分支名不包含 issue 编号，需要显式确认分支
+uv run iar recover-publish --issue 5 --branch feature-xyz
+```
+
+### 恢复流程
+
+1. 解析已存在的 issue worktree 路径
+2. 校验工作区干净（无未提交变更）
+3. 校验分支安全（非 base branch、分支名引用 issue 编号或显式 `--branch` 确认）
+4. 校验配置的 remote 存在
+5. Push 当前分支到配置 remote
+6. 检查是否已有 open PR，有则复用，无则创建 draft PR
+7. 更新 Issue labels：移除 `agent/failed`、`agent/running`、`agent/ready`，添加 `agent/review`
+8. 发布成功 comment，记录分支、HEAD SHA、PR URL 和是否复用已有 PR
+
+### 安全边界
+
+`recover-publish` **不会**执行以下操作：
+
+- 运行 Agent 命令
+- 执行 `git add` 或 `git commit`
+- 创建新的 worktree
+- 合并分支或删除分支
+- 推送到非配置 remote
+
+### 手动恢复回退
+
+当 GitHub CLI 不可用时，可手动执行以下命令完成恢复：
+
+```bash
+# 1. 进入 issue worktree
+cd <repo>-worktrees/tasks/issue-<number>
+
+# 2. 确认当前分支和 commit
+git branch --show-current
+git log -1 --oneline
+
+# 3. 推送分支到 remote
+git push -u origin <branch>
+
+# 4. 创建 draft PR（如果不存在）
+gh pr create --draft --base main --title "[Agent] Issue #<number>" --body "Closes #<number>"
+
+# 5. 更新 Issue labels
+gh issue edit <number> --add-label agent/review --remove-label agent/failed,agent/running,agent/ready
+
+# 6. 添加 comment 记录恢复结果
+gh issue comment <number> --body "## Agent Runner Publish Recovered
+
+- Branch: \`<branch>\`
+- HEAD SHA: \`<sha>\`
+- Draft PR: <pr-url>"
 ```
 
 ## 多机部署与操作指南

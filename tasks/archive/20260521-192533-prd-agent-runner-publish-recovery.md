@@ -248,47 +248,47 @@ No external web validation required; repository code paths and GitHub CLI usage 
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/use_cases/recover_publish.py` exists and contains the publish recovery orchestration.
-- [ ] `src/backend/api/cli.py` exposes `recover-publish --issue <number>` and optional `--branch <branch>`.
-- [ ] `src/backend/core/shared/interfaces/agent_runner.py` extends `IGitHubClient` with PR lookup capability.
-- [ ] `src/backend/infrastructure/github_client.py` implements PR lookup without leaking infrastructure imports into core.
-- [ ] `recover_publish.py` does not call Agent CLI builders or recovery prompt logic.
+- [x] `src/backend/core/use_cases/recover_publish.py` exists and contains the publish recovery orchestration.
+- [x] `src/backend/api/cli.py` exposes `recover-publish --issue <number>` and optional `--branch <branch>`.
+- [x] `src/backend/core/shared/interfaces/agent_runner.py` extends `IGitHubClient` with PR lookup capability.
+- [x] `src/backend/infrastructure/github_client.py` implements PR lookup without leaking infrastructure imports into core.
+- [x] `recover_publish.py` does not call Agent CLI builders or recovery prompt logic.
 
 ### Behavior Acceptance
 
-- [ ] `iar run-once` checks configured remote before claiming ready Issues when not in dry-run mode.
-- [ ] Missing configured remote produces an error that includes the configured remote and available remotes.
-- [ ] `iar recover-publish --issue 5` resolves an existing issue worktree without creating a new worktree.
-- [ ] Recovery refuses to continue when the worktree has uncommitted changes.
-- [ ] Recovery refuses to publish when current branch equals `[agent_runner.git].base_branch`.
-- [ ] Recovery refuses suspicious branch names that do not reference the issue number unless `--branch` is supplied.
-- [ ] Recovery pushes to `[agent_runner.git].remote` only; it never auto-selects another remote.
-- [ ] If an open PR already exists for the head branch, recovery reuses it and does not create a duplicate PR.
-- [ ] If no open PR exists, recovery creates one draft PR with body containing `Closes #<issue_number>`.
-- [ ] Successful recovery removes `agent/failed`, `agent/running`, and `agent/ready`, then adds `agent/review`.
-- [ ] Successful recovery comments the Issue with branch, HEAD SHA, PR URL, and whether the PR was reused.
-- [ ] Publish failure in `run-once` comments the Issue with `iar recover-publish --issue <number>`.
-- [ ] Publish failure comments include the failed publish operation category, such as push, PR lookup, PR create, label update, or comment update when available.
+- [x] `iar run-once` checks configured remote before claiming ready Issues when not in dry-run mode.
+- [x] Missing configured remote produces an error that includes the configured remote and available remotes.
+- [x] `iar recover-publish --issue 5` resolves an existing issue worktree without creating a new worktree.
+- [x] Recovery refuses to continue when the worktree has uncommitted changes.
+- [x] Recovery refuses to publish when current branch equals `[agent_runner.git].base_branch`.
+- [x] Recovery refuses suspicious branch names that do not reference the issue number unless `--branch` is supplied.
+- [x] Recovery pushes to `[agent_runner.git].remote` only; it never auto-selects another remote.
+- [x] If an open PR already exists for the head branch, recovery reuses it and does not create a duplicate PR.
+- [x] If no open PR exists, recovery creates one draft PR with body containing `Closes #<issue_number>`.
+- [x] Successful recovery removes `agent/failed`, `agent/running`, and `agent/ready`, then adds `agent/review`.
+- [x] Successful recovery comments the Issue with branch, HEAD SHA, PR URL, and whether the PR was reused.
+- [x] Publish failure in `run-once` comments the Issue with `iar recover-publish --issue <number>`.
+- [x] Publish failure comments include the failed publish operation category, such as push, PR lookup, PR create, label update, or comment update when available.
 
 ### Safety Acceptance
 
-- [ ] `recover-publish` does not run `git add`, `git commit`, `git merge`, or branch deletion commands.
-- [ ] `recover-publish` does not run any Agent command.
-- [ ] `recover-publish` leaves labels unchanged when push or PR creation fails.
-- [ ] `recover-publish` leaves labels unchanged when network/API/auth failures interrupt push, PR lookup, or PR creation.
-- [ ] Re-running `recover-publish` after success exits successfully and reuses the existing PR.
+- [x] `recover-publish` does not run `git add`, `git commit`, `git merge`, or branch deletion commands.
+- [x] `recover-publish` does not run any Agent command.
+- [x] `recover-publish` leaves labels unchanged when push or PR creation fails.
+- [x] `recover-publish` leaves labels unchanged when network/API/auth failures interrupt push, PR lookup, or PR creation.
+- [x] Re-running `recover-publish` after success exits successfully and reuses the existing PR.
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` documents when to use `recover-publish`.
-- [ ] The docs clarify that `labels sync` is not a publish environment validator.
-- [ ] The docs include the manual recovery fallback commands for cases where GitHub CLI is unavailable.
+- [x] `docs/guides/agent-runner.md` documents when to use `recover-publish`.
+- [x] The docs clarify that `labels sync` is not a publish environment validator.
+- [x] The docs include the manual recovery fallback commands for cases where GitHub CLI is unavailable.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_recover_publish.py -v` passes.
-- [ ] `uv run pytest tests/test_run_agent.py tests/test_agent_runner_cli.py -v` passes.
-- [ ] `just test` passes.
+- [x] `uv run pytest tests/test_recover_publish.py -v` passes.
+- [x] `uv run pytest tests/test_run_agent.py tests/test_agent_runner_cli.py -v` passes.
+- [x] `just test` passes.
 
 ## 8. Functional Requirements
 

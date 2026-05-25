@@ -186,6 +186,23 @@ def build_parser() -> argparse.ArgumentParser:
     review_daemon_parser.add_argument("--max-issues", type=int)
     add_common_options(review_daemon_parser)
 
+    recover_publish_parser = subparsers.add_parser(
+        "recover-publish",
+        help="Resume a failed publish operation for an Issue.",
+    )
+    recover_publish_parser.add_argument(
+        "--issue",
+        type=int,
+        required=True,
+        help="Issue number to recover publish for.",
+    )
+    recover_publish_parser.add_argument(
+        "--branch",
+        default=None,
+        help="Explicitly confirm the current branch name.",
+    )
+    add_common_options(recover_publish_parser)
+
     deliberate_parser = subparsers.add_parser(
         "deliberate", help="Run a multi-agent deliberation session."
     )
@@ -393,6 +410,48 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
             return 0
+
+        if parsed.command == "recover-publish":
+            from backend.core.use_cases.recover_publish import (
+                PublishRecoveryError,
+                PublishRecoveryRequest,
+                recover_publish_issue,
+            )
+
+            contexts = resolve_repository_targets(
+                runner_settings,
+                repo_id=repo_id,
+                repo_path_override=repo_override,
+            )
+            if len(contexts) != 1:
+                _logger.error(
+                    "recover-publish requires exactly one target repository. "
+                    "Use --repo or --repo-id to specify."
+                )
+                return 1
+            context = contexts[0]
+            github_client = create_github_client(context.repo_path, process_runner)
+            request = PublishRecoveryRequest(
+                issue_number=parsed.issue,
+                expected_branch=parsed.branch,
+            )
+            try:
+                result = recover_publish_issue(
+                    request=request,
+                    repo_path=context.repo_path,
+                    config=context.config,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                )
+                _logger.info(
+                    "Publish recovered for Issue #%d: %s",
+                    result.issue_number,
+                    result.pr_url,
+                )
+                return 0
+            except PublishRecoveryError as exc:
+                _logger.error("Publish recovery failed: %s", exc)
+                return 1
 
         if parsed.command == "deliberate":
             deliberation_settings = runner_settings.deliberation

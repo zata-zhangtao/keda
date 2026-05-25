@@ -175,6 +175,8 @@ def _process_ready_issue(
     content_generator: IContentGenerator | None = None,
 ) -> None:
     """Process a ready Issue through the full first-implementation path."""
+    from backend.core.use_cases.run_agent_once import PublishFailureError
+
     selected_agent = choose_agent(issue, config, agent)
     github_client.edit_issue_labels(
         issue.number, add=[config.labels.running], remove=[config.labels.ready]
@@ -224,31 +226,60 @@ def _process_ready_issue(
         verification_results=verification_results,
     )
 
-    branch, pr_url = publish_changes(
-        issue,
-        worktree_path,
-        config,
-        github_client,
-        process_runner,
-        expected_branch=expected_branch,
-        content_generator=content_generator,
-    )
+    # Publish phase - wrap failures with PublishFailureError for recovery context
+    try:
+        branch, pr_url = publish_changes(
+            issue,
+            worktree_path,
+            config,
+            github_client,
+            process_runner,
+            expected_branch=expected_branch,
+            content_generator=content_generator,
+        )
+    except RuntimeError as exc:
+        raise PublishFailureError(
+            str(exc),
+            worktree_path=worktree_path,
+            failure_category="push",
+        ) from exc
+    except OSError as exc:
+        raise PublishFailureError(
+            str(exc),
+            worktree_path=worktree_path,
+            failure_category="push",
+        ) from exc
 
-    github_client.edit_issue_labels(
-        issue.number,
-        add=[config.labels.supervising],
-        remove=[config.labels.running],
-    )
+    try:
+        github_client.edit_issue_labels(
+            issue.number,
+            add=[config.labels.supervising],
+            remove=[config.labels.running],
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise PublishFailureError(
+            f"Failed to update labels after publish: {exc}",
+            worktree_path=worktree_path,
+            failure_category="label_update",
+        ) from exc
 
     publish_sha = get_head_sha(worktree_path, process_runner)
-    github_client.comment_issue(
-        issue.number,
-        build_draft_pr_created_comment(
-            pr_url=pr_url,
-            branch=branch,
-            head_sha=publish_sha,
-        ),
-    )
+
+    try:
+        github_client.comment_issue(
+            issue.number,
+            build_draft_pr_created_comment(
+                pr_url=pr_url,
+                branch=branch,
+                head_sha=publish_sha,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise PublishFailureError(
+            f"Failed to post draft PR comment: {exc}",
+            worktree_path=worktree_path,
+            failure_category="comment_update",
+        ) from exc
 
     supervisor_config = config.post_pr_supervisor
     if supervisor_config.enabled:
@@ -666,6 +697,12 @@ def run_once(
                 )
             _logger.info("Completed Issue #%d: %s", issue.number, issue.title)
         except Exception as exc:  # noqa: BLE001 - report queue failures and continue.
+            from backend.core.use_cases.run_agent_once import (
+                PublishFailureError,
+                format_failure_comment,
+                format_publish_failure_comment,
+            )
+
             exit_code = 1
             github_client.edit_issue_labels(
                 issue.number,
@@ -673,9 +710,16 @@ def run_once(
                 remove=_workflow_state_labels(config),
             )
             attempt_results = getattr(exc, "attempt_results", None)
-            if attempt_results is not None:
-                from backend.core.use_cases.run_agent_once import format_failure_comment
 
+            # Check for publish failure with recovery context
+            if isinstance(exc, PublishFailureError):
+                comment_body = format_publish_failure_comment(
+                    exc,
+                    issue.number,
+                    worktree_path=exc.worktree_path,
+                    failure_category=exc.failure_category,
+                )
+            elif attempt_results is not None:
                 comment_body = format_failure_comment(exc, attempt_results)
             else:
                 comment_body = f"## Agent Runner Failed\n\n```text\n{exc}\n```\n"
