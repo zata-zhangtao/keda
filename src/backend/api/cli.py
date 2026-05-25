@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,13 +30,13 @@ from backend.core.use_cases.sync_labels import sync_labels
 from backend.core.shared.models.agent_deliberation import DeliberationSession
 from backend.engines.agent_runner.factory import (
     build_deliberation_config_from_settings,
-    configure_cli_logging,
     create_content_generator,
     create_event_sink,
     create_github_client,
     create_process_runner,
     create_transcript_runner,
     get_agent_runner_settings,
+    logger,
     resolve_issue_from_prd_target,
     resolve_repository_targets,
     write_deliberation_outputs,
@@ -49,8 +48,6 @@ if TYPE_CHECKING:
         IProcessRunner,
     )
     from backend.core.shared.models.agent_runner import LabelConfig
-
-_logger = logging.getLogger(__name__)
 
 
 def _prompt_and_publish_prd_if_needed(
@@ -218,11 +215,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the CLI."""
-    configure_cli_logging()
     parsed = build_parser().parse_args(argv)
 
     if parsed.config:
-        _logger.warning(
+        logger.warning(
             "The --config flag is deprecated. Use config.toml or env vars instead."
         )
 
@@ -230,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     repo_override: str | None = getattr(parsed, "repo", None)
 
     if repo_id is not None and repo_override is not None:
-        _logger.error("--repo and --repo-id are mutually exclusive.")
+        logger.error("--repo and --repo-id are mutually exclusive.")
         return 1
 
     process_runner = create_process_runner()
@@ -248,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
                 sync_labels(
                     labels_config=context.config.labels, github_client=github_client
                 )
-            _logger.info("Labels are ready.")
+            logger.info("Labels are ready.")
             return 0
 
         if parsed.command == "issue-from-prd":
@@ -298,12 +294,12 @@ def main(argv: list[str] | None = None) -> int:
                     process_runner=process_runner,
                 )
             if not parsed.ready:
-                _logger.info(
+                logger.info(
                     "Issue created without '%s' label. "
                     "Use --ready if you want a runner to pick it up.",
                     context.config.labels.ready,
                 )
-            _logger.info("Created GitHub Issue: %s", issue_url)
+            logger.info("Created GitHub Issue: %s", issue_url)
             return 0
 
         if parsed.command == "run-once":
@@ -367,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
                         aggregated_exit_code = 1
                 except Exception as exc:  # noqa: BLE001
                     aggregated_exit_code = 1
-                    _logger.error(
+                    logger.error(
                         "Repository '%s' review_once failed: %s",
                         context.repo_id,
                         exc,
@@ -456,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\nDeliberation complete: {output_path}")
             return 0
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
-        _logger.error("iar failed: %s", exc)
+        logger.error("iar failed: %s", exc)
         return 1
     return 1
 

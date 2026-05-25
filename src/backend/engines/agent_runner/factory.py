@@ -9,7 +9,6 @@ cases.
 from __future__ import annotations
 
 import dataclasses
-import logging
 import subprocess
 from collections.abc import Callable
 from datetime import datetime
@@ -50,35 +49,32 @@ from backend.infrastructure.config.settings import (
     config,
 )
 from backend.infrastructure.github_client import GitHubCliClient
+from backend.infrastructure.logging.logger import logger
 from backend.infrastructure.process_runner import (
     SubprocessRunner,
     run_filtered_claude_stream,
     should_filter_claude_stream,
 )
 
-_logger = logging.getLogger(__name__)
-
-
-def configure_cli_logging() -> None:
-    """Configure root logger with handlers from Logger singleton.
-
-    This function should be called at CLI startup to enable both console
-    and file logging for all modules. It is idempotent - multiple calls
-    will not add duplicate handlers.
-    """
-    from backend.infrastructure.logging.logger import Logger
-
-    app_logger = Logger().get_logger()
-    root_logger = logging.getLogger()
-    root_logger.setLevel(app_logger.level)
-
-    existing_types = {type(handler) for handler in root_logger.handlers}
-    for handler in app_logger.handlers:
-        if type(handler) not in existing_types:
-            root_logger.addHandler(handler)
-            existing_types.add(type(handler))
-
-    app_logger.propagate = False
+__all__ = [
+    "logger",
+    "build_deliberation_config_from_settings",
+    "create_content_generator",
+    "create_event_sink",
+    "create_github_client",
+    "create_process_runner",
+    "create_transcript_runner",
+    "get_agent_runner_settings",
+    "get_agent_runner_status_data",
+    "build_app_config",
+    "build_app_config_from_settings",
+    "merge_repository_config",
+    "resolve_repository_targets",
+    "resolve_issue_from_prd_target",
+    "create_transcript_runner",
+    "write_deliberation_outputs",
+    "create_event_sink",
+]
 
 
 def _format_timestamped_line(text: str) -> str:
@@ -721,7 +717,7 @@ class SubprocessTranscriptRunner:
                     stdout_lines.append(line)
                     timestamped = _format_timestamped_line(line)
                     print(timestamped, end="")
-                    _logger.info("%s", line.rstrip("\n"))
+                    logger.info("%s", line.rstrip("\n"))
             return_code = process.wait(timeout=None)
         except Exception:
             process.kill()
@@ -768,7 +764,7 @@ def _run_agent_with_stdin_prompt(
                 stdout_lines.append(line)
                 timestamped = _format_timestamped_line(line)
                 print(timestamped, end="")
-                _logger.info("%s", line.rstrip("\n"))
+                logger.info("%s", line.rstrip("\n"))
         return_code = process.wait(timeout=None)
     except Exception:
         process.kill()

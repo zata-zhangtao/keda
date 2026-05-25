@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -11,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-_logger = logging.getLogger(__name__)
+from backend.infrastructure.logging.logger import logger
 
 _MAX_BUFFER_SIZE = 4096
 
@@ -99,13 +98,13 @@ class SubprocessRunner:
                     for line in process.stdout:
                         timestamped = _format_timestamped_line(line)
                         print(timestamped, end="", flush=True)
-                        _logger.info("%s", line.rstrip("\n"))
+                        logger.info("%s", line.rstrip("\n"))
                         stdout_lines.append(line)
                 if process.stderr is not None:
                     for line in process.stderr:
                         timestamped = _format_timestamped_line(line)
                         print(timestamped, end="", file=sys.stderr, flush=True)
-                        _logger.warning("%s", line.rstrip("\n"))
+                        logger.warning("%s", line.rstrip("\n"))
                         stderr_lines.append(line)
                 return_code = process.wait(timeout=timeout)
             except Exception:
@@ -266,7 +265,7 @@ def run_filtered_claude_stream(
                         or "[agent result]" in rendered_text
                         or "[agent error]" in rendered_text
                     ):
-                        _logger.info("%s", rendered_text.strip())
+                        logger.info("%s", rendered_text.strip())
                     else:
                         text_buffer.append(rendered_text)
                         buffered_text = "".join(text_buffer)
@@ -276,12 +275,12 @@ def run_filtered_claude_stream(
                         ):
                             stripped = buffered_text.strip()
                             if stripped:
-                                _logger.info("Agent output: %s", stripped)
+                                logger.info("Agent output: %s", stripped)
                             text_buffer.clear()
         if text_buffer:
             buffered = "".join(text_buffer).strip()
             if buffered:
-                _logger.info("Agent output: %s", buffered)
+                logger.info("Agent output: %s", buffered)
         return_code = process.wait(timeout=timeout)
     except Exception:
         process.kill()
