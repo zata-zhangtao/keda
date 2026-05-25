@@ -2,7 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 from backend.api.cli import build_parser
+from backend.infrastructure.logging.logger import Logger
+
+
+def _reset_logger_singleton() -> None:
+    """Reset Logger singleton state for test isolation."""
+    if Logger._logger is not None:
+        for handler in Logger._logger.handlers[:]:
+            handler.close()
+            Logger._logger.removeHandler(handler)
+    Logger._instance = None
+    Logger._logger = None
 
 
 def test_cli_parser_labels_sync() -> None:
@@ -87,8 +102,6 @@ def test_main_rejects_repo_and_repo_id_together() -> None:
 
 def test_main_rejects_unknown_repo_id() -> None:
     """main should exit 1 when repo-id does not exist in config."""
-    from unittest.mock import patch
-
     from backend.api.cli import main
 
     with patch(
@@ -101,9 +114,6 @@ def test_main_rejects_unknown_repo_id() -> None:
 
 def test_main_labels_sync_iterates_multiple_repos() -> None:
     """labels sync without selector should call sync_labels for each repo."""
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
     from backend.api.cli import main
 
     mock_context_a = MagicMock()
@@ -126,9 +136,6 @@ def test_main_labels_sync_iterates_multiple_repos() -> None:
 
 def test_main_issue_from_prd_defaults_to_cwd() -> None:
     """issue-from-prd without --repo or --repo-id should resolve to cwd."""
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
     from backend.api.cli import main
 
     mock_context = MagicMock()
@@ -190,8 +197,6 @@ def test_cli_parser_deliberate_custom_agents() -> None:
 
 def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     """deliberate should pass the finalized session directory to all writers."""
-    from unittest.mock import MagicMock, patch
-
     from backend.api.cli import main
     from backend.core.shared.models.agent_deliberation import (
         DeliberationAgentProfile,
@@ -268,3 +273,92 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
         "skeptic",
         "architect",
     )
+
+
+# New tests for CLI logging configuration
+
+
+def test_cli_logging_adds_file_handler_to_root(tmp_path: Path) -> None:
+    """After configure_cli_logging, root logger must have a FileHandler."""
+    log_file = str(tmp_path / "app.log")
+    with patch("backend.infrastructure.logging.logger.config") as mock_config:
+        mock_config.app_name = "test_cli_fh"
+        mock_config.log_level = "INFO"
+        mock_config.log_file = log_file
+        _reset_logger_singleton()
+
+        from backend.engines.agent_runner.factory import configure_cli_logging
+
+        root = logging.getLogger()
+        # Remove any handlers that may have been added by other tests
+        for handler in root.handlers[:]:
+            root.removeHandler(handler)
+
+        configure_cli_logging()
+
+        handler_types = {type(handler) for handler in root.handlers}
+        assert logging.FileHandler in handler_types
+        assert logging.StreamHandler in handler_types
+
+        # Clean up
+        for handler in root.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                handler.close()
+            root.removeHandler(handler)
+
+
+def test_cli_logging_idempotent(tmp_path: Path) -> None:
+    """Multiple calls to configure_cli_logging should not add duplicate handlers."""
+    log_file = str(tmp_path / "app.log")
+    with patch("backend.infrastructure.logging.logger.config") as mock_config:
+        mock_config.app_name = "test_cli_idempotent"
+        mock_config.log_level = "INFO"
+        mock_config.log_file = log_file
+        _reset_logger_singleton()
+
+        from backend.engines.agent_runner.factory import configure_cli_logging
+
+        root = logging.getLogger()
+        for handler in root.handlers[:]:
+            root.removeHandler(handler)
+
+        configure_cli_logging()
+        initial_count = len(root.handlers)
+        configure_cli_logging()
+        assert len(root.handlers) == initial_count
+
+        # Clean up
+        for handler in root.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                handler.close()
+            root.removeHandler(handler)
+
+
+def test_cli_main_does_not_use_basic_config(tmp_path: Path) -> None:
+    """cli.main() should call configure_cli_logging, not logging.basicConfig()."""
+    log_file = str(tmp_path / "app.log")
+    with patch("backend.infrastructure.logging.logger.config") as mock_config:
+        mock_config.app_name = "test_no_basic"
+        mock_config.log_level = "INFO"
+        mock_config.log_file = log_file
+        _reset_logger_singleton()
+
+        # Patch at the cli module level before main() is called
+        with patch("backend.api.cli.configure_cli_logging") as mock_cfg:
+            from backend.api.cli import main
+
+            with patch(
+                "backend.api.cli.resolve_repository_targets", side_effect=SystemExit(0)
+            ):
+                try:
+                    main(["run-once", "--dry-run"])
+                except SystemExit:
+                    pass
+                mock_cfg.assert_called_once()
+
+        # Clean up
+        root = logging.getLogger()
+        for handler in root.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                handler.close()
+            root.removeHandler(handler)

@@ -30,12 +30,12 @@
 
 ### Supporting Automated Checks
 
-- [ ] 执行 `uv run pytest tests/test_process_runner.py -q`，验证 Claude stream 关键事件产生 logging record、text_delta 在 message_stop 边界汇总记录、非 Claude 路径的 pipe relay 行为正确。
-- [ ] 执行 `uv run pytest tests/test_agent_runner_cli.py -q`，验证 CLI 启动后 root logger 具备 FileHandler 且 handler 不重复。
-- [ ] 执行 `uv run pytest tests/test_logger.py -q`，验证 Logger 单例行为正确。
-- [ ] 执行 `just test`，确认仓库现有自动化测试全部通过。
-- [ ] 执行 `uv run mkdocs build --strict`，确认文档构建通过。
-- [ ] 本组检查只能证明实现契约和回归安全，不能替代 `### Real CLI Validation Checklist` 的真实 agent 端到端验证。
+- [x] 执行 `uv run pytest tests/test_process_runner.py -q`，验证 Claude stream 关键事件产生 logging record、text_delta 在 message_stop 边界汇总记录、非 Claude 路径的 pipe relay 行为正确。
+- [x] 执行 `uv run pytest tests/test_agent_runner_cli.py -q`，验证 CLI 启动后 root logger 具备 FileHandler 且 handler 不重复。
+- [x] 执行 `uv run pytest tests/test_logger.py -q`，验证 Logger 单例行为正确。
+- [x] 执行 `just test`，确认仓库现有自动化测试全部通过。
+- [x] 执行 `uv run mkdocs build --strict`，确认文档构建通过。
+- [x] 本组检查只能证明实现契约和回归安全，不能替代 `### Real CLI Validation Checklist` 的真实 agent 端到端验证。
 
 ## 2. Requirement Shape
 
@@ -458,39 +458,39 @@ iar run-once
 
 ## 6. Definition Of Done
 
-- [ ] `uv run iar run-once` 执行后，`logs/app-YYYY-MM-DD.log` 存在带时间戳的运行记录。
-- [ ] 终端输出的 `[agent tool]`、`[agent result]`、`[agent error]` 带有时间戳前缀。
-- [ ] 流式 text_delta 保持实时、不碎片化地显示在终端。
-- [ ] 非 Claude agent（默认 Codex/Kimi）的终端输出同样带有时间戳并写入日志。
-- [ ] `logs/app-YYYY-MM-DD.log` 中无重复日志条目。
-- [ ] `just lint` 通过。
-- [ ] `pytest` 全部通过。
-- [ ] 文档更新了日志查看说明。
+- [x] `uv run iar run-once` 执行后，`logs/app-YYYY-MM-DD.log` 存在带时间戳的运行记录。
+- [x] 终端输出的 `[agent tool]`、`[agent result]`、`[agent error]` 带有时间戳前缀。
+- [x] 流式 text_delta 保持实时、不碎片化地显示在终端。
+- [x] 非 Claude agent（默认 Codex/Kimi）的终端输出同样带有时间戳并写入日志。
+- [x] `logs/app-YYYY-MM-DD.log` 中无重复日志条目。
+- [x] `just lint` 通过。
+- [x] `pytest` 全部通过。
+- [x] 文档更新了日志查看说明。
 
 ## 7. Acceptance Checklist
 
 ### Behavior Acceptance
 
-- [ ] `cli.py` 的 `main()` 不再调用 `logging.basicConfig()`。
-- [ ] `factory.py` 的 `configure_cli_logging()` 被 `cli.main()` 调用。
-- [ ] 调用后 `logging.getLogger().handlers` 至少包含一个 `FileHandler` 和一个 `StreamHandler`。
-- [ ] 多次调用 `configure_cli_logging()` 不会重复添加 handler。
-- [ ] `Logger` 单例的 `propagate` 属性为 `False`。
-- [ ] `SubprocessRunner.run()` 的非 Claude 路径使用 `subprocess.PIPE` 而非 `stdout=None`。
-- [ ] `run_filtered_claude_stream()` 的关键事件（tool / result / error）通过 `_logger.info()` 记录。
-- [ ] `run_filtered_claude_stream()` 的流式文本在 `message_stop` 后汇总记录。
-- [ ] `run_filtered_claude_stream()` 的 text_delta 缓冲区达到 `max_buffer_size` 时强制刷新。
-- [ ] `SubprocessTranscriptRunner.run()` 的 deliberation 输出同时进入终端和日志。
-- [ ] 终端时间戳出现在每行行首，不插入在流式单词中间。
-- [ ] `capture_output=True` 分支的 stdout/stderr 不被时间戳或日志前缀污染。
+- [x] `cli.py` 的 `main()` 不再调用 `logging.basicConfig()`。
+- [x] `factory.py` 的 `configure_cli_logging()` 被 `cli.main()` 调用。
+- [x] 调用后 `logging.getLogger().handlers` 至少包含一个 `FileHandler` 和一个 `StreamHandler`。
+- [x] 多次调用 `configure_cli_logging()` 不会重复添加 handler。
+- [x] `Logger` 单例的 `propagate` 属性为 `False`。
+- [x] `SubprocessRunner.run()` 的非 Claude 路径使用 `subprocess.PIPE` 而非 `stdout=None`。
+- [x] `run_filtered_claude_stream()` 的关键事件（tool / result / error）通过 `_logger.info()` 记录。
+- [x] `run_filtered_claude_stream()` 的流式文本在 `message_stop` 后汇总记录。
+- [x] `run_filtered_claude_stream()` 的 text_delta 缓冲区达到 `max_buffer_size` 时强制刷新。
+- [x] `SubprocessTranscriptRunner.run()` 的 deliberation 输出同时进入终端和日志。
+- [x] 终端时间戳出现在每行行首，不插入在流式单词中间。
+- [x] `capture_output=True` 分支的 stdout/stderr 不被时间戳或日志前缀污染。
 
 ### Validation Acceptance
 
-- [ ] `pytest tests/test_process_runner.py -q` 通过。
-- [ ] `pytest tests/test_agent_runner_cli.py -q` 通过。
-- [ ] `pytest tests/test_logger.py -q` 通过。
-- [ ] `just test` 全部通过。
-- [ ] `uv run mkdocs build --strict` 通过。
+- [x] `pytest tests/test_process_runner.py -q` 通过。
+- [x] `pytest tests/test_agent_runner_cli.py -q` 通过。
+- [x] `pytest tests/test_logger.py -q` 通过。
+- [x] `just test` 全部通过。
+- [x] `uv run mkdocs build --strict` 通过。
 
 ## 8. Functional Requirements
 

@@ -3,10 +3,38 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
+import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
+
+_logger = logging.getLogger(__name__)
+
+_MAX_BUFFER_SIZE = 4096
+
+
+def _format_timestamped_line(text: str) -> str:
+    """Prefix each line with HH:MM:SS timestamp.
+
+    Args:
+        text: The text to prefix with timestamps.
+
+    Returns:
+        Text with each line prefixed by [HH:MM:SS].
+    """
+    ts = datetime.now().strftime("%H:%M:%S")
+    lines = text.split("\n")
+    result: list[str] = []
+    for idx, line in enumerate(lines):
+        prefix = f"[{ts}] " if line else ""
+        if idx == len(lines) - 1:
+            result.append(f"{prefix}{line}")
+        else:
+            result.append(f"{prefix}{line}\n")
+    return "".join(result)
 
 
 @dataclass(frozen=True)
@@ -55,17 +83,43 @@ class SubprocessRunner:
             stdout = completed.stdout
             stderr = ""
         else:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 list(command),
                 cwd=cwd,
-                check=False,
-                stdout=None,
-                stderr=None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
                 encoding="utf-8",
-                timeout=timeout,
+                bufsize=1,
             )
-            stdout = ""
-            stderr = ""
+            stdout_lines: list[str] = []
+            stderr_lines: list[str] = []
+            try:
+                if process.stdout is not None:
+                    for line in process.stdout:
+                        timestamped = _format_timestamped_line(line)
+                        print(timestamped, end="", flush=True)
+                        _logger.info("%s", line.rstrip("\n"))
+                        stdout_lines.append(line)
+                if process.stderr is not None:
+                    for line in process.stderr:
+                        timestamped = _format_timestamped_line(line)
+                        print(timestamped, end="", file=sys.stderr, flush=True)
+                        _logger.warning("%s", line.rstrip("\n"))
+                        stderr_lines.append(line)
+                return_code = process.wait(timeout=timeout)
+            except Exception:
+                process.kill()
+                process.wait()
+                raise
+            stdout = "".join(stdout_lines)
+            stderr = "".join(stderr_lines)
+            completed = subprocess.CompletedProcess(
+                args=list(command),
+                returncode=return_code,
+                stdout=stdout,
+                stderr=stderr,
+            )
         result = CommandResult(
             command=tuple(command),
             return_code=completed.returncode,
@@ -195,6 +249,7 @@ def run_filtered_claude_stream(
     else:
         process.stdin.close()
     stdout_lines: list[str] = []
+    text_buffer: list[str] = []
     try:
         if process.stdout is not None:
             for output_line in process.stdout:
@@ -202,7 +257,31 @@ def run_filtered_claude_stream(
                 if collect_stdout and rendered_text:
                     stdout_lines.append(rendered_text)
                 if rendered_text:
-                    print(rendered_text, end="", flush=True)
+                    timestamped = _format_timestamped_line(rendered_text)
+                    print(timestamped, end="", flush=True)
+
+                    # Structured events go straight to logger
+                    if (
+                        "[agent tool]" in rendered_text
+                        or "[agent result]" in rendered_text
+                        or "[agent error]" in rendered_text
+                    ):
+                        _logger.info("%s", rendered_text.strip())
+                    else:
+                        text_buffer.append(rendered_text)
+                        buffered_text = "".join(text_buffer)
+                        if (
+                            rendered_text.endswith("\n")
+                            or len(buffered_text) >= _MAX_BUFFER_SIZE
+                        ):
+                            stripped = buffered_text.strip()
+                            if stripped:
+                                _logger.info("Agent output: %s", stripped)
+                            text_buffer.clear()
+        if text_buffer:
+            buffered = "".join(text_buffer).strip()
+            if buffered:
+                _logger.info("Agent output: %s", buffered)
         return_code = process.wait(timeout=timeout)
     except Exception:
         process.kill()

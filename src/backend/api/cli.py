@@ -31,6 +31,7 @@ from backend.core.use_cases.sync_labels import sync_labels
 from backend.core.shared.models.agent_deliberation import DeliberationSession
 from backend.engines.agent_runner.factory import (
     build_deliberation_config_from_settings,
+    configure_cli_logging,
     create_content_generator,
     create_event_sink,
     create_github_client,
@@ -217,10 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the CLI."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    configure_cli_logging()
     parsed = build_parser().parse_args(argv)
 
     if parsed.config:
