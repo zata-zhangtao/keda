@@ -15,7 +15,6 @@ dependencies (``rich``) out of the core business layer.
 
 from __future__ import annotations
 
-import io
 import os
 import sys
 import threading
