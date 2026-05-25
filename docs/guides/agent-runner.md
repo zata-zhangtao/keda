@@ -823,3 +823,36 @@ Agent Runner 的代码分布在四层架构中：
 - `infrastructure/github_client.py` / `infrastructure/process_runner.py` — 外部系统实现
 - `api/cli.py` — CLI 入口
 - `api/routes/agent_runner.py` — FastAPI 只读路由
+
+## 运行日志
+
+`iar` 命令的运行日志按日期存放在 `logs/` 目录下，文件名格式为 `app-YYYY-MM-DD.log`：
+
+```bash
+# 查看今天的日志
+cat logs/app-$(date +%Y-%m-%d).log
+
+# 实时查看日志
+tail -f logs/app-$(date +%Y-%m-%d).log
+
+# 查看最近 7 天的日志
+ls -la logs/app-*.log | head -7
+```
+
+### 日志特性
+
+- **按日期命名**：每天生成一个独立的日志文件，便于按日期排查问题
+- **14 天保留期**：自动清理超过 14 天的旧日志文件
+- **时间戳格式**：日志条目使用 `YYYY-MM-DD HH:MM:SS` 格式
+- **终端同步**：终端输出同时带有 `HH:MM:SS` 时间戳前缀，便于实时观察
+
+### 日志内容
+
+日志文件包含以下内容：
+
+- CLI 启动和配置加载事件
+- Agent 工具调用摘要（如 `[agent tool] Read: /path/to/file.py`）
+- Agent 返回结果摘要（如 `[agent result] Task completed`）
+- Agent 错误信息（如 `[agent error] API Error: 400`）
+- Agent 输出文本（按消息边界汇总）
+- 子进程输出（非 Claude agent 如 Codex/Kimi 的输出）

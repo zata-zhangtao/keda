@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import subprocess
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -48,11 +49,53 @@ from backend.infrastructure.config.settings import (
     config,
 )
 from backend.infrastructure.github_client import GitHubCliClient
+from backend.infrastructure.logging.logger import logger
 from backend.infrastructure.process_runner import (
     SubprocessRunner,
     run_filtered_claude_stream,
     should_filter_claude_stream,
 )
+
+__all__ = [
+    "logger",
+    "build_deliberation_config_from_settings",
+    "create_content_generator",
+    "create_event_sink",
+    "create_github_client",
+    "create_process_runner",
+    "create_transcript_runner",
+    "get_agent_runner_settings",
+    "get_agent_runner_status_data",
+    "build_app_config",
+    "build_app_config_from_settings",
+    "merge_repository_config",
+    "resolve_repository_targets",
+    "resolve_issue_from_prd_target",
+    "create_transcript_runner",
+    "write_deliberation_outputs",
+    "create_event_sink",
+]
+
+
+def _format_timestamped_line(text: str) -> str:
+    """Prefix each line with HH:MM:SS timestamp.
+
+    Args:
+        text: The text to prefix with timestamps.
+
+    Returns:
+        Text with each line prefixed by [HH:MM:SS].
+    """
+    ts = datetime.now().strftime("%H:%M:%S")
+    lines = text.split("\n")
+    result: list[str] = []
+    for idx, line in enumerate(lines):
+        prefix = f"[{ts}] " if line else ""
+        if idx == len(lines) - 1:
+            result.append(f"{prefix}{line}")
+        else:
+            result.append(f"{prefix}{line}\n")
+    return "".join(result)
 
 
 def _build_generated_content_target_config(
@@ -672,7 +715,9 @@ class SubprocessTranscriptRunner:
             if process.stdout is not None:
                 for line in process.stdout:
                     stdout_lines.append(line)
-                    print(line, end="")
+                    timestamped = _format_timestamped_line(line)
+                    print(timestamped, end="")
+                    logger.info("%s", line.rstrip("\n"))
             return_code = process.wait(timeout=None)
         except Exception:
             process.kill()
@@ -717,7 +762,9 @@ def _run_agent_with_stdin_prompt(
         if process.stdout is not None:
             for line in process.stdout:
                 stdout_lines.append(line)
-                print(line, end="")
+                timestamped = _format_timestamped_line(line)
+                print(timestamped, end="")
+                logger.info("%s", line.rstrip("\n"))
         return_code = process.wait(timeout=None)
     except Exception:
         process.kill()

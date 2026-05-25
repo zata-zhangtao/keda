@@ -2,7 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 from backend.api.cli import build_parser
+from backend.infrastructure.logging.logger import Logger
+
+
+def _reset_logger_singleton() -> None:
+    """Reset Logger singleton state for test isolation."""
+    if Logger._logger is not None:
+        for handler in Logger._logger.handlers[:]:
+            handler.close()
+            Logger._logger.removeHandler(handler)
+    Logger._instance = None
+    Logger._logger = None
 
 
 def test_cli_parser_labels_sync() -> None:
@@ -87,8 +102,6 @@ def test_main_rejects_repo_and_repo_id_together() -> None:
 
 def test_main_rejects_unknown_repo_id() -> None:
     """main should exit 1 when repo-id does not exist in config."""
-    from unittest.mock import patch
-
     from backend.api.cli import main
 
     with patch(
@@ -101,9 +114,6 @@ def test_main_rejects_unknown_repo_id() -> None:
 
 def test_main_labels_sync_iterates_multiple_repos() -> None:
     """labels sync without selector should call sync_labels for each repo."""
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
     from backend.api.cli import main
 
     mock_context_a = MagicMock()
@@ -126,9 +136,6 @@ def test_main_labels_sync_iterates_multiple_repos() -> None:
 
 def test_main_issue_from_prd_defaults_to_cwd() -> None:
     """issue-from-prd without --repo or --repo-id should resolve to cwd."""
-    from pathlib import Path
-    from unittest.mock import MagicMock, patch
-
     from backend.api.cli import main
 
     mock_context = MagicMock()
@@ -190,8 +197,6 @@ def test_cli_parser_deliberate_custom_agents() -> None:
 
 def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     """deliberate should pass the finalized session directory to all writers."""
-    from unittest.mock import MagicMock, patch
-
     from backend.api.cli import main
     from backend.core.shared.models.agent_deliberation import (
         DeliberationAgentProfile,
@@ -268,3 +273,8 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
         "skeptic",
         "architect",
     )
+
+
+# New tests for CLI logging configuration
+
+

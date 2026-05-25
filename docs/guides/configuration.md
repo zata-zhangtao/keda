@@ -125,7 +125,33 @@ behavior_prompt = "You are a pragmatic implementer..."
 
 ## 日志相关配置
 
-日志位于 `logs/` 目录，默认文件为 `logs/app.log`，并通过 `TimedRotatingFileHandler` 按天切分。
+日志位于 `logs/` 目录，按日期命名，格式为 `app-YYYY-MM-DD.log`：
+
+```bash
+# 查看今天的日志
+cat logs/app-$(date +%Y-%m-%d).log
+
+# 实时查看日志
+tail -f logs/app-$(date +%Y-%m-%d).log
+```
+
+### 日志特性
+
+- **按日期划分**：每天生成一个独立的日志文件，如 `app-2026-05-24.log`
+- **自动清理**：启动时自动删除超过 14 天的旧日志文件
+- **时间戳格式**：日志条目使用 `YYYY-MM-DD HH:MM:SS` 格式
+- **终端同步**：`iar` 命令的终端输出带有 `HH:MM:SS` 时间戳前缀
+
+### 日志内容
+
+日志文件记录以下内容：
+
+- CLI 启动和配置加载事件
+- Agent 工具调用摘要（如 `[agent tool] Read`）
+- Agent 返回结果摘要（如 `[agent result]`）
+- Agent 错误信息（如 `[agent error]`）
+- Agent 输出文本（按消息边界汇总记录）
+- 子进程输出（Codex/Kimi 等非 Claude agent 的输出）
 
 ## 数据库 URL 解析
 
