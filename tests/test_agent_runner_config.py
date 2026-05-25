@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from backend.core.shared.models.agent_runner import AppConfig, GitConfig, RunnerConfig
 from backend.engines.agent_runner.factory import (
     build_app_config_from_settings,
@@ -11,6 +13,7 @@ from backend.engines.agent_runner.factory import (
     resolve_issue_from_prd_target,
     resolve_repository_targets,
 )
+from backend.infrastructure.config import settings as settings_module
 from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGeneratedContentTargetSettings,
@@ -24,6 +27,28 @@ from backend.infrastructure.config.settings import (
 
 def _make_settings(**kwargs) -> AgentRunnerSettings:
     return AgentRunnerSettings(**kwargs)
+
+
+@pytest.fixture(autouse=True)
+def isolate_agent_runner_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep repository target tests independent from the developer's config.toml."""
+    original_loader = settings_module._load_toml_section_data
+
+    def load_toml_section_without_agent_repositories(
+        section_name: str,
+    ) -> dict[str, object]:
+        section_data = original_loader(section_name)
+        if section_name != "agent_runner":
+            return section_data
+        isolated_section_data = dict(section_data)
+        isolated_section_data.pop("repositories", None)
+        return isolated_section_data
+
+    monkeypatch.setattr(
+        settings_module,
+        "_load_toml_section_data",
+        load_toml_section_without_agent_repositories,
+    )
 
 
 def test_build_app_config_from_settings_structure() -> None:

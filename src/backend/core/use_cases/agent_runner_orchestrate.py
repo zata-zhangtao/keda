@@ -12,9 +12,11 @@ from backend.core.shared.interfaces.agent_runner import (
     IProcessRunner,
 )
 from backend.core.shared.models.agent_runner import (
+    AgentCommitResult,
     AppConfig,
     AttemptResult,
     CommandResult,
+    FailureType,
     IssueSummary,
     PullRequestContext,
     ReviewEventMarker,
@@ -34,13 +36,17 @@ from backend.core.use_cases.pr_supervisor import (
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
+    ensure_prd_delivery_ready,
+    ensure_verification_passed,
     format_attempt_history,
     format_command,
     get_current_branch,
     get_head_sha,
+    has_changes,
     publish_changes,
     run_agent_until_committed,
     run_preflight_checks,
+    run_verification,
 )
 
 _logger = logging.getLogger(__name__)
@@ -164,43 +170,138 @@ def _workflow_state_labels(config: AppConfig) -> list[str]:
     ]
 
 
-def _process_ready_issue(
+def _mark_issue_failed(
     *,
     issue: IssueSummary,
-    repo_path: Path,
     config: AppConfig,
-    agent: str,
+    github_client: IGitHubClient,
+    exc: Exception,
+) -> None:
+    """Best-effort failure reporting without hiding the original error."""
+    try:
+        github_client.edit_issue_labels(
+            issue.number,
+            add=[config.labels.failed],
+            remove=_workflow_state_labels(config),
+        )
+    except Exception as label_exc:  # noqa: BLE001 - preserve original failure.
+        _logger.error(
+            "Failed to mark Issue #%d as %s: %s",
+            issue.number,
+            config.labels.failed,
+            label_exc,
+        )
+
+    attempt_results = getattr(exc, "attempt_results", None)
+    if attempt_results is not None:
+        from backend.core.use_cases.run_agent_once import format_failure_comment
+
+        comment_body = format_failure_comment(exc, attempt_results)
+    else:
+        comment_body = f"## Agent Runner Failed\n\n```text\n{exc}\n```\n"
+    try:
+        github_client.comment_issue(issue.number, comment_body)
+    except Exception as comment_exc:  # noqa: BLE001 - preserve original failure.
+        _logger.error(
+            "Failed to comment on Issue #%d failure: %s",
+            issue.number,
+            comment_exc,
+        )
+
+
+def _count_local_commits_since_base(
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> int:
+    base_ref_name = f"{config.git.remote}/{config.git.base_branch}"
+    ahead_result = process_runner.run(
+        ["git", "rev-list", "--count", f"{base_ref_name}..HEAD"],
+        cwd=worktree_path,
+        check=False,
+    )
+    if ahead_result.return_code != 0:
+        return 0
+    try:
+        return int(ahead_result.stdout.strip() or "0")
+    except ValueError:
+        return 0
+
+
+def _get_merge_base_sha(
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> str:
+    base_ref_name = f"{config.git.remote}/{config.git.base_branch}"
+    merge_base_result = process_runner.run(
+        ["git", "merge-base", "HEAD", base_ref_name],
+        cwd=worktree_path,
+        check=False,
+    )
+    merge_base_sha = merge_base_result.stdout.strip()
+    if merge_base_result.return_code == 0 and merge_base_sha:
+        return merge_base_sha
+    return get_head_sha(worktree_path, process_runner)
+
+
+def _reuse_existing_local_commit(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> AgentCommitResult | None:
+    """Return existing clean local commits ready for publish, if present."""
+    local_commit_count = _count_local_commits_since_base(
+        worktree_path, config, process_runner
+    )
+    if local_commit_count <= 0 or has_changes(worktree_path, process_runner):
+        return None
+
+    verification_results = run_verification(worktree_path, config, process_runner)
+    ensure_verification_passed(verification_results)
+    ensure_prd_delivery_ready(issue, worktree_path, process_runner)
+    if has_changes(worktree_path, process_runner):
+        return None
+
+    base_ref_name = f"{config.git.remote}/{config.git.base_branch}"
+    head_sha = get_head_sha(worktree_path, process_runner)
+    _logger.info(
+        "Reusing %d existing local commit(s) for Issue #%d at %s.",
+        local_commit_count,
+        issue.number,
+        head_sha,
+    )
+    return AgentCommitResult(
+        verification_results=verification_results,
+        attempt_results=[
+            AttemptResult(
+                attempt_number=1,
+                failure_type=FailureType.SUCCESS,
+                recovered=True,
+                detail=(
+                    f"Reused {local_commit_count} existing local commit(s) "
+                    f"already ahead of {base_ref_name}; agent was not invoked."
+                ),
+            )
+        ],
+    )
+
+
+def _finish_implementation_publication(
+    *,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    selected_agent: str,
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
+    expected_branch: str,
+    commit_result: AgentCommitResult,
     content_generator: IContentGenerator | None = None,
 ) -> None:
-    """Process a ready Issue through the full first-implementation path."""
-    selected_agent = choose_agent(issue, config, agent)
-    github_client.edit_issue_labels(
-        issue.number, add=[config.labels.running], remove=[config.labels.ready]
-    )
-    github_client.comment_issue(
-        issue.number,
-        "## Agent Runner Claimed\n\n"
-        f"- Host: `{socket.gethostname()}`\n"
-        f"- Agent: `{selected_agent}`\n",
-    )
-    worktree_path = create_or_reuse_worktree(repo_path, issue, config, process_runner)
-    before_sha = get_head_sha(worktree_path, process_runner)
-    expected_branch = get_current_branch(worktree_path, process_runner)
-    commit_result = run_agent_until_committed(
-        selected_agent=selected_agent,
-        issue=issue,
-        worktree_path=worktree_path,
-        config=config,
-        process_runner=process_runner,
-        before_sha=before_sha,
-        expected_branch=expected_branch,
-    )
     verification_results = commit_result.verification_results
-    attempt_results = commit_result.attempt_results
     after_sha = get_head_sha(worktree_path, process_runner)
-
     github_client.comment_issue(
         issue.number,
         build_implementation_complete_comment(
@@ -208,11 +309,11 @@ def _process_ready_issue(
             branch=expected_branch,
             head_sha=after_sha,
             verification_results=verification_results,
-            attempt_results=attempt_results,
+            attempt_results=commit_result.attempt_results,
         ),
     )
 
-    final_sha, final_verification = run_pre_push_review(
+    final_sha, _final_verification_results = run_pre_push_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -258,7 +359,7 @@ def _process_ready_issue(
                 pr_url=pr_url,
                 branch=branch,
                 head_sha=publish_sha,
-                base_sha=before_sha,
+                base_sha=_get_merge_base_sha(worktree_path, config, process_runner),
             )
         supervisor_agent = (
             selected_agent
@@ -280,6 +381,156 @@ def _process_ready_issue(
             add=[config.labels.review],
             remove=[config.labels.supervising],
         )
+
+    _logger.info(
+        "Published Issue #%d from %s at %s after implementation head %s.",
+        issue.number,
+        branch,
+        final_sha,
+        after_sha,
+    )
+
+
+def _finish_existing_commit_publication(
+    *,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    selected_agent: str,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    expected_branch: str,
+    commit_result: AgentCommitResult,
+    content_generator: IContentGenerator | None = None,
+) -> None:
+    verification_results = commit_result.verification_results
+    head_sha = get_head_sha(worktree_path, process_runner)
+    github_client.comment_issue(
+        issue.number,
+        build_implementation_complete_comment(
+            agent=selected_agent,
+            branch=expected_branch,
+            head_sha=head_sha,
+            verification_results=verification_results,
+            attempt_results=commit_result.attempt_results,
+        ),
+    )
+
+    branch, pr_url = publish_changes(
+        issue,
+        worktree_path,
+        config,
+        github_client,
+        process_runner,
+        expected_branch=expected_branch,
+        content_generator=content_generator,
+    )
+    publish_sha = get_head_sha(worktree_path, process_runner)
+    github_client.edit_issue_labels(
+        issue.number,
+        add=[config.labels.review],
+        remove=_workflow_state_labels(config),
+    )
+    github_client.comment_issue(
+        issue.number,
+        build_draft_pr_created_comment(
+            pr_url=pr_url,
+            branch=branch,
+            head_sha=publish_sha,
+        ),
+    )
+    _logger.info(
+        "Recovered publication for Issue #%d from %s at %s.",
+        issue.number,
+        branch,
+        publish_sha,
+    )
+
+
+def _has_existing_local_commit_ready_for_publish(
+    *,
+    issue: IssueSummary,
+    repo_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> bool:
+    try:
+        worktree_path = _find_worktree_path_for_issue(
+            repo_path, issue, config, process_runner
+        )
+        return _count_local_commits_since_base(
+            worktree_path, config, process_runner
+        ) > 0 and not has_changes(worktree_path, process_runner)
+    except Exception as exc:  # noqa: BLE001 - candidate probing must not fail polling.
+        _logger.info(
+            "Skipping existing local commit probe for Issue #%d: %s",
+            issue.number,
+            exc,
+        )
+        return False
+
+
+def _process_ready_issue(
+    *,
+    issue: IssueSummary,
+    repo_path: Path,
+    config: AppConfig,
+    agent: str,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    content_generator: IContentGenerator | None = None,
+) -> None:
+    """Process a ready Issue through the full first-implementation path."""
+    selected_agent = choose_agent(issue, config, agent)
+    github_client.edit_issue_labels(
+        issue.number, add=[config.labels.running], remove=[config.labels.ready]
+    )
+    github_client.comment_issue(
+        issue.number,
+        "## Agent Runner Claimed\n\n"
+        f"- Host: `{socket.gethostname()}`\n"
+        f"- Agent: `{selected_agent}`\n",
+    )
+    worktree_path = create_or_reuse_worktree(repo_path, issue, config, process_runner)
+    before_sha = get_head_sha(worktree_path, process_runner)
+    expected_branch = get_current_branch(worktree_path, process_runner)
+    commit_result = _reuse_existing_local_commit(
+        issue, worktree_path, config, process_runner
+    )
+    if commit_result is not None:
+        _finish_existing_commit_publication(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            selected_agent=selected_agent,
+            github_client=github_client,
+            process_runner=process_runner,
+            expected_branch=expected_branch,
+            commit_result=commit_result,
+            content_generator=content_generator,
+        )
+        return
+
+    new_commit_result = run_agent_until_committed(
+        selected_agent=selected_agent,
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=process_runner,
+        before_sha=before_sha,
+        expected_branch=expected_branch,
+    )
+    _finish_implementation_publication(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        selected_agent=selected_agent,
+        github_client=github_client,
+        process_runner=process_runner,
+        expected_branch=expected_branch,
+        commit_result=new_commit_result,
+        content_generator=content_generator,
+    )
 
 
 def _run_supervisor_with_repair_loop(
@@ -561,6 +812,43 @@ def _process_running_rework(
         )
 
 
+def _process_running_publish_recovery(
+    *,
+    issue: IssueSummary,
+    repo_path: Path,
+    config: AppConfig,
+    agent: str,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    content_generator: IContentGenerator | None = None,
+) -> None:
+    """Resume publication for a running Issue that already has local commits."""
+    selected_agent = choose_agent(issue, config, agent)
+    worktree_path = _find_worktree_path_for_issue(
+        repo_path, issue, config, process_runner
+    )
+    expected_branch = get_current_branch(worktree_path, process_runner)
+    commit_result = _reuse_existing_local_commit(
+        issue, worktree_path, config, process_runner
+    )
+    if commit_result is None:
+        raise RuntimeError(
+            f"Issue #{issue.number} has no clean local commit ready for publication."
+        )
+
+    _finish_existing_commit_publication(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        selected_agent=selected_agent,
+        github_client=github_client,
+        process_runner=process_runner,
+        expected_branch=expected_branch,
+        commit_result=commit_result,
+        content_generator=content_generator,
+    )
+
+
 def run_once(
     *,
     repo_path: Path,
@@ -613,9 +901,16 @@ def run_once(
             )
             if is_rework and marker is not None:
                 issues_to_process.append((issue, "running_rework"))
+            elif _has_existing_local_commit_ready_for_publish(
+                issue=issue,
+                repo_path=repo_path,
+                config=config,
+                process_runner=process_runner,
+            ):
+                issues_to_process.append((issue, "running_publish_recovery"))
             else:
                 _logger.info(
-                    "Skipping Issue #%d with label %s: no rework intent marker or open PR.",
+                    "Skipping Issue #%d with label %s: no rework marker, open PR, or clean local commit.",
                     issue.number,
                     config.labels.running,
                 )
@@ -650,8 +945,7 @@ def run_once(
                     process_runner=process_runner,
                     content_generator=content_generator,
                 )
-            else:
-                # running_rework
+            elif issue_kind == "running_rework":
                 _, marker = _guard_running_issue_is_rework(issue, config, github_client)
                 if marker is None:
                     continue
@@ -664,21 +958,24 @@ def run_once(
                     process_runner=process_runner,
                     marker=marker,
                 )
+            else:
+                _process_running_publish_recovery(
+                    issue=issue,
+                    repo_path=repo_path,
+                    config=config,
+                    agent=agent,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                    content_generator=content_generator,
+                )
             _logger.info("Completed Issue #%d: %s", issue.number, issue.title)
         except Exception as exc:  # noqa: BLE001 - report queue failures and continue.
             exit_code = 1
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.failed],
-                remove=_workflow_state_labels(config),
+            _mark_issue_failed(
+                issue=issue,
+                config=config,
+                github_client=github_client,
+                exc=exc,
             )
-            attempt_results = getattr(exc, "attempt_results", None)
-            if attempt_results is not None:
-                from backend.core.use_cases.run_agent_once import format_failure_comment
-
-                comment_body = format_failure_comment(exc, attempt_results)
-            else:
-                comment_body = f"## Agent Runner Failed\n\n```text\n{exc}\n```\n"
-            github_client.comment_issue(issue.number, comment_body)
             _logger.error("Failed Issue #%d: %s", issue.number, exc)
     return exit_code

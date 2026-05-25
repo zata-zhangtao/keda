@@ -179,12 +179,42 @@ class GitHubCliClient:
         remove: Sequence[str] = (),
     ) -> None:
         """Add and remove Issue labels."""
+        current_labels = self._list_issue_label_names(issue_number)
+        labels_to_add = [label for label in add if label not in current_labels]
+        requested_add_labels = set(add)
+        labels_to_remove = [
+            label
+            for label in remove
+            if label in current_labels and label not in requested_add_labels
+        ]
+        if not labels_to_add and not labels_to_remove:
+            return
+
         command = ["gh", "issue", "edit", str(issue_number)]
-        for label in add:
+        for label in labels_to_add:
             command.extend(["--add-label", label])
-        for label in remove:
+        for label in labels_to_remove:
             command.extend(["--remove-label", label])
         self._runner.run(command, cwd=self.repo_path)
+
+    def _list_issue_label_names(self, issue_number: int) -> set[str]:
+        result = self._runner.run(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(issue_number),
+                "--json",
+                "labels",
+            ],
+            cwd=self.repo_path,
+        )
+        raw_issue = json.loads(result.stdout or "{}")
+        return {
+            str(raw_label.get("name", ""))
+            for raw_label in raw_issue.get("labels", [])
+            if raw_label.get("name")
+        }
 
     def comment_issue(self, issue_number: int, body: str) -> None:
         """Post a Markdown comment to an Issue."""

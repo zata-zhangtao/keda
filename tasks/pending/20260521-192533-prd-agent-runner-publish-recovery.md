@@ -10,11 +10,15 @@
 
 这类失败不应该重新启动 Agent。正确恢复方式是复用已有 worktree 和本地 commit，幂等完成发布收尾：push 分支、创建或复用 draft PR、把 Issue 从 `agent/failed` 切到 `agent/review`。
 
+2026-05-25 的 Issue #27 事故暴露了一个相邻失败模式：本地 commit `79ae0277ee08058907992321f345e9a7e49561f4` 已经存在且验证通过，但 Issue 仍停在 `agent/running`；后续 `run-once` 没有识别该 clean local commit，重新进入 Agent/recovery 路径并因 quota/auth 失败耗尽 6 次尝试。同时，失败上报阶段的 GitHub label/comment 操作失败又掩盖了原始上下文。本 PRD 因此追加 `run-once` 内联发布恢复、label 幂等编辑、失败上报 best-effort 三项实际修复范围。
+
 本 PRD 的目标：
 
 - 在 `run-once` 领取 Issue 前发现明显的发布配置错误，避免 Agent 做完后才失败。
 - 为“已有本地 commit，但发布阶段失败”的任务提供显式恢复命令。
 - 恢复命令必须幂等、安全，不重复创建 PR，不误推 base branch，不处理未提交脏变更。
+- 在 `run-once` 自身再次看到已有 clean local commit 的 ready/running Issue 时，直接完成验证与发布收尾，而不是重新启动 Agent。
+- GitHub label/comment 收尾失败不得掩盖原始 runner 错误。
 
 ### Final Live Integration Test Checklist
 
@@ -33,17 +37,28 @@
 - [ ] 在真实 issue worktree 切到 base branch 后执行 `uv run iar recover-publish --issue <number>`，确认拒绝发布 base branch；再切到不含 Issue number 的分支，确认无 `--branch` 时拒绝，带不匹配 `--branch` 时也拒绝。
 - [ ] 真实验收完成后，关闭或清理测试 Issue、测试 PR 和测试 branch，并把实际执行命令、Issue URL、PR URL、关键 `gh`/`git` 验证输出摘要记录到实现 PR 或交付说明中。
 
+### Observed Issue #27 Recovery Evidence
+
+- [x] 执行 `uv run iar run-once --repo /Users/zata/code/keda --agent codex --max-issues 1` 后，runner 复用本地 clean commit `79ae0277ee08058907992321f345e9a7e49561f4`，没有重新调用 Agent。
+- [x] `gh pr view 31 --json number,title,state,isDraft,headRefName,headRefOid,baseRefName,url` 确认 draft PR #31 已创建，head branch 为 `issue-27`，head SHA 为 `79ae0277ee08058907992321f345e9a7e49561f4`。
+- [x] `gh issue view 27 --json labels,comments` 确认 Issue #27 已进入 `agent/review`，并包含 implementation complete 与 draft PR created 两条事件评论。
+- [x] `just test` 通过：`310 passed`。
+
 ## 2. Requirement Shape
 
 - **Actor**：本地操作者或自动化 runner 运维者。
 - **Trigger**：
   - `iar run-once` 即将领取 ready Issue。
   - `iar run-once` 在 `publish_changes` 阶段失败。
+  - `iar run-once` 重新扫描到一个 ready Issue，且复用的 issue worktree 已经有 clean local commit ahead of configured base。
+  - `iar run-once` 重新扫描到一个 `agent/running` Issue，没有 rework marker 或 open PR，但 issue worktree 已经有 clean local commit ahead of configured base。
   - `git push`、PR 查询、PR 创建、Issue label 更新或 Issue comment 创建因为网络/API/认证类错误失败。
   - 用户显式执行 `iar recover-publish --issue <number>`。
 - **Expected Behavior**：
   - `run-once` 非 dry-run 时先做 publish preflight，配置 remote 不存在时直接失败，不领取 Issue。
   - publish 阶段失败时，Issue comment 明确说明本地 commit 已存在但发布收尾失败，并给出恢复命令；错误摘要保留失败命令、exit code、stdout/stderr 或异常文本。
+  - `run-once` 发现已有 clean local commit 时，先运行配置的 verification 与 PRD delivery check；通过后直接 push、创建 draft PR、更新 Issue 到 `agent/review`，不调用 Agent。
+  - 失败上报尽力执行 label/comment 更新，但这些上报失败只能记录日志，不能覆盖原始执行失败。
   - `recover-publish` 只恢复发布收尾，不启动 Agent，不运行 recovery prompt，不要求新 commit。
   - `recover-publish` 成功后，远程分支存在，draft PR 存在或被复用，Issue label 进入 review 状态。
 - **Scope Boundary**：
@@ -59,10 +74,13 @@
 |---|---|---|
 | `src/backend/api/cli.py` | `iar` CLI 参数解析与 use case 调用 | 新增 `recover-publish` 子命令 |
 | `src/backend/core/use_cases/run_agent_once.py` | Issue 领取、Agent 执行、验证、提交代理、发布 PR | 复用 `get_current_branch`, `get_head_sha`, `has_changes`, `publish_changes` 的部分逻辑；补强 publish failure comment |
+| `src/backend/core/use_cases/agent_runner_orchestrate.py` | 多仓库/多状态 Issue 编排、ready/running/review 流转、失败上报 | 追加 clean local commit 识别、ready/running 内联发布恢复、失败上报 best-effort |
 | `src/backend/core/shared/interfaces/agent_runner.py` | GitHub 与进程端口 | 需要扩展 PR 查询能力，避免 core 直接硬编码 `gh pr list` |
 | `src/backend/core/shared/models/agent_runner.py` | core 层配置与值对象 | 新增 PR summary / publish recovery request-result 模型 |
-| `src/backend/infrastructure/github_client.py` | GitHub CLI 适配器 | 实现按 head branch 查询 open PR |
-| `tests/test_run_agent.py` | runner 编排行为测试 | 覆盖 preflight 与 publish failure comment |
+| `src/backend/infrastructure/github_client.py` | GitHub CLI 适配器 | 实现按 head branch 查询 open PR；label edit 前读取当前 labels，跳过无效 add/remove |
+| `tests/test_run_agent.py` | runner 编排行为测试 | 覆盖 preflight、publish failure comment、ready/running 复用 clean local commit |
+| `tests/test_github_client.py` | GitHub CLI adapter 行为测试 | 覆盖 label 幂等编辑与 no-op 跳过 |
+| `tests/test_agent_runner_config.py` | runner 配置解析测试 | 隔离开发者本地 `config.toml` 的 repositories 配置，避免测试受本机环境影响 |
 | `tests/test_agent_runner_cli.py` | CLI parser 测试 | 覆盖 `recover-publish` 参数 |
 
 ### Architecture Constraints
@@ -77,6 +95,8 @@
 
 - `format_command(config.worktree.path_command, issue_number=...)`：只解析预期 worktree 路径，不创建新 worktree。
 - `get_current_branch`, `get_head_sha`, `has_changes`, `validate_publish_remote`：作为恢复前安全检查。
+- `run_verification`, `ensure_verification_passed`, `ensure_prd_delivery_ready`：复用现有验证和 PRD 交付检查，保证已有 local commit 仍满足发布门禁。
+- `publish_changes(...)`：复用既有 push、draft PR 创建与 PR body 生成路径，避免另写发布逻辑。
 - `github_client.create_draft_pr(...)`：PR 不存在时继续使用现有 draft PR 创建入口。
 - `github_client.edit_issue_labels(...)` 与 `comment_issue(...)`：完成 label 收尾和结果记录。
 
@@ -85,6 +105,7 @@
 - 不应新增第二套 GitHub CLI wrapper；只扩展现有 `GitHubCliClient`。
 - 不应新增“恢复状态文件”；状态可以从 Git 分支、PR 列表和 Issue labels 推导。
 - 不应让 `recover-publish` 调用 `create_or_reuse_worktree`，因为该函数可能创建 worktree；恢复命令必须只处理已经存在的工作成果。
+- 不应为了 Issue #27 事故复制一套轻量 publish 流程；`run-once` 内联恢复必须复用 `publish_changes(...)` 和既有 verification/PRD gate。
 
 ## 4. Recommendation
 
@@ -113,12 +134,27 @@
    - comment 中加入“本地 commit 已存在，发布失败”的诊断、失败命令摘要和 `iar recover-publish --issue <number>` 命令。
    - 保持 Issue 为 `agent/failed`，由恢复命令成功后切到 review。
 
+4. 追加 `run-once` 内联恢复路径：
+   - ready Issue 创建或复用 worktree 后，若当前 branch 已有 clean local commit ahead of configured base，跳过 Agent，直接运行 verification 与 PRD delivery check。
+   - running Issue 若没有 rework marker，但已有 clean local commit，则进入 publish recovery 分支，不再因“没有 rework marker”而永久跳过。
+   - 该路径成功后同样调用 `publish_changes(...)`、添加 `agent/review`、移除 workflow state labels，并写 implementation complete / draft PR created comments。
+
+5. `GitHubCliClient.edit_issue_labels(...)` 改为先读取 Issue 当前 labels：
+   - 只添加当前不存在的 labels。
+   - 只移除当前存在且没有同时被 add 的 labels。
+   - add/remove 均为空时跳过 `gh issue edit`。
+
+6. `run-once` 失败上报改为 best-effort：
+   - label 标记失败和 failure comment 都单独 try/catch。
+   - 上报失败只写日志，不覆盖原始 runner exception。
+
 ### Why This Fits
 
 - 只新增一个明确 use case，不改变 Agent retry loop。
 - 用现有 worktree、GitHub client、process runner 端口完成恢复。
 - 幂等性来自 GitHub PR 查询和 label set 操作，不需要外部状态。
 - 发布恢复与代码修复分离，避免 push 失败时错误地重启 Agent。
+- Issue #27 的即时修复没有引入新状态或新发布抽象，而是把已有 commit 识别接入现有 orchestrator 与 publish path。
 
 ### Alternatives Considered
 
@@ -130,6 +166,8 @@
 | 新增状态文件记录 publish checkpoint | 在 `.agent-runner/` 写 publish 状态 | 额外状态会过期；当前状态可从 Git 和 GitHub 查询得到 |
 
 ## 5. Implementation Guide
+
+This section is a living implementation guide based on current repository analysis. If implementation discovers additional affected files, hidden dependencies, edge cases, or a better path, update this PRD before proceeding.
 
 ### Core Logic
 
@@ -165,6 +203,43 @@ recover_publish_issue(request, config, github_client, process_runner):
   return PublishRecoveryResult(...)
 ```
 
+### Implemented Run-Once Resume Logic
+
+2026-05-25 的实际补丁先完成了 `run-once` 内联恢复，而不是新增 `recover-publish` CLI：
+
+```text
+run_once:
+  collect ready issues
+  collect running issues
+  for running issue without rework marker:
+      if issue worktree has clean local commits ahead of configured base:
+          process as running_publish_recovery
+      else:
+          skip as active/unknown running issue
+
+process ready issue:
+  claim issue as running
+  create_or_reuse_worktree(...)
+  if clean local commits ahead of configured base:
+      run verification
+      ensure PRD delivery ready
+      publish_changes(...)
+      label -> review
+      comment implementation + draft PR
+      return
+  run agent until committed
+  continue existing publish flow
+
+process running_publish_recovery:
+  resolve existing issue worktree only
+  require clean local commits ahead of configured base
+  run verification
+  ensure PRD delivery ready
+  publish_changes(...)
+  label -> review
+  comment implementation + draft PR
+```
+
 ### Change Impact Tree
 
 ```text
@@ -178,6 +253,11 @@ recover_publish_issue(request, config, github_client, process_runner):
 │   └── models/agent_runner.py
 │       [修改] 新增 PullRequestSummary, PublishRecoveryRequest, PublishRecoveryResult
 ├── src/backend/core/use_cases/
+│   ├── agent_runner_orchestrate.py
+│   │   [修改] _mark_issue_failed best-effort failure reporting
+│   │   [修改] _reuse_existing_local_commit 检测 clean local commit 并运行 verification / PRD gate
+│   │   [修改] _finish_existing_commit_publication 复用 publish_changes 完成 PR 与 label 收尾
+│   │   [修改] _process_running_publish_recovery 处理 agent/running 但已有本地 commit 的恢复
 │   ├── run_agent_once.py
 │   │   [修改] publish failure comment 增加恢复命令与本地 commit 说明
 │   └── recover_publish.py
@@ -185,9 +265,16 @@ recover_publish_issue(request, config, github_client, process_runner):
 ├── src/backend/infrastructure/
 │   └── github_client.py
 │       [修改] 通过 gh pr list 实现 find_open_pr_by_head(...)
+│       [修改] edit_issue_labels 先读取当前 labels，仅执行真实 add/remove，no-op 时跳过 gh issue edit
 ├── tests/
 │   ├── test_agent_runner_cli.py
 │   │   [修改] 覆盖 recover-publish CLI parser
+│   ├── test_agent_runner_config.py
+│   │   [修改] 隔离本地 config.toml 中的 repositories，避免开发者环境污染配置测试
+│   ├── test_github_client.py
+│   │   [修改] 覆盖只移除已存在 labels 与 no-op label update
+│   ├── test_run_agent.py
+│   │   [修改] 覆盖 ready/running Issue 复用 existing clean local commit 且不调用 Agent
 │   ├── test_recover_publish.py
 │   │   [新增] 覆盖恢复成功、复用 PR、安全拒绝、label 收尾
 │   └── conftest.py
@@ -218,6 +305,34 @@ flowchart TD
     L --> M["comment recovery summary"]
 ```
 
+```mermaid
+flowchart TD
+    A["iar run-once scans Issue"] --> B{"Issue state"}
+    B -->|agent/ready| C["claim and create/reuse issue worktree"]
+    B -->|agent/running| D{"rework marker/open PR?"}
+    D -->|Yes| E["existing running rework path"]
+    D -->|No| F{"clean local commits ahead of base?"}
+    C --> G{"clean local commits ahead of base?"}
+    G -->|No| H["invoke selected Agent"]
+    G -->|Yes| I["run verification and PRD delivery gate"]
+    F -->|No| J["skip running Issue"]
+    F -->|Yes| I
+    I --> K{"worktree still clean and checks passed?"}
+    K -->|No| L["fail with original error preserved"]
+    K -->|Yes| M["publish_changes"]
+    M --> N["Issue label -> agent/review"]
+    N --> O["implementation complete + draft PR comments"]
+```
+
+### Realistic Validation Plan
+
+| Behavior | Real entry point | Dependencies | Procedure | Why lower-level tests are insufficient |
+|---|---|---|---|---|
+| Existing clean local commit is reused without invoking Agent | `uv run iar run-once --repo /Users/zata/code/keda --agent codex --max-issues 1` | Real Git worktree, real configured remote, real GitHub CLI auth | Start from an Issue worktree with a clean commit ahead of configured base, run `run-once`, then inspect terminal/log output, `gh issue view`, and `gh pr view` | Unit tests can prove command selection, but only the real entry point proves GitHub labels/comments/PR state converge |
+| GitHub label edits are idempotent | `gh issue view` plus runner label transition | Real GitHub Issue labels | Run a transition where several remove labels are absent, confirm `gh issue edit` succeeds and final labels are correct | Fake runner cannot reproduce GitHub CLI failure behavior for absent labels |
+| Failure reporting does not hide original runner failure | `uv run iar run-once` against a controlled failing publish/comment scenario | Real or sandbox GitHub CLI failure, local logs | Force label/comment failure after an original runner exception and confirm logs preserve both messages | Mock tests can assert catch blocks, but real logs prove operator-visible diagnosis |
+| Regression coverage | `just test` | Local test suite | Run `just test` after code changes | Required repository-wide regression gate |
+
 ### Low-Fidelity Prototype
 
 No UI changes.
@@ -241,6 +356,9 @@ No external web validation required; repository code paths and GitHub CLI usage 
 - Publish failure comments distinguish execution failure from publish failure.
 - PR creation is idempotent and does not duplicate an existing open PR for the same head branch.
 - Safety checks reject dirty worktrees, base branch publishing, missing remotes, and suspicious branches.
+- `run-once` can recover ready/running Issues with existing clean local commits without invoking Agent.
+- Failure reporting does not hide the original runner exception when GitHub label/comment updates fail.
+- GitHub label editing is idempotent and skips absent-label removals/no-op updates.
 - Documentation and tests are updated.
 - `just test` passes.
 
@@ -253,6 +371,9 @@ No external web validation required; repository code paths and GitHub CLI usage 
 - [ ] `src/backend/core/shared/interfaces/agent_runner.py` extends `IGitHubClient` with PR lookup capability.
 - [ ] `src/backend/infrastructure/github_client.py` implements PR lookup without leaking infrastructure imports into core.
 - [ ] `recover_publish.py` does not call Agent CLI builders or recovery prompt logic.
+- [x] `src/backend/core/use_cases/agent_runner_orchestrate.py` contains best-effort failure reporting via `_mark_issue_failed`.
+- [x] `src/backend/core/use_cases/agent_runner_orchestrate.py` contains ready/running existing clean local commit recovery without adding new infrastructure dependencies.
+- [x] `src/backend/infrastructure/github_client.py` performs idempotent label edits by reading current Issue labels before `gh issue edit`.
 
 ### Behavior Acceptance
 
@@ -269,6 +390,11 @@ No external web validation required; repository code paths and GitHub CLI usage 
 - [ ] Successful recovery comments the Issue with branch, HEAD SHA, PR URL, and whether the PR was reused.
 - [ ] Publish failure in `run-once` comments the Issue with `iar recover-publish --issue <number>`.
 - [ ] Publish failure comments include the failed publish operation category, such as push, PR lookup, PR create, label update, or comment update when available.
+- [x] A ready Issue whose worktree already has a clean local commit ahead of configured base is published without invoking Agent.
+- [x] An `agent/running` Issue without a rework marker but with a clean local commit ahead of configured base is published without invoking Agent.
+- [x] Existing-commit recovery runs verification and PRD delivery checks before publishing.
+- [x] Existing-commit recovery writes implementation complete and draft PR created comments.
+- [x] Issue #27 was recovered to draft PR #31 with head SHA `79ae0277ee08058907992321f345e9a7e49561f4`.
 
 ### Safety Acceptance
 
@@ -277,6 +403,9 @@ No external web validation required; repository code paths and GitHub CLI usage 
 - [ ] `recover-publish` leaves labels unchanged when push or PR creation fails.
 - [ ] `recover-publish` leaves labels unchanged when network/API/auth failures interrupt push, PR lookup, or PR creation.
 - [ ] Re-running `recover-publish` after success exits successfully and reuses the existing PR.
+- [x] Existing-commit recovery refuses dirty worktrees by requiring `has_changes(...) == False`.
+- [x] Existing-commit recovery uses configured base comparison via `<remote>/<base_branch>..HEAD` and does not publish when no local commits are ahead.
+- [x] Failure label/comment updates are best-effort and cannot replace the original exception.
 
 ### Documentation Acceptance
 
@@ -289,6 +418,9 @@ No external web validation required; repository code paths and GitHub CLI usage 
 - [ ] `uv run pytest tests/test_recover_publish.py -v` passes.
 - [ ] `uv run pytest tests/test_run_agent.py tests/test_agent_runner_cli.py -v` passes.
 - [ ] `just test` passes.
+- [x] `uv run pytest tests/test_github_client.py -v` covers idempotent label editing.
+- [x] `uv run pytest tests/test_run_agent.py -v` covers ready/running existing clean local commit recovery.
+- [x] `just test` passed on 2026-05-25 with `310 passed`.
 
 ## 8. Functional Requirements
 
@@ -322,6 +454,16 @@ No external web validation required; repository code paths and GitHub CLI usage 
 
 **FR-15**: `recover-publish` must be safe to rerun after transient network/API/auth failures; it must derive current state from Git and GitHub instead of assuming the previous failed operation completed nothing.
 
+**FR-16**: `run_once` must detect when a reused ready Issue worktree already has one or more clean local commits ahead of `<config.git.remote>/<config.git.base_branch>` and must publish that commit without invoking the selected Agent.
+
+**FR-17**: `run_once` must detect `agent/running` Issues without rework markers that have clean local commits ahead of the configured base and route them to publish recovery instead of skipping indefinitely.
+
+**FR-18**: Existing local commit reuse must run configured verification and PRD delivery checks before push/PR/label/comment publication.
+
+**FR-19**: Failure reporting must be best-effort: GitHub label or comment failures must be logged but must not replace the original exception that caused the Issue processing failure.
+
+**FR-20**: `GitHubCliClient.edit_issue_labels` must be idempotent by reading current Issue labels, adding only missing labels, removing only present labels, and skipping `gh issue edit` when no effective changes exist.
+
 ## 9. Non-Goals
 
 - Do not retry or repair Agent-generated code.
@@ -330,6 +472,7 @@ No external web validation required; repository code paths and GitHub CLI usage 
 - Do not auto-detect and use a different remote when config is wrong.
 - Do not merge PRs or enable auto-merge.
 - Do not support closed PR reopening in the first implementation; closed PRs are ignored and a new draft PR may be created.
+- Do not move a recovered `agent/review` Issue back to `agent/ready` for the same local commit; review/merge should continue through the PR.
 
 ## 10. Risks And Follow-Ups
 
@@ -339,6 +482,8 @@ No external web validation required; repository code paths and GitHub CLI usage 
 | Transient network or GitHub API failures leave publish half-complete | Make recovery idempotent by checking remote branch state and existing PR before creating or updating anything |
 | Existing PR lookup misses fork-qualified head branches | Keep lookup in `GitHubCliClient` so implementation can adapt the `gh pr list` flags without touching core |
 | Label update succeeds but comment fails | Treat comment failure as command failure in tests unless existing GitHub client behavior already makes partial comment failures unavoidable |
+| `agent/running` Issue may still represent an actually active runner | Only recover when an existing issue worktree has clean commits ahead of configured base and no uncommitted changes; otherwise keep skipping |
+| Inline recovery could duplicate future `recover-publish` behavior | Keep shared behavior on existing helpers (`publish_changes`, verification gates, label APIs) and avoid a separate publish implementation |
 
 ## 11. Decision Log
 
@@ -349,3 +494,5 @@ No external web validation required; repository code paths and GitHub CLI usage 
 | D-03 | Remote behavior | Require configured remote to exist | Auto-use the only available remote | Wrong remote selection can publish sensitive or unintended branches |
 | D-04 | PR idempotency | Query open PR by head branch before creating | Always call `gh pr create` and catch failure | Explicit lookup is testable and avoids relying on CLI error text |
 | D-05 | Worktree behavior | Resolve existing worktree only | Create missing worktree during recovery | Publish recovery must operate on the completed local commit, not start a new execution environment |
+| D-06 | Immediate incident recovery | Add `run-once` inline reuse of existing clean local commits | Require a separate manual `recover-publish` command before recovering Issue #27 | The runner already had enough local state to finish publication safely; inline recovery prevents repeated Agent calls and fixes daemon behavior |
+| D-07 | Failure reporting semantics | Make label/comment failure reporting best-effort | Let label/comment failures replace the original exception | Operators need the original failure cause first; reporting failures are secondary diagnostics |

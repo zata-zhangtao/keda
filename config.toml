@@ -335,3 +335,12 @@ behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concre
 # [agent_runner.repositories.keda-worktree.git]
 # remote = "zata"
 # base_branch = "main"
+
+[agent_runner.repositories.transmaster]
+path = "/Users/zata/code/TransMaster"
+enabled = true
+display_name = "TransMaster"
+
+[agent_runner.repositories.transmaster.git]
+remote = "zata"
+base_branch = "main"

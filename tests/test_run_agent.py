@@ -2445,6 +2445,137 @@ def test_recovery_loop_exhausted_raises_max_retries(tmp_path: Path) -> None:
     assert "no_commits" in failure_comment["body"]
 
 
+def test_run_once_reuses_existing_clean_local_commit(tmp_path: Path) -> None:
+    """Runner should publish an existing clean commit without invoking the agent."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _ExistingCommitRunner(FakeProcessRunner):
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                return self.responses[command_tuple]
+            if command_tuple[:1] == ("codex",):
+                raise AssertionError("agent should not be invoked")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                return CommandResult(command_tuple, 0, "existing-sha\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == (
+                "git",
+                "rev-list",
+                "--count",
+                "origin/main..HEAD",
+            ):
+                return CommandResult(command_tuple, 0, "1\n", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _ExistingCommitRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_with_review_disabled(worktree_path)
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    commands = [tuple(command) for command in fake_runner.calls]
+    assert not [command for command in commands if command[:1] == ("codex",)]
+    assert ("git", "push", "-u", "origin", "issue-123") in commands
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    implementation_comment = [
+        c for c in comment_calls if "Implementation Complete" in c.get("body", "")
+    ]
+    assert len(implementation_comment) == 1
+    assert "Reused 1 existing local commit" in implementation_comment[0]["body"]
+
+
+def test_run_once_recovers_running_issue_with_existing_local_commit(
+    tmp_path: Path,
+) -> None:
+    """Running Issues with clean local commits should resume publish without agent."""
+    fake_client = FakeGitHubClient()
+    issue = IssueSummary(
+        number=123,
+        title="Example",
+        url="https://github.com/example/repo/issues/123",
+        body="Example body",
+        labels=("agent/running", "agent/codex"),
+    )
+    fake_client.list_ready_issues = lambda ready_label, limit: []
+    fake_client.list_review_candidate_issues = lambda labels, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _RunningRecoveryRunner(FakeProcessRunner):
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                return self.responses[command_tuple]
+            if command_tuple[:1] == ("codex",):
+                raise AssertionError("agent should not be invoked")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                return CommandResult(command_tuple, 0, "existing-sha\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == (
+                "git",
+                "rev-list",
+                "--count",
+                "origin/main..HEAD",
+            ):
+                return CommandResult(command_tuple, 0, "1\n", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _RunningRecoveryRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_with_review_disabled(worktree_path)
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    commands = [tuple(command) for command in fake_runner.calls]
+    assert not [command for command in commands if command[:1] == ("codex",)]
+    assert ("git", "push", "-u", "origin", "issue-123") in commands
+    label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
+    assert any(config.labels.review in c.get("add", []) for c in label_calls)
+
+
 def test_attempt_history_in_issue_comment(tmp_path: Path) -> None:
     """Successful run should include Attempt History in the implementation comment."""
     fake_client = FakeGitHubClient()
