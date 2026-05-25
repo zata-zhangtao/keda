@@ -970,7 +970,7 @@ def validate_publish_remote(
         "Configured git remote "
         f"'{configured_remote_name}' does not exist. "
         f"Available remotes: {available_remotes_text}. "
-        "Update [agent_runner.git].remote in config.toml before publishing."
+        "Update [agent_runner.git].remote in .iar.toml or config.toml before publishing."
     )
 
 

@@ -313,10 +313,13 @@ role = "implementer"
 behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concrete steps, and implementation details. Highlight what can be built and what resources are needed."
 
 # =============================================================================
-# Agent Runner Multi-Repository Configuration (Optional)
+# Agent Runner Repository Registry (Optional)
 # =============================================================================
 # Each repository must already be cloned locally. The runner will not clone
 # or manage credentials for remote repositories.
+# Keep only lightweight selector metadata here. Repository-specific display,
+# git, runner, labels, safety, and prompt overrides live in each target
+# repository's .iar.toml.
 
 # [agent_runner.repositories.keda-main]
 # path = "/Users/zata/code/keda"
@@ -339,8 +342,3 @@ behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concre
 [agent_runner.repositories.transmaster]
 path = "/Users/zata/code/TransMaster"
 enabled = true
-display_name = "TransMaster"
-
-[agent_runner.repositories.transmaster.git]
-remote = "zata"
-base_branch = "main"

@@ -11,11 +11,11 @@ from __future__ import annotations
 import dataclasses
 import subprocess
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel
 
+from backend.core.shared.interfaces.agent_runner import IContentGenerator
 from backend.core.shared.models.agent_deliberation import (
     DeliberationAgentProfile,
     DeliberationConfig,
@@ -23,7 +23,6 @@ from backend.core.shared.models.agent_deliberation import (
     DeliberationResult,
     DeliberationSession,
 )
-from backend.core.shared.interfaces.agent_runner import IContentGenerator
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
@@ -39,6 +38,7 @@ from backend.core.shared.models.agent_runner import (
     SafetyConfig,
     WorktreeConfig,
 )
+from backend.engines.agent_runner.repository_local import detect_git_repository_root
 from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGeneratedContentTargetSettings,
@@ -46,12 +46,15 @@ from backend.infrastructure.config.settings import (
     AgentRunnerPromptSettings,
     AgentRunnerRepositorySettings,
     AgentRunnerSettings,
+    IAR_REPOSITORY_CONFIG_FILENAME,
     config,
+    load_agent_runner_local_settings,
 )
 from backend.infrastructure.github_client import GitHubCliClient
 from backend.infrastructure.logging.logger import logger
 from backend.infrastructure.process_runner import (
     SubprocessRunner,
+    _format_timestamped_line,
     run_filtered_claude_stream,
     should_filter_claude_stream,
 )
@@ -75,27 +78,6 @@ __all__ = [
     "write_deliberation_outputs",
     "create_event_sink",
 ]
-
-
-def _format_timestamped_line(text: str) -> str:
-    """Prefix each line with HH:MM:SS timestamp.
-
-    Args:
-        text: The text to prefix with timestamps.
-
-    Returns:
-        Text with each line prefixed by [HH:MM:SS].
-    """
-    ts = datetime.now().strftime("%H:%M:%S")
-    lines = text.split("\n")
-    result: list[str] = []
-    for idx, line in enumerate(lines):
-        prefix = f"[{ts}] " if line else ""
-        if idx == len(lines) - 1:
-            result.append(f"{prefix}{line}")
-        else:
-            result.append(f"{prefix}{line}\n")
-    return "".join(result)
 
 
 def _build_generated_content_target_config(
@@ -424,6 +406,7 @@ def resolve_repository_targets(
     repo_id: str | None = None,
     repo_path_override: str | None = None,
     fallback_path: str = ".",
+    all_repositories: bool = False,
 ) -> list[RepositoryRunContext]:
     """Resolve target repositories for consumer commands.
 
@@ -432,27 +415,30 @@ def resolve_repository_targets(
         repo_id: Optional configured repository ID selector.
         repo_path_override: Optional ad-hoc repository path selector.
         fallback_path: Path to use when no repositories are configured.
+        all_repositories: Whether to select all enabled configured repositories.
 
     Returns:
         List of repository run contexts.
 
     Raises:
         ValueError: If both ``repo_id`` and ``repo_path_override`` are provided,
-            or if ``repo_id`` does not exist or is disabled.
+            or if selectors are invalid or disabled.
     """
     if repo_path_override is not None and repo_id is not None:
         raise ValueError("--repo and --repo-id are mutually exclusive.")
+    if all_repositories and (repo_path_override is not None or repo_id is not None):
+        raise ValueError("--all cannot be combined with --repo or --repo-id.")
 
     global_config = build_app_config_from_settings(settings)
 
     if repo_path_override is not None:
-        path = Path(repo_path_override).resolve()
+        repo_root_path = detect_git_repository_root(Path(repo_path_override))
         return [
-            RepositoryRunContext(
-                repo_id="ad-hoc",
-                display_name=str(path),
-                repo_path=path,
-                config=global_config,
+            _build_repository_context_from_settings(
+                global_config,
+                _repository_settings_for_path(repo_root_path),
+                fallback_repo_id="ad-hoc",
+                prefer_settings_id=True,
             )
         ]
 
@@ -462,40 +448,120 @@ def resolve_repository_targets(
         repo_settings = settings.repositories[repo_id]
         if not repo_settings.enabled:
             raise ValueError(f"Repository '{repo_id}' is disabled.")
+        repo_root_path = detect_git_repository_root(Path(repo_settings.path))
+        repository_settings = [repo_settings]
+        local_settings = _load_enabled_repository_local_settings(repo_root_path)
+        if local_settings is not None:
+            repository_settings.append(local_settings)
         return [
-            RepositoryRunContext(
-                repo_id=repo_id,
-                display_name=repo_settings.display_name or repo_id,
-                repo_path=Path(repo_settings.path).resolve(),
-                config=merge_repository_config(global_config, repo_settings),
+            _build_merged_repository_context(
+                global_config,
+                tuple(repository_settings),
+                fallback_repo_id=repo_id,
+                prefer_settings_id=False,
             )
         ]
 
-    enabled_repos = {
-        rid: rcfg for rid, rcfg in settings.repositories.items() if rcfg.enabled
-    }
-    if enabled_repos:
+    if all_repositories:
+        enabled_repos = {
+            rid: rcfg for rid, rcfg in settings.repositories.items() if rcfg.enabled
+        }
+        if not enabled_repos:
+            raise ValueError("--all was provided, but no enabled repositories exist.")
         contexts: list[RepositoryRunContext] = []
         for rid, repo_settings in enabled_repos.items():
+            repo_root_path = detect_git_repository_root(Path(repo_settings.path))
+            repository_settings = [repo_settings]
+            local_settings = _load_enabled_repository_local_settings(repo_root_path)
+            if local_settings is not None:
+                repository_settings.append(local_settings)
             contexts.append(
-                RepositoryRunContext(
-                    repo_id=rid,
-                    display_name=repo_settings.display_name or rid,
-                    repo_path=Path(repo_settings.path).resolve(),
-                    config=merge_repository_config(global_config, repo_settings),
+                _build_merged_repository_context(
+                    global_config,
+                    tuple(repository_settings),
+                    fallback_repo_id=rid,
+                    prefer_settings_id=False,
                 )
             )
         return contexts
 
-    path = Path(fallback_path).resolve()
+    repo_root_path = detect_git_repository_root(Path(fallback_path))
     return [
-        RepositoryRunContext(
-            repo_id="fallback",
-            display_name=str(path),
-            repo_path=path,
-            config=global_config,
+        _build_repository_context_from_settings(
+            global_config,
+            _repository_settings_for_path(repo_root_path),
+            fallback_repo_id=repo_root_path.name,
+            prefer_settings_id=True,
         )
     ]
+
+
+def _repository_settings_for_path(
+    repo_root_path: Path,
+) -> AgentRunnerRepositorySettings:
+    local_settings = _load_enabled_repository_local_settings(repo_root_path)
+    if local_settings is not None:
+        return local_settings
+    return AgentRunnerRepositorySettings(
+        path=str(repo_root_path),
+        id=repo_root_path.name,
+        display_name=repo_root_path.name,
+    )
+
+
+def _load_enabled_repository_local_settings(
+    repo_root_path: Path,
+) -> AgentRunnerRepositorySettings | None:
+    local_settings = load_agent_runner_local_settings(repo_root_path)
+    if local_settings is not None and not local_settings.enabled:
+        raise ValueError(
+            "Repository-local config at "
+            f"'{repo_root_path / IAR_REPOSITORY_CONFIG_FILENAME}' is disabled."
+        )
+    return local_settings
+
+
+def _build_repository_context_from_settings(
+    global_config: AppConfig,
+    repo_settings: AgentRunnerRepositorySettings,
+    *,
+    fallback_repo_id: str,
+    prefer_settings_id: bool,
+) -> RepositoryRunContext:
+    return _build_merged_repository_context(
+        global_config,
+        (repo_settings,),
+        fallback_repo_id=fallback_repo_id,
+        prefer_settings_id=prefer_settings_id,
+    )
+
+
+def _build_merged_repository_context(
+    global_config: AppConfig,
+    repository_settings: tuple[AgentRunnerRepositorySettings, ...],
+    *,
+    fallback_repo_id: str,
+    prefer_settings_id: bool,
+) -> RepositoryRunContext:
+    effective_config = global_config
+    effective_repo_id = fallback_repo_id
+    effective_display_name = fallback_repo_id
+    effective_repo_path = Path(".").resolve()
+
+    for repo_settings in repository_settings:
+        effective_config = merge_repository_config(effective_config, repo_settings)
+        effective_repo_path = Path(repo_settings.path).resolve()
+        if prefer_settings_id and repo_settings.id:
+            effective_repo_id = repo_settings.id
+        if repo_settings.display_name:
+            effective_display_name = repo_settings.display_name
+
+    return RepositoryRunContext(
+        repo_id=effective_repo_id,
+        display_name=effective_display_name,
+        repo_path=effective_repo_path,
+        config=effective_config,
+    )
 
 
 class SubprocessContentGenerator(IContentGenerator):
@@ -563,8 +629,7 @@ def resolve_issue_from_prd_target(
 ) -> RepositoryRunContext:
     """Resolve the single target repository for ``issue-from-prd``.
 
-    Defaults to the current working directory. If the current directory matches a
-    configured repository path, that repository's merged config is applied.
+    Defaults to the current Git repository and its repository-local config.
 
     Args:
         settings: Agent runner settings.
@@ -579,51 +644,13 @@ def resolve_issue_from_prd_target(
         ValueError: If both ``repo_id`` and ``repo_path_override`` are provided,
             or if ``repo_id`` does not exist or is disabled.
     """
-    if repo_path_override is not None and repo_id is not None:
-        raise ValueError("--repo and --repo-id are mutually exclusive.")
-
-    global_config = build_app_config_from_settings(settings)
-
-    if repo_path_override is not None:
-        path = Path(repo_path_override).resolve()
-        return RepositoryRunContext(
-            repo_id="ad-hoc",
-            display_name=str(path),
-            repo_path=path,
-            config=global_config,
-        )
-
-    if repo_id is not None:
-        if repo_id not in settings.repositories:
-            raise ValueError(f"Repository '{repo_id}' not found in config.")
-        repo_settings = settings.repositories[repo_id]
-        if not repo_settings.enabled:
-            raise ValueError(f"Repository '{repo_id}' is disabled.")
-        return RepositoryRunContext(
-            repo_id=repo_id,
-            display_name=repo_settings.display_name or repo_id,
-            repo_path=Path(repo_settings.path).resolve(),
-            config=merge_repository_config(global_config, repo_settings),
-        )
-
-    cwd_resolved = cwd.resolve()
-    for rid, repo_settings in settings.repositories.items():
-        if not repo_settings.enabled:
-            continue
-        if Path(repo_settings.path).resolve() == cwd_resolved:
-            return RepositoryRunContext(
-                repo_id=rid,
-                display_name=repo_settings.display_name or rid,
-                repo_path=cwd_resolved,
-                config=merge_repository_config(global_config, repo_settings),
-            )
-
-    return RepositoryRunContext(
-        repo_id="fallback",
-        display_name=str(cwd_resolved),
-        repo_path=cwd_resolved,
-        config=global_config,
+    contexts = resolve_repository_targets(
+        settings,
+        repo_id=repo_id,
+        repo_path_override=repo_path_override,
+        fallback_path=str(cwd),
     )
+    return contexts[0]
 
 
 def create_process_runner() -> SubprocessRunner:
@@ -710,23 +737,11 @@ class SubprocessTranscriptRunner:
             encoding="utf-8",
             bufsize=1,
         )
-        stdout_lines: list[str] = []
-        try:
-            if process.stdout is not None:
-                for line in process.stdout:
-                    stdout_lines.append(line)
-                    timestamped = _format_timestamped_line(line)
-                    print(timestamped, end="")
-                    logger.info("%s", line.rstrip("\n"))
-            return_code = process.wait(timeout=None)
-        except Exception:
-            process.kill()
-            process.wait()
-            raise
+        return_code, stdout_text = _relay_process_stdout(process)
         return CommandResult(
             command=tuple(command),
             return_code=return_code,
-            stdout="".join(stdout_lines),
+            stdout=stdout_text,
             stderr="",
         )
 
@@ -757,6 +772,17 @@ def _run_agent_with_stdin_prompt(
             process.stdin.close()
 
     threading.Thread(target=_write_stdin, daemon=True).start()
+    return_code, stdout_text = _relay_process_stdout(process)
+    return CommandResult(
+        command=tuple(command),
+        return_code=return_code,
+        stdout=stdout_text,
+        stderr="",
+    )
+
+
+def _relay_process_stdout(process: subprocess.Popen[str]) -> tuple[int, str]:
+    """Relay subprocess stdout to terminal and logger."""
     stdout_lines: list[str] = []
     try:
         if process.stdout is not None:
@@ -770,12 +796,7 @@ def _run_agent_with_stdin_prompt(
         process.kill()
         process.wait()
         raise
-    return CommandResult(
-        command=tuple(command),
-        return_code=return_code,
-        stdout="".join(stdout_lines),
-        stderr="",
-    )
+    return return_code, "".join(stdout_lines)
 
 
 def _build_deliberation_command(agent_name: str, prompt: str, cwd: Path) -> list[str]:

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -25,6 +25,7 @@ _INFRASTRUCTURE_DIR_PATH: Path = _CONFIG_DIR_PATH.parent
 _BACKEND_DIR_PATH: Path = _INFRASTRUCTURE_DIR_PATH.parent
 _SOURCE_DIR_PATH: Path = _BACKEND_DIR_PATH.parent
 _PROJECT_ROOT_PATH: Path = _SOURCE_DIR_PATH.parent
+IAR_REPOSITORY_CONFIG_FILENAME = ".iar.toml"
 
 
 def _find_config_toml() -> Path | None:
@@ -84,6 +85,21 @@ class _TomlSectionSource(PydanticBaseSettingsSource):
         return result
 
 
+def _env_toml_init_sources(
+    settings_cls: type[BaseSettings],
+    section_name: str,
+    env_settings: PydanticBaseSettingsSource,
+    init_settings: PydanticBaseSettingsSource,
+) -> tuple[PydanticBaseSettingsSource, ...]:
+    """Build the standard env > TOML > init settings source order."""
+    toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, section_name)
+    return (
+        env_settings,
+        toml_source,
+        init_settings,
+    )
+
+
 class DatabaseSettings(BaseSettings):
     """数据库连接配置（非敏感部分）。"""
 
@@ -104,11 +120,8 @@ class DatabaseSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "database")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "database", env_settings, init_settings
         )
 
 
@@ -130,11 +143,8 @@ class ChatModelSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "chat_model")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "chat_model", env_settings, init_settings
         )
 
 
@@ -156,11 +166,8 @@ class MinioSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "minio")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "minio", env_settings, init_settings
         )
 
 
@@ -182,11 +189,8 @@ class QdrantSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "qdrant")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "qdrant", env_settings, init_settings
         )
 
 
@@ -209,11 +213,8 @@ class EmbeddingSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "embedding")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "embedding", env_settings, init_settings
         )
 
 
@@ -234,11 +235,8 @@ class ChunkingSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "chunking")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "chunking", env_settings, init_settings
         )
 
 
@@ -261,11 +259,8 @@ class TimeoutSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "timeouts")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "timeouts", env_settings, init_settings
         )
 
 
@@ -454,12 +449,17 @@ class AgentRunnerGeneratedContentSettings(BaseModel):
     )
 
 
-class AgentRunnerRepositorySettings(BaseModel):
-    """Per-repository Agent Runner configuration overrides."""
+class AgentRunnerRepositoryMetadataSettings(BaseModel):
+    """Repository identity stored in repository-local IAR config."""
 
-    path: str
+    id: str | None = None
     enabled: bool = True
     display_name: str | None = None
+
+
+class _AgentRunnerRepositoryOverrideSettings(BaseModel):
+    """Optional Agent Runner overrides shared by registry and local config."""
+
     labels: AgentRunnerLabelSettings | None = None
     git: AgentRunnerGitSettings | None = None
     worktree: AgentRunnerWorktreeSettings | None = None
@@ -469,6 +469,82 @@ class AgentRunnerRepositorySettings(BaseModel):
     pre_push_review: AgentRunnerPrePushReviewSettings | None = None
     post_pr_supervisor: AgentRunnerPostPrSupervisorSettings | None = None
     generated_content: AgentRunnerGeneratedContentSettings | None = None
+
+
+class AgentRunnerRepositorySettings(_AgentRunnerRepositoryOverrideSettings):
+    """Per-repository Agent Runner configuration overrides."""
+
+    path: str
+    id: str | None = None
+    enabled: bool = True
+    display_name: str | None = None
+
+
+class AgentRunnerLocalSettings(_AgentRunnerRepositoryOverrideSettings):
+    """Repository-local Agent Runner settings loaded from ``.iar.toml``."""
+
+    repository: AgentRunnerRepositoryMetadataSettings = Field(
+        default_factory=AgentRunnerRepositoryMetadataSettings
+    )
+
+
+def load_agent_runner_local_settings(
+    repo_root_path: Path,
+) -> AgentRunnerRepositorySettings | None:
+    """Load repository-local IAR settings from ``.iar.toml``.
+
+    Args:
+        repo_root_path: Target Git repository root path.
+
+    Returns:
+        Repository settings if the local config exists; otherwise ``None``.
+
+    Raises:
+        ValueError: If the local config exists but is invalid.
+    """
+    resolved_repo_path = repo_root_path.resolve()
+    local_config_path = resolved_repo_path / IAR_REPOSITORY_CONFIG_FILENAME
+    if not local_config_path.is_file():
+        return None
+
+    try:
+        with open(local_config_path, "rb") as local_config_file:
+            local_toml_data: dict[str, Any] = tomllib.load(local_config_file)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(
+            f"Invalid IAR local config at {local_config_path}: {exc}"
+        ) from exc
+
+    agent_runner_section = local_toml_data.get("agent_runner")
+    if not isinstance(agent_runner_section, dict):
+        raise ValueError(
+            f"Invalid IAR local config at {local_config_path}: "
+            "missing [agent_runner] section."
+        )
+
+    try:
+        local_settings = AgentRunnerLocalSettings(**agent_runner_section)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid IAR local config at {local_config_path}: {exc}"
+        ) from exc
+
+    repository_metadata = local_settings.repository
+    return AgentRunnerRepositorySettings(
+        path=str(resolved_repo_path),
+        id=repository_metadata.id,
+        enabled=repository_metadata.enabled,
+        display_name=repository_metadata.display_name,
+        labels=local_settings.labels,
+        git=local_settings.git,
+        worktree=local_settings.worktree,
+        runner=local_settings.runner,
+        safety=local_settings.safety,
+        prompts=local_settings.prompts,
+        pre_push_review=local_settings.pre_push_review,
+        post_pr_supervisor=local_settings.post_pr_supervisor,
+        generated_content=local_settings.generated_content,
+    )
 
 
 class AgentRunnerSettings(BaseSettings):
@@ -511,13 +587,8 @@ class AgentRunnerSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(
-            settings_cls, "agent_runner"
-        )
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "agent_runner", env_settings, init_settings
         )
 
 
@@ -638,6 +709,16 @@ config.ensure_log_directory()
 _ensure_no_proxy_for_local_services()
 
 __all__ = [
+    "AgentRunnerLocalSettings",
+    "AgentRunnerRepositoryMetadataSettings",
+    "AgentRunnerGeneratedContentSettings",
+    "AgentRunnerGeneratedContentTargetSettings",
+    "AgentRunnerGitSettings",
+    "AgentRunnerLabelSettings",
+    "AgentRunnerPromptSettings",
+    "AgentRunnerRepositorySettings",
+    "AgentRunnerRunnerSettings",
+    "AgentRunnerSafetySettings",
     "AgentRunnerSettings",
     "AppSettings",
     "ChatModelSettings",
@@ -648,4 +729,5 @@ __all__ = [
     "QdrantSettings",
     "TimeoutSettings",
     "config",
+    "load_agent_runner_local_settings",
 ]

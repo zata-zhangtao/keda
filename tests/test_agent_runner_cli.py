@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -26,6 +25,33 @@ def test_cli_parser_labels_sync() -> None:
     parsed = parser.parse_args(["labels", "sync"])
     assert parsed.command == "labels"
     assert parsed.labels_command == "sync"
+
+
+def test_cli_parser_init() -> None:
+    """init should accept repository-local config options."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        [
+            "init",
+            "--dry-run",
+            "--force",
+            "--id",
+            "target",
+            "--display-name",
+            "Target",
+            "--remote",
+            "upstream",
+            "--base-branch",
+            "develop",
+        ]
+    )
+    assert parsed.command == "init"
+    assert parsed.dry_run is True
+    assert parsed.force is True
+    assert parsed.repository_id == "target"
+    assert parsed.display_name == "Target"
+    assert parsed.remote == "upstream"
+    assert parsed.base_branch == "develop"
 
 
 def test_cli_parser_issue_from_prd_defaults() -> None:
@@ -80,6 +106,13 @@ def test_cli_parser_repo_id() -> None:
     assert parsed.repo_id == "keda"
 
 
+def test_cli_parser_all_repositories() -> None:
+    """--all should be accepted by multi-target commands."""
+    parser = build_parser()
+    parsed = parser.parse_args(["run-once", "--all"])
+    assert parsed.all_repositories is True
+
+
 def test_cli_parser_repo_and_repo_id_individually_parseable() -> None:
     """--repo and --repo-id should each be parseable individually."""
     parser = build_parser()
@@ -110,6 +143,27 @@ def test_main_rejects_unknown_repo_id() -> None:
     ):
         exit_code = main(["run-once", "--repo-id", "nonexistent"])
         assert exit_code == 1
+
+
+def test_main_passes_all_repositories_selector() -> None:
+    """main should pass --all to repository target resolution."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ) as mock_resolve, patch(
+        "backend.api.cli.run_agent_repositories_once", return_value=0
+    ), patch("backend.api.cli.create_github_client"):
+        exit_code = main(["run-once", "--all", "--dry-run"])
+
+    assert exit_code == 0
+    assert mock_resolve.call_args.kwargs["all_repositories"] is True
 
 
 def test_main_labels_sync_iterates_multiple_repos() -> None:
@@ -276,5 +330,3 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
 
 
 # New tests for CLI logging configuration
-
-

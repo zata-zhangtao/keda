@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from backend.core.use_cases.create_issue_from_prd import (
     IssueFromPrdRequest,
@@ -41,13 +41,20 @@ from backend.engines.agent_runner.factory import (
     resolve_repository_targets,
     write_deliberation_outputs,
 )
+from backend.engines.agent_runner.repository_local import (
+    RepositoryInitOptions,
+    initialize_repository_local_config,
+)
 
 if TYPE_CHECKING:
     from backend.core.shared.interfaces.agent_runner import (
         IGitHubClient,
         IProcessRunner,
     )
-    from backend.core.shared.models.agent_runner import LabelConfig
+    from backend.core.shared.models.agent_runner import (
+        LabelConfig,
+        RepositoryRunContext,
+    )
 
 
 def _prompt_and_publish_prd_if_needed(
@@ -104,6 +111,32 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_all_repositories_option(parser: argparse.ArgumentParser) -> None:
+    """Allow explicit multi-repository selection for configured repositories."""
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_repositories",
+        help="Process all enabled configured repositories.",
+    )
+
+
+def _resolve_cli_repository_targets(
+    *,
+    parsed: argparse.Namespace,
+    runner_settings: Any,
+    repo_id: str | None,
+    repo_override: str | None,
+) -> list["RepositoryRunContext"]:
+    """Resolve repository targets for parsed CLI selectors."""
+    return resolve_repository_targets(
+        runner_settings,
+        repo_id=repo_id,
+        repo_path_override=repo_override,
+        all_repositories=getattr(parsed, "all_repositories", False),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(prog="iar")
@@ -117,6 +150,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    init_parser = subparsers.add_parser(
+        "init", help="Create repository-local .iar.toml config."
+    )
+    init_parser.add_argument("--dry-run", action="store_true")
+    init_parser.add_argument("--force", action="store_true")
+    init_parser.add_argument("--id", dest="repository_id")
+    init_parser.add_argument("--display-name")
+    init_parser.add_argument("--remote")
+    init_parser.add_argument("--base-branch")
+
     labels_parser = subparsers.add_parser("labels", help="Manage GitHub labels.")
     labels_subparsers = labels_parser.add_subparsers(
         dest="labels_command", required=True
@@ -125,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
         "sync", help="Sync standard labels to the repository."
     )
     add_common_options(labels_sync_parser)
+    add_all_repositories_option(labels_sync_parser)
 
     issue_parser = subparsers.add_parser("issue-from-prd")
     issue_parser.add_argument("prd_path")
@@ -159,6 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--max-issues", type=int)
     add_common_options(run_parser)
+    add_all_repositories_option(run_parser)
 
     daemon_parser = subparsers.add_parser("daemon")
     daemon_parser.add_argument("--interval", type=int, default=600)
@@ -167,6 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daemon_parser.add_argument("--max-issues", type=int)
     add_common_options(daemon_parser)
+    add_all_repositories_option(daemon_parser)
 
     review_once_parser = subparsers.add_parser("review-once")
     review_once_parser.add_argument("--dry-run", action="store_true")
@@ -175,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     review_once_parser.add_argument("--max-issues", type=int)
     add_common_options(review_once_parser)
+    add_all_repositories_option(review_once_parser)
 
     review_daemon_parser = subparsers.add_parser("review-daemon")
     review_daemon_parser.add_argument("--interval", type=int, default=600)
@@ -183,6 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     review_daemon_parser.add_argument("--max-issues", type=int)
     add_common_options(review_daemon_parser)
+    add_all_repositories_option(review_daemon_parser)
 
     deliberate_parser = subparsers.add_parser(
         "deliberate", help="Run a multi-agent deliberation session."
@@ -230,17 +278,50 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     process_runner = create_process_runner()
+
+    if parsed.command == "init":
+        if repo_id is not None or repo_override is not None:
+            logger.error(
+                "iar init uses the current Git repository; omit --repo/--repo-id."
+            )
+            return 1
+        try:
+            init_result = initialize_repository_local_config(
+                RepositoryInitOptions(
+                    cwd=Path.cwd(),
+                    repo_id_override=parsed.repository_id,
+                    display_name_override=parsed.display_name,
+                    remote_override=parsed.remote,
+                    base_branch_override=parsed.base_branch,
+                    dry_run=parsed.dry_run,
+                    force=parsed.force,
+                ),
+                process_runner,
+            )
+        except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
+            logger.error("iar init failed: %s", exc)
+            return 1
+        if parsed.dry_run:
+            print(init_result.config_text, end="")
+        else:
+            logger.info("Wrote IAR local config: %s", init_result.config_path)
+        return 0
+
     runner_settings = get_agent_runner_settings()
+
+    def github_client_factory(repo_path: Path) -> "IGitHubClient":
+        return create_github_client(repo_path, process_runner)
 
     try:
         if parsed.command == "labels":
-            contexts = resolve_repository_targets(
-                runner_settings,
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
                 repo_id=repo_id,
-                repo_path_override=repo_override,
+                repo_override=repo_override,
             )
             for context in contexts:
-                github_client = create_github_client(context.repo_path, process_runner)
+                github_client = github_client_factory(context.repo_path)
                 sync_labels(
                     labels_config=context.config.labels, github_client=github_client
                 )
@@ -303,10 +384,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if parsed.command == "run-once":
-            contexts = resolve_repository_targets(
-                runner_settings,
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
                 repo_id=repo_id,
-                repo_path_override=repo_override,
+                repo_override=repo_override,
             )
             content_generator = create_content_generator(process_runner)
             return run_agent_repositories_once(
@@ -315,17 +397,16 @@ def main(argv: list[str] | None = None) -> int:
                 agent=parsed.agent,
                 max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                 process_runner=process_runner,
-                github_client_factory=lambda rp: create_github_client(
-                    rp, process_runner
-                ),
+                github_client_factory=github_client_factory,
                 content_generator=content_generator,
             )
 
         if parsed.command == "daemon":
-            contexts = resolve_repository_targets(
-                runner_settings,
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
                 repo_id=repo_id,
-                repo_path_override=repo_override,
+                repo_override=repo_override,
             )
             run_agent_daemon(
                 contexts=contexts,
@@ -333,21 +414,20 @@ def main(argv: list[str] | None = None) -> int:
                 agent=parsed.agent,
                 max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                 process_runner=process_runner,
-                github_client_factory=lambda rp: create_github_client(
-                    rp, process_runner
-                ),
+                github_client_factory=github_client_factory,
             )
             return 0
 
         if parsed.command == "review-once":
-            contexts = resolve_repository_targets(
-                runner_settings,
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
                 repo_id=repo_id,
-                repo_path_override=repo_override,
+                repo_override=repo_override,
             )
             aggregated_exit_code = 0
             for context in contexts:
-                github_client = create_github_client(context.repo_path, process_runner)
+                github_client = github_client_factory(context.repo_path)
                 try:
                     repo_exit_code = review_once(
                         repo_path=context.repo_path,
@@ -371,10 +451,11 @@ def main(argv: list[str] | None = None) -> int:
             return aggregated_exit_code
 
         if parsed.command == "review-daemon":
-            contexts = resolve_repository_targets(
-                runner_settings,
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
                 repo_id=repo_id,
-                repo_path_override=repo_override,
+                repo_override=repo_override,
             )
             run_review_daemon(
                 contexts=contexts,
@@ -382,9 +463,7 @@ def main(argv: list[str] | None = None) -> int:
                 agent=parsed.agent,
                 max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                 process_runner=process_runner,
-                github_client_factory=lambda rp: create_github_client(
-                    rp, process_runner
-                ),
+                github_client_factory=github_client_factory,
             )
             return 0
 

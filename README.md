@@ -49,7 +49,10 @@ just docs-serve
 本项目内置 `iar`（issue-agent-runner）CLI，用于将 GitHub Issues 转为本地 AI Agent 队列：
 
 ```bash
-# 同步 GitHub Labels（所有启用仓库）
+# 在目标仓库初始化本地配置
+uv run iar init
+
+# 同步当前仓库 GitHub Labels
 uv run iar labels sync
 
 # 同步指定仓库
@@ -61,39 +64,42 @@ uv run iar issue-from-prd tasks/pending/example.md --repo-id keda --agent codex 
 # 单次执行（dry-run 预览）
 uv run iar run-once --dry-run
 
-# 单次执行（所有启用仓库）
+# 单次执行（当前仓库）
 uv run iar run-once
 
-# Daemon 模式轮询（默认每 600 秒轮询一次，所有启用仓库）
+# 显式处理 config.toml registry 中所有启用仓库
+uv run iar run-once --all
+
+# Daemon 模式轮询（默认每 600 秒轮询一次，当前仓库）
 uv run iar daemon
 ```
 
 安装后也可直接使用 `iar`（通过 `pyproject.toml` 的 `[project.scripts]` 注册）。
 
-多仓库配置示例（`config.toml`）：
+多仓库 registry 示例（`config.toml`）：
 
 ```toml
 [agent_runner.repositories.keda]
 path = "/Users/zata/code/keda"
 enabled = true
-display_name = "Keda"
 
 [agent_runner.repositories.backend_service]
 path = "/Users/zata/code/backend-service"
 enabled = true
-display_name = "Backend Service"
 ```
+
+`config.toml` 中的仓库列表现在是 legacy registry：仅在显式传入 `--repo-id` 或 `--all` 时使用。这里通常只保留 `path` 和 `enabled`；目标仓库自己的 display、git、runner 等配置应放在该仓库根目录的 `.iar.toml`。
 
 ## 配置说明
 
-配置文件位于 `config.toml`，敏感信息请使用 `.env` 文件管理。
+全局配置位于 `config.toml`，目标仓库 runner 配置位于 `.iar.toml`，敏感信息请使用 `.env` 文件管理。
 
 主要配置项：
 - `app.name` - 应用名称
 - `app.log_level` - 日志级别
 - `database.*` - 数据库配置
 - `chat_model.*` - 聊天模型配置
-- `agent_runner.*` - Agent Runner 配置（labels、git、worktree、runner、safety）
+- `agent_runner.*` - Agent Runner 配置（labels、git、worktree、runner、safety），仓库级覆盖优先放在 `.iar.toml`
 
 ## 开发指南
 
