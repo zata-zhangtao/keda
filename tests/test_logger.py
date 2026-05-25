@@ -64,7 +64,7 @@ def test_logger_file_handler_uses_daily_filename(tmp_path: Path) -> None:
 
 
 def test_logger_propagate_false(tmp_path: Path) -> None:
-    """Logger singleton should have propagate=False after configure_cli_logging."""
+    """Logger singleton should have propagate=False after initialization."""
     log_file = str(tmp_path / "app.log")
     with patch("backend.infrastructure.logging.logger.config") as mock_config:
         mock_config.app_name = "test_propagate"
@@ -74,11 +74,7 @@ def test_logger_propagate_false(tmp_path: Path) -> None:
         Logger._logger = None
         try:
             logger_instance = Logger().get_logger()
-            # Before configure_cli_logging, propagate may be True (default).
-            # After calling configure_cli_logging, it should be False.
-            from backend.engines.agent_runner.factory import configure_cli_logging
-
-            configure_cli_logging()
+            # Logger singleton sets propagate=False on initialization
             assert logger_instance.propagate is False
         finally:
             for handler in logger_instance.handlers[:]:

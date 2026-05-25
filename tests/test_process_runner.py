@@ -230,7 +230,7 @@ def test_run_filtered_claude_stream_logs_structured_events(tmp_path: Path) -> No
     handler = logging.Handler()
     handler.emit = lambda record: log_records.append(record)
 
-    logger = logging.getLogger("backend.infrastructure.process_runner")
+    logger = logging.getLogger("app")
     logger.addHandler(handler)
     original_level = logger.level
     logger.setLevel(logging.INFO)
@@ -286,7 +286,7 @@ def test_run_filtered_claude_stream_buffers_text_delta(tmp_path: Path) -> None:
     handler = logging.Handler()
     handler.emit = lambda record: log_records.append(record)
 
-    logger = logging.getLogger("backend.infrastructure.process_runner")
+    logger = logging.getLogger("app")
     logger.addHandler(handler)
     original_level = logger.level
     logger.setLevel(logging.INFO)
@@ -323,7 +323,7 @@ def test_subprocess_runner_non_claude_path_uses_pipe(tmp_path: Path) -> None:
     handler = logging.Handler()
     handler.emit = lambda record: log_records.append(record)
 
-    logger = logging.getLogger("backend.infrastructure.process_runner")
+    logger = logging.getLogger("app")
     logger.addHandler(handler)
     original_level = logger.level
     logger.setLevel(logging.INFO)

@@ -30,6 +30,7 @@ class Logger:
     def _setup_logger(self) -> None:
         self._logger = logging.getLogger(config.app_name)
         self._logger.setLevel(getattr(logging, config.log_level))
+        self._logger.propagate = False
 
         if self._logger.handlers:
             return
