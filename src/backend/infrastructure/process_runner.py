@@ -6,7 +6,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 
 @dataclass(frozen=True)
@@ -168,8 +168,21 @@ def run_filtered_claude_stream(
     timeout: int | None,
     collect_stdout: bool = False,
     prompt_text: str | None = None,
+    output_sink: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run Claude stream-json and print a filtered live view."""
+    """Run Claude stream-json and print a filtered live view.
+
+    Args:
+        command: Command to run.
+        cwd: Working directory.
+        timeout: Optional timeout in seconds.
+        collect_stdout: Whether to collect rendered output.
+        prompt_text: Optional prompt to pass via stdin.
+        output_sink: Optional callback for rendered text chunks.
+
+    Returns:
+        CompletedProcess with collected stdout if requested.
+    """
     import threading
 
     renderer = ClaudeStreamRenderer()
@@ -203,6 +216,8 @@ def run_filtered_claude_stream(
                     stdout_lines.append(rendered_text)
                 if rendered_text:
                     print(rendered_text, end="", flush=True)
+                    if output_sink is not None:
+                        output_sink(rendered_text.rstrip("\n"))
         return_code = process.wait(timeout=timeout)
     except Exception:
         process.kill()

@@ -45,9 +45,14 @@ class FakeTranscriptRunner(IAgentTranscriptRunner):
         *,
         cwd: Path,
         event_sink: Callable[[DeliberationEvent], None],
+        output_sink: Callable[[str], None] | None = None,
     ) -> CommandResult:
         self.calls.append({"agent_name": agent_name, "prompt": prompt, "cwd": cwd})
         output = self.responses.get(agent_name, "default output")
+        # Simulate streaming output if output_sink is provided
+        if output_sink is not None:
+            for line in output.splitlines():
+                output_sink(line)
         return CommandResult(
             command=(agent_name,),
             return_code=self.return_codes.get(agent_name, 0),

@@ -41,6 +41,7 @@ from backend.engines.agent_runner.factory import (
     resolve_repository_targets,
     write_deliberation_outputs,
 )
+from backend.engines.agent_runner.live_terminal import create_output_view
 
 if TYPE_CHECKING:
     from backend.core.shared.interfaces.agent_runner import (
@@ -422,12 +423,14 @@ def main(argv: list[str] | None = None) -> int:
             transcript_runner = create_transcript_runner(process_runner)
             output_path.mkdir(parents=True, exist_ok=True)
             event_sink = create_event_sink(output_path)
+            output_view = create_output_view()
             result = run_agent_deliberation(
                 request=request,
                 config=deliberation_config,
                 transcript_runner=transcript_runner,
                 event_sink=event_sink,
                 target_repo_path=Path.cwd(),
+                output_view=output_view,
             )
             selected_profile_ids = tuple(
                 dict.fromkeys(

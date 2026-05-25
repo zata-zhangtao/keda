@@ -59,6 +59,7 @@ class IAgentTranscriptRunner(ABC):
         *,
         cwd: Path,
         event_sink: Callable[[DeliberationEvent], None],
+        output_sink: Callable[[str], None] | None = None,
     ) -> CommandResult:
         """Run an agent and emit events.
 
@@ -67,6 +68,10 @@ class IAgentTranscriptRunner(ABC):
             prompt: Full prompt text.
             cwd: Working directory for the agent process.
             event_sink: Callback invoked for each event.
+            output_sink: Optional callback for readable rendered text
+                chunks. When provided, each chunk of rendered output
+                is passed to this callback as it arrives, enabling
+                real-time streaming display and file append.
 
         Returns:
             CommandResult with captured output.

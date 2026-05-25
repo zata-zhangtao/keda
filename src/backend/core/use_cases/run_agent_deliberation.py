@@ -8,6 +8,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from backend.core.shared.interfaces.agent_runner import (
     IAgentTranscriptRunner,
@@ -19,6 +20,10 @@ from backend.core.shared.models.agent_deliberation import (
     DeliberationRequest,
     DeliberationResult,
 )
+from backend.core.shared.interfaces.agent_output_view import IAgentOutputView
+
+if TYPE_CHECKING:
+    pass
 
 _logger = logging.getLogger(__name__)
 
@@ -120,6 +125,37 @@ def _write_workspace_output(output_path: Path, output_text: str) -> None:
     )
 
 
+def _create_streaming_sink(
+    output_path: Path,
+    output_view: IAgentOutputView,
+    round_number: int,
+    profile_id: str,
+) -> Callable[[str], None]:
+    """Create a sink that appends chunks to a workspace file and updates the view.
+
+    The workspace file is created (or truncated) on first call, then
+    each subsequent chunk is appended. This enables real-time file
+    growth while the agent subprocess is running.
+    """
+    import threading
+
+    lock = threading.Lock()
+    initialized = False
+
+    def _sink(chunk: str) -> None:
+        nonlocal initialized
+        with lock:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            if not initialized:
+                output_path.write_text("", encoding="utf-8")
+                initialized = True
+            with open(output_path, "a", encoding="utf-8") as f:
+                f.write(chunk + "\n")
+        output_view.append_output(round_number, profile_id, chunk)
+
+    return _sink
+
+
 def _run_single_agent(
     agent_name: str,
     prompt: str,
@@ -129,6 +165,8 @@ def _run_single_agent(
     session_id: str,
     round_number: int,
     agent_label: str,
+    output_view: IAgentOutputView,
+    output_sink: Callable[[str], None] | None = None,
 ) -> str:
     _emit(
         event_sink,
@@ -138,14 +176,18 @@ def _run_single_agent(
         "agent_started",
         "started analysis",
     )
+    output_view.update_status(round_number, agent_label, "running")
     result = transcript_runner.run(
         agent_name=agent_name,
         prompt=prompt,
         cwd=cwd,
         event_sink=event_sink,
+        output_sink=output_sink,
     )
     output_text = result.stdout.strip()
     _write_workspace_output(cwd / f"round-{round_number}-output.md", output_text)
+    final_status = "finished" if result.return_code == 0 else "failed"
+    output_view.update_status(round_number, agent_label, final_status)
     _emit(
         event_sink,
         session_id,
@@ -171,13 +213,21 @@ def _run_round(
     event_sink: Callable[[DeliberationEvent], None],
     workspace_root: Path,
     session_id: str,
+    output_view: IAgentOutputView,
 ) -> dict[str, str]:
     outputs: dict[str, str] = {}
+
+    # Register profiles with the output view for this round
+    output_view.register_round_profiles(round_number, profiles)
 
     def _run_profile(profile: DeliberationAgentProfile) -> tuple[str, str]:
         prompt = prompt_builder(profile)
         profile_workspace = workspace_root / profile.profile_id
         profile_workspace.mkdir(parents=True, exist_ok=True)
+        output_path = profile_workspace / f"round-{round_number}-output.md"
+        streaming_sink = _create_streaming_sink(
+            output_path, output_view, round_number, profile.profile_id
+        )
         output = _run_single_agent(
             agent_name=profile.agent,
             prompt=prompt,
@@ -187,6 +237,8 @@ def _run_round(
             session_id=session_id,
             round_number=round_number,
             agent_label=profile.profile_id,
+            output_view=output_view,
+            output_sink=streaming_sink,
         )
         return profile.profile_id, output
 
@@ -247,6 +299,7 @@ def run_agent_deliberation(
     transcript_runner: IAgentTranscriptRunner,
     event_sink: Callable[[DeliberationEvent], None],
     target_repo_path: Path,
+    output_view: IAgentOutputView | None = None,
 ) -> DeliberationResult:
     """Run a multi-agent deliberation session.
 
@@ -256,10 +309,17 @@ def run_agent_deliberation(
         transcript_runner: Runner that executes agents and emits events.
         event_sink: Callback for structured events.
         target_repo_path: Path to the target repository for read-only safety checks.
+        output_view: Optional output view for live terminal display. If not
+            provided, a NoOpOutputView is used.
 
     Returns:
         DeliberationResult with the final report.
     """
+    from backend.core.shared.interfaces.agent_output_view import NoOpOutputView
+
+    if output_view is None:
+        output_view = NoOpOutputView()
+
     session_id = request.session_id or create_default_session_id()
     output_dir = Path(request.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -304,6 +364,7 @@ def run_agent_deliberation(
         event_sink=_record_event,
         workspace_root=workspace_root,
         session_id=session_id,
+        output_view=output_view,
     )
     round_outputs[1] = isolation_outputs
     transcript_parts.append(_format_round_transcript(1, isolation_outputs))
@@ -322,6 +383,7 @@ def run_agent_deliberation(
             event_sink=_record_event,
             workspace_root=workspace_root,
             session_id=session_id,
+            output_view=output_view,
         )
         round_outputs[round_number] = discussion_outputs
         transcript_parts.append(
@@ -333,6 +395,16 @@ def run_agent_deliberation(
     synthesis_prompt = _build_synthesis_prompt(request, full_transcript)
     synthesizer_workspace = workspace_root / "synthesizer"
     synthesizer_workspace.mkdir(parents=True, exist_ok=True)
+    synthesis_output_path = synthesizer_workspace / "synthesis-output.md"
+
+    # Register synthesizer as a single-agent "round" for the output view
+    synthesizer_profile = DeliberationAgentProfile(
+        profile_id="synthesizer",
+        agent=request.synthesizer,
+        role="synthesizer",
+        behavior_prompt="",
+    )
+    output_view.register_round_profiles(0, (synthesizer_profile,))
 
     _emit(
         _record_event,
@@ -342,16 +414,21 @@ def run_agent_deliberation(
         "agent_started",
         "started synthesis",
     )
+    output_view.update_status(0, "synthesizer", "running")
+    synthesis_sink = _create_streaming_sink(
+        synthesis_output_path, output_view, 0, "synthesizer"
+    )
     synthesis_result = transcript_runner.run(
         agent_name=request.synthesizer,
         prompt=synthesis_prompt,
         cwd=synthesizer_workspace,
         event_sink=_record_event,
+        output_sink=synthesis_sink,
     )
     synthesis_output = synthesis_result.stdout.strip()
-    _write_workspace_output(
-        synthesizer_workspace / "synthesis-output.md", synthesis_output
-    )
+    _write_workspace_output(synthesis_output_path, synthesis_output)
+    synthesis_status = "finished" if synthesis_result.return_code == 0 else "failed"
+    output_view.update_status(0, "synthesizer", synthesis_status)
     _emit(
         _record_event,
         session_id,
@@ -377,6 +454,9 @@ def run_agent_deliberation(
         "session_finished",
         f"session={session_id}",
     )
+
+    # Close the output view when deliberation is complete
+    output_view.close()
 
     result = DeliberationResult(
         session_id=session_id,
