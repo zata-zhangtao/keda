@@ -45,11 +45,13 @@ from backend.core.use_cases.agent_runner_commit import (
 from backend.core.use_cases.agent_runner_failure import (
     AgentRunnerAttemptError,
     MaxRetriesExceededError,
+    PublishFailureError,
     UnrecoverableError,
     classify_failure,
     format_agent_execution_failure,
     format_attempt_history,
     format_failure_comment,
+    format_publish_failure_comment,
     format_recovery_failure_summary,
     is_recoverable_commit_request_error,
 )
@@ -89,6 +91,7 @@ __all__ = [
     "AgentRunnerAttemptError",
     "MaxRetriesExceededError",
     "PrdDeliveryError",
+    "PublishFailureError",
     "UnrecoverableError",
     "VerificationFailedError",
     "build_prompt",
@@ -107,6 +110,7 @@ __all__ = [
     "format_command",
     "format_failure_comment",
     "format_prd_delivery_failure",
+    "format_publish_failure_comment",
     "format_recovery_failure_summary",
     "format_result_for_recovery",
     "format_verification_failure",
@@ -703,3 +707,4 @@ def run_once(
         github_client=github_client,
         process_runner=process_runner,
     )
+

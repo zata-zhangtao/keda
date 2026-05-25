@@ -177,11 +177,22 @@ def _mark_issue_failed(
             label_exc,
         )
 
+    from backend.core.use_cases.run_agent_once import (
+        PublishFailureError,
+        format_failure_comment,
+        format_publish_failure_comment,
+    )
+
     # 尝试从异常中提取尝试历史并格式化失败评论
     attempt_results = getattr(exc, "attempt_results", None)
-    if attempt_results is not None:
-        from backend.core.use_cases.run_agent_once import format_failure_comment
-
+    if isinstance(exc, PublishFailureError):
+        comment_body = format_publish_failure_comment(
+            exc,
+            issue.number,
+            worktree_path=exc.worktree_path,
+            failure_category=exc.failure_category,
+        )
+    elif attempt_results is not None:
         comment_body = format_failure_comment(exc, attempt_results)
     else:
         comment_body = f"## Agent Runner Failed\n\n```text\n{exc}\n```\n"

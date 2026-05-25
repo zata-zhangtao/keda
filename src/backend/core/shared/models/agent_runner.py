@@ -263,3 +263,33 @@ class RepositoryRunContext:
     display_name: str
     repo_path: Path
     config: AppConfig
+
+
+class PublishFailureCategory(Enum):
+    """Categorized publish failure reason for recovery context."""
+
+    PUSH = "push"
+    PR_LOOKUP = "pr_lookup"
+    PR_CREATE = "pr_create"
+    LABEL_UPDATE = "label_update"
+    COMMENT_UPDATE = "comment_update"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class PublishRecoveryRequest:
+    """Request for publish recovery."""
+
+    issue_number: int
+    expected_branch: str | None = None
+
+
+@dataclass(frozen=True)
+class PublishRecoveryResult:
+    """Result of successful publish recovery."""
+
+    issue_number: int
+    branch: str
+    head_sha: str
+    pr_url: str
+    pr_reused: bool

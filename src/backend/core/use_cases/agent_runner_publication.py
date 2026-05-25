@@ -30,9 +30,11 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     FailureType,
     IssueSummary,
+    PublishFailureCategory,
 )
 from backend.core.use_cases.agent_review import run_pre_push_review
 from backend.core.use_cases.agent_runner_events import format_event_marker
+from backend.core.use_cases.agent_runner_failure import PublishFailureError
 from backend.core.use_cases.run_agent_once import (
     ensure_prd_delivery_ready,
     ensure_verification_passed,
@@ -148,6 +150,76 @@ def _workflow_state_labels(config: AppConfig) -> list[str]:
         config.labels.review,
         config.labels.blocked,
     ]
+
+
+def _publish_changes_with_recovery_context(
+    *,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    expected_branch: str,
+    content_generator: IContentGenerator | None,
+) -> tuple[str, str]:
+    """Publish changes and preserve recovery context on publish failures."""
+    try:
+        return publish_changes(
+            issue,
+            worktree_path,
+            config,
+            github_client,
+            process_runner,
+            expected_branch=expected_branch,
+            content_generator=content_generator,
+        )
+    except (RuntimeError, OSError) as exc:
+        raise PublishFailureError(
+            str(exc),
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.PUSH,
+        ) from exc
+
+
+def _edit_issue_labels_after_publish(
+    *,
+    issue_number: int,
+    add_labels: list[str],
+    remove_labels: list[str],
+    worktree_path: Path,
+    github_client: IGitHubClient,
+) -> None:
+    """Update labels and preserve recovery context on GitHub failures."""
+    try:
+        github_client.edit_issue_labels(
+            issue_number,
+            add=add_labels,
+            remove=remove_labels,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface category for recovery.
+        raise PublishFailureError(
+            f"Failed to update labels after publish: {exc}",
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.LABEL_UPDATE,
+        ) from exc
+
+
+def _comment_issue_after_publish(
+    *,
+    issue_number: int,
+    comment_body: str,
+    worktree_path: Path,
+    github_client: IGitHubClient,
+) -> None:
+    """Post a publish comment and preserve recovery context on GitHub failures."""
+    try:
+        github_client.comment_issue(issue_number, comment_body)
+    except Exception as exc:  # noqa: BLE001 - surface category for recovery.
+        raise PublishFailureError(
+            f"Failed to post draft PR comment: {exc}",
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.COMMENT_UPDATE,
+        ) from exc
 
 
 def _count_local_commits_since_base(
@@ -313,31 +385,35 @@ def _finish_implementation_publication(
     )
 
     # 步骤 3: 发布到远程并创建 Draft PR
-    branch, pr_url = publish_changes(
-        issue,
-        worktree_path,
-        config,
-        github_client,
-        process_runner,
+    branch, pr_url = _publish_changes_with_recovery_context(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=github_client,
+        process_runner=process_runner,
         expected_branch=expected_branch,
         content_generator=content_generator,
     )
 
     # 切换标签：running → supervising
-    github_client.edit_issue_labels(
-        issue.number,
-        add=[config.labels.supervising],
-        remove=[config.labels.running],
+    _edit_issue_labels_after_publish(
+        issue_number=issue.number,
+        add_labels=[config.labels.supervising],
+        remove_labels=[config.labels.running],
+        worktree_path=worktree_path,
+        github_client=github_client,
     )
 
     publish_sha = get_head_sha(worktree_path, process_runner)
-    github_client.comment_issue(
-        issue.number,
-        build_draft_pr_created_comment(
+    _comment_issue_after_publish(
+        issue_number=issue.number,
+        comment_body=build_draft_pr_created_comment(
             pr_url=pr_url,
             branch=branch,
             head_sha=publish_sha,
         ),
+        worktree_path=worktree_path,
+        github_client=github_client,
     )
 
     # 步骤 4: PR 后监督（可选）
@@ -370,10 +446,12 @@ def _finish_implementation_publication(
             )
     else:
         # 未启用监督时直接进入 review 标签
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.review],
-            remove=[config.labels.supervising],
+        _edit_issue_labels_after_publish(
+            issue_number=issue.number,
+            add_labels=[config.labels.review],
+            remove_labels=[config.labels.supervising],
+            worktree_path=worktree_path,
+            github_client=github_client,
         )
 
     _logger.info(
@@ -453,30 +531,34 @@ def _finish_existing_commit_publication(
     )
 
     # 步骤 3: 发布到远程并创建 Draft PR
-    branch, pr_url = publish_changes(
-        issue,
-        worktree_path,
-        config,
-        github_client,
-        process_runner,
+    branch, pr_url = _publish_changes_with_recovery_context(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=github_client,
+        process_runner=process_runner,
         expected_branch=expected_branch,
         content_generator=content_generator,
     )
     publish_sha = get_head_sha(worktree_path, process_runner)
 
     # 切换标签：从 workflow state labels → supervising
-    github_client.edit_issue_labels(
-        issue.number,
-        add=[config.labels.supervising],
-        remove=_workflow_state_labels(config),
+    _edit_issue_labels_after_publish(
+        issue_number=issue.number,
+        add_labels=[config.labels.supervising],
+        remove_labels=_workflow_state_labels(config),
+        worktree_path=worktree_path,
+        github_client=github_client,
     )
-    github_client.comment_issue(
-        issue.number,
-        build_draft_pr_created_comment(
+    _comment_issue_after_publish(
+        issue_number=issue.number,
+        comment_body=build_draft_pr_created_comment(
             pr_url=pr_url,
             branch=branch,
             head_sha=publish_sha,
         ),
+        worktree_path=worktree_path,
+        github_client=github_client,
     )
 
     # 步骤 4: PR 后监督（可选）
@@ -506,10 +588,12 @@ def _finish_existing_commit_publication(
                 supervisor_agent=supervisor_agent,
             )
     else:
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.review],
-            remove=[config.labels.supervising],
+        _edit_issue_labels_after_publish(
+            issue_number=issue.number,
+            add_labels=[config.labels.review],
+            remove_labels=[config.labels.supervising],
+            worktree_path=worktree_path,
+            github_client=github_client,
         )
 
     _logger.info(
