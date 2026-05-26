@@ -57,3 +57,4 @@ coverage/
 Thumbs.db
 
 # Claude planning session archives (local state, not for VCS)
+.local/state/gh/device-id

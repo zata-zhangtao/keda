@@ -107,6 +107,7 @@ def build_repository_local_config_text(
             f"base_branch = {_toml_quote(selected_base_branch)}",
             "",
             "[agent_runner.runner]",
+            'default_agent = "claude"',
             "verification_commands = [",
             f"  {_toml_quote('git diff --check')},",
             "]",

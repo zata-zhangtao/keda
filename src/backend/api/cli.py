@@ -28,6 +28,7 @@ from backend.core.use_cases.review_daemon import run_review_daemon
 from backend.core.use_cases.review_once import review_once
 from backend.core.use_cases.sync_labels import sync_labels
 from backend.core.shared.models.agent_deliberation import DeliberationSession
+from backend.core.shared.models.agent_runner import LabelConfig
 from backend.engines.agent_runner.factory import (
     build_deliberation_config_from_settings,
     create_content_generator,
@@ -303,8 +304,17 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if parsed.dry_run:
             print(init_result.config_text, end="")
-        else:
-            logger.info("Wrote IAR local config: %s", init_result.config_path)
+            return 0
+
+        logger.info("Wrote IAR local config: %s", init_result.config_path)
+        try:
+            github_client = create_github_client(
+                init_result.repo_root_path, process_runner
+            )
+            sync_labels(labels_config=LabelConfig(), github_client=github_client)
+            logger.info("Labels synced for: %s", init_result.repo_root_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Label sync failed (labels may already exist): %s", exc)
         return 0
 
     runner_settings = get_agent_runner_settings()
