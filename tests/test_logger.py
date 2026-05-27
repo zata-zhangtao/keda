@@ -10,25 +10,28 @@ from backend.infrastructure.logging.logger import Logger
 
 
 def test_logger_uses_daily_file_handler(tmp_path: Path) -> None:
-    """Logger should use daily-named FileHandler."""
+    """Root logger should use daily-named FileHandler."""
     log_file = str(tmp_path / "app-2026-05-24.log")
     with patch("backend.infrastructure.logging.logger.config") as mock_config:
         mock_config.app_name = "test_daily_fh"
         mock_config.log_level = "INFO"
         mock_config.log_file = log_file
-        # Reset singleton for clean test
         Logger._instance = None
         Logger._logger = None
+        root = logging.getLogger()
+        # Clear existing handlers so _setup_logger re-adds them under mock config
+        for handler in root.handlers[:]:
+            handler.close()
+            root.removeHandler(handler)
         try:
-            logger_instance = Logger().get_logger()
-            handler_types = {type(handler) for handler in logger_instance.handlers}
+            Logger().get_logger()
+            handler_types = {type(handler) for handler in root.handlers}
             assert logging.FileHandler in handler_types
             assert logging.StreamHandler in handler_types
         finally:
-            # Clean up handlers to avoid leaking to other tests
-            for handler in logger_instance.handlers[:]:
+            for handler in root.handlers[:]:
                 handler.close()
-                logger_instance.removeHandler(handler)
+                root.removeHandler(handler)
             Logger._instance = None
             Logger._logger = None
 
@@ -45,41 +48,47 @@ def test_logger_file_handler_uses_daily_filename(tmp_path: Path) -> None:
         mock_config.log_file = log_file
         Logger._instance = None
         Logger._logger = None
+        root = logging.getLogger()
+        for handler in root.handlers[:]:
+            handler.close()
+            root.removeHandler(handler)
         try:
-            logger_instance = Logger().get_logger()
+            Logger().get_logger()
             file_handlers = [
-                h
-                for h in logger_instance.handlers
-                if isinstance(h, logging.FileHandler)
+                h for h in root.handlers if isinstance(h, logging.FileHandler)
             ]
             assert file_handlers, "FileHandler is not configured."
             today = datetime.now().strftime("%Y-%m-%d")
             assert f"app-{today}.log" in file_handlers[0].baseFilename
         finally:
-            for handler in logger_instance.handlers[:]:
+            for handler in root.handlers[:]:
                 handler.close()
-                logger_instance.removeHandler(handler)
+                root.removeHandler(handler)
             Logger._instance = None
             Logger._logger = None
 
 
-def test_logger_propagate_false(tmp_path: Path) -> None:
-    """Logger singleton should have propagate=False after initialization."""
+def test_logger_handlers_on_root(tmp_path: Path) -> None:
+    """Handlers should be attached to root logger so all module loggers work."""
     log_file = str(tmp_path / "app.log")
     with patch("backend.infrastructure.logging.logger.config") as mock_config:
-        mock_config.app_name = "test_propagate"
+        mock_config.app_name = "test_root_handlers"
         mock_config.log_level = "INFO"
         mock_config.log_file = log_file
         Logger._instance = None
         Logger._logger = None
+        root = logging.getLogger()
+        for handler in root.handlers[:]:
+            handler.close()
+            root.removeHandler(handler)
         try:
-            logger_instance = Logger().get_logger()
-            # Logger singleton sets propagate=False on initialization
-            assert logger_instance.propagate is False
+            Logger().get_logger()
+            assert root.handlers, "Root logger should have handlers"
+            assert any(isinstance(h, logging.StreamHandler) for h in root.handlers)
         finally:
-            for handler in logger_instance.handlers[:]:
+            for handler in root.handlers[:]:
                 handler.close()
-                logger_instance.removeHandler(handler)
+                root.removeHandler(handler)
             Logger._instance = None
             Logger._logger = None
 
@@ -108,14 +117,18 @@ def test_cleanup_old_logs(tmp_path: Path) -> None:
         mock_config.log_file = log_file
         Logger._instance = None
         Logger._logger = None
+        root = logging.getLogger()
+        for handler in root.handlers[:]:
+            handler.close()
+            root.removeHandler(handler)
         try:
-            logger_instance = Logger()
+            Logger()
             # Old file should be cleaned up, recent file should remain
             assert not old_file.exists()
             assert recent_file.exists()
         finally:
-            for handler in logger_instance.handlers[:]:
+            for handler in root.handlers[:]:
                 handler.close()
-                logger_instance.removeHandler(handler)
+                root.removeHandler(handler)
             Logger._instance = None
             Logger._logger = None

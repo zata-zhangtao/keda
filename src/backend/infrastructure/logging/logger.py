@@ -30,10 +30,12 @@ class Logger:
     def _setup_logger(self) -> None:
         self._logger = logging.getLogger(config.app_name)
         self._logger.setLevel(getattr(logging, config.log_level))
-        self._logger.propagate = False
 
-        if self._logger.handlers:
+        root = logging.getLogger()
+        if root.handlers:
             return
+
+        root.setLevel(getattr(logging, config.log_level))
 
         formatter = logging.Formatter(
             fmt="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s",
@@ -48,7 +50,7 @@ class Logger:
                 console_handler.stream.reconfigure(encoding="utf-8", errors="replace")
             except Exception:
                 pass
-        self._logger.addHandler(console_handler)
+        root.addHandler(console_handler)
 
         try:
             log_dir = Path(config.log_file).parent
@@ -63,7 +65,7 @@ class Logger:
             )
             file_handler.setLevel(getattr(logging, config.log_level))
             file_handler.setFormatter(formatter)
-            self._logger.addHandler(file_handler)
+            root.addHandler(file_handler)
 
             self._cleanup_old_logs(log_dir, keep_days=14)
         except (OSError, PermissionError) as error:
