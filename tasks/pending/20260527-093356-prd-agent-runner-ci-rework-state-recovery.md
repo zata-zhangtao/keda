@@ -27,6 +27,19 @@
 - [ ] **label 互斥真实验证**：通过真实 CLI fixture 检查任意一次 state transition 后 Issue 不会同时包含 `agent/running`、`agent/review`、`agent/supervising`、`agent/blocked`、`agent/failed`。
 - [ ] **为什么单元测试不够**：该问题发生在 CLI 目标解析、GitHub CLI JSON 字段、Issue comments marker 顺序、labels 当前状态和本地 worktree 路径共同作用时；单元测试无法证明真实入口组合路径收敛。
 
+### Implementation Progress
+
+2026-05-27 已完成一个最小安全修复切片：
+
+- `GitHubCliClient.get_pull_request_context(...)` 已从 `statusCheckRollupState` 改为当前 GitHub CLI 支持的 `statusCheckRollup`，并聚合为 `SUCCESS`、`PENDING`、`FAILURE` 或 `None`。
+- `PullRequestContext` 已新增 `checks_summary`，supervisor prompt 和 gate summary 可携带 failed/pending check 摘要。
+- `pr_supervisor.guard_supervisor_action_for_pr_state(...)` 已加入 deterministic gate：PR 冲突时将 approval 改写为 `rebase_pr_branch`，checks failure 时将 approval 改写为 `repair_pr_branch`。
+- `review_once` 已复用该 gate，防止 review polling 路径把冲突或 failed-check PR 放入 `agent/review`。
+- `docs/guides/agent-runner.md` 已记录 checks 聚合和 approval gate 行为。
+- 已用真实 `gh` 对 keda PR #32 / branch `issue-28` 验证 adapter 可返回 `mergeable=False`，不再因 unsupported JSON field 丢失 PR context。
+
+仍未完成：workflow label transition helper、marker history helper、pending rework consumption 修复、CLI smoke fixture，以及完整 label 互斥收敛。因此本 PRD 继续保留在 `tasks/pending/`。
+
 ## 2. Requirement Shape
 
 **Actor**: 使用 `iar run-once`、`iar review-once` 或 `iar review-daemon` 运维跨仓库 Agent Runner 的本地 operator。
@@ -401,24 +414,24 @@ No external validation required; repository evidence and local `gh --json` behav
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/api/cli.py` remains a thin CLI adapter and does not gain workflow decision branches.
-- [ ] GitHub CLI JSON field handling remains in `src/backend/infrastructure/github_client.py`.
+- [x] `src/backend/api/cli.py` remains a thin CLI adapter and does not gain workflow decision branches.
+- [x] GitHub CLI JSON field handling remains in `src/backend/infrastructure/github_client.py`.
 - [ ] CI gate, pending rework semantics, and label transition decisions live in `src/backend/core/use_cases/`.
 - [ ] Workflow transition and marker-history helpers are phase-agnostic and not named around CI or rework only.
-- [ ] No new database, queue, HTTP service, webhook receiver, or persistent local state source is introduced.
+- [x] No new database, queue, HTTP service, webhook receiver, or persistent local state source is introduced.
 
 ### Dependency Acceptance
 
-- [ ] `src/backend/core/` does not import `src/backend/infrastructure/`, `src/backend/engines/`, or `src/backend/api/`.
+- [x] `src/backend/core/` does not import `src/backend/infrastructure/`, `src/backend/engines/`, or `src/backend/api/`.
 - [ ] New shared workflow helper imports only core models/interfaces.
-- [ ] Existing `IGitHubClient` contract remains the boundary between core and GitHub CLI implementation.
+- [x] Existing `IGitHubClient` contract remains the boundary between core and GitHub CLI implementation.
 
 ### Behavior Acceptance
 
-- [ ] `statusCheckRollup` with one failed CheckRun yields `PullRequestContext.checks_state == "FAILURE"` and includes the failed check name in the summary.
-- [ ] Empty `statusCheckRollup` yields `checks_state is None` and does not block approval for repos without CI.
-- [ ] `review-once` receiving supervisor `approve_for_human_review` while `checks_state == "FAILURE"` does not transition to `agent/review`.
-- [ ] `review-once` writes or preserves a rework/blocking comment that names failed checks when approval is blocked by CI failure.
+- [x] `statusCheckRollup` with one failed CheckRun yields `PullRequestContext.checks_state == "FAILURE"` and includes the failed check name in the summary.
+- [x] Empty `statusCheckRollup` yields `checks_state is None` and does not block approval for repos without CI.
+- [x] `review-once` receiving supervisor `approve_for_human_review` while `checks_state == "FAILURE"` does not transition to `agent/review`.
+- [x] `review-once` writes or preserves a rework/blocking comment that names failed checks when approval is blocked by CI failure.
 - [ ] `repair_pr_branch`, `rebase_pr_branch`, and `resolve_conflict` transitions leave only `agent/running` among durable workflow labels.
 - [ ] `approve_for_human_review` transitions leave only `agent/review` among durable workflow labels.
 - [ ] exception paths in `review-once` and `run-once` leave only `agent/failed` or `agent/blocked`, not mixed workflow labels.
@@ -429,17 +442,18 @@ No external validation required; repository evidence and local `gh --json` behav
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` documents checks aggregation, CI failure gate, and pending checks behavior.
+- [x] `docs/guides/agent-runner.md` documents checks aggregation and failed-check/conflict approval gates.
+- [ ] `docs/guides/agent-runner.md` documents pending checks behavior.
 - [ ] `docs/guides/agent-runner.md` documents that durable workflow labels are mutually exclusive.
 - [ ] `docs/guides/agent-runner.md` documents how `post_pr_rework_requested` is consumed and how operators recover a blocked missing-worktree case.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_github_client.py tests/test_pr_supervisor.py tests/test_review_once.py tests/test_run_agent.py -q` passes.
+- [x] `uv run pytest tests/test_github_client.py tests/test_pr_supervisor.py tests/test_review_once.py tests/test_run_agent.py -q` passes.
 - [ ] A CLI smoke test or documented fixture runs `uv run iar review-once --repo <fixture-repo> --max-issues 1` and proves failed checks do not enter `agent/review`.
 - [ ] A CLI smoke test or documented fixture runs `uv run iar run-once --repo <fixture-repo> --max-issues 1` and proves pending rework is consumed.
-- [ ] `uv run mkdocs build` passes after docs updates.
-- [ ] `just test` passes before marking the PRD task complete.
+- [x] `uv run mkdocs build` passes after docs updates.
+- [x] `just test` passes before marking the PRD task complete.
 
 ## 8. Functional Requirements
 

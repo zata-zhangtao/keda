@@ -258,6 +258,21 @@ uv run iar review-daemon --interval 600
 - 任一维度变化时，先移回 `agent/supervising`，运行 supervisor cycle
 - 无变化时直接 skip，避免无意义重评
 
+PR context 读取使用当前 GitHub CLI 支持的 `statusCheckRollup` 字段聚合
+checks 状态：
+
+- 任一 check/status 失败时，`checks_state=FAILURE`
+- 任一 check/status 仍在 queued、in_progress 或 pending 时，`checks_state=PENDING`
+- 所有 check/status 成功、skipped 或 neutral 时，`checks_state=SUCCESS`
+- 无 CI/check rollup 时，`checks_state` 为空，不阻断人工 review
+
+即使 supervisor 返回 `approve_for_human_review`，runner 仍会执行确定性门禁：
+
+- PR 当前不可合并或存在冲突时，approval 会被改写为 `rebase_pr_branch`
+- PR checks 已失败时，approval 会被改写为 `repair_pr_branch`
+
+这样可以避免 `agent/review` label 覆盖仍需 `run-once` 消费的 rework/rebase 状态。
+
 ### Rework Guard
 
 `run-once` 遇到 `agent/running` Issue 时，不会自动视为 rework。只有同时满足以下两个条件才会进入现有 PR branch rework 路径：

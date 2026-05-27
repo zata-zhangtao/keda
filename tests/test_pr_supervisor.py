@@ -11,6 +11,7 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     IssueSummary,
     PullRequestContext,
+    SupervisorActionResult,
 )
 from backend.core.use_cases.pr_supervisor import (
     build_conflict_resolution_prompt,
@@ -18,6 +19,7 @@ from backend.core.use_cases.pr_supervisor import (
     build_supervisor_prompt,
     execute_rebase,
     execute_repair,
+    guard_supervisor_action_for_pr_state,
     parse_supervisor_action,
     run_post_pr_supervisor_cycle,
 )
@@ -47,6 +49,48 @@ def test_parse_supervisor_action_invalid_defaults_to_human_input() -> None:
     text = '{"action": "unknown_action"}'
     result = parse_supervisor_action(text)
     assert result.action == "request_human_input"
+
+
+def test_supervisor_action_gate_blocks_conflicting_pr_approval() -> None:
+    """Conflicting PRs should request rebase instead of human review."""
+    action_result = SupervisorActionResult(
+        action="approve_for_human_review",
+        summary="LGTM",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=False,
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "rebase_pr_branch"
+    assert "mergeability gate" in gated_result.summary
+
+
+def test_supervisor_action_gate_blocks_failed_check_approval() -> None:
+    """Failed checks should request repair instead of human review."""
+    action_result = SupervisorActionResult(
+        action="approve_for_human_review",
+        summary="LGTM",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=True,
+        checks_state="FAILURE",
+        checks_summary=("lint (conclusion=FAILURE)",),
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "repair_pr_branch"
+    assert "lint" in gated_result.summary
 
 
 def test_build_rework_intent_comment_has_marker() -> None:

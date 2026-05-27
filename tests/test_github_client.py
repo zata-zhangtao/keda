@@ -72,6 +72,115 @@ def test_list_pr_comments_requests_comments_field(tmp_path: Path) -> None:
     assert fake_runner.calls == [list(command)]
 
 
+def test_get_pull_request_context_uses_supported_rollup_field(
+    tmp_path: Path,
+) -> None:
+    """PR context loading should use current gh statusCheckRollup output."""
+    command = (
+        "gh",
+        "pr",
+        "list",
+        "--head",
+        "issue-28",
+        "--state",
+        "open",
+        "--json",
+        "url,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollup",
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            command: CommandResult(
+                command=command,
+                return_code=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "url": "https://github.com/example/repo/pull/28",
+                            "headRefName": "issue-28",
+                            "headRefOid": "head-sha",
+                            "baseRefOid": "base-sha",
+                            "mergeable": "CONFLICTING",
+                            "statusCheckRollup": [
+                                {
+                                    "__typename": "CheckRun",
+                                    "name": "lint",
+                                    "status": "COMPLETED",
+                                    "conclusion": "FAILURE",
+                                    "detailsUrl": "https://checks.example/lint",
+                                },
+                                {
+                                    "__typename": "StatusContext",
+                                    "context": "unit",
+                                    "state": "SUCCESS",
+                                },
+                            ],
+                        }
+                    ]
+                ),
+                stderr="",
+            )
+        }
+    )
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    pr_context = github_client.get_pull_request_context("issue-28")
+
+    assert pr_context is not None
+    assert pr_context.pr_url == "https://github.com/example/repo/pull/28"
+    assert pr_context.mergeable is False
+    assert pr_context.checks_state == "FAILURE"
+    assert pr_context.checks_summary == (
+        "lint (status=COMPLETED, conclusion=FAILURE) https://checks.example/lint",
+    )
+    assert fake_runner.calls == [list(command)]
+
+
+def test_get_pull_request_context_empty_rollup_has_no_checks_state(
+    tmp_path: Path,
+) -> None:
+    """Empty check rollup should stay compatible with repositories without CI."""
+    command = (
+        "gh",
+        "pr",
+        "list",
+        "--head",
+        "issue-1",
+        "--state",
+        "open",
+        "--json",
+        "url,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollup",
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            command: CommandResult(
+                command=command,
+                return_code=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "url": "https://github.com/example/repo/pull/1",
+                            "headRefName": "issue-1",
+                            "headRefOid": "head-sha",
+                            "baseRefOid": "base-sha",
+                            "mergeable": "MERGEABLE",
+                            "statusCheckRollup": [],
+                        }
+                    ]
+                ),
+                stderr="",
+            )
+        }
+    )
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    pr_context = github_client.get_pull_request_context("issue-1")
+
+    assert pr_context is not None
+    assert pr_context.mergeable is True
+    assert pr_context.checks_state is None
+    assert pr_context.checks_summary == ()
+
+
 def test_edit_issue_labels_only_removes_attached_labels(tmp_path: Path) -> None:
     """Label editing should not ask gh to remove labels absent from the Issue."""
     view_command = (

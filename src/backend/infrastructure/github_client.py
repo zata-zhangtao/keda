@@ -51,6 +51,133 @@ class PullRequestContext:
     base_sha: str
     mergeable: bool | None = None
     checks_state: str | None = None
+    checks_summary: tuple[str, ...] = ()
+
+
+_CHECK_FAILURE_STATES = {
+    "ACTION_REQUIRED",
+    "CANCELLED",
+    "ERROR",
+    "FAILURE",
+    "FAILED",
+    "STARTUP_FAILURE",
+    "TIMED_OUT",
+}
+_CHECK_PENDING_STATES = {
+    "EXPECTED",
+    "IN_PROGRESS",
+    "PENDING",
+    "QUEUED",
+    "REQUESTED",
+    "WAITING",
+}
+_CHECK_SUCCESS_STATES = {"NEUTRAL", "SKIPPED", "SUCCESS"}
+
+
+def _normalize_optional_state(raw_value: object) -> str | None:
+    """Normalize GitHub CLI check state values for comparison."""
+    if raw_value is None:
+        return None
+    normalized_value = str(raw_value).strip().upper()
+    return normalized_value or None
+
+
+def _normalize_mergeable(raw_mergeable: object) -> bool | None:
+    """Normalize GitHub CLI mergeable enum output to the core boolean model."""
+    if isinstance(raw_mergeable, bool):
+        return raw_mergeable
+
+    mergeable_state = _normalize_optional_state(raw_mergeable)
+    if mergeable_state in ("MERGEABLE", "TRUE"):
+        return True
+    if mergeable_state in ("CONFLICTING", "FALSE"):
+        return False
+    return None
+
+
+def _extract_rollup_entries(raw_rollup: object) -> list[dict[str, object]]:
+    """Return status check entries from supported GitHub CLI rollup shapes."""
+    if isinstance(raw_rollup, list):
+        return [entry for entry in raw_rollup if isinstance(entry, dict)]
+    if isinstance(raw_rollup, dict):
+        for key in ("nodes", "checks", "contexts"):
+            raw_entries = raw_rollup.get(key)
+            if isinstance(raw_entries, list):
+                return [entry for entry in raw_entries if isinstance(entry, dict)]
+    return []
+
+
+def _check_display_name(raw_check: dict[str, object]) -> str:
+    """Return a compact human name for a check rollup entry."""
+    for key in ("name", "context", "workflowName"):
+        raw_name = raw_check.get(key)
+        if raw_name:
+            return str(raw_name)
+    return str(raw_check.get("__typename", "check"))
+
+
+def _check_summary_line(raw_check: dict[str, object]) -> str:
+    """Build a readable summary for a failed or pending check."""
+    state_parts = []
+    for key in ("status", "conclusion", "state"):
+        raw_state = raw_check.get(key)
+        if raw_state:
+            state_parts.append(f"{key}={raw_state}")
+
+    check_url = raw_check.get("detailsUrl") or raw_check.get("targetUrl")
+    suffix = f" ({', '.join(state_parts)})" if state_parts else ""
+    if check_url:
+        suffix = f"{suffix} {check_url}".rstrip()
+    return f"{_check_display_name(raw_check)}{suffix}"
+
+
+def _check_entry_state(raw_check: dict[str, object]) -> str:
+    """Classify one status check rollup entry."""
+    conclusion = _normalize_optional_state(raw_check.get("conclusion"))
+    state = _normalize_optional_state(raw_check.get("state"))
+    status = _normalize_optional_state(raw_check.get("status"))
+
+    for candidate_state in (conclusion, state):
+        if candidate_state in _CHECK_FAILURE_STATES:
+            return "FAILURE"
+        if candidate_state in _CHECK_PENDING_STATES:
+            return "PENDING"
+        if candidate_state in _CHECK_SUCCESS_STATES:
+            return "SUCCESS"
+
+    if status in _CHECK_FAILURE_STATES:
+        return "FAILURE"
+    if status in _CHECK_PENDING_STATES:
+        return "PENDING"
+    if status == "COMPLETED":
+        return "PENDING" if conclusion is None else "SUCCESS"
+    if status in _CHECK_SUCCESS_STATES:
+        return "SUCCESS"
+    return "PENDING"
+
+
+def _aggregate_status_check_rollup(
+    raw_rollup: object,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Aggregate GitHub CLI statusCheckRollup entries into a stable state."""
+    rollup_entries = _extract_rollup_entries(raw_rollup)
+    if not rollup_entries:
+        return None, ()
+
+    pending_summaries: list[str] = []
+    failure_summaries: list[str] = []
+    for raw_check in rollup_entries:
+        check_state = _check_entry_state(raw_check)
+        if check_state == "FAILURE":
+            failure_summaries.append(_check_summary_line(raw_check))
+        elif check_state == "PENDING":
+            pending_summaries.append(_check_summary_line(raw_check))
+
+    if failure_summaries:
+        return "FAILURE", tuple(failure_summaries)
+    if pending_summaries:
+        return "PENDING", tuple(pending_summaries)
+    return "SUCCESS", ()
 
 
 class GitHubCliClient:
@@ -338,7 +465,7 @@ class GitHubCliClient:
                 "--state",
                 "open",
                 "--json",
-                "url,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollupState",
+                "url,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollup",
             ],
             cwd=self.repo_path,
             check=False,
@@ -349,13 +476,17 @@ class GitHubCliClient:
         if not raw_prs:
             return None
         raw_pr = raw_prs[0]
+        checks_state, checks_summary = _aggregate_status_check_rollup(
+            raw_pr.get("statusCheckRollup")
+        )
         return PullRequestContext(
             pr_url=str(raw_pr.get("url", "")),
             branch=str(raw_pr.get("headRefName", branch)),
             head_sha=str(raw_pr.get("headRefOid", "")),
             base_sha=str(raw_pr.get("baseRefOid", "")),
-            mergeable=raw_pr.get("mergeable"),
-            checks_state=str(raw_pr.get("statusCheckRollupState", "")) or None,
+            mergeable=_normalize_mergeable(raw_pr.get("mergeable")),
+            checks_state=checks_state,
+            checks_summary=checks_summary,
         )
 
     def list_issue_comments(self, issue_number: int) -> list[str]:

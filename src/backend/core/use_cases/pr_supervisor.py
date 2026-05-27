@@ -95,6 +95,8 @@ def build_supervisor_prompt(
             f"PR Base SHA: `{pr_context.base_sha}`",
             f"Mergeable: {pr_context.mergeable}",
             f"Checks state: {pr_context.checks_state}",
+            "Checks summary:",
+            "\n".join(f"- {check}" for check in pr_context.checks_summary) or "(none)",
             prd_line,
             "",
             "Issue body:",
@@ -162,6 +164,50 @@ def parse_supervisor_action(text: str) -> SupervisorActionResult:
         verification_status=str(payload.get("verification_status", "")),
         head_sha=str(payload.get("head_sha", "")) or None,
     )
+
+
+def guard_supervisor_action_for_pr_state(
+    action_result: SupervisorActionResult,
+    pr_context: PullRequestContext,
+) -> SupervisorActionResult:
+    """Prevent unsafe approval when deterministic PR state is not reviewable."""
+    if action_result.action != "approve_for_human_review":
+        return action_result
+
+    if pr_context.mergeable is False:
+        summary = (
+            "Approval blocked by PR mergeability gate: the PR is currently "
+            "conflicting or otherwise not mergeable. Requesting rebase before "
+            f"human review. Supervisor summary: {action_result.summary}"
+        )
+        return SupervisorActionResult(
+            action="rebase_pr_branch",
+            summary=summary,
+            findings_counts=action_result.findings_counts,
+            verification_status=action_result.verification_status,
+            head_sha=action_result.head_sha,
+        )
+
+    if pr_context.checks_state == "FAILURE":
+        failed_checks_text = (
+            "; ".join(pr_context.checks_summary)
+            if pr_context.checks_summary
+            else "failed PR checks"
+        )
+        summary = (
+            "Approval blocked by PR checks gate: checks are failing "
+            f"({failed_checks_text}). Requesting branch repair before human "
+            f"review. Supervisor summary: {action_result.summary}"
+        )
+        return SupervisorActionResult(
+            action="repair_pr_branch",
+            summary=summary,
+            findings_counts=action_result.findings_counts,
+            verification_status=action_result.verification_status,
+            head_sha=action_result.head_sha,
+        )
+
+    return action_result
 
 
 def build_supervisor_result_comment(
@@ -575,7 +621,11 @@ def run_post_pr_supervisor_cycle(
         process_runner,
         capture_output=True,
     )
-    action_result = parse_supervisor_action(extract_agent_response_text(result))
+    raw_action_result = parse_supervisor_action(extract_agent_response_text(result))
+    action_result = guard_supervisor_action_for_pr_state(
+        raw_action_result,
+        pr_context,
+    )
 
     comment_body = build_supervisor_result_comment(
         action=action_result.action,
