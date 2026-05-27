@@ -157,6 +157,7 @@ class PullRequestContext:
     base_sha: str
     mergeable: bool | None = None
     checks_state: str | None = None
+    checks_summary: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

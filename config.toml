@@ -232,9 +232,9 @@ body_template = [
   "",
   "- PRD path: `{relative_prd_path}`",
   "",
-  "## Acceptance Summary",
+  "## PRD Introduction",
   "",
-  "{acceptance_items}",
+  "{prd_introduction}",
   "",
   "## Delivery Notes",
   "",
@@ -252,11 +252,11 @@ prompt = [
   "",
   "Issue type: {issue_type}",
   "Initial title: {title}",
+  "PRD introduction (first section):",
+  "{prd_introduction}",
+  "",
   "PRD goals:",
   "{prd_goals}",
-  "",
-  "Acceptance items:",
-  "{acceptance_items}",
   "",
   "PRD content:",
   "{prd_text}",
@@ -313,10 +313,13 @@ role = "implementer"
 behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concrete steps, and implementation details. Highlight what can be built and what resources are needed."
 
 # =============================================================================
-# Agent Runner Multi-Repository Configuration (Optional)
+# Agent Runner Repository Registry (Optional)
 # =============================================================================
 # Each repository must already be cloned locally. The runner will not clone
 # or manage credentials for remote repositories.
+# Keep only lightweight selector metadata here. Repository-specific display,
+# git, runner, labels, safety, and prompt overrides live in each target
+# repository's .iar.toml.
 
 # [agent_runner.repositories.keda-main]
 # path = "/Users/zata/code/keda"
@@ -335,3 +338,7 @@ behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concre
 # [agent_runner.repositories.keda-worktree.git]
 # remote = "zata"
 # base_branch = "main"
+
+[agent_runner.repositories.transmaster]
+path = "/Users/zata/code/TransMaster"
+enabled = true

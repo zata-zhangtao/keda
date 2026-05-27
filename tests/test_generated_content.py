@@ -246,6 +246,47 @@ def test_generate_issue_content_agent_invalid_json_fallback() -> None:
     assert result.source == "fallback"
 
 
+def test_generate_issue_content_agent_fallback_to_template() -> None:
+    """Agent failure with fallback=template should render templates before hard fallback."""
+    generator = FakeContentGenerator(response="not json")
+    config = GeneratedContentConfig(
+        enabled=True,
+        fallback="template",
+        issue_from_prd=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="agent",
+            output="json",
+            title_template="[Template] {prd_title}",
+            body_template="- PRD path: `{relative_prd_path}`\n\nTemplate body.",
+            prompt="Generate Issue",
+        ),
+    )
+    context = IssueContext(
+        issue_type="feature",
+        title="Title",
+        prd_title="PRD Title",
+        relative_prd_path="tasks/example.md",
+        acceptance_items="",
+        prd_text="",
+        prd_introduction="",
+        prd_goals="",
+        prd_requirement_shape="",
+        prd_change_impact_tree="",
+    )
+    result = generate_issue_content(
+        config=config,
+        context=context,
+        fallback_title="Fallback",
+        fallback_body="Fallback Body",
+        generator=generator,
+        cwd=Path("."),
+    )
+    assert result.title == "[Template] PRD Title"
+    assert "- PRD path: `tasks/example.md`" in result.body
+    assert "Template body." in result.body
+    assert result.source == "template"
+
+
 def test_generate_pr_content_disabled_uses_fallback() -> None:
     """When PR generation is disabled, fallback should be returned."""
     config = GeneratedContentConfig(enabled=False)
@@ -373,6 +414,46 @@ def test_generate_pr_content_agent_mode_markdown() -> None:
     assert result.title == "Closes #42"
     assert "Closes #42" in result.body
     assert result.source == "agent"
+
+
+def test_generate_pr_content_agent_fallback_to_template() -> None:
+    """Agent failure with fallback=template should render PR templates before hard fallback."""
+    generator = FakeContentGenerator(response="invalid markdown")
+    config = GeneratedContentConfig(
+        enabled=True,
+        fallback="template",
+        draft_pr=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="agent",
+            output="markdown",
+            title_template="[Template] {issue_title}",
+            body_template="Closes #{issue_number}\n\nTemplate PR body.",
+            prompt="Generate PR",
+        ),
+    )
+    context = PrContext(
+        issue_number=42,
+        issue_title="Title",
+        issue_body="Body",
+        branch="issue-42",
+        base_branch="main",
+        commit_log="",
+        commit_messages="",
+        diff_stat="",
+        git_diff_stat="",
+    )
+    result = generate_pr_content(
+        config=config,
+        context=context,
+        fallback_title="Fallback",
+        fallback_body="Fallback Body",
+        generator=generator,
+        cwd=Path("."),
+    )
+    assert result.title == "[Template] Title"
+    assert "Closes #42" in result.body
+    assert "Template PR body." in result.body
+    assert result.source == "template"
 
 
 def test_build_issue_context_extracts_sections() -> None:

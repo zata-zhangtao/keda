@@ -12,6 +12,8 @@ Agent Runner 已经可以通过 GitHub Issue labels、Issue comments、PR 状态
 - `review-once` 和 Issue comment 读取存在边缘缺陷，导致 CLI 无法稳定识别 supervising Issue 和 latest `iar:event`。监控面板需要从底层修复这些读取缺陷，才能提供可信的状态展示。
 - rebase 冲突包含 PRD 语义决策时，系统进入 `agent/blocked` 状态。运维者需要打开监控面板才能快速看到哪些 Issue 被阻塞、阻塞原因是什么、最近一次事件是什么。
 
+2026-05-27 更新：核心 runner 已完成一部分底层修复，`review-once` 现在能通过当前 GitHub CLI 的 `statusCheckRollup` 获取 PR context，并在 PR 冲突或 failed checks 时阻止 `approve_for_human_review` 直接进入 `agent/review`。本监控面板 PRD 仍保留 `pr_dirty_in_review` 异常检测，因为它仍需要覆盖历史残留状态、人工改 label、外部 PR 状态变化以及后续回归。
+
 本 PRD 的目标是新增一个**只读的 Agent Runner 监控面板**。运维者打开 Web Dashboard 就能看到当前队列状态、事件时间线、健康检查和最近异常。所有恢复操作仍然通过现有 CLI 完成，监控面板不替代 CLI，而是让状态"打开即见"。
 
 可衡量目标：

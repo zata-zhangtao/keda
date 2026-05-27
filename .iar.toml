@@ -1,0 +1,14 @@
+[agent_runner.repository]
+id = "keda"
+enabled = true
+display_name = "keda"
+
+[agent_runner.git]
+remote = "zata"
+base_branch = "main"
+
+[agent_runner.runner]
+default_agent = "claude"
+verification_commands = [
+  "git diff --check",
+]

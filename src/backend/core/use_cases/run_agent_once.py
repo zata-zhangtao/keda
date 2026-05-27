@@ -1,4 +1,17 @@
-"""Local Issue queue runner — single polling pass."""
+"""Local Issue queue runner — single polling pass.
+
+本模块是 Agent Runner 的核心执行层，负责：
+1. 为单个 Issue 创建或复用 git worktree
+2. 调用 AI Agent（Claude / Kimi / Codex）执行代码变更
+3. 运行验证命令（lint / test）
+4. 通过受限 commit proxy 将 agent 变更提交到本地分支
+5. 管理 recovery 重试循环：当验证或 commit 失败时，给 agent 发送 recovery prompt
+
+Commit Proxy 机制：
+agent 不直接执行 `git commit`，而是将 commit message 写入
+`.agent-runner/commit-request.json`。runner 读取该文件后执行 commit，
+这样可以确保在 commit 前运行验证、检查 forbidden paths、控制分支安全。
+"""
 
 from __future__ import annotations
 
@@ -8,11 +21,9 @@ import shlex
 import subprocess
 import time
 from collections.abc import Callable
-from fnmatch import fnmatch
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
-    IContentGenerator,
     IGitHubClient,
     IProcessRunner,
 )
@@ -23,6 +34,24 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     FailureType,
     IssueSummary,
+)
+from backend.core.use_cases.agent_runner_commit import (
+    commit_requested_changes,
+    read_commit_request,
+    remove_commit_request,
+    sanitize_commit_message,
+    unstage_changes,
+)
+from backend.core.use_cases.agent_runner_failure import (
+    AgentRunnerAttemptError,
+    MaxRetriesExceededError,
+    UnrecoverableError,
+    classify_failure,
+    format_agent_execution_failure,
+    format_attempt_history,
+    format_failure_comment,
+    format_recovery_failure_summary,
+    is_recoverable_commit_request_error,
 )
 from backend.core.use_cases.agent_runner_feedback import (
     PrdDeliveryError,
@@ -39,15 +68,22 @@ from backend.core.use_cases.agent_runner_feedback import (
     resolve_prd_archive_path,
     truncate_recovery_output,
 )
-from backend.core.use_cases.generated_content import (
-    build_pr_context,
-    generate_pr_content,
+from backend.core.use_cases.agent_runner_git import (
+    get_current_branch,
+    get_head_sha,
+    has_changes,
+    list_changed_paths,
+    list_git_remotes,
+    run_verification,
+)
+from backend.core.use_cases.agent_runner_publish import (
+    publish_changes,
+    run_preflight_checks,
+    validate_publish_remote,
+    validate_safe_changes,
 )
 
 _logger = logging.getLogger(__name__)
-
-_COMMIT_REQUEST_RELATIVE_PATH = Path(".agent-runner/commit-request.json")
-_MAX_COMMIT_MESSAGE_LENGTH = 200
 
 __all__ = [
     "AgentRunnerAttemptError",
@@ -98,39 +134,6 @@ __all__ = [
 ]
 
 
-class AgentRunnerAttemptError(RuntimeError):
-    """Base error that carries attempt history."""
-
-    def __init__(
-        self,
-        message: str,
-        attempt_results: list[AttemptResult],
-    ) -> None:
-        super().__init__(message)
-        self.attempt_results = attempt_results
-
-
-class MaxRetriesExceededError(AgentRunnerAttemptError):
-    """Raised when all recovery attempts are exhausted."""
-
-    def __init__(self, attempt_results: list[AttemptResult]) -> None:
-        super().__init__(
-            f"Failed after {len(attempt_results)} attempts.",
-            attempt_results,
-        )
-
-
-class UnrecoverableError(AgentRunnerAttemptError):
-    """Raised when an unrecoverable failure is encountered."""
-
-    def __init__(
-        self,
-        message: str,
-        attempt_results: list[AttemptResult],
-    ) -> None:
-        super().__init__(message, attempt_results)
-
-
 def format_command(template: str, *, issue_number: int) -> list[str]:
     """Format a configured command template for an Issue."""
     return shlex.split(template.format(issue_number=issue_number))
@@ -146,7 +149,7 @@ def choose_agent(issue: IssueSummary, config: AppConfig, override_agent: str) ->
     return (
         config.runner.default_agent
         if config.runner.default_agent != "auto"
-        else "codex"
+        else "claude"
     )
 
 
@@ -245,7 +248,12 @@ def run_agent_with_prompt(
 
 
 def extract_agent_response_text(result: CommandResult) -> str:
-    """Return assistant response text from direct stdout or Claude stream-json."""
+    """Return assistant response text from direct stdout or Claude stream-json.
+
+    Claude 使用 `--output-format stream-json` 时，每行输出是一个 JSON 事件，
+    包含 stream_event（文本增量）、assistant（完整消息）或 result（最终结果）。
+    本函数按优先级提取有效文本，非 stream-json 命令则直接返回原始 stdout。
+    """
     if not result.stdout:
         return ""
     command_name = result.command[0] if result.command else ""
@@ -313,269 +321,6 @@ def _append_claude_assistant_text(
             text_parts.append(str(content_block.get("text", "")))
 
 
-def get_head_sha(worktree_path: Path, process_runner: IProcessRunner) -> str:
-    """Return the full SHA of the current HEAD commit."""
-    result = process_runner.run(["git", "rev-parse", "HEAD"], cwd=worktree_path)
-    return result.stdout.strip()
-
-
-def get_current_branch(worktree_path: Path, process_runner: IProcessRunner) -> str:
-    """Return the current branch name for a worktree."""
-    result = process_runner.run(["git", "branch", "--show-current"], cwd=worktree_path)
-    return result.stdout.strip()
-
-
-def run_verification(
-    worktree_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> list[CommandResult]:
-    """Run configured verification commands."""
-    verification_results: list[CommandResult] = []
-    for command in config.runner.verification_commands:
-        result = process_runner.run(
-            shlex.split(command),
-            cwd=worktree_path,
-            check=False,
-        )
-        verification_results.append(result)
-        if result.return_code != 0:
-            break
-    return verification_results
-
-
-def default_commit_message(issue: IssueSummary) -> str:
-    """Build the fallback commit message for an Issue."""
-    return f"[Agent] Issue #{issue.number}: {issue.title}"
-
-
-def sanitize_commit_message(raw_message: object, issue: IssueSummary) -> str:
-    """Return a single-line commit message safe to pass to Git."""
-    if not isinstance(raw_message, str):
-        return default_commit_message(issue)
-    message = " ".join(raw_message.split())
-    if not message:
-        return default_commit_message(issue)
-    return message[:_MAX_COMMIT_MESSAGE_LENGTH]
-
-
-def read_commit_request(worktree_path: Path, issue: IssueSummary) -> str:
-    """Read the agent's restricted commit request file."""
-    request_path = worktree_path / _COMMIT_REQUEST_RELATIVE_PATH
-    if not request_path.is_file():
-        raise RuntimeError("Agent left uncommitted changes without a commit request.")
-    with request_path.open("r", encoding="utf-8") as request_file:
-        try:
-            request_payload = json.load(request_file)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("Commit request must be valid JSON.") from exc
-    if not isinstance(request_payload, dict):
-        raise RuntimeError("Commit request must be a JSON object.")
-    return sanitize_commit_message(request_payload.get("commit_message"), issue)
-
-
-def remove_commit_request(worktree_path: Path) -> None:
-    """Remove the transient agent commit request file from the worktree."""
-    request_path = worktree_path / _COMMIT_REQUEST_RELATIVE_PATH
-    if request_path.exists():
-        request_path.unlink()
-    request_directory = request_path.parent
-    try:
-        request_directory.rmdir()
-    except OSError:
-        pass
-
-
-def commit_requested_changes(
-    issue: IssueSummary,
-    worktree_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-    *,
-    expected_branch: str,
-) -> list[CommandResult]:
-    """Commit agent changes through the runner's restricted commit proxy."""
-    current_branch = get_current_branch(worktree_path, process_runner)
-    if current_branch != expected_branch:
-        raise RuntimeError(f"Refusing to commit on unexpected branch: {current_branch}")
-    commit_message = read_commit_request(worktree_path, issue)
-    remove_commit_request(worktree_path)
-    if not has_changes(worktree_path, process_runner):
-        raise RuntimeError("Agent requested a commit but produced no file changes.")
-    validate_safe_changes(worktree_path, config, process_runner)
-    process_runner.run(["git", "add", "-A"], cwd=worktree_path)
-    verification_results = run_verification(worktree_path, config, process_runner)
-    ensure_verification_passed(verification_results)
-    process_runner.run(["git", "commit", "-m", commit_message], cwd=worktree_path)
-    return verification_results
-
-
-def unstage_changes(worktree_path: Path, process_runner: IProcessRunner) -> None:
-    """Reset the Git index after a staged verification failure."""
-    process_runner.run(["git", "reset", "--mixed"], cwd=worktree_path)
-
-
-def is_recoverable_commit_request_error(exc: RuntimeError) -> bool:
-    """Return whether the agent can repair a commit request protocol error."""
-    message = str(exc)
-    return message.startswith(
-        (
-            "Agent left uncommitted changes without a commit request.",
-            "Commit request must be valid JSON.",
-            "Commit request must be a JSON object.",
-            "Agent requested a commit but produced no file changes.",
-        )
-    )
-
-
-def classify_failure(
-    *,
-    before_sha: str,
-    after_sha: str,
-    has_uncommitted: bool,
-    agent_result: CommandResult,
-    verification_results: list[CommandResult],
-    exc: BaseException | None = None,
-) -> FailureType:
-    """Classify the failure type of an agent execution attempt.
-
-    Priority:
-    1. UNRECOVERABLE (security/branch violations)
-    2. UNCOMMITTED_CHANGES
-    3. NO_COMMITS
-    4. VERIFICATION_FAILED
-    5. AGENT_ERROR
-    6. SUCCESS
-
-    Args:
-        before_sha: SHA before the agent run.
-        after_sha: SHA after the agent run.
-        has_uncommitted: Whether the worktree has uncommitted changes.
-        agent_result: Result of the agent CLI invocation.
-        verification_results: Results of verification commands.
-        exc: Optional exception raised during the attempt.
-
-    Returns:
-        The classified failure type.
-    """
-    if exc is not None:
-        if isinstance(exc, RuntimeError):
-            exc_message = str(exc)
-            if "Refusing to publish forbidden paths" in exc_message:
-                return FailureType.UNRECOVERABLE
-            if "Refusing to commit on unexpected branch" in exc_message:
-                return FailureType.UNRECOVERABLE
-            if is_recoverable_commit_request_error(exc):
-                return FailureType.UNCOMMITTED_CHANGES
-        return FailureType.AGENT_ERROR
-
-    if has_uncommitted:
-        return FailureType.UNCOMMITTED_CHANGES
-
-    if before_sha == after_sha:
-        return FailureType.NO_COMMITS
-
-    if any(result.return_code != 0 for result in verification_results):
-        return FailureType.VERIFICATION_FAILED
-
-    if agent_result.return_code != 0:
-        return FailureType.AGENT_ERROR
-
-    return FailureType.SUCCESS
-
-
-def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
-    """Format attempt results as a Markdown table."""
-    if not attempt_results:
-        return ""
-
-    lines = [
-        "### Attempt History",
-        "",
-        "| Attempt | Failure Type | Recovered | Detail |",
-        "|---------|-------------|-----------|--------|",
-    ]
-    for result in attempt_results:
-        detail = result.detail.replace("\n", " ")[:100]
-        recovered = "Yes" if result.recovered else "No"
-        lines.append(
-            f"| {result.attempt_number} | {result.failure_type.value} | {recovered} | {detail} |"
-        )
-    return "\n".join(lines)
-
-
-def format_failure_comment(
-    exc: BaseException,
-    attempt_results: list[AttemptResult] | None = None,
-) -> str:
-    """Build a failure comment with optional attempt history."""
-    lines = ["## Agent Runner Failed", ""]
-
-    if attempt_results:
-        lines.append(format_attempt_history(attempt_results))
-        lines.append("")
-
-    lines.extend(["```text", str(exc)])
-    if exc.__cause__ is not None:
-        lines.append(str(exc.__cause__))
-    lines.extend(["```", ""])
-    return "\n".join(lines)
-
-
-def format_recovery_failure_summary(
-    heading: str,
-    verification_results: list[CommandResult],
-) -> str:
-    """Build the failure section for a verification recovery prompt."""
-    failed_results = failed_verification_results(verification_results)
-    if not failed_results:
-        return heading
-    result_sections = "\n\n".join(
-        format_result_for_recovery(result) for result in failed_results
-    )
-    return "\n\n".join([heading, result_sections])
-
-
-def format_agent_execution_failure(exc: BaseException) -> str:
-    """Build the failure section for a failed agent CLI invocation."""
-    lines = ["Agent command failed before runner verification could start."]
-    if isinstance(exc, subprocess.CalledProcessError):
-        lines.extend(
-            [
-                f"Command: `{_agent_command_name(exc.cmd)}`",
-                f"Exit code: {exc.returncode}",
-                "stdout:",
-                "```text",
-                truncate_recovery_output(str(exc.output or "")),
-                "```",
-                "stderr:",
-                "```text",
-                truncate_recovery_output(str(exc.stderr or "")),
-                "```",
-            ]
-        )
-        if not exc.output and not exc.stderr:
-            lines.append("The command streamed its details to the terminal.")
-    else:
-        lines.extend(
-            [
-                f"Exception type: {type(exc).__name__}",
-                "Exception:",
-                "```text",
-                truncate_recovery_output(str(exc)),
-                "```",
-            ]
-        )
-    return "\n".join(lines)
-
-
-def _agent_command_name(command: object) -> str:
-    """Return a short command name without echoing a potentially huge prompt."""
-    if isinstance(command, (list, tuple)) and command:
-        return str(command[0])
-    return str(command)
-
-
 def wait_before_recovery_attempt(
     issue_number: int,
     *,
@@ -606,13 +351,41 @@ def run_agent_until_committed(
     before_sha: str,
     expected_branch: str,
 ) -> AgentCommitResult:
-    """Run the agent, recover failed verification, and return final checks."""
+    """Run the agent, recover failed verification, and return final checks.
+
+    这是一个带 recovery 重试的状态机循环。每次尝试包含以下阶段：
+    1. 运行 agent（首次）或发送 recovery prompt（重试）
+    2. 运行验证命令（lint / test）
+    3. 检查 PRD 交付状态（归档 pending PRD）
+    4. 通过 commit proxy 提交变更
+
+    任意阶段失败后，如果还有剩余重试次数，会构造 recovery prompt
+    让 agent 在下一次尝试中修复问题。所有尝试记录都写入 attempt_results，
+    最终随失败评论一起发布到 GitHub Issue。
+
+    Args:
+        selected_agent: 使用的 AI agent 名称（claude / kimi / codex）。
+        issue: 当前处理的 Issue。
+        worktree_path: agent 工作的 git worktree 路径。
+        config: Agent Runner 配置。
+        process_runner: 命令执行器。
+        before_sha: 循环开始前的 HEAD SHA，用于检测是否有新提交。
+        expected_branch: 期望的分支名，防止 agent 切换分支。
+
+    Returns:
+        AgentCommitResult，包含最终验证结果和尝试历史。
+
+    Raises:
+        UnrecoverableError: 遇到安全违规（forbidden paths、分支异常）不可恢复。
+        MaxRetriesExceededError: 所有重试次数耗尽仍未成功。
+    """
     max_recovery_attempts = max(0, config.runner.max_recovery_attempts)
     recovery_retry_delay_seconds = max(0, config.runner.recovery_retry_delay_seconds)
     recovery_failure_summary = ""
     final_verification_results: list[CommandResult] = []
     attempt_results: list[AttemptResult] = []
 
+    # Recovery 重试循环：第 0 次是正常执行，后续是 recovery
     for attempt_index in range(max_recovery_attempts + 1):
         if attempt_index > 0:
             wait_before_recovery_attempt(
@@ -621,6 +394,8 @@ def run_agent_until_committed(
                 max_recovery_attempts=max_recovery_attempts,
                 delay_seconds=recovery_retry_delay_seconds,
             )
+
+        # Phase 1: 运行 agent 或 recovery prompt
         try:
             if attempt_index == 0:
                 run_agent(selected_agent, issue, worktree_path, config, process_runner)
@@ -666,6 +441,7 @@ def run_agent_until_committed(
             )
             continue
 
+        # Phase 2: 验证 agent 产出的代码（staging 之前）
         verification_results = run_verification(worktree_path, config, process_runner)
         final_verification_results = verification_results
         try:
@@ -706,6 +482,7 @@ def run_agent_until_committed(
             )
             continue
 
+        # Phase 3: 检查 PRD 交付（归档已完成 PRD）
         try:
             ensure_prd_delivery_ready(issue, worktree_path, process_runner)
         except PrdDeliveryError as exc:
@@ -738,6 +515,7 @@ def run_agent_until_committed(
             )
             continue
 
+        # Phase 4: Commit proxy — agent 通过 commit-request 文件请求提交
         if has_changes(worktree_path, process_runner):
             _logger.warning(
                 "Agent left uncommitted changes for Issue #%d; "
@@ -753,6 +531,7 @@ def run_agent_until_committed(
                     expected_branch=expected_branch,
                 )
             except VerificationFailedError as exc:
+                # staging 后验证失败：unstage 并进入 recovery，让 agent 修复
                 unstage_changes(worktree_path, process_runner)
                 after_sha = get_head_sha(worktree_path, process_runner)
                 failure_type = classify_failure(
@@ -788,8 +567,11 @@ def run_agent_until_committed(
                     max_recovery_attempts,
                 )
                 continue
-            except RuntimeError as exc:
+            except (RuntimeError, subprocess.CalledProcessError) as exc:
                 after_sha = get_head_sha(worktree_path, process_runner)
+                # 对于不可恢复的 commit 错误（如分支切换、无 commit request），
+                # 或者已耗尽重试次数，直接失败。
+                # CalledProcessError（如 pre-commit hook 失败）则视为可恢复。
                 if (
                     attempt_index >= max_recovery_attempts
                     or not is_recoverable_commit_request_error(exc)
@@ -849,6 +631,7 @@ def run_agent_until_committed(
                 )
                 continue
 
+        # Phase 5: 检查 agent 是否实际产生了 commit
         after_sha = get_head_sha(worktree_path, process_runner)
         if before_sha != after_sha:
             attempt_results.append(
@@ -861,6 +644,7 @@ def run_agent_until_committed(
             )
             return AgentCommitResult(final_verification_results, attempt_results)
 
+        # Agent 没有产生任何变更：进入 recovery 要求实际修改代码
         has_uncommitted = has_changes(worktree_path, process_runner)
         failure_type = classify_failure(
             before_sha=before_sha,
@@ -895,150 +679,6 @@ def run_agent_until_committed(
         )
 
     raise MaxRetriesExceededError(attempt_results)
-
-
-def has_changes(worktree_path: Path, process_runner: IProcessRunner) -> bool:
-    """Return whether the worktree has uncommitted changes."""
-    result = process_runner.run(["git", "status", "--porcelain"], cwd=worktree_path)
-    return bool(result.stdout.strip())
-
-
-def list_changed_paths(
-    worktree_path: Path, process_runner: IProcessRunner
-) -> list[str]:
-    """List changed paths in a worktree."""
-    status_result = process_runner.run(
-        ["git", "status", "--porcelain"], cwd=worktree_path
-    )
-    changed_paths: list[str] = []
-    for status_line in status_result.stdout.splitlines():
-        if not status_line:
-            continue
-        raw_path_text = status_line[3:]
-        if " -> " in raw_path_text:
-            changed_paths.extend(raw_path_text.split(" -> ", maxsplit=1))
-        else:
-            changed_paths.append(raw_path_text)
-    return changed_paths
-
-
-def validate_safe_changes(
-    worktree_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> None:
-    """Refuse to publish changes to configured forbidden paths."""
-    blocked_paths: list[str] = []
-    for changed_path_text in list_changed_paths(worktree_path, process_runner):
-        changed_path_name = Path(changed_path_text).name
-        for forbidden_pattern in config.safety.forbidden_path_patterns:
-            if fnmatch(changed_path_text, forbidden_pattern) or fnmatch(
-                changed_path_name,
-                forbidden_pattern,
-            ):
-                blocked_paths.append(changed_path_text)
-                break
-    if blocked_paths:
-        blocked_paths_text = ", ".join(sorted(set(blocked_paths)))
-        raise RuntimeError(f"Refusing to publish forbidden paths: {blocked_paths_text}")
-
-
-def list_git_remotes(worktree_path: Path, process_runner: IProcessRunner) -> list[str]:
-    """Return configured Git remote names for the worktree."""
-    remote_result = process_runner.run(["git", "remote"], cwd=worktree_path)
-    remote_names = []
-    for remote_line in remote_result.stdout.splitlines():
-        remote_name = remote_line.strip()
-        if remote_name and remote_name not in remote_names:
-            remote_names.append(remote_name)
-    return remote_names
-
-
-def validate_publish_remote(
-    worktree_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> str:
-    """Return the configured publish remote after confirming it exists."""
-    remote_names = list_git_remotes(worktree_path, process_runner)
-    configured_remote_name = config.git.remote
-    if configured_remote_name in remote_names:
-        return configured_remote_name
-
-    available_remotes_text = ", ".join(remote_names) if remote_names else "(none)"
-    raise RuntimeError(
-        "Configured git remote "
-        f"'{configured_remote_name}' does not exist. "
-        f"Available remotes: {available_remotes_text}. "
-        "Update [agent_runner.git].remote in config.toml before publishing."
-    )
-
-
-def run_preflight_checks(
-    repo_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> None:
-    """Validate runner configuration before claiming any Issue."""
-    validate_publish_remote(repo_path, config, process_runner)
-
-
-def publish_changes(
-    issue: IssueSummary,
-    worktree_path: Path,
-    config: AppConfig,
-    github_client: IGitHubClient,
-    process_runner: IProcessRunner,
-    *,
-    expected_branch: str | None = None,
-    content_generator: IContentGenerator | None = None,
-) -> tuple[str, str]:
-    """Push and create a draft PR. Assumes the agent has already committed."""
-    branch = get_current_branch(worktree_path, process_runner)
-    if expected_branch is not None and branch != expected_branch:
-        raise RuntimeError(
-            f"Refusing to publish from unexpected branch: {branch} "
-            f"(expected {expected_branch})"
-        )
-    validate_safe_changes(worktree_path, config, process_runner)
-    publish_remote_name = validate_publish_remote(worktree_path, config, process_runner)
-    process_runner.run(
-        ["git", "push", "-u", publish_remote_name, branch], cwd=worktree_path
-    )
-
-    fallback_title = f"[Agent] {issue.title}"
-    fallback_body = f"Closes #{issue.number}\n\nGenerated by issue-agent-runner.\n"
-
-    gc_config = config.generated_content
-    pr_title = fallback_title
-    pr_body = fallback_body
-    if gc_config.enabled:
-        gc_context = build_pr_context(
-            issue=issue,
-            branch=branch,
-            base_branch=config.git.base_branch,
-            worktree_path=worktree_path,
-            process_runner=process_runner,
-            target_config=gc_config.draft_pr,
-        )
-        generated = generate_pr_content(
-            config=gc_config,
-            context=gc_context,
-            fallback_title=fallback_title,
-            fallback_body=fallback_body,
-            generator=content_generator,
-            cwd=worktree_path,
-        )
-        pr_title = generated.title
-        pr_body = generated.body
-
-    pr_url = github_client.create_draft_pr(
-        title=pr_title,
-        body=pr_body,
-        base_branch=config.git.base_branch,
-        cwd=worktree_path,
-    )
-    return branch, pr_url
 
 
 def run_once(

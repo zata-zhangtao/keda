@@ -85,6 +85,21 @@ class _TomlSectionSource(PydanticBaseSettingsSource):
         return result
 
 
+def _env_toml_init_sources(
+    settings_cls: type[BaseSettings],
+    section_name: str,
+    env_settings: PydanticBaseSettingsSource,
+    init_settings: PydanticBaseSettingsSource,
+) -> tuple[PydanticBaseSettingsSource, ...]:
+    """Build the standard env > TOML > init settings source order."""
+    toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, section_name)
+    return (
+        env_settings,
+        toml_source,
+        init_settings,
+    )
+
+
 class DatabaseSettings(BaseSettings):
     """数据库连接配置（非敏感部分）。"""
 
@@ -105,11 +120,8 @@ class DatabaseSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "database")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "database", env_settings, init_settings
         )
 
 
@@ -131,11 +143,8 @@ class ChatModelSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "chat_model")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "chat_model", env_settings, init_settings
         )
 
 
@@ -157,11 +166,8 @@ class MinioSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "minio")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "minio", env_settings, init_settings
         )
 
 
@@ -183,11 +189,8 @@ class QdrantSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "qdrant")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "qdrant", env_settings, init_settings
         )
 
 
@@ -210,11 +213,8 @@ class EmbeddingSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "embedding")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "embedding", env_settings, init_settings
         )
 
 
@@ -235,11 +235,8 @@ class ChunkingSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "chunking")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "chunking", env_settings, init_settings
         )
 
 
@@ -262,11 +259,8 @@ class TimeoutSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(settings_cls, "timeouts")
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "timeouts", env_settings, init_settings
         )
 
 
@@ -593,13 +587,8 @@ class AgentRunnerSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        toml_source: _TomlSectionSource = _TomlSectionSource(
-            settings_cls, "agent_runner"
-        )
-        return (
-            env_settings,
-            toml_source,
-            init_settings,
+        return _env_toml_init_sources(
+            settings_cls, "agent_runner", env_settings, init_settings
         )
 
 
@@ -721,6 +710,15 @@ _ensure_no_proxy_for_local_services()
 
 __all__ = [
     "AgentRunnerLocalSettings",
+    "AgentRunnerRepositoryMetadataSettings",
+    "AgentRunnerGeneratedContentSettings",
+    "AgentRunnerGeneratedContentTargetSettings",
+    "AgentRunnerGitSettings",
+    "AgentRunnerLabelSettings",
+    "AgentRunnerPromptSettings",
+    "AgentRunnerRepositorySettings",
+    "AgentRunnerRunnerSettings",
+    "AgentRunnerSafetySettings",
     "AgentRunnerSettings",
     "AppSettings",
     "ChatModelSettings",

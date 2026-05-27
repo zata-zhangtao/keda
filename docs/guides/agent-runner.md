@@ -4,6 +4,7 @@
 
 ## 功能概述
 
+- **init**：在目标 Git 仓库创建仓库本地 `.iar.toml` 配置
 - **labels sync**：在目标仓库创建或更新标准 labels（`agent/ready`、`agent/running`、`agent/supervising` 等）
 - **issue-from-prd**：从 PRD Markdown 文件创建 GitHub Issue，并可在 ready 前发布 PRD
 - **run-once**：单次轮询 `agent/ready` 的 Issues，claim 后执行 AI Agent，验证、pre-push review、创建 draft PR、进入 `agent/supervising` 并运行 post-PR supervisor
@@ -62,7 +63,7 @@ iar --help
 | | `type/bug` | 🔴 | Bug 修复 |
 | **队列状态** | `status/backlog` | 🩵 | 待办/未开始 |
 
-> 标签名称可在 `config.toml` 的 `[agent_runner.labels]` 段自定义。
+> 标签名称可在全局 `config.toml` 或目标仓库 `.iar.toml` 的 `[agent_runner.labels]` 段自定义。
 
 ### 使用示例
 
@@ -79,9 +80,50 @@ iar labels sync --repo-id keda
 
 首次使用 `iar` 时只需执行一次，后续标签会自动复用。
 
-## 多仓库配置
+## 仓库本地配置
 
-`iar` 支持在 `config.toml` 中配置多个目标仓库：
+`iar` 默认以当前 Git 仓库作为目标仓库。首次在目标仓库使用前，先生成仓库本地配置：
+
+```bash
+cd /path/to/target-repo
+uv run --project /path/to/keda iar init --dry-run
+uv run --project /path/to/keda iar init
+```
+
+`iar init --dry-run` 只打印将要写入的内容，不创建文件。`.iar.toml` 已存在时，`iar init` 会拒绝覆盖；确认需要重建时显式传入 `--force`。
+
+生成示例：
+
+```toml
+[agent_runner.repository]
+id = "target-repo"
+enabled = true
+display_name = "target-repo"
+
+[agent_runner.git]
+remote = "origin"
+base_branch = "main"
+
+[agent_runner.runner]
+verification_commands = [
+  "git diff --check",
+]
+```
+
+仓库本地 `.iar.toml` 可覆盖 `git`、`runner`、`labels`、`worktree`、`safety`、`prompts`、`pre_push_review`、`post_pr_supervisor` 和 `generated_content`。`config.toml` 继续保存全局默认值、环境级设置和 legacy registry，不应保存 token、API key 或账号凭据。
+
+单仓库命令的目标解析规则：
+
+| 命令形态 | 目标解析 |
+|---|---|
+| `iar run-once` / `iar labels sync` / `iar review-once` / `iar issue-from-prd ...` | 当前 Git 仓库，合并当前仓库 `.iar.toml` |
+| `iar run-once --repo /path/to/repo` | 指定 Git 仓库，合并 `/path/to/repo/.iar.toml` |
+| `iar run-once --repo-id keda` | 从 legacy registry 找到路径，再合并目标仓库 `.iar.toml` |
+| `iar run-once --all` | 显式处理 `config.toml` 中所有 enabled registry entries |
+
+## 多仓库 Registry 兼容
+
+`config.toml` 中的 `[agent_runner.repositories.*]` 现在作为显式 registry 兼容路径使用，适合 `--repo-id` 或 `--all`：
 
 ```toml
 [agent_runner]
@@ -90,28 +132,59 @@ max_issues = 1
 [agent_runner.repositories.keda]
 path = "/Users/zata/code/keda"
 enabled = true
-display_name = "Keda"
 
-[agent_runner.repositories.keda.git]
-remote = "origin"
-base_branch = "main"
+[agent_runner.repositories.backend_service]
+path = "/Users/zata/code/backend-service"
+enabled = true
+```
 
+- 每个仓库必须有 `path`（本地绝对路径）。
+- `enabled = false` 可临时禁用某个仓库。
+- registry 通常只保留 `path` 和 `enabled`；仓库级 overrides 仍兼容，但建议迁移到目标仓库的 `.iar.toml`。
+- 未指定 `--repo`、`--repo-id` 或 `--all` 时，单仓库命令只处理当前 Git 仓库，不会隐式处理所有 enabled registry entries。
+
+迁移示例：
+
+```toml
+# 旧 config.toml
 [agent_runner.repositories.backend_service]
 path = "/Users/zata/code/backend-service"
 enabled = true
 display_name = "Backend Service"
 
+[agent_runner.repositories.backend_service.git]
+remote = "origin"
+base_branch = "main"
+
 [agent_runner.repositories.backend_service.runner]
-verification_commands = [
-  "git diff --check",
-  "uv run pytest",
-]
+verification_commands = ["git diff --check", "uv run pytest"]
 ```
 
-- 每个仓库必须有 `path`（本地绝对路径）。
-- `enabled = false` 可临时禁用某个仓库。
-- 仓库级 `labels`、`git`、`worktree`、`runner`、`safety`、`pre_push_review`、`post_pr_supervisor` 可覆盖全局 `[agent_runner]` 默认值。
-- 未指定 `--repo` 或 `--repo-id` 时，`labels sync`、`run-once`、`daemon`、`review-once`、`review-daemon` 会自动处理所有 `enabled = true` 的仓库。
+迁移后保留轻量 registry：
+
+```toml
+# keda/config.toml
+[agent_runner.repositories.backend_service]
+path = "/Users/zata/code/backend-service"
+enabled = true
+```
+
+把仓库细节放到目标仓库：
+
+```toml
+# /Users/zata/code/backend-service/.iar.toml
+[agent_runner.repository]
+id = "backend_service"
+enabled = true
+display_name = "Backend Service"
+
+[agent_runner.git]
+remote = "origin"
+base_branch = "main"
+
+[agent_runner.runner]
+verification_commands = ["git diff --check", "uv run pytest"]
+```
 
 ## 状态流转与两阶段审查
 
@@ -185,6 +258,26 @@ uv run iar review-daemon --interval 600
 - 任一维度变化时，先移回 `agent/supervising`，运行 supervisor cycle
 - 无变化时直接 skip，避免无意义重评
 
+PR context 读取使用当前 GitHub CLI 支持的 `statusCheckRollup` 字段聚合
+checks 状态：
+
+- 任一 check/status 失败时，`checks_state=FAILURE`
+- 任一 check/status 仍在 queued、in_progress 或 pending 时，`checks_state=PENDING`
+- 所有 check/status 成功、skipped 或 neutral 时，`checks_state=SUCCESS`
+- 无 CI/check rollup 时，`checks_state` 为空，不阻断人工 review
+
+即使 supervisor 返回 `approve_for_human_review`，runner 仍会执行确定性门禁：
+
+- PR 当前不可合并或存在冲突时，approval 会被改写为 `rebase_pr_branch`
+- PR checks 已失败时，approval 会被改写为 `repair_pr_branch`
+- open PR 存在但完整 PR context 暂时无法读取时，本轮 supervision 会 defer 并保留待观察状态；发布、rework 后续评审和循环内再次评审都不会使用不完整 context 批准进入 review
+
+这样可以避免 `agent/review` label 覆盖仍需 `run-once` 消费的 rework/rebase 状态。
+
+`review-once` 的 CLI 日志会打印本轮 outcome，例如 `queued_rebase_pr_branch`、
+`approved_for_human_review` 或 `deferred_pr_context_unavailable`。被 queue 的
+rebase/repair 仍由下一次 `iar run-once` 在 PR branch worktree 中执行。
+
 ### Rework Guard
 
 `run-once` 遇到 `agent/running` Issue 时，不会自动视为 rework。只有同时满足以下两个条件才会进入现有 PR branch rework 路径：
@@ -197,7 +290,10 @@ uv run iar review-daemon --interval 600
 ## 常用命令
 
 ```bash
-# 同步 Labels（所有启用仓库）
+# 初始化当前目标仓库配置
+iar init
+
+# 同步当前仓库 Labels
 iar labels sync
 
 # 同步单个配置仓库
@@ -209,10 +305,13 @@ iar issue-from-prd tasks/pending/example.md --repo-id keda --type feature --agen
 # 单次执行（dry-run 预览）
 iar run-once --dry-run
 
-# 单次执行（所有启用仓库）
+# 单次执行（当前仓库）
 iar run-once
 
-# Daemon 模式（默认每 600 秒轮询一次，所有启用仓库）
+# 显式处理所有 enabled registry entries
+iar run-once --all
+
+# Daemon 模式（默认每 600 秒轮询一次，当前仓库）
 iar daemon
 
 # 单次 review 检查
@@ -295,9 +394,10 @@ agent/supervising ── supervisor 要求 rework ──→ agent/running ──
 #### 1. 环境准备
 
 ```bash
-# 克隆仓库（即本项目 keda）
-git clone <keda-repo-url>
-cd keda
+# 克隆目标仓库和 keda CLI 项目
+git clone <target-repo-url>
+git clone <keda-repo-url> /path/to/keda
+cd /path/to/keda
 
 # 安装依赖
 just sync
@@ -309,18 +409,20 @@ gh auth login
 #### 2. 初始化 Labels（只需一次）
 
 ```bash
-uv run iar labels sync
+cd /path/to/target-repo
+uv run --project /path/to/keda iar init
+uv run --project /path/to/keda iar labels sync
 ```
 
-> `target-repo` 是你要 AI 改代码的目标仓库（不是 keda 本身）。
+> `target-repo` 是你要 AI 改代码的目标仓库（不是 keda 本身）。如果已经安装了 `iar` 脚本，也可以在目标仓库中直接运行 `iar init` 和 `iar labels sync`。
 
 #### 3. 写 PRD 并创建 Issue
 
 ```bash
 # 写 PRD 文件，例如 tasks/pending/feature-login.md
 # 然后创建 GitHub Issue
-uv run iar issue-from-prd tasks/pending/feature-login.md \
-  --repo-id keda \
+cd /path/to/target-repo
+uv run --project /path/to/keda iar issue-from-prd tasks/pending/feature-login.md \
   --type feature \
   --agent codex \
   --publish-prd \
@@ -396,22 +498,22 @@ kimi --help
 #### 3. 单次执行（测试用）
 
 ```bash
-cd ~/keda
+cd /path/to/target-repo
 
 # Dry run 预览（不实际执行）
-uv run iar run-once --dry-run
+uv run --project ~/keda iar run-once --dry-run
 
-# 真正执行一次（所有启用仓库）
-uv run iar run-once --agent codex
+# 真正执行一次（当前仓库）
+uv run --project ~/keda iar run-once --agent codex
 ```
 
 #### 4. Daemon 常驻模式（生产用）
 
 ```bash
-cd ~/keda
+cd /path/to/target-repo
 
-# 每 600 秒（10 分钟）轮询一次（所有启用仓库）
-uv run iar daemon --agent auto
+# 每 600 秒（10 分钟）轮询一次（当前仓库）
+uv run --project ~/keda iar daemon --agent auto
 ```
 
 > 建议用 `tmux`、`screen` 或 `systemd` 保持后台运行。
@@ -420,7 +522,7 @@ uv run iar daemon --agent auto
 
 ```bash
 tmux new -s iar-daemon
-cd ~/keda && uv run iar daemon
+cd /path/to/target-repo && uv run --project ~/keda iar daemon
 # 按 Ctrl+B 再按 D  detach
 ```
 
@@ -429,10 +531,10 @@ cd ~/keda && uv run iar daemon
 如果你希望 PR 创建后持续自动检查并维护 PR 状态：
 
 ```bash
-cd ~/keda
+cd /path/to/target-repo
 
 # 每 600 秒检查一次 supervising/review Issues
-uv run iar review-daemon --interval 600
+uv run --project ~/keda iar review-daemon --interval 600
 ```
 
 ### 同一台电脑运行
@@ -449,14 +551,16 @@ gh auth login
 npm install -g @openai/codex
 export OPENAI_API_KEY="sk-xxx"
 
-# 3. 同步 labels（首次）
-uv run iar labels sync
+# 3. 在目标仓库初始化并同步 labels（首次）
+cd /path/to/target-repo
+uv run --project /path/to/keda iar init
+uv run --project /path/to/keda iar labels sync
 
 # 4. 创建 Issue
-uv run iar issue-from-prd tasks/pending/xxx.md --repo-id keda --agent codex --publish-prd --ready
+uv run --project /path/to/keda iar issue-from-prd tasks/pending/xxx.md --agent codex --publish-prd --ready
 
 # 5. 启动 daemon 自动执行
-uv run iar daemon
+uv run --project /path/to/keda iar daemon
 ```
 
 ### 运行前检查清单
@@ -472,7 +576,7 @@ uv run iar daemon
 
 ## 配置
 
-Agent Runner 的配置统一放在 `config.toml` 的 `[agent_runner]` 段：
+Agent Runner 的默认配置来自 keda 的 `config.toml`，目标仓库细节优先来自目标仓库 `.iar.toml`。两者使用相同的 `[agent_runner.*]` section shape；通常把通用默认值放在 `config.toml`，把仓库特定的 `git`、`runner`、`labels` 等覆盖项放在 `.iar.toml`。
 
 ```toml
 [agent_runner]
@@ -554,7 +658,7 @@ supervisor_agent = "auto"
 max_repair_attempts = 2
 ```
 
-配置优先级：环境变量 > `config.toml` > 代码默认值。
+配置优先级：目标仓库 `.iar.toml` 覆盖项 > 环境变量 > `config.toml` 全局默认值 > 代码默认值。目标仓库覆盖项只影响对应 repository context，不会改变 keda 全局设置。
 
 Prompt 模板支持以下变量占位符：
 
@@ -884,3 +988,36 @@ Agent Runner 的代码分布在四层架构中：
 - `infrastructure/github_client.py` / `infrastructure/process_runner.py` — 外部系统实现
 - `api/cli.py` — CLI 入口
 - `api/routes/agent_runner.py` — FastAPI 只读路由
+
+## 运行日志
+
+`iar` 命令的运行日志按日期存放在 `logs/` 目录下，文件名格式为 `app-YYYY-MM-DD.log`：
+
+```bash
+# 查看今天的日志
+cat logs/app-$(date +%Y-%m-%d).log
+
+# 实时查看日志
+tail -f logs/app-$(date +%Y-%m-%d).log
+
+# 查看最近 7 天的日志
+ls -la logs/app-*.log | head -7
+```
+
+### 日志特性
+
+- **按日期命名**：每天生成一个独立的日志文件，便于按日期排查问题
+- **14 天保留期**：自动清理超过 14 天的旧日志文件
+- **时间戳格式**：日志条目使用 `YYYY-MM-DD HH:MM:SS` 格式
+- **终端同步**：终端输出同时带有 `HH:MM:SS` 时间戳前缀，便于实时观察
+
+### 日志内容
+
+日志文件包含以下内容：
+
+- CLI 启动和配置加载事件
+- Agent 工具调用摘要（如 `[agent tool] Read: /path/to/file.py`）
+- Agent 返回结果摘要（如 `[agent result] Task completed`）
+- Agent 错误信息（如 `[agent error] API Error: 400`）
+- Agent 输出文本（按消息边界汇总）
+- 子进程输出（非 Claude agent 如 Codex/Kimi 的输出）
