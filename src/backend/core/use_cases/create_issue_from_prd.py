@@ -1,4 +1,27 @@
-"""Create GitHub Issues from local PRD Markdown files."""
+"""根据本地 PRD Markdown 文件创建 GitHub Issue。
+
+本模块实现 ``issue-from-prd`` 工作流：
+
+1. 读取本地 PRD Markdown 文件。
+2. 提取元数据（标题、验收清单、引言）。
+3. 可选：通过 AI 生成更丰富的 Issue 内容（agent/template 模式）。
+4. 通过 ``IGitHubClient`` 创建 GitHub Issue。
+5. 将创建的 Issue URL 回写到 PRD 中。
+6. 可选：发布 PRD 文件（stage、commit、push），使 Issue 链接持久化到仓库。
+
+内容生成遵循三级级联策略：
+
+- **Agent 模式**（当 ``generated_content`` 启用且 ``mode="agent"`` 时）：
+  AI agent 根据完整 PRD 上下文生成 Issue 标题和正文。
+- **Template 模式**（当 agent 失败且 ``fallback="template"``，或
+  直接设置 ``mode="template"`` 时）：
+  使用类似 Jinja2 的 ``.format()`` 模板，通过 PRD 上下文变量
+  （如 ``{prd_introduction}``、``{relative_prd_path}`` 等）渲染标题/正文。
+- **Hard fallback**（始终可用）：``build_issue_body()`` 构建一个确定的
+  Markdown 正文，包含 PRD 路径锚点、验收清单以及（自本次修复后）PRD 引言章节。
+
+所有文件系统 I/O 均显式指定 ``encoding="utf-8"``。
+"""
 
 from __future__ import annotations
 
@@ -18,18 +41,52 @@ from backend.core.shared.models.agent_runner import (
 )
 from backend.core.use_cases.generated_content import (
     build_issue_context,
+    extract_prd_section,
     generate_issue_content,
 )
 
 _logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# 正则表达式：PRD 元数据解析
+# ---------------------------------------------------------------------------
+
+# 匹配 "- GitHub Issue: <url>" 这一行，用于判断 PRD 是否已关联 Issue，
+# 以及在创建新 Issue 后更新/替换该行。
 ISSUE_LINE_RE = re.compile(r"^- GitHub Issue:\s*\S+\s*$")
+
+# 从 GitHub Issue URL（如 ``https://github.com/org/repo/issues/42``）
+# 中提取数字 Issue 编号。
 ISSUE_NUMBER_RE = re.compile(r"/issues/(?P<issue_number>\d+)(?:\D*$|$)")
+
+
+# ---------------------------------------------------------------------------
+# 数据传输对象
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class IssueFromPrdRequest:
-    """Input values for creating a GitHub Issue from a PRD."""
+    """从 PRD 创建 GitHub Issue 的输入参数。
+
+    Attributes:
+        repo_path: 仓库根目录的绝对路径。
+        prd_path: PRD 文件路径。可以是绝对路径，也可以相对于 ``repo_path``。
+        issue_type: 用于构建初始标签的类别，例如 ``"feature"`` → ``"type/feature"``。
+        title_override: 如果提供，将同时覆盖 AI 生成的标题和 PRD 派生的 fallback 标题。
+        queue_ready: 是否在 Issue 创建后立即添加 ``agent/ready`` 标签
+            （当 ``publish_prd=True`` 时则在发布后添加）。
+        issue_agent: 要附加的 agent 路由标签。必须是 ``LabelConfig.agent_labels``
+            中的键（如 ``"claude"``、``"kimi"``），或 ``"auto"`` / ``"none"``。
+        labels_config: 显式指定的标签名称。为 ``None`` 时使用默认值。
+        force: 为 ``True`` 时替换 PRD 中已有的 ``- GitHub Issue:`` 行，
+            而不是抛出 ``ValueError``。
+        publish_prd: 为 ``True`` 时在 Issue 创建后对 PRD 文件执行 stage、commit、push。
+        git_remote: 要 push 到的 Git remote 名称（默认 ``"origin"``）。
+        git_base_branch: 基础分支名称。当 ``queue_ready=True`` 且 ``publish_prd=True`` 时必需。
+        generated_content_config: 可选的 AI 内容生成配置。
+            为 ``None`` 或 ``enabled=False`` 时使用确定性 fallback 正文。
+    """
 
     repo_path: Path
     prd_path: Path
@@ -47,7 +104,14 @@ class IssueFromPrdRequest:
 
 @dataclass(frozen=True)
 class PrdPublishContext:
-    """Git publishing values for one target PRD file."""
+    """单个目标 PRD 文件的 Git 发布上下文。
+
+    Attributes:
+        repo_path: 仓库的绝对路径。
+        relative_prd_path: 相对于 ``repo_path`` 的 PRD 路径。
+        git_remote: 要 push 到的 remote 名称。
+        current_branch: 当前检出的分支（用作 push 目标）。
+    """
 
     repo_path: Path
     relative_prd_path: Path
@@ -55,8 +119,25 @@ class PrdPublishContext:
     current_branch: str
 
 
+# ---------------------------------------------------------------------------
+# PRD 元数据提取辅助函数
+# ---------------------------------------------------------------------------
+
+
 def extract_title(prd_text: str, fallback_title: str) -> str:
-    """Extract a title from a PRD document."""
+    """从 PRD 文档中提取人类可读的标题。
+
+    逐行扫描 PRD，查找第一个 Markdown H1 标题（``# ...``）。
+    如果存在 ``PRD:`` / ``PRD：`` 前缀则将其去除。
+    未找到 H1 时回退到 ``fallback_title``。
+
+    Args:
+        prd_text: PRD 文件的完整文本。
+        fallback_title: 未找到 H1 标题时返回的标题。
+
+    Returns:
+        提取的标题或 ``fallback_title``。
+    """
 
     for line in prd_text.splitlines():
         stripped = line.strip()
@@ -66,12 +147,28 @@ def extract_title(prd_text: str, fallback_title: str) -> str:
 
 
 def extract_acceptance_items(prd_text: str) -> list[str]:
-    """Extract acceptance checklist items from a PRD."""
+    """从 PRD 中提取验收清单条目。
+
+    搜索 H2 标题中包含 ``"acceptance"`` 或 ``"验收"``（不区分大小写）的章节。
+    在该章节内，收集所有以 ``"- ["`` 开头的 Markdown 复选框行。
+    已有的勾选状态（``[x]``、``[X]``）会被规范化为未勾选 ``[ ]``，
+    因为 Issue 代表的是*待完成*的工作。
+
+    如果未找到验收章节或没有清单条目，则返回默认的三项清单，
+    确保 Issue 不会在没有可执行项的情况下被创建。
+
+    Args:
+        prd_text: PRD 文件的完整文本。
+
+    Returns:
+        Markdown 复选框字符串列表。
+    """
 
     items: list[str] = []
     in_acceptance = False
     for line in prd_text.splitlines():
         stripped = line.strip()
+        # 根据 H2 标题进入/退出验收章节。
         if stripped.startswith("## "):
             in_acceptance = bool(re.search(r"acceptance|验收", stripped, re.IGNORECASE))
             continue
@@ -84,16 +181,49 @@ def extract_acceptance_items(prd_text: str) -> list[str]:
     ]
 
 
-def build_issue_body(
-    *, relative_prd_path: Path, title: str, acceptance_items: list[str]
-) -> str:
-    """Build the Issue body from PRD metadata."""
+# ---------------------------------------------------------------------------
+# Issue 正文构建
+# ---------------------------------------------------------------------------
 
-    return "\n".join(
+
+def build_issue_body(
+    *, relative_prd_path: Path, title: str, acceptance_items: list[str], prd_text: str
+) -> str:
+    """基于 PRD 元数据构建确定的 Issue 正文。
+
+    这是 AI 内容生成被禁用或失败时的 *hard fallback*。正文包含：
+
+    1. 带有 Issue 标题的摘要行。
+    2. PRD 引言章节（如果存在），使读者无需打开 PRD 文件即可理解需求。
+    3. 机器可读的 ``- PRD path: ...`` 锚点，runner 依赖它定位规范 PRD。
+    4. 从 PRD 复制的验收清单。
+    5. 交付说明（分支命名、worktree 命令、PR 规范）。
+
+    Args:
+        relative_prd_path: 相对于仓库根目录的 PRD 路径。
+        title: Issue 标题（用于摘要行）。
+        acceptance_items: 从 PRD 提取的清单条目。
+        prd_text: 完整 PRD 文本，用于提取引言章节。
+
+    Returns:
+        完整的 Issue 正文 Markdown 字符串。
+    """
+
+    # 从 PRD 中提取引言/目标章节，使 Issue 正文自成一体。
+    # 使用与 AI 上下文构建器相同的关键词列表，确保 template、agent、
+    # fallback 三条路径保持一致。
+    introduction = extract_prd_section(
+        prd_text, ("introduction", "intro", "引言", "概述")
+    )
+    body_parts: list[str] = [
+        "## Summary",
+        "",
+        f"Tracked implementation task for `{title}`.",
+    ]
+    if introduction:
+        body_parts.extend(["", introduction])
+    body_parts.extend(
         [
-            "## Summary",
-            "",
-            f"Tracked implementation task for `{title}`.",
             "",
             "## Canonical PRD",
             "",
@@ -111,17 +241,23 @@ def build_issue_body(
             "",
         ]
     )
+    return "\n".join(body_parts)
+
+
+# ---------------------------------------------------------------------------
+# 路径与标签辅助函数
+# ---------------------------------------------------------------------------
 
 
 def resolve_prd_paths(repo_path: Path, prd_path: Path) -> tuple[Path, Path]:
-    """Resolve absolute and repository-relative PRD paths.
+    """解析 PRD 的绝对路径和仓库相对路径。
 
     Args:
-        repo_path: Target repository path.
-        prd_path: Path to the PRD file.
+        repo_path: 目标仓库路径。
+        prd_path: PRD 文件路径。
 
     Returns:
-        Absolute PRD path and repository-relative PRD path.
+        ``(absolute_prd_path, relative_prd_path)`` 元组。
     """
 
     absolute_prd_path = (
@@ -134,17 +270,33 @@ def resolve_prd_paths(repo_path: Path, prd_path: Path) -> tuple[Path, Path]:
 def build_issue_labels(
     request: IssueFromPrdRequest, effective_labels_config: LabelConfig
 ) -> list[str]:
-    """Build labels for the initial GitHub Issue creation.
+    """构建 GitHub Issue 创建时的初始标签。
+
+    默认标签集合为::
+
+        ["type/{issue_type}", "status/backlog", "source/prd"]
+
+    当 ``queue_ready=True``（且 ``publish_prd=False``）时，
+    立即添加 ``agent/ready`` 标签，使 daemon 无需额外手动打标即可拾取该 Issue。
+
+    当 ``issue_agent`` 为显式 agent 键（非 ``"auto"`` 或 ``"none"``）时，
+    追加对应的 agent 路由标签。
 
     Args:
-        request: Issue creation request.
-        effective_labels_config: Label names to apply.
+        request: Issue 创建请求。
+        effective_labels_config: 要应用的标签名称配置。
 
     Returns:
-        Initial labels for the Issue.
+        Issue 的初始标签列表。
+
+    Raises:
+        ValueError: 当 ``issue_agent`` 不是可识别的值时。
     """
 
     labels = [f"type/{request.issue_type}", "status/backlog", "source/prd"]
+    # 仅在用户显式要求且本次命令不发布 PRD 时才添加 "ready"。
+    # 当 publish_prd=True 时，ready 在 push 成功*之后*再添加，
+    # 避免在未发布的 PRD 上就开始工作。
     if request.queue_ready and not request.publish_prd:
         labels.append(effective_labels_config.ready)
     if request.issue_agent in effective_labels_config.agent_labels:
@@ -157,17 +309,22 @@ def build_issue_labels(
     return labels
 
 
+# ---------------------------------------------------------------------------
+# Issue URL 解析与 PRD 回写
+# ---------------------------------------------------------------------------
+
+
 def parse_issue_number(issue_url: str) -> int:
-    """Parse the GitHub Issue number from an Issue URL.
+    """从 Issue URL 中解析 GitHub Issue 编号。
 
     Args:
-        issue_url: GitHub Issue URL returned by the client.
+        issue_url: 客户端返回的 GitHub Issue URL。
 
     Returns:
-        Parsed Issue number.
+        解析出的 Issue 编号。
 
     Raises:
-        ValueError: If the URL does not contain an Issue number.
+        ValueError: 当 URL 中不包含 Issue 编号时。
     """
 
     issue_number_match = ISSUE_NUMBER_RE.search(issue_url)
@@ -179,13 +336,21 @@ def parse_issue_number(issue_url: str) -> int:
 def write_issue_link(
     *, prd_text: str, absolute_prd_path: Path, issue_url: str, force: bool
 ) -> None:
-    """Write the GitHub Issue URL back into the PRD.
+    """将 GitHub Issue URL 回写到 PRD 中。
+
+    链接以 ``- GitHub Issue: <url>`` 的形式插入。
+
+    * 如果 PRD 已包含这样的行且 ``force=False``，则保留原有行不变
+      （调用方预期已对此做了防护）。
+    * 如果 ``force=True``，则替换已有行。
+    * 如果不存在这样的行，则在 H1 标题行之后立即插入。
+    * 最后的兜底（未找到 H1）时，将链接插入文件最顶部。
 
     Args:
-        prd_text: Original PRD text.
-        absolute_prd_path: PRD file path to update.
-        issue_url: Created GitHub Issue URL.
-        force: Whether to replace an existing Issue URL.
+        prd_text: 原始 PRD 文本。
+        absolute_prd_path: 要更新的 PRD 文件路径。
+        issue_url: 创建的 GitHub Issue URL。
+        force: 是否替换已有的 Issue URL。
     """
 
     link_line = f"- GitHub Issue: {issue_url}"
@@ -196,29 +361,37 @@ def write_issue_link(
             if force:
                 updated_lines.append(link_line)
                 link_written = True
+            # 跳过旧行（force=False 时由调用方提前拦截此路径）。
             continue
         updated_lines.append(line)
+        # 如果尚未替换已有链接，则在第一个 H1 标题后插入链接。
         if not link_written and line.startswith("# "):
             updated_lines.extend(["", link_line])
             link_written = True
     if not link_written:
+        # 未找到 H1 标题 —— 安全起见前置插入。
         updated_lines.insert(0, link_line)
 
     absolute_prd_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# PRD 发布的 Git 辅助函数
+# ---------------------------------------------------------------------------
+
+
 def current_git_branch(repo_path: Path, process_runner: IProcessRunner) -> str:
-    """Return the current Git branch name.
+    """返回当前 Git 分支名称。
 
     Args:
-        repo_path: Target repository path.
-        process_runner: Runner for executing Git commands.
+        repo_path: 目标仓库路径。
+        process_runner: 执行 Git 命令的 runner。
 
     Returns:
-        Current branch name.
+        当前分支名称。
 
     Raises:
-        RuntimeError: If the repository is in detached HEAD state.
+        RuntimeError: 当仓库处于 detached HEAD 状态时。
     """
 
     branch_result = process_runner.run(
@@ -233,15 +406,18 @@ def current_git_branch(repo_path: Path, process_runner: IProcessRunner) -> str:
 def validate_ready_publish_branch(
     *, current_branch: str, git_base_branch: str, queue_ready: bool
 ) -> None:
-    """Validate that ready PRDs are published from the runner base branch.
+    """验证 ready PRD 必须从 runner 基础分支发布。
+
+    从功能分支发布 ``ready`` PRD 会在该分支上创建提交，而这个提交可能永远
+    无法进入 ``main``，导致 daemon 检出基础分支时找不到该 PRD。
 
     Args:
-        current_branch: Current Git branch name.
-        git_base_branch: Configured runner base branch.
-        queue_ready: Whether the user asked to add the ready label.
+        current_branch: 当前 Git 分支名称。
+        git_base_branch: 配置的 runner 基础分支。
+        queue_ready: 用户是否要求添加 ready 标签。
 
     Raises:
-        RuntimeError: If a ready PRD would be published from the wrong branch.
+        RuntimeError: 当 ready PRD 试图从错误分支发布时。
     """
 
     if queue_ready and current_branch != git_base_branch:
@@ -255,15 +431,17 @@ def validate_ready_publish_branch(
 def validate_staged_changes_are_prd_only(
     repo_path: Path, relative_prd_path: Path, process_runner: IProcessRunner
 ) -> None:
-    """Refuse publishing when non-target files are already staged.
+    """当暂存区包含非目标文件时拒绝发布。
+
+    防止将无关工作意外打包进 PRD 发布提交。
 
     Args:
-        repo_path: Target repository path.
-        relative_prd_path: PRD path relative to repo_path.
-        process_runner: Runner for executing Git commands.
+        repo_path: 目标仓库路径。
+        relative_prd_path: 相对于 repo_path 的 PRD 路径。
+        process_runner: 执行 Git 命令的 runner。
 
     Raises:
-        RuntimeError: If any staged path is not the target PRD file.
+        RuntimeError: 当暂存区包含非目标 PRD 文件时。
     """
 
     staged_result = process_runner.run(
@@ -289,13 +467,19 @@ def validate_staged_changes_are_prd_only(
 
 
 def build_prd_commit_message(relative_prd_path: Path) -> str:
-    """Build the PRD publish commit message.
+    """构建 PRD 发布的提交信息。
+
+    从文件名 ``-prd-`` 之后的段提取 slug。
+    示例::
+
+        tasks/pending/20260527-190923-prd-example.md
+        → "docs(prd): publish example"
 
     Args:
-        relative_prd_path: PRD path relative to the repository.
+        relative_prd_path: 相对于仓库的 PRD 路径。
 
     Returns:
-        Commit message for publishing the PRD.
+        PRD 发布的提交信息。
     """
 
     prd_slug = relative_prd_path.stem.split("-prd-", maxsplit=1)[-1]
@@ -305,11 +489,14 @@ def build_prd_commit_message(relative_prd_path: Path) -> str:
 def publish_prd_file(
     publish_context: PrdPublishContext, process_runner: IProcessRunner
 ) -> None:
-    """Stage, commit, and push only the target PRD file.
+    """仅暂存、提交并推送目标 PRD 文件。
+
+    使用 ``git add -- <path>``、``git commit -m <msg> -- <path>`` 和
+    ``git push <remote> <branch>``，确保发布提交中*仅*包含该 PRD 文件。
 
     Args:
-        publish_context: Git publishing values.
-        process_runner: Runner for executing Git commands.
+        publish_context: Git 发布上下文。
+        process_runner: 执行 Git 命令的 runner。
     """
 
     relative_prd_path_text = publish_context.relative_prd_path.as_posix()
@@ -333,6 +520,11 @@ def publish_prd_file(
     )
 
 
+# ---------------------------------------------------------------------------
+# 主流程编排
+# ---------------------------------------------------------------------------
+
+
 def create_issue_from_prd(
     *,
     request: IssueFromPrdRequest,
@@ -340,25 +532,59 @@ def create_issue_from_prd(
     process_runner: IProcessRunner | None = None,
     content_generator: IContentGenerator | None = None,
 ) -> str:
-    """Create a GitHub Issue from a PRD and write the URL back to the PRD.
+    """从 PRD 创建 GitHub Issue 并将 URL 回写到 PRD。
+
+    编排流程：
+
+    1. **路径解析** —— 将 ``prd_path`` 转换为绝对路径和仓库相对路径。
+    2. **PRD 校验** —— 读取 PRD 并检查是否已存在 Issue 链接
+       （防止重复创建，除非 ``force=True``）。
+    3. **标题提取** —— 从 PRD H1 标题或文件名 slug 派生 fallback 标题；
+       ``title_override`` 优先级最高。
+    4. **标签组装** —— 构建初始标签集合（type、backlog、source，
+       可选的 ready/agent 标签）。
+    5. **发布预检**（可选）—— 当 ``publish_prd=True`` 时，
+       验证分支状态和暂存区变更，然后捕获 ``PrdPublishContext`` 供第 9 步使用。
+    6. **Fallback 正文** —— 基于 PRD 元数据构建确定的 Issue 正文
+       （验收清单 + 引言 + 交付说明）。
+    7. **内容生成**（可选）—— 当 ``generated_content_config`` 启用时，
+       调用 ``generate_issue_content()``，遵循模块文档中描述的
+       ``agent → template → fallback`` 级联策略。
+       返回的 title/body 替换 fallback 值。
+    8. **Issue 创建** —— 调用 ``github_client.create_issue()``。
+    9. **回写** —— 将 Issue URL 持久化到 PRD 文件。
+    10. **发布**（可选）—— 执行预检时捕获的发布上下文
+        （stage、commit、push）。如果 ``queue_ready=True``，
+        在 push 成功*之后*再添加 ready 标签。
 
     Args:
-        request: Issue creation request.
-        github_client: Client for interacting with GitHub.
-        process_runner: Optional runner for PRD publishing Git commands.
-        content_generator: Optional content generator for AI-generated Issue content.
+        request: Issue 创建请求。
+        github_client: 与 GitHub 交互的客户端。
+        process_runner: 用于 PRD 发布 Git 命令的可选 runner。
+            当 ``publish_prd=True`` 时必需。
+        content_generator: 用于 AI 生成 Issue 内容的可选生成器。
+            当 ``generated_content_config`` 使用 agent 模式时必需。
 
     Returns:
-        URL of the created GitHub Issue.
+        创建的 GitHub Issue URL。
 
     Raises:
-        ValueError: If the PRD already has a GitHub Issue link or inputs are invalid.
-        RuntimeError: If PRD publishing cannot be completed.
+        ValueError: 当 PRD 已有 GitHub Issue 链接且 ``force=False``，
+            或当 ``publish_prd=True`` 时缺少 ``process_runner``。
+        RuntimeError: 当 PRD 发布无法完成时（错误分支、暂存区冲突、
+            push 失败等）。
     """
 
+    # ------------------------------------------------------------------
+    # 1. 解析路径，得到绝对路径（用于 I/O）和相对路径（用于 Issue 正文和提交信息）。
+    # ------------------------------------------------------------------
     absolute_prd_path, relative_prd_path = resolve_prd_paths(
         request.repo_path, request.prd_path
     )
+
+    # ------------------------------------------------------------------
+    # 2. 读取 PRD 并防止意外重复创建 Issue。
+    # ------------------------------------------------------------------
     prd_text = absolute_prd_path.read_text(encoding="utf-8")
     if not request.force and any(
         ISSUE_LINE_RE.match(line) for line in prd_text.splitlines()
@@ -367,6 +593,9 @@ def create_issue_from_prd(
             "PRD already has a GitHub Issue link. Use --force to replace it."
         )
 
+    # ------------------------------------------------------------------
+    # 3. 派生 fallback 标题。当 PRD 没有 H1 标题时，使用文件名 slug（"-prd-" 之后部分）作为最后手段。
+    # ------------------------------------------------------------------
     fallback_title = absolute_prd_path.stem.split("-prd-", maxsplit=1)[-1].replace(
         "-", " "
     )
@@ -374,9 +603,16 @@ def create_issue_from_prd(
         request.title_override
         or f"[{request.issue_type.title()}] {extract_title(prd_text, fallback_title)}"
     )
+
+    # ------------------------------------------------------------------
+    # 4. 构建标签。
+    # ------------------------------------------------------------------
     effective_labels_config = request.labels_config or LabelConfig()
     labels = build_issue_labels(request, effective_labels_config)
 
+    # ------------------------------------------------------------------
+    # 5. 发布预检（仅在 publish_prd=True 时执行）。
+    # ------------------------------------------------------------------
     publish_context: PrdPublishContext | None = None
     if request.publish_prd:
         if process_runner is None:
@@ -397,12 +633,19 @@ def create_issue_from_prd(
             current_branch=current_branch,
         )
 
+    # ------------------------------------------------------------------
+    # 6. 构建确定的 fallback 正文。
+    # ------------------------------------------------------------------
     fallback_body = build_issue_body(
         relative_prd_path=relative_prd_path,
         title=fallback_title,
         acceptance_items=extract_acceptance_items(prd_text),
+        prd_text=prd_text,
     )
 
+    # ------------------------------------------------------------------
+    # 7. 可选的 AI 内容生成（agent → template → fallback）。
+    # ------------------------------------------------------------------
     title = fallback_title
     body = fallback_body
     gc_config = request.generated_content_config
@@ -426,18 +669,30 @@ def create_issue_from_prd(
         title = generated.title
         body = generated.body
 
+    # ------------------------------------------------------------------
+    # 8. 创建 GitHub Issue。
+    # ------------------------------------------------------------------
     issue_url = github_client.create_issue(title=title, body=body, labels=labels)
+
+    # ------------------------------------------------------------------
+    # 9. 将 Issue URL 回写到 PRD。
+    # ------------------------------------------------------------------
     write_issue_link(
         prd_text=prd_text,
         absolute_prd_path=absolute_prd_path,
         issue_url=issue_url,
         force=request.force,
     )
+
+    # ------------------------------------------------------------------
+    # 10. 发布 PRD 文件并可选地添加 ready 标签。
+    # ------------------------------------------------------------------
     if publish_context is not None:
         publish_prd_file(publish_context, process_runner)
         if request.queue_ready:
             github_client.edit_issue_labels(
                 parse_issue_number(issue_url), add=[effective_labels_config.ready]
             )
+
     _logger.info("Created GitHub Issue: %s", issue_url)
     return issue_url
