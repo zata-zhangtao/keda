@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from backend.core.shared.models.agent_runner import AppConfig, GitConfig, RunnerConfig
 from backend.engines.agent_runner.factory import (
@@ -11,6 +14,7 @@ from backend.engines.agent_runner.factory import (
     resolve_issue_from_prd_target,
     resolve_repository_targets,
 )
+from backend.infrastructure.config import settings as settings_module
 from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGeneratedContentTargetSettings,
@@ -22,8 +26,53 @@ from backend.infrastructure.config.settings import (
 )
 
 
+def _run_git(repo_path: Path, *git_args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *git_args],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+
+def _init_git_repository(tmp_path: Path, name: str) -> Path:
+    repo_path = tmp_path / name
+    repo_path.mkdir()
+    _run_git(repo_path, "init")
+    _run_git(repo_path, "checkout", "-b", "main")
+    return repo_path
+
+
+def _write_local_iar_config(repo_path: Path, content: str) -> None:
+    (repo_path / ".iar.toml").write_text(content, encoding="utf-8")
+
+
 def _make_settings(**kwargs) -> AgentRunnerSettings:
     return AgentRunnerSettings(**kwargs)
+
+
+@pytest.fixture(autouse=True)
+def isolate_agent_runner_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep repository target tests independent from the developer's config.toml."""
+    original_loader = settings_module._load_toml_section_data
+
+    def load_toml_section_without_agent_repositories(
+        section_name: str,
+    ) -> dict[str, object]:
+        section_data = original_loader(section_name)
+        if section_name != "agent_runner":
+            return section_data
+        isolated_section_data = dict(section_data)
+        isolated_section_data.pop("repositories", None)
+        return isolated_section_data
+
+    monkeypatch.setattr(
+        settings_module,
+        "_load_toml_section_data",
+        load_toml_section_without_agent_repositories,
+    )
 
 
 def test_build_app_config_from_settings_structure() -> None:
@@ -93,23 +142,51 @@ def test_merge_repository_config_inherits_label_agent_labels() -> None:
     assert merged.labels.agent_labels["claude"] == "repo/claude"
 
 
-def test_resolve_repository_targets_ad_hoc_repo() -> None:
-    """--repo should return a single ad-hoc context with global config."""
+def test_resolve_repository_targets_ad_hoc_repo(tmp_path: Path) -> None:
+    """--repo should return a single context for the explicit Git repository."""
+    repo_path = _init_git_repository(tmp_path, "repo")
     settings = _make_settings()
     contexts = resolve_repository_targets(
-        settings, repo_id=None, repo_path_override="/tmp/repo"
+        settings, repo_id=None, repo_path_override=str(repo_path)
     )
     assert len(contexts) == 1
-    assert contexts[0].repo_id == "ad-hoc"
-    assert contexts[0].repo_path == Path("/tmp/repo").resolve()
+    assert contexts[0].repo_id == "repo"
+    assert contexts[0].repo_path == repo_path.resolve()
 
 
-def test_resolve_repository_targets_by_repo_id() -> None:
+def test_resolve_repository_targets_repo_path_loads_local_config(
+    tmp_path: Path,
+) -> None:
+    """--repo should merge the target repository's .iar.toml."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "target-local"
+display_name = "Target Local"
+
+[agent_runner.git]
+remote = "upstream"
+base_branch = "develop"
+""",
+    )
+    settings = _make_settings()
+    contexts = resolve_repository_targets(settings, repo_path_override=str(repo_path))
+    assert len(contexts) == 1
+    assert contexts[0].repo_id == "target-local"
+    assert contexts[0].display_name == "Target Local"
+    assert contexts[0].config.git.remote == "upstream"
+    assert contexts[0].config.git.base_branch == "develop"
+
+
+def test_resolve_repository_targets_by_repo_id(tmp_path: Path) -> None:
     """--repo-id should return a single configured repository context."""
+    repo_path = _init_git_repository(tmp_path, "keda")
     settings = _make_settings(
         repositories={
             "keda": AgentRunnerRepositorySettings(
-                path="/Users/zata/code/keda",
+                path=str(repo_path),
                 display_name="Keda",
                 git=AgentRunnerGitSettings(base_branch="develop"),
             )
@@ -122,29 +199,120 @@ def test_resolve_repository_targets_by_repo_id() -> None:
     assert contexts[0].config.git.base_branch == "develop"
 
 
-def test_resolve_repository_targets_all_enabled() -> None:
-    """No selector should return all enabled configured repositories."""
+def test_resolve_repository_targets_by_repo_id_merges_local_config(
+    tmp_path: Path,
+) -> None:
+    """--repo-id should use registry path and merge repository-local overrides."""
+    repo_path = _init_git_repository(tmp_path, "keda")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "local-keda"
+
+[agent_runner.git]
+base_branch = "local-main"
+""",
+    )
     settings = _make_settings(
         repositories={
             "keda": AgentRunnerRepositorySettings(
-                path="/tmp/keda", enabled=True, display_name="Keda"
+                path=str(repo_path),
+                display_name="Keda",
+                git=AgentRunnerGitSettings(base_branch="develop", remote="zata"),
+            )
+        }
+    )
+    contexts = resolve_repository_targets(settings, repo_id="keda")
+    assert len(contexts) == 1
+    assert contexts[0].repo_id == "keda"
+    assert contexts[0].display_name == "Keda"
+    assert contexts[0].config.git.remote == "zata"
+    assert contexts[0].config.git.base_branch == "local-main"
+
+
+def test_resolve_repository_targets_all_enabled_requires_all_selector(
+    tmp_path: Path,
+) -> None:
+    """--all should return all enabled configured repositories."""
+    keda_path = _init_git_repository(tmp_path, "keda")
+    backend_path = _init_git_repository(tmp_path, "backend")
+    settings = _make_settings(
+        repositories={
+            "keda": AgentRunnerRepositorySettings(
+                path=str(keda_path), enabled=True, display_name="Keda"
             ),
             "backend": AgentRunnerRepositorySettings(
-                path="/tmp/backend", enabled=False, display_name="Backend"
+                path=str(backend_path), enabled=False, display_name="Backend"
             ),
         }
     )
-    contexts = resolve_repository_targets(settings)
+    contexts = resolve_repository_targets(settings, all_repositories=True)
     assert len(contexts) == 1
     assert contexts[0].repo_id == "keda"
 
 
-def test_resolve_repository_targets_fallback_when_empty() -> None:
-    """No selector and no configured repos should fallback to cwd."""
+def test_resolve_repository_targets_no_selector_uses_current_git_repo(
+    tmp_path: Path,
+) -> None:
+    """No selector should use the current Git repo instead of configured repos."""
+    current_repo_path = _init_git_repository(tmp_path, "current")
+    other_repo_path = _init_git_repository(tmp_path, "other")
+    _write_local_iar_config(
+        current_repo_path,
+        """
+[agent_runner.repository]
+id = "current-local"
+display_name = "Current Local"
+
+[agent_runner.git]
+base_branch = "current-main"
+""",
+    )
+    settings = _make_settings(
+        repositories={
+            "other": AgentRunnerRepositorySettings(
+                path=str(other_repo_path),
+                enabled=True,
+                git=AgentRunnerGitSettings(base_branch="other-main"),
+            ),
+        }
+    )
+    contexts = resolve_repository_targets(
+        settings, fallback_path=str(current_repo_path)
+    )
+    assert len(contexts) == 1
+    assert contexts[0].repo_id == "current-local"
+    assert contexts[0].repo_path == current_repo_path.resolve()
+    assert contexts[0].config.git.base_branch == "current-main"
+
+
+def test_resolve_repository_targets_rejects_disabled_local_config(
+    tmp_path: Path,
+) -> None:
+    """Repository-local disabled config should produce an actionable error."""
+    repo_path = _init_git_repository(tmp_path, "disabled")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "disabled"
+enabled = false
+""",
+    )
     settings = _make_settings()
-    contexts = resolve_repository_targets(settings, fallback_path=".")
+    with pytest.raises(ValueError, match="Repository-local config"):
+        resolve_repository_targets(settings, fallback_path=str(repo_path))
+
+
+def test_resolve_repository_targets_fallback_when_empty(tmp_path: Path) -> None:
+    """No selector and no configured repos should use the current Git repo."""
+    repo_path = _init_git_repository(tmp_path, "fallback")
+    settings = _make_settings()
+    contexts = resolve_repository_targets(settings, fallback_path=str(repo_path))
     assert len(contexts) == 1
     assert contexts[0].repo_id == "fallback"
+    assert contexts[0].repo_path == repo_path.resolve()
 
 
 def test_resolve_repository_targets_mutual_exclusion() -> None:
@@ -159,11 +327,12 @@ def test_resolve_repository_targets_mutual_exclusion() -> None:
         assert "mutually exclusive" in str(exc)
 
 
-def test_resolve_repository_targets_disabled_repo() -> None:
+def test_resolve_repository_targets_disabled_repo(tmp_path: Path) -> None:
     """Selecting a disabled repo should raise an error."""
+    repo_path = _init_git_repository(tmp_path, "keda")
     settings = _make_settings(
         repositories={
-            "keda": AgentRunnerRepositorySettings(path="/tmp/keda", enabled=False)
+            "keda": AgentRunnerRepositorySettings(path=str(repo_path), enabled=False)
         }
     )
     try:
@@ -173,32 +342,43 @@ def test_resolve_repository_targets_disabled_repo() -> None:
         assert "disabled" in str(exc)
 
 
-def test_resolve_issue_from_prd_matches_cwd() -> None:
-    """When cwd matches a configured repo path, merged config should apply."""
-    cwd = Path("/tmp/keda")
+def test_resolve_issue_from_prd_uses_local_cwd_config(tmp_path: Path) -> None:
+    """issue-from-prd no-selector should use the current repository local config."""
+    cwd = _init_git_repository(tmp_path, "keda")
+    _write_local_iar_config(
+        cwd,
+        """
+[agent_runner.repository]
+id = "cwd-keda"
+
+[agent_runner.git]
+base_branch = "local-develop"
+""",
+    )
     settings = _make_settings(
         repositories={
             "keda": AgentRunnerRepositorySettings(
-                path="/tmp/keda",
+                path=str(cwd),
                 git=AgentRunnerGitSettings(base_branch="develop"),
             )
         }
     )
     context = resolve_issue_from_prd_target(settings, cwd=cwd)
-    assert context.repo_id == "keda"
-    assert context.config.git.base_branch == "develop"
+    assert context.repo_id == "cwd-keda"
+    assert context.config.git.base_branch == "local-develop"
 
 
-def test_resolve_issue_from_prd_fallback() -> None:
-    """When cwd does not match any configured repo, global config should apply."""
-    cwd = Path("/tmp/other")
+def test_resolve_issue_from_prd_fallback(tmp_path: Path) -> None:
+    """When cwd has no local config, global config should apply to current repo."""
+    cwd = _init_git_repository(tmp_path, "other")
+    configured_repo = _init_git_repository(tmp_path, "keda")
     settings = _make_settings(
         repositories={
-            "keda": AgentRunnerRepositorySettings(path="/tmp/keda"),
+            "keda": AgentRunnerRepositorySettings(path=str(configured_repo)),
         }
     )
     context = resolve_issue_from_prd_target(settings, cwd=cwd)
-    assert context.repo_id == "fallback"
+    assert context.repo_id == "other"
     assert context.config.git.base_branch == "main"
 
 
