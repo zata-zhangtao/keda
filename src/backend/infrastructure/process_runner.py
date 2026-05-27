@@ -215,9 +215,10 @@ def run_filtered_claude_stream(
                 if collect_stdout and rendered_text:
                     stdout_lines.append(rendered_text)
                 if rendered_text:
-                    print(rendered_text, end="", flush=True)
                     if output_sink is not None:
                         output_sink(rendered_text.rstrip("\n"))
+                    else:
+                        print(rendered_text, end="", flush=True)
         return_code = process.wait(timeout=timeout)
     except Exception:
         process.kill()

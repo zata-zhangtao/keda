@@ -678,9 +678,10 @@ class SubprocessTranscriptRunner:
             if process.stdout is not None:
                 for line in process.stdout:
                     stdout_lines.append(line)
-                    print(line, end="")
                     if output_sink is not None:
                         output_sink(line.rstrip("\n"))
+                    else:
+                        print(line, end="")
             return_code = process.wait(timeout=None)
         except Exception:
             process.kill()
@@ -728,9 +729,10 @@ def _run_agent_with_stdin_prompt(
         if process.stdout is not None:
             for line in process.stdout:
                 stdout_lines.append(line)
-                print(line, end="")
                 if output_sink is not None:
                     output_sink(line.rstrip("\n"))
+                else:
+                    print(line, end="")
         return_code = process.wait(timeout=None)
     except Exception:
         process.kill()
