@@ -29,7 +29,6 @@ from backend.core.shared.interfaces.agent_runner import (
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     IssueSummary,
-    PullRequestContext,
     ReviewEventMarker,
 )
 from backend.core.use_cases.agent_runner_events import (
@@ -429,17 +428,17 @@ def _process_running_rework(
         remove=[config.labels.running],
     )
 
-    pr_context = github_client.get_pull_request_context(pr_branch)
-    if pr_context is None:
-        pr_context = PullRequestContext(
-            pr_url=github_client.find_open_pr_by_head(pr_branch) or "",
-            branch=pr_branch,
-            head_sha=get_head_sha(worktree_path, process_runner),
-            base_sha=expected_head,
-        )
-
     # 修复后再次运行监督循环
     if config.post_pr_supervisor.enabled:
+        pr_context = github_client.get_pull_request_context(pr_branch)
+        if pr_context is None:
+            _logger.warning(
+                "Deferring post-rework supervisor for Issue #%d branch %s: "
+                "complete PR context is unavailable.",
+                issue.number,
+                pr_branch,
+            )
+            return
         _run_supervisor_with_repair_loop(
             issue=issue,
             worktree_path=worktree_path,

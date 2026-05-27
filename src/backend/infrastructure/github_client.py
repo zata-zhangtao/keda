@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
 from backend.infrastructure.process_runner import SubprocessRunner
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -471,6 +474,11 @@ class GitHubCliClient:
             check=False,
         )
         if result.return_code != 0:
+            _logger.warning(
+                "Unable to load full PR context for branch %s: %s",
+                branch,
+                result.stderr.strip() or f"gh exited with status {result.return_code}",
+            )
             return None
         raw_prs = json.loads(result.stdout or "[]")
         if not raw_prs:

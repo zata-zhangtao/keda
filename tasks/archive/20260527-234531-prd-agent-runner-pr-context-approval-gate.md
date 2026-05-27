@@ -11,13 +11,14 @@
 3. 聚合 PR checks 为稳定的 `SUCCESS`、`PENDING`、`FAILURE` 或 `None`，并携带 failed/pending checks 摘要。
 4. 在 supervisor action 后增加 deterministic approval gate：冲突 PR 不得进入 `agent/review`，failed checks PR 不得进入 `agent/review`。
 5. 同步测试、文档和相关 pending PRD 进度说明。
+6. 对完整 PR context 临时不可用的 open PR 采用 fail-closed defer，并把 `review-once` 日志改为可观察的 outcome。
 
 ### Realistic Validation
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点或真实外部边界**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
 - [x] **真实 GitHub CLI adapter 验证**：通过 `uv run python - <<'PY' ... GitHubCliClient(Path('.')).get_pull_request_context('issue-28') ... PY` 验证当前本机 `gh` 可读取 PR #32，并返回 `mergeable=False`。
-- [x] **review-once gate 单元/用例验证**：通过 `uv run pytest tests/test_github_client.py tests/test_pr_supervisor.py tests/test_review_once.py tests/test_run_agent.py -q` 验证 unsupported field 不再出现，failed checks 和 conflict approval 不会进入 `agent/review`。
+- [x] **review-once gate 单元/用例验证**：通过 `uv run pytest tests/test_github_client.py tests/test_pr_supervisor.py tests/test_review_once.py tests/test_agent_runner_supervisor_entrypoints.py tests/test_run_agent.py -q` 验证 unsupported field 不再出现，failed checks、conflict approval 和缺失完整 context 都不会进入 `agent/review`。
 - [x] **全仓回归验证**：通过 `just test` 验证 lint、架构检查、PRD checklist 检查和 335 个测试全部通过。
 - [x] **为什么不直接运行 live `iar review-once`**：真实 `iar review-once` 会修改 GitHub Issue labels/comments 并可能调用 agent；本切片用真实 `gh` adapter 验证外部字段兼容，用 mocked core tests 验证状态机 gate，避免对 live Issue 产生额外副作用。
 
@@ -58,10 +59,14 @@
 | `src/backend/core/shared/models/agent_runner.py` | Core dataclasses | 扩展 `PullRequestContext` 增加 `checks_summary` |
 | `src/backend/core/use_cases/pr_supervisor.py` | post-PR supervisor prompt、action parse、repair/rebase 执行 | 增加 approval gate，并将 checks summary 放进 prompt/comment 语义 |
 | `src/backend/core/use_cases/review_once.py` | review polling 单次处理 | 复用 approval gate，防止 polling 路径绕过 core supervisor gate |
+| `src/backend/core/use_cases/agent_runner_publication.py` | 发布完成后触发 post-PR supervisor | 完整 PR context 不可用时留在 supervising 等待重试 |
+| `src/backend/core/use_cases/agent_runner_orchestrate.py` | running rework 执行后再次触发 supervisor | 完整 PR context 不可用时 defer 后续监督，不使用未知状态批准 |
+| `src/backend/core/use_cases/agent_runner_supervisor.py` | repair/rebase 后的即时监督循环 | 每轮后续评审前刷新完整 context；读取失败时 defer |
 | `docs/guides/agent-runner.md` | Agent Runner operator 文档 | 记录 checks 聚合和 approval gate |
 | `tests/test_github_client.py` | GitHub CLI adapter tests | 覆盖 `statusCheckRollup` 字段、empty rollup、conflicting mergeable |
 | `tests/test_pr_supervisor.py` | supervisor action tests | 覆盖 conflict / failed checks approval gate |
 | `tests/test_review_once.py` | review-once tests | 覆盖 conflicting PR approval 不进入 `agent/review` |
+| `tests/test_agent_runner_supervisor_entrypoints.py` | post-PR entry point tests | 覆盖发布、rework、循环 refresh 的 incomplete context defer |
 | `tasks/pending/20260527-093356-prd-agent-runner-ci-rework-state-recovery.md` | 更大范围 pending PRD | 更新 Implementation Progress 和已完成 acceptance items |
 | `tasks/pending/20260524-162356-prd-agent-runner-operations-console.md` | 监控面板 pending PRD | 记录底层 runner 已降低 `pr_dirty_in_review` 新增概率 |
 
@@ -113,6 +118,8 @@ GitHubCliClient.get_pull_request_context(...)
    - `checks_state == "FAILURE"` 且 action 为 approval 时，改写为 `repair_pr_branch`。
 5. 在 `run_post_pr_supervisor_cycle(...)` 和 `review_once._process_review_candidate(...)` 后应用同一个 gate。
 6. 补充测试和 operator 文档。
+7. 删除 review/publication/rework supervisor 路径以及 supervisor 循环内部的不完整 context approve fallback；context 暂不可读时记录 warning 并 defer。
+8. 让 `review-once` 顶层日志报告 `queued_*`、`approved_*` 或 `deferred_*` outcome，不再用 `Reviewed` 掩盖状态流转。
 
 ### Why This Is The Best Fit
 
@@ -172,6 +179,8 @@ Required behavior:
 - `mergeable is False` approval becomes `rebase_pr_branch`.
 - `checks_state == "FAILURE"` approval becomes `repair_pr_branch`.
 - `review_once` applies the same gate after calling `run_post_pr_supervisor_cycle(...)`, so tests or future refactors cannot bypass it accidentally.
+- If an open PR exists but full PR context is unavailable, supervisor execution is deferred instead of using a partial context with unknown mergeability.
+- Publication, post-rework and in-loop follow-up supervisor entry points follow the same fail-closed defer rule.
 
 ### Change Impact Tree
 
@@ -205,9 +214,24 @@ Required behavior:
 ├── Domain
 │   └── src/backend/core/use_cases/review_once.py
 │       [修改]
-│       【总结】在 review polling 路径复用 supervisor approval gate。
+│       【总结】在 review polling 路径复用 approval gate，并在 PR context 不完整时安全 defer、报告明确 outcome。
 │
-│       └── apply guard before label/comment transition
+│       ├── apply guard before label/comment transition
+│       ├── refuse partial PR context approval fallback
+│       └── report queued/deferred/approved outcome logs
+│
+├── Domain
+│   ├── src/backend/core/use_cases/agent_runner_publication.py
+│   │   [修改]
+│   │   【总结】发布后完整 PR context 不可读时延后 supervisor，而非用未知 mergeability 评审。
+│   │
+│   ├── src/backend/core/use_cases/agent_runner_orchestrate.py
+│   │   [修改]
+│   │   【总结】rework 后完整 PR context 不可读时延后 supervisor，防止错误批准。
+│
+│   └── src/backend/core/use_cases/agent_runner_supervisor.py
+│       [修改]
+│       【总结】repair/rebase 后再次监督前刷新完整 PR context，读取失败则 defer。
 │
 ├── Tests
 │   ├── tests/test_github_client.py
@@ -218,9 +242,13 @@ Required behavior:
 │   │   [修改]
 │   │   【总结】覆盖 conflict 与 failed-check approval action rewrite。
 │   │
-│   └── tests/test_review_once.py
-│       [修改]
-│       【总结】覆盖 review-once 遇到 conflicting PR approval 时进入 rework 而非 review。
+│   ├── tests/test_review_once.py
+│   │   [修改]
+│   │   【总结】覆盖 review-once 遇到 conflicting PR approval 时进入 rework 而非 review。
+│
+│   └── tests/test_agent_runner_supervisor_entrypoints.py
+│       [新增]
+│       【总结】覆盖 publication、rework 与 supervisor 循环不能用不完整 context approve。
 │
 ├── Docs
 │   └── docs/guides/agent-runner.md
@@ -269,7 +297,7 @@ flowchart TD
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
 |---|---|---|---|---|---|---|
 | Current `gh` PR context field compatibility | Python entry using real `GitHubCliClient` and real `gh` process | live adapter sanity | No mock; real GitHub CLI and current repository auth | Open PR branch `issue-28` in keda | `uv run python - <<'PY'\nfrom pathlib import Path\nfrom backend.infrastructure.github_client import GitHubCliClient\nctx = GitHubCliClient(Path('.')).get_pull_request_context('issue-28')\nprint(ctx)\nassert ctx is not None\nassert ctx.mergeable is False\nPY` | Yes |
-| Rollup aggregation and approval gate | pytest through core and infrastructure test suites | unit/integration | GitHub CLI stdout and agent output mocked at repository boundary | JSON fixtures for CheckRun, StatusContext, empty rollup; fake supervisor approval | `uv run pytest tests/test_github_client.py tests/test_pr_supervisor.py tests/test_review_once.py tests/test_run_agent.py -q` | Yes |
+| Rollup aggregation and approval gate | pytest through core and infrastructure test suites | unit/integration | GitHub CLI stdout and agent output mocked at repository boundary | JSON fixtures for CheckRun, StatusContext, empty rollup; fake supervisor approval; unavailable full context | `uv run pytest tests/test_github_client.py tests/test_pr_supervisor.py tests/test_review_once.py tests/test_agent_runner_supervisor_entrypoints.py tests/test_run_agent.py -q` | Yes |
 | Full repository regression | Repository test entry | full local regression | Existing test fakes only; no live external writes | Local Python/uv/just environment | `just test` | Yes |
 | Operator docs build | MkDocs build | docs build | No external dependencies beyond local docs toolchain | Local docs tree | `uv run mkdocs build` | Yes |
 | Optional live `iar review-once` mutation check | CLI command against live GitHub Issue | manual/sandbox | No mock; writes live labels/comments and may invoke agent | Disposable Issue/PR only; operator opt-in | `IAR_LIVE_GITHUB_VALIDATION=1 uv run iar review-once --max-issues 1` against disposable repo | No |
@@ -303,6 +331,8 @@ No external validation required; repository evidence and local GitHub CLI behavi
 - Conflicting PR approval is deterministically rewritten to `rebase_pr_branch`.
 - Failed-check approval is deterministically rewritten to `repair_pr_branch`.
 - `review_once` uses the same gate as `run_post_pr_supervisor_cycle`.
+- Open PR context lookup failure defers supervision in review, publication, post-rework, and in-loop follow-up paths rather than approving from partial state.
+- `review-once` logs the actual outcome instead of a generic reviewed message.
 - Targeted pytest, `uv run mkdocs build`, and `just test` pass.
 - Related pending PRDs clearly distinguish this completed slice from their remaining scope.
 
@@ -330,6 +360,9 @@ No external validation required; repository evidence and local GitHub CLI behavi
 - [x] `approve_for_human_review` is rewritten to `rebase_pr_branch` when `pr_context.mergeable is False`.
 - [x] `approve_for_human_review` is rewritten to `repair_pr_branch` when `pr_context.checks_state == "FAILURE"`.
 - [x] `review_once` does not transition a conflicting PR approval into `agent/review`.
+- [x] `review_once` defers an open PR when complete context cannot be loaded, rather than running supervisor with unknown mergeability.
+- [x] Publication, post-rework and in-loop follow-up supervisor entry paths defer when complete PR context cannot be loaded.
+- [x] `review-once` logs an explicit processing outcome instead of the generic `Reviewed Issue` message.
 
 ### Documentation Acceptance
 
@@ -340,7 +373,7 @@ No external validation required; repository evidence and local GitHub CLI behavi
 
 ### Validation Acceptance
 
-- [x] `uv run pytest tests/test_github_client.py tests/test_pr_supervisor.py tests/test_review_once.py tests/test_run_agent.py -q` passes.
+- [x] `uv run pytest tests/test_github_client.py tests/test_pr_supervisor.py tests/test_review_once.py tests/test_agent_runner_supervisor_entrypoints.py tests/test_run_agent.py -q` passes.
 - [x] `uv run mkdocs build` passes.
 - [x] `just test` passes.
 - [x] Real GitHub CLI adapter sanity confirms `issue-28` PR context returns `mergeable=False`.
@@ -373,6 +406,12 @@ No external validation required; repository evidence and local GitHub CLI behavi
 
 **FR-13**: The implementation must reuse existing rework actions and must not introduce a new conflict action protocol.
 
+**FR-14**: When an open PR exists but its full PR context cannot be loaded, `review_once` must defer supervision and must not construct a partial approvable context.
+
+**FR-15**: Publication, post-rework and in-loop follow-up supervisor entry paths must not invoke supervisor approval from partial PR context.
+
+**FR-16**: `review-once` logs must expose the actual queued, deferred, approved, or skipped outcome.
+
 ## 9. Non-Goals
 
 - Do not implement workflow label exclusivity helper in this PRD.
@@ -398,3 +437,4 @@ No external validation required; repository evidence and local GitHub CLI behavi
 | D-03 | Conflict action mapping | Rewrite conflicting approval to `rebase_pr_branch` | Directly run conflict resolution from `review_once` | Existing conflict resolution is intentionally inside `execute_rebase(...)` after safe branch and HEAD checks. |
 | D-04 | Checks failure action mapping | Rewrite failed-check approval to `repair_pr_branch` | Mark failed checks as human review follow-up | Failed checks are actionable runner repair work and should not be hidden behind `agent/review`. |
 | D-05 | PRD placement | Archive this completed slice PRD | Add a completed PRD under `tasks/pending/` | Repository rules require completed PRD tasks to be checked off and archived. |
+| D-06 | Missing full PR context behavior | Defer supervision and retain an observable state | Build a partial PR context and allow approval | Unknown mergeability/checks cannot safely support transition to human review. |

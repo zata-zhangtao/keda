@@ -160,13 +160,19 @@ def _run_supervisor_with_repair_loop(
                 add=[config.labels.supervising],
                 remove=[config.labels.running],
             )
-            # 更新 PR 上下文并继续循环
-            current_pr_context = PullRequestContext(
-                pr_url=current_pr_context.pr_url,
-                branch=current_pr_context.branch,
-                head_sha=repair_sha,
-                base_sha=current_pr_context.base_sha,
+            # 更新完整 PR 上下文后再继续循环，避免未知 mergeability 被批准。
+            refreshed_pr_context = github_client.get_pull_request_context(
+                current_pr_context.branch
             )
+            if refreshed_pr_context is None:
+                _logger.warning(
+                    "Deferring post-repair supervisor for Issue #%d branch %s: "
+                    "complete PR context is unavailable.",
+                    issue.number,
+                    current_pr_context.branch,
+                )
+                return
+            current_pr_context = refreshed_pr_context
             continue
 
         # Rebase
@@ -219,12 +225,18 @@ def _run_supervisor_with_repair_loop(
                 add=[config.labels.supervising],
                 remove=[config.labels.running],
             )
-            current_pr_context = PullRequestContext(
-                pr_url=current_pr_context.pr_url,
-                branch=current_pr_context.branch,
-                head_sha=rebase_sha,
-                base_sha=current_pr_context.base_sha,
+            refreshed_pr_context = github_client.get_pull_request_context(
+                current_pr_context.branch
             )
+            if refreshed_pr_context is None:
+                _logger.warning(
+                    "Deferring post-rebase supervisor for Issue #%d branch %s: "
+                    "complete PR context is unavailable.",
+                    issue.number,
+                    current_pr_context.branch,
+                )
+                return
+            current_pr_context = refreshed_pr_context
             continue
 
         # 未知动作：标记为 blocked

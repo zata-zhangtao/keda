@@ -35,6 +35,7 @@ from backend.core.use_cases.run_agent_once import (
 _logger = logging.getLogger(__name__)
 
 
+# 允许的超管动作集合；用集合保证 O(1) 校验并防止拼写错误导致意外行为
 VALID_SUPERVISOR_ACTIONS: set[str] = {
     "approve_for_human_review",
     "repair_pr_branch",
@@ -78,6 +79,7 @@ def build_supervisor_prompt(
         for result in verification_results
     )
 
+    # 只取最近 10 条并截断到 200 字符，防止上下文过长导致模型注意力稀释或 token 超限
     issue_comments_text = "\n".join(
         f"- {comment[:200]}" for comment in issue_comments[-10:]
     )
@@ -104,6 +106,8 @@ def build_supervisor_prompt(
             "",
             "Diff:",
             "```diff",
+            # diff 截断到 6000 字符：超管评审只需把握整体变更方向，
+            # 过长的 diff 会挤占其他上下文并增加模型处理时间
             diff_text[:6000] if len(diff_text) > 6000 else diff_text,
             "```",
             "",
@@ -132,18 +136,22 @@ def build_supervisor_prompt(
 
 def parse_supervisor_action(text: str) -> SupervisorActionResult:
     """Parse supervisor JSON output from agent response text."""
+    # 优先匹配 markdown 代码块，兼容模型在 JSON 外包裹解释文本的情况
     match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
         json_text = match.group(1)
     else:
+        # 回退：尝试直接提取包含 action 字段的最外层 JSON 对象
         match = re.search(r"\{.*\"action\".*\}", text, re.DOTALL)
         json_text = match.group(0) if match else "{}"
 
     try:
         payload = json.loads(json_text)
     except json.JSONDecodeError:
+        # 解析失败时降级为空对象，避免整轮崩溃
         payload = {}
 
+    # 任何非法或缺失 action 均回退到 request_human_input，确保不会卡死流程
     action = str(payload.get("action", "request_human_input"))
     if action not in VALID_SUPERVISOR_ACTIONS:
         action = "request_human_input"
@@ -170,10 +178,17 @@ def guard_supervisor_action_for_pr_state(
     action_result: SupervisorActionResult,
     pr_context: PullRequestContext,
 ) -> SupervisorActionResult:
-    """Prevent unsafe approval when deterministic PR state is not reviewable."""
+    """Prevent unsafe approval when deterministic PR state is not reviewable.
+
+    这是 LLM 决策与实际 PR 状态之间的守卫层：模型可能基于过时上下文
+    批准代码，而 GitHub 的 mergeable/checks_state 是更接近事实的
+    确定性信号，因此必须独立校验。
+    """
     if action_result.action != "approve_for_human_review":
         return action_result
 
+    # mergeable=False 通常意味着存在冲突，直接批准会导致后续人工 Reviewer
+    # 无法合并，因此强制转交 rebase 流程先解决冲突
     if pr_context.mergeable is False:
         summary = (
             "Approval blocked by PR mergeability gate: the PR is currently "
@@ -359,6 +374,8 @@ def execute_rebase(
     Returns:
         Verification results after rebase.
     """
+    # 在执行任何变更前校验 HEAD 与分支，防止因并发操作或其他流程
+    # 已修改工作树而导致 rebase 在错误状态上执行
     current_head = get_head_sha(worktree_path, process_runner)
     if current_head != expected_head:
         raise RuntimeError(
@@ -374,13 +391,13 @@ def execute_rebase(
     remote = config.git.remote
     base_branch = config.git.base_branch
 
-    # Fetch latest base branch
+    # 拉取远程最新 base，确保 rebase 目标是最新的，减少后续再次冲突的概率
     process_runner.run(
         ["git", "fetch", remote, base_branch],
         cwd=worktree_path,
     )
 
-    # Rebase onto fetched base
+    # 执行 rebase；不设置 check=True，因为冲突是预期内的正常分支情况
     rebase_result = process_runner.run(
         ["git", "rebase", f"{remote}/{base_branch}"],
         cwd=worktree_path,
@@ -388,8 +405,10 @@ def execute_rebase(
     )
 
     if rebase_result.return_code != 0:
+        # 使用配置中的最大修复次数，避免在复杂冲突上无限循环消耗资源
         max_attempts = max(0, config.post_pr_supervisor.max_repair_attempts)
         for attempt in range(1, max_attempts + 1):
+            # 获取当前存在冲突的文件列表，仅让 Agent 聚焦这些文件
             diff_names_result = process_runner.run(
                 ["git", "diff", "--name-only", "--diff-filter=U"],
                 cwd=worktree_path,
@@ -407,8 +426,11 @@ def execute_rebase(
                 supervisor_agent, prompt, worktree_path, process_runner
             )
 
+            # Agent 通过写入 commit-request.json 显式表达提交意图，
+            # 避免无意的文件修改被自动提交
             request_path = worktree_path / ".agent-runner" / "commit-request.json"
             if request_path.is_file():
+                # 在提交前再次确认分支，防止 Agent 中途切换了分支
                 current_branch = get_current_branch(worktree_path, process_runner)
                 if current_branch != pr_branch:
                     raise RuntimeError(
@@ -422,6 +444,7 @@ def execute_rebase(
                     )
                 validate_safe_changes(worktree_path, config, process_runner)
                 process_runner.run(["git", "add", "-A"], cwd=worktree_path)
+                # rebase --continue 前先做验证，确保冲突解决后的代码仍然健康
                 verification_results = run_verification(
                     worktree_path, config, process_runner
                 )
@@ -432,21 +455,26 @@ def execute_rebase(
                     check=False,
                 )
                 if continue_result.return_code == 0:
+                    # rebase 成功后再验证并推送，保证推送到远程的代码一定通过校验
                     verification_results = run_verification(
                         worktree_path, config, process_runner
                     )
                     ensure_verification_passed(verification_results)
+                    # force-with-lease 比 force 安全：若远程分支在 fetch 后被他人
+                    # 更新，则推送会失败，避免覆盖他人的并行工作
                     process_runner.run(
                         ["git", "push", "--force-with-lease", remote, pr_branch],
                         cwd=worktree_path,
                     )
                     return verification_results
             else:
+                # Agent 没有写 commit-request 却改了文件，属于未授权修改，必须拒绝
                 if has_changes(worktree_path, process_runner):
                     raise RuntimeError(
                         "Rebase conflict agent changed files without writing "
                         ".agent-runner/commit-request.json."
                     )
+                # Agent 未修改文件，尝试继续 rebase，可能冲突已被外部解决
                 continue_result = process_runner.run(
                     ["git", "rebase", "--continue"],
                     cwd=worktree_path,
@@ -463,6 +491,7 @@ def execute_rebase(
                     )
                     return verification_results
 
+        # 所有重试次数用尽后回退 rebase，保持工作树干净并抛出异常让上层决策
         process_runner.run(
             ["git", "rebase", "--abort"],
             cwd=worktree_path,
@@ -470,11 +499,11 @@ def execute_rebase(
         )
         raise RuntimeError("Rebase conflict resolution exhausted")
 
-    # Verify after rebase
+    # rebase 未遇到冲突时，仍需验证代码健康度再推送
     verification_results = run_verification(worktree_path, config, process_runner)
     ensure_verification_passed(verification_results)
 
-    # Push with force-with-lease only on the PR branch
+    # 仅在 PR 分支上使用 force-with-lease 推送，避免误操作其他分支
     process_runner.run(
         ["git", "push", "--force-with-lease", remote, pr_branch],
         cwd=worktree_path,
@@ -507,6 +536,7 @@ def execute_repair(
     Returns:
         Verification results after repair commit.
     """
+    # 与 rebase 同理：在让 Agent 介入前先锁定工作树状态，防止竞态
     current_head = get_head_sha(worktree_path, process_runner)
     if current_head != expected_head:
         raise RuntimeError(
@@ -539,6 +569,8 @@ def execute_repair(
         supervisor_agent, repair_prompt, worktree_path, process_runner
     )
 
+    # Agent 必须通过 commit-request.json 显式请求提交；直接检测文件变更不可靠，
+    # 因为 Agent 可能仅做探索性查看或临时文件修改，不应被误提交
     request_path = worktree_path / ".agent-runner" / "commit-request.json"
     if request_path.is_file():
         verification_results = commit_requested_changes(
@@ -554,6 +586,7 @@ def execute_repair(
                 "Repair agent changed files without writing "
                 ".agent-runner/commit-request.json."
             )
+        # Agent 未做修改时仍需确认当前代码通过验证，避免空转后留下隐患
         verification_results = run_verification(worktree_path, config, process_runner)
         ensure_verification_passed(verification_results)
 
@@ -593,12 +626,14 @@ def run_post_pr_supervisor_cycle(
         Supervisor action result.
     """
     issue_comments = github_client.list_issue_comments(issue.number)
-    # Derive PR number from URL for PR comments
+    # PR URL 中解析 PR number；Issue 与 PR 通常一一对应，但 PR 评论需单独拉取
     pr_number_match = re.search(r"/pull/(\d+)", pr_context.pr_url)
     pr_comments: list[str] = []
     if pr_number_match:
         pr_comments = github_client.list_pr_comments(int(pr_number_match.group(1)))
 
+    # 获取远程 base 分支最新 SHA，用于判断 PR 是否落后于 base，
+    # 并在提示词中给模型提供合并基线参考
     base_sha_remote = github_client.get_remote_base_sha(
         config.git.remote, config.git.base_branch
     )
@@ -622,6 +657,7 @@ def run_post_pr_supervisor_cycle(
         capture_output=True,
     )
     raw_action_result = parse_supervisor_action(extract_agent_response_text(result))
+    # 先经过守卫层校正，再对外暴露最终决策，确保不违背客观 PR 状态
     action_result = guard_supervisor_action_for_pr_state(
         raw_action_result,
         pr_context,
@@ -640,6 +676,8 @@ def run_post_pr_supervisor_cycle(
         issue_comments_count=len(issue_comments),
         pr_comments_count=len(pr_comments),
     )
+    # 评论写入 Issue 而非 PR，确保事件时间线与原始需求单保持一致，
+    # 方便后续 run-once 调度器通过 Issue 评论追踪整体进度
     github_client.comment_issue(issue.number, comment_body)
 
     return action_result

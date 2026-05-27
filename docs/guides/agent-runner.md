@@ -270,8 +270,13 @@ checks 状态：
 
 - PR 当前不可合并或存在冲突时，approval 会被改写为 `rebase_pr_branch`
 - PR checks 已失败时，approval 会被改写为 `repair_pr_branch`
+- open PR 存在但完整 PR context 暂时无法读取时，本轮 supervision 会 defer 并保留待观察状态；发布、rework 后续评审和循环内再次评审都不会使用不完整 context 批准进入 review
 
 这样可以避免 `agent/review` label 覆盖仍需 `run-once` 消费的 rework/rebase 状态。
+
+`review-once` 的 CLI 日志会打印本轮 outcome，例如 `queued_rebase_pr_branch`、
+`approved_for_human_review` 或 `deferred_pr_context_unavailable`。被 queue 的
+rebase/repair 仍由下一次 `iar run-once` 在 PR branch worktree 中执行。
 
 ### Rework Guard
 

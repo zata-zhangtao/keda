@@ -92,7 +92,7 @@ def _process_review_candidate(
     agent: str,
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
-) -> None:
+) -> str:
     """Run supervisor cycle for a single review candidate."""
     comments = github_client.list_issue_comments(issue.number)
     last_marker = parse_latest_event_marker(comments)
@@ -103,25 +103,26 @@ def _process_review_candidate(
         _logger.warning(
             "Issue #%d has no identifiable PR branch; skipping.", issue.number
         )
-        return
+        return "skipped_no_pr_branch"
 
     pr_context = github_client.get_pull_request_context(pr_branch)
     if pr_context is None:
         open_pr_url = github_client.find_open_pr_by_head(pr_branch)
         if open_pr_url:
-            pr_context = PullRequestContext(
-                pr_url=open_pr_url,
-                branch=pr_branch,
-                head_sha=last_marker.head_sha if last_marker else "",
-                base_sha="",
+            _logger.warning(
+                "Issue #%d branch %s has an open PR but complete PR context is "
+                "unavailable; deferring supervision to avoid unsafe approval.",
+                issue.number,
+                pr_branch,
             )
+            return "deferred_pr_context_unavailable"
         else:
             _logger.warning(
                 "Issue #%d branch %s has no open PR; skipping.",
                 issue.number,
                 pr_branch,
             )
-            return
+            return "skipped_no_open_pr"
 
     pr_number_match = re.search(r"/pull/(\d+)", pr_context.pr_url)
     pr_comments: list[str] = []
@@ -143,7 +144,7 @@ def _process_review_candidate(
             "Issue #%d context unchanged since last supervisor event; skipping.",
             issue.number,
         )
-        return
+        return "skipped_context_unchanged"
 
     # Move to supervising if currently in review
     if config.labels.review in issue.labels:
@@ -174,7 +175,7 @@ def _process_review_candidate(
             add=[config.labels.review],
             remove=[config.labels.supervising],
         )
-        return
+        return "approved_for_human_review"
 
     if action_result.action in ("request_human_input",):
         github_client.edit_issue_labels(
@@ -182,7 +183,7 @@ def _process_review_candidate(
             add=[config.labels.blocked],
             remove=[config.labels.supervising],
         )
-        return
+        return "blocked_human_input"
 
     if action_result.action == "mark_failed":
         github_client.edit_issue_labels(
@@ -190,7 +191,7 @@ def _process_review_candidate(
             add=[config.labels.failed],
             remove=[config.labels.supervising],
         )
-        return
+        return "marked_failed"
 
     if action_result.action in (
         "repair_pr_branch",
@@ -211,7 +212,7 @@ def _process_review_candidate(
             add=[config.labels.running],
             remove=[config.labels.supervising],
         )
-        return
+        return f"queued_{action_result.action}"
 
     # Unknown action: block
     github_client.edit_issue_labels(
@@ -219,6 +220,7 @@ def _process_review_candidate(
         add=[config.labels.blocked],
         remove=[config.labels.supervising],
     )
+    return "blocked_unknown_action"
 
 
 def review_once(
@@ -266,7 +268,7 @@ def review_once(
             )
             continue
         try:
-            _process_review_candidate(
+            outcome = _process_review_candidate(
                 issue=issue,
                 repo_path=repo_path,
                 config=config,
@@ -274,7 +276,12 @@ def review_once(
                 github_client=github_client,
                 process_runner=process_runner,
             )
-            _logger.info("Reviewed Issue #%d: %s", issue.number, issue.title)
+            _logger.info(
+                "Review outcome for Issue #%d: %s (%s)",
+                issue.number,
+                outcome,
+                issue.title,
+            )
         except Exception as exc:  # noqa: BLE001 - report queue failures and continue.
             exit_code = 1
             current_labels = [

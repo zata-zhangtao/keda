@@ -35,6 +35,7 @@
 - `PullRequestContext` 已新增 `checks_summary`，supervisor prompt 和 gate summary 可携带 failed/pending check 摘要。
 - `pr_supervisor.guard_supervisor_action_for_pr_state(...)` 已加入 deterministic gate：PR 冲突时将 approval 改写为 `rebase_pr_branch`，checks failure 时将 approval 改写为 `repair_pr_branch`。
 - `review_once` 已复用该 gate，防止 review polling 路径把冲突或 failed-check PR 放入 `agent/review`。
+- 2026-05-28 补充修复：当 open PR 存在但完整 PR context 暂时无法读取时，`review_once`、发布/rework 后 supervisor 路径以及修复循环内的后续评审都会 defer，而不是构造未知 `mergeable` 的 fallback context 继续 approve；CLI outcome 日志也会明确显示 queued/deferred/approved。
 - `docs/guides/agent-runner.md` 已记录 checks 聚合和 approval gate 行为。
 - 已用真实 `gh` 对 keda PR #32 / branch `issue-28` 验证 adapter 可返回 `mergeable=False`，不再因 unsupported JSON field 丢失 PR context。
 

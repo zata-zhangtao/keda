@@ -30,7 +30,6 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     FailureType,
     IssueSummary,
-    PullRequestContext,
 )
 from backend.core.use_cases.agent_review import run_pre_push_review
 from backend.core.use_cases.agent_runner_events import format_event_marker
@@ -180,35 +179,6 @@ def _count_local_commits_since_base(
         return int(ahead_result.stdout.strip() or "0")
     except ValueError:
         return 0
-
-
-def _get_merge_base_sha(
-    worktree_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> str:
-    """获取 worktree 与远程 base 分支的 merge base SHA。
-
-    用于 PR 上下文记录 base commit。
-
-    Args:
-        worktree_path: worktree 目录
-        config: 应用配置
-        process_runner: 进程运行器
-
-    Returns:
-        merge base SHA，失败时返回当前 HEAD SHA
-    """
-    base_ref_name = f"{config.git.remote}/{config.git.base_branch}"
-    merge_base_result = process_runner.run(
-        ["git", "merge-base", "HEAD", base_ref_name],
-        cwd=worktree_path,
-        check=False,
-    )
-    merge_base_sha = merge_base_result.stdout.strip()
-    if merge_base_result.return_code == 0 and merge_base_sha:
-        return merge_base_sha
-    return get_head_sha(worktree_path, process_runner)
 
 
 def _reuse_existing_local_commit(
@@ -376,27 +346,28 @@ def _finish_implementation_publication(
         # 获取 PR 上下文（如果已存在）
         pr_context = github_client.get_pull_request_context(branch)
         if pr_context is None:
-            pr_context = PullRequestContext(
-                pr_url=pr_url,
-                branch=branch,
-                head_sha=publish_sha,
-                base_sha=_get_merge_base_sha(worktree_path, config, process_runner),
+            _logger.warning(
+                "Deferring post-PR supervisor for Issue #%d branch %s: "
+                "complete PR context is unavailable.",
+                issue.number,
+                branch,
             )
-        supervisor_agent = (
-            selected_agent
-            if supervisor_config.supervisor_agent == "auto"
-            else supervisor_config.supervisor_agent
-        )
-        # 启动监督修复循环
-        _run_supervisor_with_repair_loop(
-            issue=issue,
-            worktree_path=worktree_path,
-            config=config,
-            github_client=github_client,
-            process_runner=process_runner,
-            pr_context=pr_context,
-            supervisor_agent=supervisor_agent,
-        )
+        else:
+            supervisor_agent = (
+                selected_agent
+                if supervisor_config.supervisor_agent == "auto"
+                else supervisor_config.supervisor_agent
+            )
+            # 启动监督修复循环
+            _run_supervisor_with_repair_loop(
+                issue=issue,
+                worktree_path=worktree_path,
+                config=config,
+                github_client=github_client,
+                process_runner=process_runner,
+                pr_context=pr_context,
+                supervisor_agent=supervisor_agent,
+            )
     else:
         # 未启用监督时直接进入 review 标签
         github_client.edit_issue_labels(
@@ -513,26 +484,27 @@ def _finish_existing_commit_publication(
     if supervisor_config.enabled:
         pr_context = github_client.get_pull_request_context(branch)
         if pr_context is None:
-            pr_context = PullRequestContext(
-                pr_url=pr_url,
-                branch=branch,
-                head_sha=publish_sha,
-                base_sha=_get_merge_base_sha(worktree_path, config, process_runner),
+            _logger.warning(
+                "Deferring post-PR supervisor for Issue #%d branch %s: "
+                "complete PR context is unavailable.",
+                issue.number,
+                branch,
             )
-        supervisor_agent = (
-            selected_agent
-            if supervisor_config.supervisor_agent == "auto"
-            else supervisor_config.supervisor_agent
-        )
-        _run_supervisor_with_repair_loop(
-            issue=issue,
-            worktree_path=worktree_path,
-            config=config,
-            github_client=github_client,
-            process_runner=process_runner,
-            pr_context=pr_context,
-            supervisor_agent=supervisor_agent,
-        )
+        else:
+            supervisor_agent = (
+                selected_agent
+                if supervisor_config.supervisor_agent == "auto"
+                else supervisor_config.supervisor_agent
+            )
+            _run_supervisor_with_repair_loop(
+                issue=issue,
+                worktree_path=worktree_path,
+                config=config,
+                github_client=github_client,
+                process_runner=process_runner,
+                pr_context=pr_context,
+                supervisor_agent=supervisor_agent,
+            )
     else:
         github_client.edit_issue_labels(
             issue.number,
