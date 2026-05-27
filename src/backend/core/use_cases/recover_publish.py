@@ -54,7 +54,6 @@ def resolve_existing_worktree(
     Raises:
         PublishRecoveryError: If the worktree path cannot be resolved or does not exist.
     """
-    import shlex
 
     from backend.core.use_cases.run_agent_once import format_command
 
@@ -77,9 +76,7 @@ def resolve_existing_worktree(
         check=False,
     )
     if git_dir_result.return_code != 0:
-        raise PublishRecoveryError(
-            f"Path is not a valid git worktree: {worktree_path}"
-        )
+        raise PublishRecoveryError(f"Path is not a valid git worktree: {worktree_path}")
 
     return worktree_path
 
@@ -140,8 +137,7 @@ def validate_branch_safety(
 
     if not current_branch:
         raise PublishRecoveryError(
-            "Cannot recover from detached HEAD state. "
-            "Checkout a valid branch first."
+            "Cannot recover from detached HEAD state. " "Checkout a valid branch first."
         )
 
     if current_branch == config.git.base_branch:
@@ -210,7 +206,6 @@ def recover_publish_issue(
     from backend.core.use_cases.run_agent_once import (
         get_head_sha,
         list_git_remotes,
-        validate_publish_remote,
     )
 
     issue_number = request.issue_number

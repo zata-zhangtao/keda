@@ -23,6 +23,7 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     FailureType,
     IssueSummary,
+    PublishFailureCategory,
 )
 from backend.core.use_cases.agent_runner_feedback import (
     PrdDeliveryError,
@@ -141,7 +142,7 @@ class PublishFailureError(RuntimeError):
         message: str,
         *,
         worktree_path: Path | None = None,
-        failure_category: str = "unknown",
+        failure_category: PublishFailureCategory = PublishFailureCategory.UNKNOWN,
     ) -> None:
         super().__init__(message)
         self.worktree_path = worktree_path
@@ -1087,7 +1088,7 @@ def format_publish_failure_comment(
     issue_number: int,
     *,
     worktree_path: Path | None = None,
-    failure_category: str = "unknown",
+    failure_category: PublishFailureCategory = PublishFailureCategory.UNKNOWN,
 ) -> str:
     """Build a failure comment for publish phase failures.
 
@@ -1109,7 +1110,7 @@ def format_publish_failure_comment(
         "",
         "The agent produced a local commit but publishing failed.",
         "",
-        f"- Failure category: `{failure_category}`",
+        f"- Failure category: `{failure_category.value}`",
     ]
 
     if worktree_path is not None:

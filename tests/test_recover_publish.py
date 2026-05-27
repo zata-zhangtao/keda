@@ -107,9 +107,7 @@ class TestResolveExistingWorktree:
         config = _make_config()
         # Configure path_command to return non-existent path
         config = AppConfig(
-            worktree=config.worktree.__class__(
-                path_command=f"echo {nonexistent_path}"
-            )
+            worktree=config.worktree.__class__(path_command=f"echo {nonexistent_path}")
         )
         responses = {
             ("echo", str(nonexistent_path)): type(
@@ -271,9 +269,7 @@ class TestRecoverPublishIssue:
                 review="agent/review",
                 failed="agent/failed",
             ),
-            worktree=config.worktree.__class__(
-                path_command=f"echo {worktree_path}"
-            ),
+            worktree=config.worktree.__class__(path_command=f"echo {worktree_path}"),
         )
 
         runner = _make_process_runner_with_worktree(worktree_path, branch="issue-42")
@@ -321,9 +317,7 @@ class TestRecoverPublishIssue:
                 review="agent/review",
                 failed="agent/failed",
             ),
-            worktree=config.worktree.__class__(
-                path_command=f"echo {worktree_path}"
-            ),
+            worktree=config.worktree.__class__(path_command=f"echo {worktree_path}"),
         )
 
         runner = _make_process_runner_with_worktree(worktree_path, branch="issue-42")
@@ -359,9 +353,7 @@ class TestRecoverPublishIssue:
                 review="agent/review",
                 failed="agent/failed",
             ),
-            worktree=config.worktree.__class__(
-                path_command=f"echo {worktree_path}"
-            ),
+            worktree=config.worktree.__class__(path_command=f"echo {worktree_path}"),
         )
 
         runner = _make_process_runner_with_worktree(
@@ -397,9 +389,7 @@ class TestRecoverPublishIssue:
                 review="agent/review",
                 failed="agent/failed",
             ),
-            worktree=config.worktree.__class__(
-                path_command=f"echo {worktree_path}"
-            ),
+            worktree=config.worktree.__class__(path_command=f"echo {worktree_path}"),
         )
 
         runner = _make_process_runner_with_worktree(
@@ -435,9 +425,7 @@ class TestRecoverPublishIssue:
                 review="agent/review",
                 failed="agent/failed",
             ),
-            worktree=config.worktree.__class__(
-                path_command=f"echo {worktree_path}"
-            ),
+            worktree=config.worktree.__class__(path_command=f"echo {worktree_path}"),
         )
 
         runner = _make_process_runner_with_worktree(worktree_path, branch="issue-42")

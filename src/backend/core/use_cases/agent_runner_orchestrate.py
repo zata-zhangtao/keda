@@ -16,6 +16,7 @@ from backend.core.shared.models.agent_runner import (
     AttemptResult,
     CommandResult,
     IssueSummary,
+    PublishFailureCategory,
     PullRequestContext,
     ReviewEventMarker,
 )
@@ -241,13 +242,13 @@ def _process_ready_issue(
         raise PublishFailureError(
             str(exc),
             worktree_path=worktree_path,
-            failure_category="push",
+            failure_category=PublishFailureCategory.PUSH,
         ) from exc
     except OSError as exc:
         raise PublishFailureError(
             str(exc),
             worktree_path=worktree_path,
-            failure_category="push",
+            failure_category=PublishFailureCategory.PUSH,
         ) from exc
 
     try:
@@ -260,7 +261,7 @@ def _process_ready_issue(
         raise PublishFailureError(
             f"Failed to update labels after publish: {exc}",
             worktree_path=worktree_path,
-            failure_category="label_update",
+            failure_category=PublishFailureCategory.LABEL_UPDATE,
         ) from exc
 
     publish_sha = get_head_sha(worktree_path, process_runner)
@@ -278,7 +279,7 @@ def _process_ready_issue(
         raise PublishFailureError(
             f"Failed to post draft PR comment: {exc}",
             worktree_path=worktree_path,
-            failure_category="comment_update",
+            failure_category=PublishFailureCategory.COMMENT_UPDATE,
         ) from exc
 
     supervisor_config = config.post_pr_supervisor
