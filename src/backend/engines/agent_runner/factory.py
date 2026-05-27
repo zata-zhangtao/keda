@@ -805,11 +805,12 @@ def _relay_process_stdout(
         if process.stdout is not None:
             for line in process.stdout:
                 stdout_lines.append(line)
-                timestamped = _format_timestamped_line(line)
-                print(timestamped, end="")
                 logger.info("%s", line.rstrip("\n"))
                 if output_sink is not None:
                     output_sink(line.rstrip("\n"))
+                else:
+                    timestamped = _format_timestamped_line(line)
+                    print(timestamped, end="")
         return_code = process.wait(timeout=None)
     except Exception:
         process.kill()

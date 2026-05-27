@@ -320,163 +320,163 @@ def run_agent_deliberation(
     if output_view is None:
         output_view = NoOpOutputView()
 
-    session_id = request.session_id or create_default_session_id()
-    output_dir = Path(request.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    workspace_root = output_dir / "workspaces"
-    workspace_root.mkdir(parents=True, exist_ok=True)
+    try:
+        session_id = request.session_id or create_default_session_id()
+        output_dir = Path(request.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        workspace_root = output_dir / "workspaces"
+        workspace_root.mkdir(parents=True, exist_ok=True)
 
-    started_at = _now_iso()
-    emitted_events: list[DeliberationEvent] = []
+        started_at = _now_iso()
+        emitted_events: list[DeliberationEvent] = []
 
-    def _record_event(event: DeliberationEvent) -> None:
-        emitted_events.append(event)
-        event_sink(event)
+        def _record_event(event: DeliberationEvent) -> None:
+            emitted_events.append(event)
+            event_sink(event)
 
-    _emit(
-        _record_event,
-        session_id,
-        0,
-        "system",
-        "session_started",
-        f"session={session_id} rounds={request.rounds}",
-    )
+        _emit(
+            _record_event,
+            session_id,
+            0,
+            "system",
+            "session_started",
+            f"session={session_id} rounds={request.rounds}",
+        )
 
-    profiles_by_id = {profile.profile_id: profile for profile in config.profiles}
-    selected_profiles = tuple(
-        profiles_by_id[profile_id]
-        for profile_id in request.agents
-        if profile_id in profiles_by_id
-    )
-    if not selected_profiles:
-        selected_profiles = config.profiles
+        profiles_by_id = {profile.profile_id: profile for profile in config.profiles}
+        selected_profiles = tuple(
+            profiles_by_id[profile_id]
+            for profile_id in request.agents
+            if profile_id in profiles_by_id
+        )
+        if not selected_profiles:
+            selected_profiles = config.profiles
 
-    transcript_parts: list[str] = []
-    round_outputs: dict[int, dict[str, str]] = {}
+        transcript_parts: list[str] = []
+        round_outputs: dict[int, dict[str, str]] = {}
 
-    # Isolation round
-    isolation_outputs = _run_round(
-        request=request,
-        profiles=selected_profiles,
-        round_number=1,
-        prompt_builder=lambda profile: _build_isolated_prompt(request, profile),
-        transcript_runner=transcript_runner,
-        event_sink=_record_event,
-        workspace_root=workspace_root,
-        session_id=session_id,
-        output_view=output_view,
-    )
-    round_outputs[1] = isolation_outputs
-    transcript_parts.append(_format_round_transcript(1, isolation_outputs))
-
-    # Discussion rounds
-    for round_number in range(2, request.rounds + 1):
-        current_transcript = "\n\n".join(transcript_parts)
-        discussion_outputs = _run_round(
+        # Isolation round
+        isolation_outputs = _run_round(
             request=request,
             profiles=selected_profiles,
-            round_number=round_number,
-            prompt_builder=lambda profile: _build_discussion_prompt(
-                request, profile, current_transcript
-            ),
+            round_number=1,
+            prompt_builder=lambda profile: _build_isolated_prompt(request, profile),
             transcript_runner=transcript_runner,
             event_sink=_record_event,
             workspace_root=workspace_root,
             session_id=session_id,
             output_view=output_view,
         )
-        round_outputs[round_number] = discussion_outputs
-        transcript_parts.append(
-            _format_round_transcript(round_number, discussion_outputs)
+        round_outputs[1] = isolation_outputs
+        transcript_parts.append(_format_round_transcript(1, isolation_outputs))
+
+        # Discussion rounds
+        for round_number in range(2, request.rounds + 1):
+            current_transcript = "\n\n".join(transcript_parts)
+            discussion_outputs = _run_round(
+                request=request,
+                profiles=selected_profiles,
+                round_number=round_number,
+                prompt_builder=lambda profile: _build_discussion_prompt(
+                    request, profile, current_transcript
+                ),
+                transcript_runner=transcript_runner,
+                event_sink=_record_event,
+                workspace_root=workspace_root,
+                session_id=session_id,
+                output_view=output_view,
+            )
+            round_outputs[round_number] = discussion_outputs
+            transcript_parts.append(
+                _format_round_transcript(round_number, discussion_outputs)
+            )
+
+        # Synthesis
+        full_transcript = "\n\n".join(transcript_parts)
+        synthesis_prompt = _build_synthesis_prompt(request, full_transcript)
+        synthesizer_workspace = workspace_root / "synthesizer"
+        synthesizer_workspace.mkdir(parents=True, exist_ok=True)
+        synthesis_output_path = synthesizer_workspace / "synthesis-output.md"
+
+        # Register synthesizer as a single-agent "round" for the output view
+        synthesizer_profile = DeliberationAgentProfile(
+            profile_id="synthesizer",
+            agent=request.synthesizer,
+            role="synthesizer",
+            behavior_prompt="",
+        )
+        output_view.register_round_profiles(0, (synthesizer_profile,))
+
+        _emit(
+            _record_event,
+            session_id,
+            0,
+            "synthesizer",
+            "agent_started",
+            "started synthesis",
+        )
+        output_view.update_status(0, "synthesizer", "running")
+        synthesis_sink = _create_streaming_sink(
+            synthesis_output_path, output_view, 0, "synthesizer"
+        )
+        synthesis_result = transcript_runner.run(
+            agent_name=request.synthesizer,
+            prompt=synthesis_prompt,
+            cwd=synthesizer_workspace,
+            event_sink=_record_event,
+            output_sink=synthesis_sink,
+        )
+        synthesis_output = synthesis_result.stdout.strip()
+        _write_workspace_output(synthesis_output_path, synthesis_output)
+        synthesis_status = "finished" if synthesis_result.return_code == 0 else "failed"
+        output_view.update_status(0, "synthesizer", synthesis_status)
+        _emit(
+            _record_event,
+            session_id,
+            0,
+            "synthesizer",
+            "agent_finished",
+            f"exit={synthesis_result.return_code}",
+        )
+        if synthesis_result.return_code != 0:
+            raise RuntimeError(
+                "Deliberation synthesizer failed with exit code "
+                f"{synthesis_result.return_code}."
+            )
+
+        parsed = _parse_synthesis(synthesis_output)
+
+        finished_at = _now_iso()
+        _emit(
+            _record_event,
+            session_id,
+            0,
+            "system",
+            "session_finished",
+            f"session={session_id}",
         )
 
-    # Synthesis
-    full_transcript = "\n\n".join(transcript_parts)
-    synthesis_prompt = _build_synthesis_prompt(request, full_transcript)
-    synthesizer_workspace = workspace_root / "synthesizer"
-    synthesizer_workspace.mkdir(parents=True, exist_ok=True)
-    synthesis_output_path = synthesizer_workspace / "synthesis-output.md"
-
-    # Register synthesizer as a single-agent "round" for the output view
-    synthesizer_profile = DeliberationAgentProfile(
-        profile_id="synthesizer",
-        agent=request.synthesizer,
-        role="synthesizer",
-        behavior_prompt="",
-    )
-    output_view.register_round_profiles(0, (synthesizer_profile,))
-
-    _emit(
-        _record_event,
-        session_id,
-        0,
-        "synthesizer",
-        "agent_started",
-        "started synthesis",
-    )
-    output_view.update_status(0, "synthesizer", "running")
-    synthesis_sink = _create_streaming_sink(
-        synthesis_output_path, output_view, 0, "synthesizer"
-    )
-    synthesis_result = transcript_runner.run(
-        agent_name=request.synthesizer,
-        prompt=synthesis_prompt,
-        cwd=synthesizer_workspace,
-        event_sink=_record_event,
-        output_sink=synthesis_sink,
-    )
-    synthesis_output = synthesis_result.stdout.strip()
-    _write_workspace_output(synthesis_output_path, synthesis_output)
-    synthesis_status = "finished" if synthesis_result.return_code == 0 else "failed"
-    output_view.update_status(0, "synthesizer", synthesis_status)
-    _emit(
-        _record_event,
-        session_id,
-        0,
-        "synthesizer",
-        "agent_finished",
-        f"exit={synthesis_result.return_code}",
-    )
-    if synthesis_result.return_code != 0:
-        raise RuntimeError(
-            "Deliberation synthesizer failed with exit code "
-            f"{synthesis_result.return_code}."
+        result = DeliberationResult(
+            session_id=session_id,
+            prompt=request.prompt,
+            recommendation=parsed["recommendation"],
+            consensus=parsed["consensus"],
+            disagreements=parsed["disagreements"],
+            risks=parsed["risks"],
+            next_actions=parsed["next_actions"],
+            events=tuple(emitted_events),
+            agent_outputs={
+                f"round_{round_number}": dict(outputs)
+                for round_number, outputs in round_outputs.items()
+            },
+            output_dir=str(output_dir),
+            started_at=started_at,
+            finished_at=finished_at,
         )
 
-    parsed = _parse_synthesis(synthesis_output)
-
-    finished_at = _now_iso()
-    _emit(
-        _record_event,
-        session_id,
-        0,
-        "system",
-        "session_finished",
-        f"session={session_id}",
-    )
-
-    # Close the output view when deliberation is complete
-    output_view.close()
-
-    result = DeliberationResult(
-        session_id=session_id,
-        prompt=request.prompt,
-        recommendation=parsed["recommendation"],
-        consensus=parsed["consensus"],
-        disagreements=parsed["disagreements"],
-        risks=parsed["risks"],
-        next_actions=parsed["next_actions"],
-        events=tuple(emitted_events),
-        agent_outputs={
-            f"round_{round_number}": dict(outputs)
-            for round_number, outputs in round_outputs.items()
-        },
-        output_dir=str(output_dir),
-        started_at=started_at,
-        finished_at=finished_at,
-    )
-
-    return result
+        return result
+    finally:
+        output_view.close()
 
 
 def create_default_session_id() -> str:

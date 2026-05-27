@@ -269,10 +269,11 @@ def run_filtered_claude_stream(
                 if collect_stdout and rendered_text:
                     stdout_lines.append(rendered_text)
                 if rendered_text:
-                    timestamped = _format_timestamped_line(rendered_text)
-                    print(timestamped, end="", flush=True)
                     if output_sink is not None:
                         output_sink(rendered_text.rstrip("\n"))
+                    else:
+                        timestamped = _format_timestamped_line(rendered_text)
+                        print(timestamped, end="", flush=True)
 
                     # Structured events go straight to logger
                     if (
