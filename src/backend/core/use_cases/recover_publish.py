@@ -136,8 +136,7 @@ def validate_branch_safety(
 
     if not current_branch:
         raise PublishRecoveryError(
-            "Cannot recover from detached HEAD state. "
-            "Checkout a valid branch first."
+            "Cannot recover from detached HEAD state. " "Checkout a valid branch first."
         )
 
     if current_branch == config.git.base_branch:

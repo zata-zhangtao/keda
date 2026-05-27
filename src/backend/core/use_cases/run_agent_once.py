@@ -707,4 +707,3 @@ def run_once(
         github_client=github_client,
         process_runner=process_runner,
     )
-
