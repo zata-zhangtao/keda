@@ -725,6 +725,7 @@ __all__ = [
     "ChunkingSettings",
     "DatabaseSettings",
     "EmbeddingSettings",
+    "IAR_REPOSITORY_CONFIG_FILENAME",
     "MinioSettings",
     "QdrantSettings",
     "TimeoutSettings",

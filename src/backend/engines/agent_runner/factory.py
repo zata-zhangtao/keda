@@ -696,11 +696,14 @@ class SubprocessTranscriptRunner:
         *,
         cwd: Path,
         event_sink: "Callable[[DeliberationEvent], None]",
+        output_sink: "Callable[[str], None] | None" = None,
     ) -> "CommandResult":
         """Run an agent and emit events.
 
         Streams agent stdout to the terminal in real time while
-        collecting it for the deliberation transcript.
+        collecting it for the deliberation transcript. When
+        ``output_sink`` is provided, rendered text chunks are passed
+        to it as they arrive.
         """
         command = _build_deliberation_command(agent_name, prompt, cwd)
         _ = event_sink
@@ -716,6 +719,7 @@ class SubprocessTranscriptRunner:
                 timeout=None,
                 collect_stdout=True,
                 prompt_text=prompt,
+                output_sink=output_sink,
             )
             return CommandResult(
                 command=tuple(command_no_prompt),
@@ -726,7 +730,9 @@ class SubprocessTranscriptRunner:
         if agent_name in ("kimi", "codex"):
             # Pass the prompt via stdin to avoid "Argument list too long"
             # when the transcript grows across rounds.
-            return _run_agent_with_stdin_prompt(command, prompt, cwd)
+            return _run_agent_with_stdin_prompt(
+                command, prompt, cwd, output_sink=output_sink
+            )
         process = subprocess.Popen(
             list(command),
             cwd=cwd,
@@ -737,7 +743,9 @@ class SubprocessTranscriptRunner:
             encoding="utf-8",
             bufsize=1,
         )
-        return_code, stdout_text = _relay_process_stdout(process)
+        return_code, stdout_text = _relay_process_stdout(
+            process, output_sink=output_sink
+        )
         return CommandResult(
             command=tuple(command),
             return_code=return_code,
@@ -747,7 +755,10 @@ class SubprocessTranscriptRunner:
 
 
 def _run_agent_with_stdin_prompt(
-    command: list[str], prompt: str, cwd: Path
+    command: list[str],
+    prompt: str,
+    cwd: Path,
+    output_sink: "Callable[[str], None] | None" = None,
 ) -> CommandResult:
     """Run an agent subprocess, passing the prompt via stdin."""
     import threading
@@ -772,7 +783,7 @@ def _run_agent_with_stdin_prompt(
             process.stdin.close()
 
     threading.Thread(target=_write_stdin, daemon=True).start()
-    return_code, stdout_text = _relay_process_stdout(process)
+    return_code, stdout_text = _relay_process_stdout(process, output_sink=output_sink)
     return CommandResult(
         command=tuple(command),
         return_code=return_code,
@@ -781,16 +792,22 @@ def _run_agent_with_stdin_prompt(
     )
 
 
-def _relay_process_stdout(process: subprocess.Popen[str]) -> tuple[int, str]:
+def _relay_process_stdout(
+    process: subprocess.Popen[str],
+    output_sink: "Callable[[str], None] | None" = None,
+) -> tuple[int, str]:
     """Relay subprocess stdout to terminal and logger."""
     stdout_lines: list[str] = []
     try:
         if process.stdout is not None:
             for line in process.stdout:
                 stdout_lines.append(line)
-                timestamped = _format_timestamped_line(line)
-                print(timestamped, end="")
-                logger.info("%s", line.rstrip("\n"))
+                if output_sink is not None:
+                    output_sink(line.rstrip("\n"))
+                else:
+                    timestamped = _format_timestamped_line(line)
+                    print(timestamped, end="")
+                    logger.info("%s", line.rstrip("\n"))
         return_code = process.wait(timeout=None)
     except Exception:
         process.kill()
