@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from backend.infrastructure.config.settings import IAR_REPOSITORY_CONFIG_FILENAME
+import tomli_w
+
+from backend.infrastructure.config.settings import (
+    AgentRunnerGeneratedContentSettings,
+    AgentRunnerGitSettings,
+    AgentRunnerLocalSettings,
+    AgentRunnerPrePushReviewSettings,
+    AgentRunnerPromptSettings,
+    AgentRunnerRepositoryMetadataSettings,
+    AgentRunnerRunnerSettings,
+    AgentRunnerSafetySettings,
+    AgentRunnerWorktreeSettings,
+    AgentRunnerPostPrSupervisorSettings,
+    IAR_REPOSITORY_CONFIG_FILENAME,
+)
 from backend.infrastructure.process_runner import CommandResult, SubprocessRunner
 
 
@@ -69,6 +83,47 @@ def detect_git_repository_root(
     return Path(git_root_text).resolve()
 
 
+TOML_HEADER_COMMENT = """# IAR local configuration for this repository.
+# Empty fields inherit defaults from config.toml / environment variables.
+# See: https://github.com/anthropics/claude-code (or your internal docs)
+"""
+
+IAR_CONFIG_COMMENT = """
+
+# [agent_runner] section - agent runner settings
+# Uncomment and set values to override global defaults
+"""
+
+
+def settings_to_toml_string(settings: AgentRunnerLocalSettings) -> str:
+    """Serialize AgentRunnerLocalSettings to formatted TOML string."""
+
+    data = _filter_none_dict(settings.model_dump())
+    # Wrap in [agent_runner] to match .iar.toml structure
+    wrapped = {"agent_runner": data}
+    toml_body = tomli_w.dumps(wrapped)
+    return TOML_HEADER_COMMENT + toml_body
+
+
+def _filter_none_dict(data: dict) -> dict:
+    """Recursively remove None values from dict for TOML serialization."""
+
+    def filter_value(v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return filter_dict(v)
+        if isinstance(v, list):
+            return [filter_value(item) for item in v]
+        return v
+
+    def filter_dict(d: dict) -> dict:
+        result = {k: filter_value(v) for k, v in d.items() if v is not None}
+        return result if result else {}
+
+    return filter_dict(data)
+
+
 def build_repository_local_config_text(
     options: RepositoryInitOptions,
     process_runner: SubprocessRunner | None = None,
@@ -95,26 +150,26 @@ def build_repository_local_config_text(
         repo_root_path, selected_remote, process_runner
     )
 
-    toml_text = "\n".join(
-        [
-            "[agent_runner.repository]",
-            f"id = {_toml_quote(selected_repo_id)}",
-            "enabled = true",
-            f"display_name = {_toml_quote(selected_display_name)}",
-            "",
-            "[agent_runner.git]",
-            f"remote = {_toml_quote(selected_remote)}",
-            f"base_branch = {_toml_quote(selected_base_branch)}",
-            "",
-            "[agent_runner.runner]",
-            'default_agent = "claude"',
-            "verification_commands = [",
-            f"  {_toml_quote('git diff --check')},",
-            "]",
-            "",
-        ]
+    settings = AgentRunnerLocalSettings(
+        repository=AgentRunnerRepositoryMetadataSettings(
+            id=selected_repo_id,
+            enabled=True,
+            display_name=selected_display_name,
+        ),
+        git=AgentRunnerGitSettings(
+            remote=selected_remote,
+            base_branch=selected_base_branch,
+        ),
+        worktree=AgentRunnerWorktreeSettings(),
+        runner=AgentRunnerRunnerSettings(),
+        safety=AgentRunnerSafetySettings(),
+        prompts=AgentRunnerPromptSettings(),
+        pre_push_review=AgentRunnerPrePushReviewSettings(),
+        post_pr_supervisor=AgentRunnerPostPrSupervisorSettings(),
+        generated_content=AgentRunnerGeneratedContentSettings(),
     )
-    return repo_root_path, toml_text
+
+    return repo_root_path, settings_to_toml_string(settings)
 
 
 def initialize_repository_local_config(
@@ -280,7 +335,3 @@ def _remote_head_branch(
     if remote_head_result.return_code == 0 and remote_head_text.startswith(prefix):
         return remote_head_text[len(prefix) :]
     return None
-
-
-def _toml_quote(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)
