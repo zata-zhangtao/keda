@@ -146,7 +146,7 @@ def choose_agent(issue: IssueSummary, config: AppConfig, override_agent: str) ->
     return (
         config.runner.default_agent
         if config.runner.default_agent != "auto"
-        else "codex"
+        else "claude"
     )
 
 

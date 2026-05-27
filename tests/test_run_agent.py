@@ -66,11 +66,11 @@ def test_choose_agent_from_labels() -> None:
     assert choose_agent(issue, config, "auto") == "claude"
 
 
-def test_choose_agent_defaults_to_codex() -> None:
-    """Default agent should be codex when no signals are present."""
+def test_choose_agent_defaults_to_claude() -> None:
+    """Default agent should be claude when no signals are present."""
     issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     config = AppConfig()
-    assert choose_agent(issue, config, "auto") == "codex"
+    assert choose_agent(issue, config, "auto") == "claude"
 
 
 def test_run_agent_with_prompt_uses_claude_yolo_mode(tmp_path: Path) -> None:

@@ -1,4 +1,19 @@
-"""Agent runner orchestration — high-level issue processing flow."""
+"""Agent runner orchestration — high-level issue processing flow.
+
+本模块是 Agent Runner 的核心编排层，负责管理 Issue 的完整生命周期流程：
+
+1. **轮询发现** — 从 GitHub 发现 ready/running 状态的 Issue
+2. **工作树准备** — 为每个 Issue 创建或复用 git worktree
+3. **Agent 执行** — 调用 AI Agent 实现 Issue（可选，视恢复路径而定）
+4. **代码评审** — 在 push 前运行 pre-push review
+5. **发布** — 将代码推送到远程并创建 Draft PR
+6. **事后监督** — 可选的 PR 后监督循环（修复冲突、重新构建等）
+
+Issue 有三条处理路径：
+- `_process_ready_issue`: 新 Issue → 完整 Agent 执行 → 评审 → 发布
+- `_process_running_rework`: 已运行 Issue → 检测到 rework 标记 → 执行修复 → 评审
+- `_process_running_publish_recovery`: 已运行 Issue → 有本地 commit → 直接评审 → 发布
+"""
 
 from __future__ import annotations
 
@@ -12,114 +27,54 @@ from backend.core.shared.interfaces.agent_runner import (
     IProcessRunner,
 )
 from backend.core.shared.models.agent_runner import (
-    AgentCommitResult,
     AppConfig,
-    AttemptResult,
-    CommandResult,
-    FailureType,
     IssueSummary,
     PullRequestContext,
     ReviewEventMarker,
 )
-from backend.core.use_cases.agent_review import run_pre_push_review
 from backend.core.use_cases.agent_runner_events import (
-    format_event_marker,
     parse_latest_event_marker,
+)
+from backend.core.use_cases.agent_runner_publication import (
+    _finish_existing_commit_publication,
+    _finish_implementation_publication,
+    _reuse_existing_local_commit,
+)
+from backend.core.use_cases.agent_runner_supervisor import (
+    _run_supervisor_with_repair_loop,
 )
 from backend.core.use_cases.pr_supervisor import (
     build_rework_intent_comment,
-    build_supervisor_result_comment,
     execute_rebase,
     execute_repair,
-    run_post_pr_supervisor_cycle,
 )
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
-    ensure_prd_delivery_ready,
-    ensure_verification_passed,
-    format_attempt_history,
     format_command,
     get_current_branch,
     get_head_sha,
-    has_changes,
-    publish_changes,
-    run_agent_until_committed,
-    run_preflight_checks,
-    run_verification,
 )
 
 _logger = logging.getLogger(__name__)
-
-
-def build_implementation_complete_comment(
-    *,
-    agent: str,
-    branch: str,
-    head_sha: str,
-    verification_results: list[CommandResult],
-    attempt_results: list[AttemptResult] | None = None,
-) -> str:
-    """Build the Issue comment after implementation agent finishes."""
-
-    marker = format_event_marker(
-        phase="implementation_complete",
-        cycle=1,
-        head_sha=head_sha,
-    )
-    verification_lines = "\n".join(
-        f"- `{' '.join(result.command)}`: exit {result.return_code}"
-        for result in verification_results
-    )
-    lines = [
-        marker,
-        "",
-        "## Agent Runner Implementation Complete",
-        "",
-        f"- Agent: `{agent}`",
-        f"- Branch: `{branch}`",
-        f"- Head SHA: `{head_sha}`",
-        "",
-        "Verification:",
-        verification_lines,
-    ]
-    if attempt_results:
-        lines.append("")
-        lines.append(format_attempt_history(attempt_results))
-    return "\n".join(lines)
-
-
-def build_draft_pr_created_comment(
-    *,
-    pr_url: str,
-    branch: str,
-    head_sha: str,
-) -> str:
-    """Build the Issue comment after Draft PR creation."""
-    marker = format_event_marker(
-        phase="draft_pr_created",
-        cycle=1,
-        head_sha=head_sha,
-        pr_branch=branch,
-    )
-    return "\n".join(
-        [
-            marker,
-            "",
-            "## Agent Runner Draft PR Created",
-            "",
-            f"- Branch: `{branch}`",
-            f"- Draft PR: {pr_url}",
-            f"- Head SHA: `{head_sha}`",
-        ]
-    )
 
 
 def _has_rework_intent(
     issue: IssueSummary,
     github_client: IGitHubClient,
 ) -> tuple[bool, ReviewEventMarker | None]:
-    """Return whether the Issue has a post_pr_rework_requested marker."""
+    """检测 Issue 是否包含事后修复请求标记。
+
+    通过解析 Issue 的评论列表，查找 post_pr_rework_requested 事件标记。
+    该标记在监督者请求修复时由监督循环写入。
+
+    Args:
+        issue: Issue 对象
+        github_client: GitHub 客户端
+
+    Returns:
+        (是否存在 rework 意图, 事件标记对象)
+    """
     comments = github_client.list_issue_comments(issue.number)
     marker = parse_latest_event_marker(comments)
     if marker is not None and marker.phase == "post_pr_rework_requested":
@@ -132,7 +87,21 @@ def _guard_running_issue_is_rework(
     config: AppConfig,
     github_client: IGitHubClient,
 ) -> tuple[bool, ReviewEventMarker | None]:
-    """Check if a running Issue is eligible for existing PR branch rework."""
+    """判断一个 running 状态的 Issue 是否符合 rework 资格。
+
+    资格条件：
+    1. 有 post_pr_rework_requested 事件标记
+    2. 标记中包含有效的 PR 分支名
+    3. 该分支在 GitHub 上存在对应的 open PR
+
+    Args:
+        issue: Issue 对象
+        config: 应用配置
+        github_client: GitHub 客户端
+
+    Returns:
+        (是否符合 rework 资格, 事件标记对象)
+    """
     has_rework, marker = _has_rework_intent(issue, github_client)
     if not has_rework or marker is None:
         return False, None
@@ -151,23 +120,25 @@ def _find_worktree_path_for_issue(
     config: AppConfig,
     process_runner: IProcessRunner,
 ) -> Path:
-    """Locate the existing worktree for an Issue."""
+    """根据 Issue 编号查找对应的 worktree 目录路径。
+
+    通过执行配置的 path_command 获取 worktree 路径。
+    path_command 通常是查找包含 issue 编号的 worktree 目录的脚本。
+
+    Args:
+        repo_path: 仓库根目录
+        issue: Issue 对象
+        config: 应用配置
+        process_runner: 进程运行器
+
+    Returns:
+        worktree 的绝对路径
+    """
     path_result = process_runner.run(
         format_command(config.worktree.path_command, issue_number=issue.number),
         cwd=repo_path,
     )
     return Path(path_result.stdout.strip()).resolve()
-
-
-def _workflow_state_labels(config: AppConfig) -> list[str]:
-    """Return durable workflow state labels, excluding agent routing labels."""
-    return [
-        config.labels.ready,
-        config.labels.running,
-        config.labels.supervising,
-        config.labels.review,
-        config.labels.blocked,
-    ]
 
 
 def _mark_issue_failed(
@@ -177,7 +148,22 @@ def _mark_issue_failed(
     github_client: IGitHubClient,
     exc: Exception,
 ) -> None:
-    """Best-effort failure reporting without hiding the original error."""
+    """将 Issue 标记为失败状态。
+
+    最佳努力（best-effort）报告：即使标签或评论写入失败，
+    也保留原始异常，不吞没错误。
+
+    Args:
+        issue: Issue 对象
+        config: 应用配置
+        github_client: GitHub 客户端
+        exc: 捕获的异常对象
+    """
+    # 延迟导入避免循环依赖
+    from backend.core.use_cases.agent_runner_publication import (
+        _workflow_state_labels,
+    )
+
     try:
         github_client.edit_issue_labels(
             issue.number,
@@ -192,6 +178,7 @@ def _mark_issue_failed(
             label_exc,
         )
 
+    # 尝试从异常中提取尝试历史并格式化失败评论
     attempt_results = getattr(exc, "attempt_results", None)
     if attempt_results is not None:
         from backend.core.use_cases.run_agent_once import format_failure_comment
@@ -209,244 +196,6 @@ def _mark_issue_failed(
         )
 
 
-def _count_local_commits_since_base(
-    worktree_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> int:
-    base_ref_name = f"{config.git.remote}/{config.git.base_branch}"
-    ahead_result = process_runner.run(
-        ["git", "rev-list", "--count", f"{base_ref_name}..HEAD"],
-        cwd=worktree_path,
-        check=False,
-    )
-    if ahead_result.return_code != 0:
-        return 0
-    try:
-        return int(ahead_result.stdout.strip() or "0")
-    except ValueError:
-        return 0
-
-
-def _get_merge_base_sha(
-    worktree_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> str:
-    base_ref_name = f"{config.git.remote}/{config.git.base_branch}"
-    merge_base_result = process_runner.run(
-        ["git", "merge-base", "HEAD", base_ref_name],
-        cwd=worktree_path,
-        check=False,
-    )
-    merge_base_sha = merge_base_result.stdout.strip()
-    if merge_base_result.return_code == 0 and merge_base_sha:
-        return merge_base_sha
-    return get_head_sha(worktree_path, process_runner)
-
-
-def _reuse_existing_local_commit(
-    issue: IssueSummary,
-    worktree_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> AgentCommitResult | None:
-    """Return existing clean local commits ready for publish, if present."""
-    local_commit_count = _count_local_commits_since_base(
-        worktree_path, config, process_runner
-    )
-    if local_commit_count <= 0 or has_changes(worktree_path, process_runner):
-        return None
-
-    verification_results = run_verification(worktree_path, config, process_runner)
-    ensure_verification_passed(verification_results)
-    ensure_prd_delivery_ready(issue, worktree_path, process_runner)
-    if has_changes(worktree_path, process_runner):
-        return None
-
-    base_ref_name = f"{config.git.remote}/{config.git.base_branch}"
-    head_sha = get_head_sha(worktree_path, process_runner)
-    _logger.info(
-        "Reusing %d existing local commit(s) for Issue #%d at %s.",
-        local_commit_count,
-        issue.number,
-        head_sha,
-    )
-    return AgentCommitResult(
-        verification_results=verification_results,
-        attempt_results=[
-            AttemptResult(
-                attempt_number=1,
-                failure_type=FailureType.SUCCESS,
-                recovered=True,
-                detail=(
-                    f"Reused {local_commit_count} existing local commit(s) "
-                    f"already ahead of {base_ref_name}; agent was not invoked."
-                ),
-            )
-        ],
-    )
-
-
-def _finish_implementation_publication(
-    *,
-    issue: IssueSummary,
-    worktree_path: Path,
-    config: AppConfig,
-    selected_agent: str,
-    github_client: IGitHubClient,
-    process_runner: IProcessRunner,
-    expected_branch: str,
-    commit_result: AgentCommitResult,
-    content_generator: IContentGenerator | None = None,
-) -> None:
-    verification_results = commit_result.verification_results
-    after_sha = get_head_sha(worktree_path, process_runner)
-    github_client.comment_issue(
-        issue.number,
-        build_implementation_complete_comment(
-            agent=selected_agent,
-            branch=expected_branch,
-            head_sha=after_sha,
-            verification_results=verification_results,
-            attempt_results=commit_result.attempt_results,
-        ),
-    )
-
-    final_sha, _final_verification_results = run_pre_push_review(
-        issue=issue,
-        worktree_path=worktree_path,
-        config=config,
-        github_client=github_client,
-        process_runner=process_runner,
-        selected_agent=selected_agent,
-        head_sha_before=after_sha,
-        expected_branch=expected_branch,
-        verification_results=verification_results,
-    )
-
-    branch, pr_url = publish_changes(
-        issue,
-        worktree_path,
-        config,
-        github_client,
-        process_runner,
-        expected_branch=expected_branch,
-        content_generator=content_generator,
-    )
-
-    github_client.edit_issue_labels(
-        issue.number,
-        add=[config.labels.supervising],
-        remove=[config.labels.running],
-    )
-
-    publish_sha = get_head_sha(worktree_path, process_runner)
-    github_client.comment_issue(
-        issue.number,
-        build_draft_pr_created_comment(
-            pr_url=pr_url,
-            branch=branch,
-            head_sha=publish_sha,
-        ),
-    )
-
-    supervisor_config = config.post_pr_supervisor
-    if supervisor_config.enabled:
-        pr_context = github_client.get_pull_request_context(branch)
-        if pr_context is None:
-            pr_context = PullRequestContext(
-                pr_url=pr_url,
-                branch=branch,
-                head_sha=publish_sha,
-                base_sha=_get_merge_base_sha(worktree_path, config, process_runner),
-            )
-        supervisor_agent = (
-            selected_agent
-            if supervisor_config.supervisor_agent == "auto"
-            else supervisor_config.supervisor_agent
-        )
-        _run_supervisor_with_repair_loop(
-            issue=issue,
-            worktree_path=worktree_path,
-            config=config,
-            github_client=github_client,
-            process_runner=process_runner,
-            pr_context=pr_context,
-            supervisor_agent=supervisor_agent,
-        )
-    else:
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.review],
-            remove=[config.labels.supervising],
-        )
-
-    _logger.info(
-        "Published Issue #%d from %s at %s after implementation head %s.",
-        issue.number,
-        branch,
-        final_sha,
-        after_sha,
-    )
-
-
-def _finish_existing_commit_publication(
-    *,
-    issue: IssueSummary,
-    worktree_path: Path,
-    config: AppConfig,
-    selected_agent: str,
-    github_client: IGitHubClient,
-    process_runner: IProcessRunner,
-    expected_branch: str,
-    commit_result: AgentCommitResult,
-    content_generator: IContentGenerator | None = None,
-) -> None:
-    verification_results = commit_result.verification_results
-    head_sha = get_head_sha(worktree_path, process_runner)
-    github_client.comment_issue(
-        issue.number,
-        build_implementation_complete_comment(
-            agent=selected_agent,
-            branch=expected_branch,
-            head_sha=head_sha,
-            verification_results=verification_results,
-            attempt_results=commit_result.attempt_results,
-        ),
-    )
-
-    branch, pr_url = publish_changes(
-        issue,
-        worktree_path,
-        config,
-        github_client,
-        process_runner,
-        expected_branch=expected_branch,
-        content_generator=content_generator,
-    )
-    publish_sha = get_head_sha(worktree_path, process_runner)
-    github_client.edit_issue_labels(
-        issue.number,
-        add=[config.labels.review],
-        remove=_workflow_state_labels(config),
-    )
-    github_client.comment_issue(
-        issue.number,
-        build_draft_pr_created_comment(
-            pr_url=pr_url,
-            branch=branch,
-            head_sha=publish_sha,
-        ),
-    )
-    _logger.info(
-        "Recovered publication for Issue #%d from %s at %s.",
-        issue.number,
-        branch,
-        publish_sha,
-    )
-
-
 def _has_existing_local_commit_ready_for_publish(
     *,
     issue: IssueSummary,
@@ -454,13 +203,40 @@ def _has_existing_local_commit_ready_for_publish(
     config: AppConfig,
     process_runner: IProcessRunner,
 ) -> bool:
+    """检查 Issue 是否有可发布的本地提交。
+
+    用于 running 状态 Issue 的发布恢复检测。
+    轮询时发现 running Issue 会调用此函数判断是否可恢复发布。
+
+    检测条件：
+    1. 存在 worktree 目录
+    2. 有超过 base 分支的提交
+    3. 工作区干净（无未提交变更）
+
+    Args:
+        issue: Issue 对象
+        repo_path: 仓库根目录
+        config: 应用配置
+        process_runner: 进程运行器
+
+    Returns:
+        是否有可发布的本地 commit
+    """
     try:
         worktree_path = _find_worktree_path_for_issue(
             repo_path, issue, config, process_runner
         )
-        return _count_local_commits_since_base(
-            worktree_path, config, process_runner
-        ) > 0 and not has_changes(worktree_path, process_runner)
+        from backend.core.use_cases.agent_runner_publication import (
+            _count_local_commits_since_base,
+        )
+
+        return (
+            _count_local_commits_since_base(worktree_path, config, process_runner) > 0
+            and not process_runner.run(
+                ["git", "diff", "--stat"],
+                cwd=worktree_path,
+            ).stdout.strip()
+        )
     except Exception as exc:  # noqa: BLE001 - candidate probing must not fail polling.
         _logger.info(
             "Skipping existing local commit probe for Issue #%d: %s",
@@ -480,8 +256,31 @@ def _process_ready_issue(
     process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
 ) -> None:
-    """Process a ready Issue through the full first-implementation path."""
+    """处理 ready 状态的 Issue（完整实现路径）。
+
+    ready Issue 是新 claim 的 Issue，需要完整处理：
+    1. 标记为 running 并评论声明
+    2. 创建或复用 worktree
+    3. 检查是否有已存在的本地 commit（恢复路径）
+    4. 如无本地 commit 则运行 Agent 实现
+    5. 完成发布流程
+
+    Args:
+        issue: Issue 对象
+        repo_path: 仓库根目录
+        config: 应用配置
+        agent: Agent 覆盖（auto/codex/claude）
+        github_client: GitHub 客户端
+        process_runner: 进程运行器
+        content_generator: 可选的 AI 内容生成器
+    """
+    from backend.core.use_cases.run_agent_once import (
+        run_agent_until_committed,
+    )
+
     selected_agent = choose_agent(issue, config, agent)
+
+    # 步骤 1: 声明 Issue
     github_client.edit_issue_labels(
         issue.number, add=[config.labels.running], remove=[config.labels.ready]
     )
@@ -491,13 +290,18 @@ def _process_ready_issue(
         f"- Host: `{socket.gethostname()}`\n"
         f"- Agent: `{selected_agent}`\n",
     )
+
+    # 步骤 2: 准备 worktree
     worktree_path = create_or_reuse_worktree(repo_path, issue, config, process_runner)
     before_sha = get_head_sha(worktree_path, process_runner)
     expected_branch = get_current_branch(worktree_path, process_runner)
+
+    # 步骤 3: 检查恢复路径
     commit_result = _reuse_existing_local_commit(
         issue, worktree_path, config, process_runner
     )
     if commit_result is not None:
+        # 有已存在的本地 commit → 恢复路径
         _finish_existing_commit_publication(
             issue=issue,
             worktree_path=worktree_path,
@@ -511,6 +315,7 @@ def _process_ready_issue(
         )
         return
 
+    # 步骤 4: 无本地 commit → 完整 Agent 执行
     new_commit_result = run_agent_until_committed(
         selected_agent=selected_agent,
         issue=issue,
@@ -520,6 +325,8 @@ def _process_ready_issue(
         before_sha=before_sha,
         expected_branch=expected_branch,
     )
+
+    # 步骤 5: 完成发布流程
     _finish_implementation_publication(
         issue=issue,
         worktree_path=worktree_path,
@@ -533,184 +340,6 @@ def _process_ready_issue(
     )
 
 
-def _run_supervisor_with_repair_loop(
-    *,
-    issue: IssueSummary,
-    worktree_path: Path,
-    config: AppConfig,
-    github_client: IGitHubClient,
-    process_runner: IProcessRunner,
-    pr_context: PullRequestContext,
-    supervisor_agent: str,
-) -> None:
-    """Run supervisor cycles with bounded inline repair/rebase."""
-    max_repair = max(0, config.post_pr_supervisor.max_repair_attempts)
-    current_pr_context = pr_context
-
-    for cycle in range(1, max_repair + 2):
-        action_result = run_post_pr_supervisor_cycle(
-            issue=issue,
-            worktree_path=worktree_path,
-            config=config,
-            github_client=github_client,
-            process_runner=process_runner,
-            pr_context=current_pr_context,
-            supervisor_agent=supervisor_agent,
-            cycle=cycle,
-        )
-
-        if action_result.action == "approve_for_human_review":
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.review],
-                remove=[config.labels.supervising],
-            )
-            return
-
-        if action_result.action in ("request_human_input",):
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.blocked],
-                remove=[config.labels.supervising],
-            )
-            return
-
-        if action_result.action == "mark_failed":
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.failed],
-                remove=[config.labels.supervising],
-            )
-            return
-
-        if action_result.action in ("repair_pr_branch", "resolve_conflict"):
-            if cycle > max_repair:
-                github_client.comment_issue(
-                    issue.number,
-                    build_supervisor_result_comment(
-                        action="max_repair_exceeded",
-                        supervisor=supervisor_agent,
-                        summary="Max repair attempts exceeded; moving to blocked.",
-                        findings_counts={},
-                        verification_status="",
-                        head_sha=current_pr_context.head_sha,
-                        cycle=cycle,
-                    ),
-                )
-                github_client.edit_issue_labels(
-                    issue.number,
-                    add=[config.labels.blocked],
-                    remove=[config.labels.supervising],
-                )
-                return
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.running],
-                remove=[config.labels.supervising],
-            )
-            execute_repair(
-                issue=issue,
-                worktree_path=worktree_path,
-                config=config,
-                process_runner=process_runner,
-                pr_branch=current_pr_context.branch,
-                expected_head=current_pr_context.head_sha,
-                supervisor_agent=supervisor_agent,
-            )
-            repair_sha = get_head_sha(worktree_path, process_runner)
-            github_client.comment_issue(
-                issue.number,
-                build_rework_intent_comment(
-                    action=action_result.action,
-                    pr_branch=current_pr_context.branch,
-                    head_sha=repair_sha,
-                ),
-            )
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.supervising],
-                remove=[config.labels.running],
-            )
-            current_pr_context = PullRequestContext(
-                pr_url=current_pr_context.pr_url,
-                branch=current_pr_context.branch,
-                head_sha=repair_sha,
-                base_sha=current_pr_context.base_sha,
-            )
-            continue
-
-        if action_result.action == "rebase_pr_branch":
-            if cycle > max_repair:
-                github_client.comment_issue(
-                    issue.number,
-                    build_supervisor_result_comment(
-                        action="max_rebase_exceeded",
-                        supervisor=supervisor_agent,
-                        summary="Max rebase attempts exceeded; moving to blocked.",
-                        findings_counts={},
-                        verification_status="",
-                        head_sha=current_pr_context.head_sha,
-                        cycle=cycle,
-                    ),
-                )
-                github_client.edit_issue_labels(
-                    issue.number,
-                    add=[config.labels.blocked],
-                    remove=[config.labels.supervising],
-                )
-                return
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.running],
-                remove=[config.labels.supervising],
-            )
-            execute_rebase(
-                issue=issue,
-                worktree_path=worktree_path,
-                config=config,
-                process_runner=process_runner,
-                pr_branch=current_pr_context.branch,
-                expected_head=current_pr_context.head_sha,
-                supervisor_agent=supervisor_agent,
-            )
-            rebase_sha = get_head_sha(worktree_path, process_runner)
-            github_client.comment_issue(
-                issue.number,
-                build_rework_intent_comment(
-                    action=action_result.action,
-                    pr_branch=current_pr_context.branch,
-                    head_sha=rebase_sha,
-                ),
-            )
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.supervising],
-                remove=[config.labels.running],
-            )
-            current_pr_context = PullRequestContext(
-                pr_url=current_pr_context.pr_url,
-                branch=current_pr_context.branch,
-                head_sha=rebase_sha,
-                base_sha=current_pr_context.base_sha,
-            )
-            continue
-
-        # Unknown action: treat as blocked
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.blocked],
-            remove=[config.labels.supervising],
-        )
-        return
-
-    # If we exhausted all cycles without approval, block
-    github_client.edit_issue_labels(
-        issue.number,
-        add=[config.labels.blocked],
-        remove=[config.labels.supervising],
-    )
-
-
 def _process_running_rework(
     *,
     issue: IssueSummary,
@@ -721,11 +350,25 @@ def _process_running_rework(
     process_runner: IProcessRunner,
     marker: ReviewEventMarker,
 ) -> None:
-    """Process a running Issue with a post-PR rework intent marker."""
+    """处理带 rework 标记的 running Issue。
+
+    当 Issue 有 post_pr_rework_requested 事件标记时进入此路径。
+    监督者之前已请求修复，现在执行修复操作。
+
+    Args:
+        issue: Issue 对象
+        repo_path: 仓库根目录
+        config: 应用配置
+        agent: Agent 覆盖
+        github_client: GitHub 客户端
+        process_runner: 进程运行器
+        marker: 事件标记（包含动作类型和分支信息）
+    """
     pr_branch = marker.pr_branch
     if pr_branch is None:
         raise RuntimeError("Rework marker missing pr_branch")
 
+    # 定位 worktree 并确认分支
     worktree_path = _find_worktree_path_for_issue(
         repo_path, issue, config, process_runner
     )
@@ -739,6 +382,7 @@ def _process_running_rework(
     action = marker.action or "repair_pr_branch"
     supervisor_agent = choose_agent(issue, config, agent)
 
+    # 执行修复或 rebase
     if action == "rebase_pr_branch":
         execute_rebase(
             issue=issue,
@@ -778,13 +422,13 @@ def _process_running_rework(
             ),
         )
 
+    # 标记为 supervising 并获取 PR 上下文
     github_client.edit_issue_labels(
         issue.number,
         add=[config.labels.supervising],
         remove=[config.labels.running],
     )
 
-    # Run supervisor cycle after rework
     pr_context = github_client.get_pull_request_context(pr_branch)
     if pr_context is None:
         pr_context = PullRequestContext(
@@ -794,6 +438,7 @@ def _process_running_rework(
             base_sha=expected_head,
         )
 
+    # 修复后再次运行监督循环
     if config.post_pr_supervisor.enabled:
         _run_supervisor_with_repair_loop(
             issue=issue,
@@ -822,12 +467,29 @@ def _process_running_publish_recovery(
     process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
 ) -> None:
-    """Resume publication for a running Issue that already has local commits."""
+    """恢复 running Issue 的发布流程。
+
+    用于 runner 重启后发现 running Issue 已有本地 commit 的情况。
+    通过复用已有 commit 来完成发布，无需重新运行 Agent。
+
+    Args:
+        issue: Issue 对象
+        repo_path: 仓库根目录
+        config: 应用配置
+        agent: Agent 覆盖
+        github_client: GitHub 客户端
+        process_runner: 进程运行器
+        content_generator: 可选的 AI 内容生成器
+    """
     selected_agent = choose_agent(issue, config, agent)
+
+    # 定位 worktree 并确认分支
     worktree_path = _find_worktree_path_for_issue(
         repo_path, issue, config, process_runner
     )
     expected_branch = get_current_branch(worktree_path, process_runner)
+
+    # 检查是否有可复用的本地 commit
     commit_result = _reuse_existing_local_commit(
         issue, worktree_path, config, process_runner
     )
@@ -836,6 +498,7 @@ def _process_running_publish_recovery(
             f"Issue #{issue.number} has no clean local commit ready for publication."
         )
 
+    # 完成发布流程（恢复路径）
     _finish_existing_commit_publication(
         issue=issue,
         worktree_path=worktree_path,
@@ -860,21 +523,34 @@ def run_once(
     process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
 ) -> int:
-    """Run one polling pass.
+    """执行一次轮询处理。
+
+    本函数是 Agent Runner 的入口点，在每次轮询间隔调用。
+    发现并处理 ready 和 running 状态的 Issue。
+
+    Issue 发现逻辑：
+    1. 收集所有 ready 标签的 Issue（最多 max_issues 个）
+    2. 对 remaining 配额，从 running 标签 Issue 中筛选候选：
+       - 有 rework 标记 → running_rework
+       - 有已就绪的本地 commit → running_publish_recovery
+       - 否则跳过
 
     Args:
-        repo_path: Target repository path.
-        config: Application configuration.
-        dry_run: If True, only list ready issues without processing.
-        agent: Agent override (auto, codex, claude).
-        max_issues: Maximum issues to process.
-        github_client: Client for interacting with GitHub.
-        process_runner: Runner for executing subprocess commands.
-        content_generator: Optional content generator for AI-generated PR content.
+        repo_path: 目标仓库路径
+        config: 应用配置
+        dry_run: 若为 True，仅列出待处理 Issue 不实际处理
+        agent: Agent 覆盖（auto/codex/claude）
+        max_issues: 每次轮询最多处理的 Issue 数量
+        github_client: GitHub 客户端
+        process_runner: 进程运行器
+        content_generator: 可选的 AI 内容生成器
 
     Returns:
-        Exit code (0 on success, 1 if any issue failed).
+        退出码（0 成功，1 有 Issue 处理失败）
     """
+    from backend.core.use_cases.run_agent_once import run_preflight_checks
+
+    # 前置检查
     if not dry_run:
         try:
             run_preflight_checks(repo_path, config, process_runner)
@@ -882,6 +558,7 @@ def run_once(
             _logger.error("Agent runner preflight failed: %s", exc)
             return 1
 
+    # 发现 ready Issue
     ready_issues = github_client.list_ready_issues(config.labels.ready, max_issues)
     processed_count = 0
     issues_to_process: list[tuple[IssueSummary, str]] = []
@@ -890,6 +567,7 @@ def run_once(
         issues_to_process.append((issue, "ready"))
         processed_count += 1
 
+    # 发现 running Issue（使用剩余配额）
     remaining = max_issues - processed_count
     if remaining > 0:
         running_candidates = github_client.list_review_candidate_issues(
@@ -922,6 +600,7 @@ def run_once(
         )
         return 0
 
+    # 处理 Issue
     exit_code = 0
     for issue, issue_kind in issues_to_process:
         selected_agent = choose_agent(issue, config, agent)
