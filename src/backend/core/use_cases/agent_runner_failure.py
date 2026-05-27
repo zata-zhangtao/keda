@@ -1,0 +1,229 @@
+"""Failure classification and formatting for the agent runner."""
+
+from __future__ import annotations
+
+import subprocess
+
+from backend.core.shared.models.agent_runner import (
+    AttemptResult,
+    CommandResult,
+    FailureType,
+)
+from backend.core.use_cases.agent_runner_feedback import (
+    failed_verification_results,
+    format_result_for_recovery,
+    truncate_recovery_output,
+)
+
+__all__ = [
+    "AgentRunnerAttemptError",
+    "MaxRetriesExceededError",
+    "UnrecoverableError",
+    "classify_failure",
+    "format_agent_execution_failure",
+    "format_attempt_history",
+    "format_failure_comment",
+    "format_recovery_failure_summary",
+    "is_recoverable_commit_request_error",
+]
+
+
+class AgentRunnerAttemptError(RuntimeError):
+    """Base error that carries attempt history."""
+
+    def __init__(
+        self,
+        message: str,
+        attempt_results: list[AttemptResult],
+    ) -> None:
+        super().__init__(message)
+        self.attempt_results = attempt_results
+
+
+class MaxRetriesExceededError(AgentRunnerAttemptError):
+    """Raised when all recovery attempts are exhausted."""
+
+    def __init__(self, attempt_results: list[AttemptResult]) -> None:
+        super().__init__(
+            f"Failed after {len(attempt_results)} attempts.",
+            attempt_results,
+        )
+
+
+class UnrecoverableError(AgentRunnerAttemptError):
+    """Raised when an unrecoverable failure is encountered."""
+
+    def __init__(
+        self,
+        message: str,
+        attempt_results: list[AttemptResult],
+    ) -> None:
+        super().__init__(message, attempt_results)
+
+
+def is_recoverable_commit_request_error(exc: BaseException) -> bool:
+    """Return whether the agent can repair a commit request protocol error.
+
+    CalledProcessError（如 pre-commit hook 失败、git commit 被拒绝）也视为可恢复，
+    因为 agent 通常可以通过修改代码来修复这类问题。
+    """
+    # subprocess 命令失败（pre-commit、git 错误等）通常可由 agent 修复代码后重试
+    if isinstance(exc, subprocess.CalledProcessError):
+        return True
+    message = str(exc)
+    return message.startswith(
+        (
+            "Agent left uncommitted changes without a commit request.",
+            "Commit request must be valid JSON.",
+            "Commit request must be a JSON object.",
+            "Agent requested a commit but produced no file changes.",
+        )
+    )
+
+
+def classify_failure(
+    *,
+    before_sha: str,
+    after_sha: str,
+    has_uncommitted: bool,
+    agent_result: CommandResult,
+    verification_results: list[CommandResult],
+    exc: BaseException | None = None,
+) -> FailureType:
+    """Classify the failure type of an agent execution attempt.
+
+    Priority:
+    1. UNRECOVERABLE (security/branch violations)
+    2. UNCOMMITTED_CHANGES
+    3. NO_COMMITS
+    4. VERIFICATION_FAILED
+    5. AGENT_ERROR
+    6. SUCCESS
+
+    Args:
+        before_sha: SHA before the agent run.
+        after_sha: SHA after the agent run.
+        has_uncommitted: Whether the worktree has uncommitted changes.
+        agent_result: Result of the agent CLI invocation.
+        verification_results: Results of verification commands.
+        exc: Optional exception raised during the attempt.
+
+    Returns:
+        The classified failure type.
+    """
+    if exc is not None:
+        if isinstance(exc, RuntimeError):
+            exc_message = str(exc)
+            if "Refusing to publish forbidden paths" in exc_message:
+                return FailureType.UNRECOVERABLE
+            if "Refusing to commit on unexpected branch" in exc_message:
+                return FailureType.UNRECOVERABLE
+            if is_recoverable_commit_request_error(exc):
+                return FailureType.UNCOMMITTED_CHANGES
+        return FailureType.AGENT_ERROR
+
+    if has_uncommitted:
+        return FailureType.UNCOMMITTED_CHANGES
+
+    if before_sha == after_sha:
+        return FailureType.NO_COMMITS
+
+    if any(result.return_code != 0 for result in verification_results):
+        return FailureType.VERIFICATION_FAILED
+
+    if agent_result.return_code != 0:
+        return FailureType.AGENT_ERROR
+
+    return FailureType.SUCCESS
+
+
+def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
+    """Format attempt results as a Markdown table."""
+    if not attempt_results:
+        return ""
+
+    lines = [
+        "### Attempt History",
+        "",
+        "| Attempt | Failure Type | Recovered | Detail |",
+        "|---------|-------------|-----------|--------|",
+    ]
+    for result in attempt_results:
+        detail = result.detail.replace("\n", " ")[:100]
+        recovered = "Yes" if result.recovered else "No"
+        lines.append(
+            f"| {result.attempt_number} | {result.failure_type.value} | {recovered} | {detail} |"
+        )
+    return "\n".join(lines)
+
+
+def format_failure_comment(
+    exc: BaseException,
+    attempt_results: list[AttemptResult] | None = None,
+) -> str:
+    """Build a failure comment with optional attempt history."""
+    lines = ["## Agent Runner Failed", ""]
+
+    if attempt_results:
+        lines.append(format_attempt_history(attempt_results))
+        lines.append("")
+
+    lines.extend(["```text", str(exc)])
+    if exc.__cause__ is not None:
+        lines.append(str(exc.__cause__))
+    lines.extend(["```", ""])
+    return "\n".join(lines)
+
+
+def format_recovery_failure_summary(
+    heading: str,
+    verification_results: list[CommandResult],
+) -> str:
+    """Build the failure section for a verification recovery prompt."""
+    failed_results = failed_verification_results(verification_results)
+    if not failed_results:
+        return heading
+    result_sections = "\n\n".join(
+        format_result_for_recovery(result) for result in failed_results
+    )
+    return "\n\n".join([heading, result_sections])
+
+
+def format_agent_execution_failure(exc: BaseException) -> str:
+    """Build the failure section for a failed agent CLI invocation."""
+    lines = ["Agent command failed before runner verification could start."]
+    if isinstance(exc, subprocess.CalledProcessError):
+        lines.extend(
+            [
+                f"Command: `{_agent_command_name(exc.cmd)}`",
+                f"Exit code: {exc.returncode}",
+                "stdout:",
+                "```text",
+                truncate_recovery_output(str(exc.output or "")),
+                "```",
+                "stderr:",
+                "```text",
+                truncate_recovery_output(str(exc.stderr or "")),
+                "```",
+            ]
+        )
+        if not exc.output and not exc.stderr:
+            lines.append("The command streamed its details to the terminal.")
+    else:
+        lines.extend(
+            [
+                f"Exception type: {type(exc).__name__}",
+                "Exception:",
+                "```text",
+                truncate_recovery_output(str(exc)),
+                "```",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _agent_command_name(command: object) -> str:
+    """Return a short command name without echoing a potentially huge prompt."""
+    if isinstance(command, (list, tuple)) and command:
+        return str(command[0])
+    return str(command)
