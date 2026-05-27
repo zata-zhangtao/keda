@@ -185,7 +185,8 @@ def _run_single_agent(
         output_sink=output_sink,
     )
     output_text = result.stdout.strip()
-    _write_workspace_output(cwd / f"round-{round_number}-output.md", output_text)
+    if output_sink is None:
+        _write_workspace_output(cwd / f"round-{round_number}-output.md", output_text)
     final_status = "finished" if result.return_code == 0 else "failed"
     output_view.update_status(round_number, agent_label, final_status)
     _emit(
@@ -427,7 +428,6 @@ def run_agent_deliberation(
             output_sink=synthesis_sink,
         )
         synthesis_output = synthesis_result.stdout.strip()
-        _write_workspace_output(synthesis_output_path, synthesis_output)
         synthesis_status = "finished" if synthesis_result.return_code == 0 else "failed"
         output_view.update_status(0, "synthesizer", synthesis_status)
         _emit(
