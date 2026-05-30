@@ -354,13 +354,17 @@ def main(argv: list[str] | None = None) -> int:
             if gc_config.enabled and gc_config.issue_from_prd.enabled:
                 if gc_config.issue_from_prd.mode == "agent":
                     content_generator = create_content_generator(process_runner)
+            # 当不显式 --publish-prd 时，先把 queue_ready 压成 False，
+            # 避免 Issue 还没发布就已经 ready，runner 在 worktree 里读到过时 PRD。
+            # 交互式 prompt 在 push 成功后再补 ready。
+            queue_ready_for_request = parsed.ready if parsed.publish_prd else False
             issue_url = create_issue_from_prd(
                 request=IssueFromPrdRequest(
                     repo_path=context.repo_path,
                     prd_path=Path(parsed.prd_path),
                     issue_type=parsed.type,
                     title_override=parsed.title,
-                    queue_ready=parsed.ready,
+                    queue_ready=queue_ready_for_request,
                     issue_agent=parsed.agent,
                     labels_config=context.config.labels,
                     force=parsed.force,
@@ -373,8 +377,9 @@ def main(argv: list[str] | None = None) -> int:
                 process_runner=process_runner,
                 content_generator=content_generator,
             )
+            published = False
             if not parsed.publish_prd:
-                _prompt_and_publish_prd_if_needed(
+                published = _prompt_and_publish_prd_if_needed(
                     repo_path=context.repo_path,
                     relative_prd_path=relative_prd_path,
                     issue_url=issue_url,
@@ -384,7 +389,9 @@ def main(argv: list[str] | None = None) -> int:
                     github_client=github_client,
                     process_runner=process_runner,
                 )
-            if not parsed.ready:
+            if not parsed.ready or (
+                parsed.ready and not parsed.publish_prd and not published
+            ):
                 logger.info(
                     "Issue created without '%s' label. "
                     "Use --ready if you want a runner to pick it up.",

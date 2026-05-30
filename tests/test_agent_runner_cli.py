@@ -208,6 +208,87 @@ def test_main_issue_from_prd_defaults_to_cwd() -> None:
         assert exit_code == 0
 
 
+def test_main_issue_from_prd_ready_without_publish_defers_label() -> None:
+    """--ready without --publish-prd should not ready the Issue until PRD is pushed.
+
+    时序说明：
+    ┌─────────────────────────────────────────────────────────┐
+    │ cli.py                                                 │
+    │   queue_ready_for_request = False  # 无 --publish-prd   │
+    │   create_issue_from_prd(queue_ready=False)  → Issue不含ready │
+    │   _prompt_and_publish_prd_if_needed(queue_ready=True)   │
+    │     └─ 用户确认push → edit_issue_labels add ready      │
+    └─────────────────────────────────────────────────────────┘
+
+    关键断言：
+    1. create_issue_from_prd 收到 queue_ready=False（Issue 创建时不带 ready）
+    2. _prompt_and_publish_prd_if_needed 收到 queue_ready=True（交互 prompt 可以在 push 成功后补 ready）
+    """
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path.cwd()
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd",
+        return_value="https://github.com/example/issues/1",
+    ) as mock_create, patch(
+        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
+    ) as mock_prompt:
+        exit_code = main(["issue-from-prd", "tasks/example.md", "--ready"])
+        assert exit_code == 0
+        # create_issue_from_prd should be called with queue_ready=False
+        assert mock_create.call_args.kwargs["request"].queue_ready is False
+        # prompt should still receive queue_ready=True so it can add the label after push
+        assert mock_prompt.call_args.kwargs["queue_ready"] is True
+
+
+def test_main_issue_from_prd_ready_with_publish_keeps_label() -> None:
+    """--ready with --publish-prd should let create_issue_from_prd handle ready gating.
+
+    时序说明：
+    ┌─────────────────────────────────────────────────────────┐
+    │ cli.py                                                 │
+    │   queue_ready_for_request = True   # 有 --publish-prd   │
+    │   create_issue_from_prd(queue_ready=True)  → Issue含ready │
+    │   # 不进入 _prompt_and_publish_prd_if_needed 分支       │
+    │   # （ready 由 core 内部在 push 成功后添加）            │
+    └─────────────────────────────────────────────────────────┘
+
+    关键断言：
+    1. create_issue_from_prd 收到 queue_ready=True（core 内部处理 ready gating）
+    2. _prompt_and_publish_prd_if_needed 不被调用（--publish-prd 时走非交互路径）
+    """
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path.cwd()
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd",
+        return_value="https://github.com/example/issues/1",
+    ) as mock_create, patch(
+        "backend.api.cli._prompt_and_publish_prd_if_needed"
+    ) as mock_prompt:
+        exit_code = main(
+            ["issue-from-prd", "tasks/example.md", "--publish-prd", "--ready"]
+        )
+        assert exit_code == 0
+        assert mock_create.call_args.kwargs["request"].queue_ready is True
+        # prompt should not be called when --publish-prd is used
+        mock_prompt.assert_not_called()
+
+
 def test_cli_parser_deliberate_defaults() -> None:
     """deliberate should have sensible defaults."""
     parser = build_parser()
