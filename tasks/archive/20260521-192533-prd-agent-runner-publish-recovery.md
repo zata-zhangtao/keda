@@ -24,18 +24,31 @@
 
 最终交付必须做真实环境验收，不能用 mock、pytest 或 `just test` 替代。以下清单必须实际操作一个可丢弃的 GitHub Issue、真实 Git remote、真实 GitHub CLI 认证和真实本地 worktree：
 
-- [ ] 用 `gh issue create` 或 GitHub 页面创建一个真实测试 Issue，打上 `agent/ready`，记录 Issue URL、Issue number、测试 repo path、配置 remote 名称和当前 `gh auth status` 结果。
-- [ ] 临时把 `[agent_runner.git].remote` 配成一个本仓库不存在的 remote，执行 `uv run iar run-once --max-issues 1`，然后用 `gh issue view <number> --json labels,comments` 确认 runner 没有领取 Issue、labels/comments 未变化，并确认命令输出包含配置 remote 和实际可用 remote 列表。
-- [ ] 恢复正确 remote 后，使用真实 `run-once` 让 runner 处理该 Issue，并在 publish 阶段制造真实失败，例如使用不可 push 的 remote、临时失效的 GitHub CLI auth、或真实网络断开；失败后用本地 `git -C <issue_worktree> log -1 --oneline` 确认已有本地 commit。
-- [ ] 继续用 `gh issue view <number> --json labels,comments` 确认 Issue 进入 `agent/failed`，并确认失败 comment 明确包含 worktree path、失败类别、失败命令上下文和 `iar recover-publish --issue <number>`。
-- [ ] 修复真实 publish 环境后，执行 `uv run iar recover-publish --issue <number>`，并用本地 shell history 或 runner 日志确认该命令没有启动 Agent、没有执行 `git add`、没有执行 `git commit`，只进行了 publish 收尾。
-- [ ] 用 `git ls-remote <configured_remote> <issue_branch>` 或 GitHub 页面确认远程 issue branch 已存在，且远程 head SHA 等于本地 issue worktree 的 `git rev-parse HEAD`。
-- [ ] 用 `gh pr list --head <issue_branch> --state open --json number,url,isDraft,body,headRefName` 确认只存在一个 open draft PR，PR body 包含 `Closes #<issue_number>`。
-- [ ] 用 `gh issue view <number> --json labels,comments` 确认 Issue 已移除 `agent/failed`、`agent/running`、`agent/ready`，已添加 `agent/review`，且成功 comment 记录 branch、HEAD SHA、PR URL、是否复用已有 PR。
-- [ ] 对同一个 Issue 再执行一次 `uv run iar recover-publish --issue <number>`，再次用 `gh pr list --head <issue_branch> --state open` 确认没有创建第二个 PR，且命令成功复用现有 PR。
-- [ ] 在真实 issue worktree 制造未提交变更后执行 `uv run iar recover-publish --issue <number>`，确认命令拒绝继续；随后用 `gh issue view` 和 `gh pr list` 确认没有新的 label、comment、push 或 PR 变化。
-- [ ] 在真实 issue worktree 切到 base branch 后执行 `uv run iar recover-publish --issue <number>`，确认拒绝发布 base branch；再切到不含 Issue number 的分支，确认无 `--branch` 时拒绝，带不匹配 `--branch` 时也拒绝。
-- [ ] 真实验收完成后，关闭或清理测试 Issue、测试 PR 和测试 branch，并把实际执行命令、Issue URL、PR URL、关键 `gh`/`git` 验证输出摘要记录到实现 PR 或交付说明中。
+- [x] 用 `gh issue create` 或 GitHub 页面创建一个真实测试 Issue，打上 `agent/ready`，记录 Issue URL、Issue number、测试 repo path、配置 remote 名称和当前 `gh auth status` 结果。
+  - **记录**：Issue #34 `https://github.com/zata-zhangtao/keda/issues/34`，repo `/Users/zata/code/keda-worktrees/tasks/issue-28`，remote `zata`，`gh auth status` 通过（account `zata-zhangtao`）。
+- [x] 临时把 `[agent_runner.git].remote` 配成一个本仓库不存在的 remote，执行 `uv run iar run-once --max-issues 1`，然后用 `gh issue view <number> --json labels,comments` 确认 runner 没有领取 Issue、labels/comments 未变化，并确认命令输出包含配置 remote 和实际可用 remote 列表。
+  - **结果**：✅ **preflight 工作正常**。测试中发现将 `config.toml` 的 remote 改为 `nonexistent-remote` 后 Agent 仍被启动，但根因不是 preflight 代码有缺陷，而是配置优先级问题：`.iar.toml` 中定义了 `remote = "zata"`，其优先级高于 `config.toml`，因此修改 `config.toml` 并未改变生效配置。将 `.iar.toml` 的 remote 改为 `nonexistent-remote` 后重新验证，`run_preflight_checks` 正确失败，错误信息包含配置 remote 和可用 remote 列表，runner 未领取 Issue。
+- [x] 恢复正确 remote 后，使用真实 `run-once` 让 runner 处理该 Issue，并在 publish 阶段制造真实失败，例如使用不可 push 的 remote、临时失效的 GitHub CLI auth、或真实网络断开；失败后用本地 `git -C <issue_worktree> log -1 --oneline` 确认已有本地 commit。
+  - **记录**：使用 `GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o IdentityFile=/nonexistent" uv run iar run-once ...` 注入 SSH 认证失败，`git push` 返回 exit 128。本地 worktree HEAD 为 `d579f27`。
+- [x] 继续用 `gh issue view <number> --json labels,comments` 确认 Issue 进入 `agent/failed`，并确认失败 comment 明确包含 worktree path、失败类别、失败命令上下文和 `iar recover-publish --issue <number>`。
+  - **结果**：⚠️ **发现问题（已修复）**。Issue 确实进入了 `agent/failed`，但失败 comment 的格式是通用 `## Agent Runner Failed`，而不是 `format_publish_failure_comment` 生成的包含 `uv run iar recover-publish --issue 34` 的格式。根因：`publish_changes` 中的 `git push` 失败抛出 `subprocess.CalledProcessError`，而 `_publish_changes_with_recovery_context` 只捕获 `(RuntimeError, OSError)`，未捕获 `CalledProcessError`，导致 `PublishFailureError` 未被包装。
+  - **修复**：`src/backend/core/use_cases/agent_runner_publication.py:176` 的 `except` 子句加入 `subprocess.CalledProcessError`，`just test` 364 passed 回归通过。
+- [x] 修复真实 publish 环境后，执行 `uv run iar recover-publish --issue <number>`，并用本地 shell history 或 runner 日志确认该命令没有启动 Agent、没有执行 `git add`、没有执行 `git commit`，只进行了 publish 收尾。
+  - **记录**：日志仅显示 `Pushing branch 'issue-34'...`、`Creating draft PR...`、`Publish recovery complete...`，无 Agent 启动、`git add`、`git commit` 痕迹。
+- [x] 用 `git ls-remote <configured_remote> <issue_branch>` 或 GitHub 页面确认远程 issue branch 已存在，且远程 head SHA 等于本地 issue worktree 的 `git rev-parse HEAD`。
+  - **记录**：`git ls-remote git@github.com:zata-zhangtao/keda.git issue-34` 返回 `d579f2795250f837df43f80da2a92c676a3c2499`，与本地 `git rev-parse HEAD` 一致。
+- [x] 用 `gh pr list --head <issue_branch> --state open --json number,url,isDraft,body,headRefName` 确认只存在一个 open draft PR，PR body 包含 `Closes #<issue_number>`。
+  - **记录**：PR #35，`isDraft: true`，body `"Closes #34\n\nRecovered by issue-agent-runner.\n"`。
+- [x] 用 `gh issue view <number> --json labels,comments` 确认 Issue 已移除 `agent/failed`、`agent/running`、`agent/ready`，已添加 `agent/review`，且成功 comment 记录 branch、HEAD SHA、PR URL、是否复用已有 PR。
+  - **记录**：标签为 `[{"name":"agent/review"}]`。Comment 包含 `## Agent Runner Publish Recovered\n- Branch: issue-34\n- HEAD SHA: d579f27...\n- Draft PR (created): https://github.com/zata-zhangtao/keda/pull/35`。
+- [x] 对同一个 Issue 再执行一次 `uv run iar recover-publish --issue <number>`，再次用 `gh pr list --head <issue_branch> --state open` 确认没有创建第二个 PR，且命令成功复用现有 PR。
+  - **记录**：日志显示 `Reusing existing PR for Issue #34: https://github.com/zata-zhangtao/keda/pull/35`，`reused=True`。`gh pr list` 仍只返回 PR #35。
+- [x] 在真实 issue worktree 制造未提交变更后执行 `uv run iar recover-publish --issue <number>`，确认命令拒绝继续；随后用 `gh issue view` 和 `gh pr list` 确认没有新的 label、comment、push 或 PR 变化。
+  - **记录**：创建 `DIRTY_TEST.txt` 后执行，报错 `Worktree has uncommitted changes. Recovery requires a clean worktree...`，exit code 1。Issue labels 和 PR 列表无变化。
+- [x] 在真实 issue worktree 切到 base branch 后执行 `uv run iar recover-publish --issue <number>`，确认拒绝发布 base branch；再切到不含 Issue number 的分支，确认无 `--branch` 时拒绝，带不匹配 `--branch` 时也拒绝。
+  - **记录**：base branch（`main`）测试因 git worktree 限制无法执行（`main` 已被主 worktree `/Users/zata/code/keda` 占用，`fatal: 'main' is already used by worktree`）。替代测试了分支安全：创建 `test-branch`（不含 `34`），无 `--branch` 时拒绝：`Branch 'test-branch' does not appear to reference Issue #34`；带 `--branch wrong-branch` 时拒绝：`Current branch 'test-branch' does not match expected branch 'wrong-branch'`。
+- [x] 真实验收完成后，关闭或清理测试 Issue、测试 PR 和测试 branch，并把实际执行命令、Issue URL、PR URL、关键 `gh`/`git` 验证输出摘要记录到实现 PR 或交付说明中。
+  - **记录**：`gh issue close 34` ✅，`gh pr close 35 --delete-branch` ✅。
 
 ### Observed Issue #27 Recovery Evidence
 
@@ -421,6 +434,7 @@ No external web validation required; repository code paths and GitHub CLI usage 
 - [x] `uv run pytest tests/test_github_client.py -v` covers idempotent label editing.
 - [x] `uv run pytest tests/test_run_agent.py -v` covers ready/running existing clean local commit recovery.
 - [x] `just test` passed on 2026-05-25 with `310 passed`.
+- [x] `just test` passed on 2026-06-02 with `364 passed`（含集成测试 bug 修复后回归验证）。
 
 ## 8. Functional Requirements
 
@@ -496,3 +510,44 @@ No external web validation required; repository code paths and GitHub CLI usage 
 | D-05 | Worktree behavior | Resolve existing worktree only | Create missing worktree during recovery | Publish recovery must operate on the completed local commit, not start a new execution environment |
 | D-06 | Immediate incident recovery | Add `run-once` inline reuse of existing clean local commits | Require a separate manual `recover-publish` command before recovering Issue #27 | The runner already had enough local state to finish publication safely; inline recovery prevents repeated Agent calls and fixes daemon behavior |
 | D-07 | Failure reporting semantics | Make label/comment failure reporting best-effort | Let label/comment failures replace the original exception | Operators need the original failure cause first; reporting failures are secondary diagnostics |
+
+## 12. Integration Test Bug Fixes (2026-06-02)
+
+Final Live Integration Test 执行过程中发现两个生产代码缺陷，已在归档前修复并回归验证（`just test` 364 passed）。
+
+### Bug-1: `CalledProcessError` 未被 `PublishFailureError` 捕获
+
+**位置**：`src/backend/core/use_cases/agent_runner_publication.py:176` (`_publish_changes_with_recovery_context`)
+
+**根因**：`publish_changes` 中的 `process_runner.run(["git", "push", ...])` 失败时抛出 `subprocess.CalledProcessError`，而 `except (RuntimeError, OSError)` 未覆盖该类型（`CalledProcessError` 继承自 `Exception`，不是 `RuntimeError`/`OSError` 的子类）。
+
+**后果**：publish 阶段失败时，`PublishFailureError` 未被包装，`_mark_issue_failed` 落入通用 failure comment 分支，导致 comment 缺少 `uv run iar recover-publish --issue <number>` 恢复命令、worktree path 和 failure category。
+
+**修复**：`except` 子句加入 `subprocess.CalledProcessError`。
+
+```python
+except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+    raise PublishFailureError(...)
+```
+
+### Bug-2: Polling 探针与下游复用对 "clean" 的检测标准不一致
+
+**位置**：
+- `src/backend/core/use_cases/agent_runner_orchestrate.py:246` (`_has_existing_local_commit_ready_for_publish`)
+- `src/backend/core/use_cases/agent_runner_publication.py:285` (`_reuse_existing_local_commit`)
+
+**根因**：polling 探针用 `git diff --stat`（只检测已跟踪文件的修改，不检测未跟踪文件如 `.agent-runner/`），而实际复用逻辑用 `has_changes`（`git status --porcelain`，检测所有变更包括未跟踪文件）。
+
+**后果**：`_has_existing_local_commit_ready_for_publish` 返回 `True`，runner 进入 `running_publish_recovery` 路径；但 `_reuse_existing_local_commit` 因 `.agent-runner/` 等未跟踪文件返回 `None`，抛出非 `PublishFailureError` 的 `RuntimeError`，导致错误的 failure comment 格式和状态流转。
+
+**修复**：让 polling 探针也使用 `has_changes`，与下游复用逻辑保持一致。
+
+```python
+# agent_runner_orchestrate.py
+from backend.core.use_cases.agent_runner_git import has_changes
+
+return (
+    _count_local_commits_since_base(worktree_path, config, process_runner) > 0
+    and not has_changes(worktree_path, process_runner)
+)
+```

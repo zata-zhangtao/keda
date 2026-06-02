@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
@@ -173,7 +174,7 @@ def _publish_changes_with_recovery_context(
             expected_branch=expected_branch,
             content_generator=content_generator,
         )
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
         raise PublishFailureError(
             str(exc),
             worktree_path=worktree_path,

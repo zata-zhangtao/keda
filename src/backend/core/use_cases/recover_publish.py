@@ -1,4 +1,9 @@
-"""Publish recovery use case for resuming failed publish operations."""
+"""发布恢复用例：用于恢复此前失败的发布（publish）流程。
+
+当 Agent 已经在本地 worktree 完成提交（commit），但后续的推送（push）或
+建 PR 环节失败时，本模块负责在不重新运行 Agent、不重新提交、不改动工作树
+内容的前提下，安全地把已有提交推送到远端并创建/复用草稿 PR，从而完成发布。
+"""
 
 from __future__ import annotations
 
@@ -29,7 +34,11 @@ __all__ = [
 
 
 class PublishRecoveryError(RuntimeError):
-    """Base error for publish recovery failures."""
+    """发布恢复流程的基础异常类型。
+
+    当恢复流程因任意安全校验失败或外部命令出错而无法继续时抛出，
+    上层调用方可统一捕获该异常类型来处理恢复失败。
+    """
 
     pass
 
@@ -40,22 +49,28 @@ def resolve_existing_worktree(
     config: AppConfig,
     process_runner: IProcessRunner,
 ) -> Path:
-    """Resolve the path to an existing issue worktree without creating one.
+    """解析已存在的 Issue 工作树（worktree）路径，且不会创建新的工作树。
+
+    恢复流程依赖一个已经存在、且包含本地提交的工作树，因此这里只做“解析 +
+    校验存在性”，绝不在缺失时新建，以免覆盖或干扰用户已有的工作进度。
 
     Args:
-        repo_path: Path to the main repository.
-        issue_number: GitHub Issue number.
-        config: Application configuration.
-        process_runner: Process runner for executing commands.
+        repo_path (Path): 主仓库路径。
+        issue_number (int): GitHub Issue 编号。
+        config (AppConfig): 应用配置。
+        process_runner (IProcessRunner): 用于执行命令的进程执行器。
 
     Returns:
-        Resolved absolute path to the worktree.
+        Path: 解析后的工作树绝对路径。
 
     Raises:
-        PublishRecoveryError: If the worktree path cannot be resolved or does not exist.
+        PublishRecoveryError: 当工作树路径无法解析、不存在，或不是合法的
+            git 工作树时抛出。
     """
     from backend.core.use_cases.run_agent_once import format_command
 
+    # 通过配置中的 path_command 模板（注入 issue_number）计算工作树路径，
+    # 复用与正常发布流程相同的路径推导逻辑，保证两条路径一致。
     path_result = process_runner.run(
         format_command(config.worktree.path_command, issue_number=issue_number),
         cwd=repo_path,
@@ -68,7 +83,8 @@ def resolve_existing_worktree(
             f"Recovery requires an existing worktree with a local commit."
         )
 
-    # Verify it is a valid git worktree
+    # 路径存在并不代表它就是有效的 git 工作树，需再用 git rev-parse 确认，
+    # 防止误把普通目录当作工作树继续后续的 git 操作。check=False 以便手动判错。
     git_dir_result = process_runner.run(
         ["git", "rev-parse", "--git-dir"],
         cwd=worktree_path,
@@ -84,15 +100,20 @@ def validate_worktree_clean(
     worktree_path: Path,
     process_runner: IProcessRunner,
 ) -> None:
-    """Validate that the worktree has no uncommitted changes.
+    """校验工作树没有未提交的改动（保持干净状态）。
+
+    恢复流程的契约是“只发布已有提交、不产生新提交”。若工作树存在未提交改动，
+    说明状态不符合预期（可能 Agent 仍在运行或用户手动改动），此时贸然推送可能
+    遗漏或混入未提交内容，因此必须拒绝。
 
     Args:
-        worktree_path: Path to the worktree.
-        process_runner: Process runner for executing commands.
+        worktree_path (Path): 工作树路径。
+        process_runner (IProcessRunner): 用于执行命令的进程执行器。
 
     Raises:
-        PublishRecoveryError: If the worktree has uncommitted changes.
+        PublishRecoveryError: 当工作树存在未提交改动时抛出。
     """
+    # --porcelain 输出稳定且易于机器解析：非空即代表存在未暂存/未提交改动。
     status_result = process_runner.run(
         ["git", "status", "--porcelain"],
         cwd=worktree_path,
@@ -113,20 +134,25 @@ def validate_branch_safety(
     process_runner: IProcessRunner,
     expected_branch: str | None = None,
 ) -> str:
-    """Validate branch safety for publish recovery.
+    """校验发布恢复时的分支安全性，确认当前分支可以安全推送。
+
+    该函数是恢复流程的关键“护栏”，依次拦截三类危险场景：游离 HEAD、误用基线
+    分支、以及分支与目标 Issue 不匹配，避免把提交推送到错误的分支上。
 
     Args:
-        worktree_path: Path to the worktree.
-        issue_number: GitHub Issue number.
-        config: Application configuration.
-        process_runner: Process runner for executing commands.
-        expected_branch: Optional explicit branch name to expect.
+        worktree_path (Path): 工作树路径。
+        issue_number (int): GitHub Issue 编号。
+        config (AppConfig): 应用配置。
+        process_runner (IProcessRunner): 用于执行命令的进程执行器。
+        expected_branch (str | None): 调用方显式指定的期望分支名；若提供，则当前
+            分支必须与之完全一致。
 
     Returns:
-        The validated current branch name.
+        str: 校验通过后的当前分支名。
 
     Raises:
-        PublishRecoveryError: If the branch is not safe for recovery.
+        PublishRecoveryError: 当处于游离 HEAD、当前为基线分支，或分支与期望/
+            Issue 编号不匹配时抛出。
     """
     branch_result = process_runner.run(
         ["git", "branch", "--show-current"],
@@ -134,18 +160,21 @@ def validate_branch_safety(
     )
     current_branch = branch_result.stdout.strip()
 
+    # 游离 HEAD（detached HEAD）下没有可推送的分支名，无法安全发布。
     if not current_branch:
         raise PublishRecoveryError(
             "Cannot recover from detached HEAD state. " "Checkout a valid branch first."
         )
 
+    # 严禁从基线分支（如 main）直接发布，否则会把 Issue 提交污染主干。
     if current_branch == config.git.base_branch:
         raise PublishRecoveryError(
             f"Refusing to publish from base branch '{config.git.base_branch}'. "
             f"Switch to the issue branch and retry."
         )
 
-    # If explicit branch provided, current branch must match exactly
+    # 若调用方显式指定了期望分支，则采用“精确匹配”这一最严格的确认方式，
+    # 通过后直接返回，跳过下面基于命名约定的启发式校验。
     if expected_branch is not None:
         if current_branch != expected_branch:
             raise PublishRecoveryError(
@@ -155,7 +184,8 @@ def validate_branch_safety(
             )
         return current_branch
 
-    # Without explicit branch, validate branch references issue number
+    # 未显式指定分支时，退而用命名约定做启发式校验：分支名应包含对应的 Issue
+    # 编号引用。覆盖 issue-28 / issue_28 / tasks/issue-28 等常见命名变体。
     issue_ref_patterns = [
         rf"issue[-_]?{issue_number}",
         rf"tasks[-_/]issue[-_]?{issue_number}",
@@ -184,23 +214,25 @@ def recover_publish_issue(
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
 ) -> PublishRecoveryResult:
-    """Recover a failed publish operation for an Issue.
+    """恢复某个 Issue 此前失败的发布（publish）操作。
 
-    This function safely resumes publish for tasks that already have a local commit.
-    It does not run the agent, create commits, or modify the worktree.
+    本函数为“已存在本地提交”的任务安全地续做发布，整个过程不会运行 Agent、
+    不会创建提交、也不会改动工作树内容；它只做校验、推送已有提交并创建/复用 PR。
+    执行顺序经过精心编排：先完成全部本地安全校验与推送，确认成功后才更新标签、
+    评论 Issue，确保只有真正发布成功才会改变 Issue 的可见状态。
 
     Args:
-        request: Recovery request with issue number and optional branch.
-        repo_path: Path to the main repository.
-        config: Application configuration.
-        github_client: GitHub client for API operations.
-        process_runner: Process runner for Git commands.
+        request (PublishRecoveryRequest): 恢复请求，含 Issue 编号与可选分支。
+        repo_path (Path): 主仓库路径。
+        config (AppConfig): 应用配置。
+        github_client (IGitHubClient): 用于 GitHub API 操作的客户端。
+        process_runner (IProcessRunner): 用于执行 Git 命令的进程执行器。
 
     Returns:
-        PublishRecoveryResult with branch, SHA, PR URL, and reuse status.
+        PublishRecoveryResult: 包含分支名、HEAD SHA、PR 链接及是否复用 PR 的结果。
 
     Raises:
-        PublishRecoveryError: If recovery cannot proceed safely.
+        PublishRecoveryError: 当任一安全校验失败或推送失败，导致无法安全恢复时抛出。
     """
     from backend.core.use_cases.run_agent_once import (
         get_head_sha,
@@ -209,15 +241,15 @@ def recover_publish_issue(
 
     issue_number = request.issue_number
 
-    # Resolve existing worktree
+    # 第一步：解析已存在的工作树（不创建）。
     worktree_path = resolve_existing_worktree(
         repo_path, issue_number, config, process_runner
     )
 
-    # Validate worktree is clean
+    # 第二步：确认工作树干净，保证只发布已有提交。
     validate_worktree_clean(worktree_path, process_runner)
 
-    # Validate branch safety
+    # 第三步：分支安全护栏，拒绝游离 HEAD / 基线分支 / 不匹配分支。
     branch = validate_branch_safety(
         worktree_path=worktree_path,
         issue_number=issue_number,
@@ -226,10 +258,12 @@ def recover_publish_issue(
         expected_branch=request.expected_branch,
     )
 
-    # Get HEAD SHA before any operations
+    # 在任何推送/远端操作之前先记录 HEAD SHA，作为本次发布提交的稳定标识，
+    # 后续用于评论与返回结果。
     head_sha = get_head_sha(worktree_path, process_runner)
 
-    # Validate configured remote exists
+    # 推送前校验配置的远端是否真实存在，提前给出可读的报错与可用远端列表，
+    # 避免 git push 因远端不存在而产生晦涩的失败信息。
     remote_names = list_git_remotes(worktree_path, process_runner)
     configured_remote = config.git.remote
     if configured_remote not in remote_names:
@@ -240,7 +274,7 @@ def recover_publish_issue(
             f"Update [agent_runner.git].remote in config.toml."
         )
 
-    # Push to configured remote
+    # 第四步：将分支推送到配置的远端（-u 建立上游跟踪）。
     _logger.info(
         "Pushing branch '%s' to remote '%s' for Issue #%d",
         branch,
@@ -259,7 +293,8 @@ def recover_publish_issue(
             f"Stderr: {push_result.stderr}"
         )
 
-    # Check for existing open PR
+    # 第五步：查找该分支是否已有处于 open 状态的 PR。恢复场景下 PR 可能在上次
+    # 失败前已创建，复用可避免产生重复 PR。
     existing_pr_url = github_client.find_open_pr_by_head(branch)
     pr_reused = existing_pr_url is not None
 
@@ -271,7 +306,8 @@ def recover_publish_issue(
             pr_url,
         )
     else:
-        # Create new draft PR
+        # 不存在可复用 PR 时创建草稿 PR；正文中的 Closes #N 用于在合并后自动关闭
+        # 对应 Issue。
         pr_title = f"[Agent] Issue #{issue_number}"
         pr_body = f"Closes #{issue_number}\n\nRecovered by issue-agent-runner.\n"
 
@@ -283,7 +319,8 @@ def recover_publish_issue(
             cwd=worktree_path,
         )
 
-    # Update labels - only after successful push and PR
+    # 第六步：仅在推送与 PR 均成功后才更新标签，移除 failed/running/ready 等
+    # 中间态，标记为 review，保证 Issue 状态与实际发布结果严格一致。
     labels_to_remove = [
         config.labels.failed,
         config.labels.running,
@@ -295,7 +332,7 @@ def recover_publish_issue(
         remove=labels_to_remove,
     )
 
-    # Comment on Issue with recovery summary
+    # 第七步：在 Issue 下留言，给出本次恢复的分支、SHA、PR 等摘要信息。
     github_client.comment_issue(
         issue_number,
         build_recovery_success_comment(
@@ -330,17 +367,18 @@ def build_recovery_success_comment(
     pr_url: str,
     pr_reused: bool,
 ) -> str:
-    """Build the Issue comment for successful publish recovery.
+    """构建发布恢复成功后写入 Issue 的评论正文。
 
     Args:
-        branch: Branch name that was pushed.
-        head_sha: HEAD SHA of the commit.
-        pr_url: URL of the PR (new or reused).
-        pr_reused: Whether an existing PR was reused.
+        branch (str): 已推送的分支名。
+        head_sha (str): 提交的 HEAD SHA。
+        pr_url (str): PR 链接（新建或复用）。
+        pr_reused (bool): 是否复用了已存在的 PR。
 
     Returns:
-        Markdown comment body.
+        str: Markdown 格式的评论正文。
     """
+    # 复用与新建在文案上区分开，方便人工在 Issue 中快速识别 PR 来源。
     reuse_status = "reused" if pr_reused else "created"
     return "\n".join(
         [

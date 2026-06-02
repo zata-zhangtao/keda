@@ -34,6 +34,7 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_runner_events import (
     parse_latest_event_marker,
 )
+from backend.core.use_cases.agent_runner_git import has_changes
 from backend.core.use_cases.agent_runner_publication import (
     _finish_existing_commit_publication,
     _finish_implementation_publication,
@@ -240,13 +241,9 @@ def _has_existing_local_commit_ready_for_publish(
             _count_local_commits_since_base,
         )
 
-        return (
-            _count_local_commits_since_base(worktree_path, config, process_runner) > 0
-            and not process_runner.run(
-                ["git", "diff", "--stat"],
-                cwd=worktree_path,
-            ).stdout.strip()
-        )
+        return _count_local_commits_since_base(
+            worktree_path, config, process_runner
+        ) > 0 and not has_changes(worktree_path, process_runner)
     except Exception as exc:  # noqa: BLE001 - candidate probing must not fail polling.
         _logger.info(
             "Skipping existing local commit probe for Issue #%d: %s",
