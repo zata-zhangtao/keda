@@ -34,6 +34,7 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_runner_events import (
     parse_latest_event_marker,
 )
+from backend.core.use_cases.agent_runner_git import has_changes
 from backend.core.use_cases.agent_runner_publication import (
     _finish_existing_commit_publication,
     _finish_implementation_publication,
@@ -184,11 +185,22 @@ def _mark_issue_failed(
             label_exc,
         )
 
+    from backend.core.use_cases.run_agent_once import (
+        PublishFailureError,
+        format_failure_comment,
+        format_publish_failure_comment,
+    )
+
     # 尝试从异常中提取尝试历史并格式化失败评论
     attempt_results = getattr(exc, "attempt_results", None)
-    if attempt_results is not None:
-        from backend.core.use_cases.run_agent_once import format_failure_comment
-
+    if isinstance(exc, PublishFailureError):
+        comment_body = format_publish_failure_comment(
+            exc,
+            issue.number,
+            worktree_path=exc.worktree_path,
+            failure_category=exc.failure_category,
+        )
+    elif attempt_results is not None:
         comment_body = format_failure_comment(exc, attempt_results)
     else:
         comment_body = f"## Agent Runner Failed\n\n```text\n{exc}\n```\n"
@@ -236,13 +248,9 @@ def _has_existing_local_commit_ready_for_publish(
             _count_local_commits_since_base,
         )
 
-        return (
-            _count_local_commits_since_base(worktree_path, config, process_runner) > 0
-            and not process_runner.run(
-                ["git", "diff", "--stat"],
-                cwd=worktree_path,
-            ).stdout.strip()
-        )
+        return _count_local_commits_since_base(
+            worktree_path, config, process_runner
+        ) > 0 and not has_changes(worktree_path, process_runner)
     except Exception as exc:  # noqa: BLE001 - candidate probing must not fail polling.
         _logger.info(
             "Skipping existing local commit probe for Issue #%d: %s",

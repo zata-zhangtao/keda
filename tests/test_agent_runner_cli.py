@@ -410,4 +410,30 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     )
 
 
-# New tests for CLI logging configuration
+def test_cli_parser_recover_publish_required_args() -> None:
+    """recover-publish should require --issue."""
+    parser = build_parser()
+    parsed = parser.parse_args(["recover-publish", "--issue", "5"])
+    assert parsed.command == "recover-publish"
+    assert parsed.issue == 5
+    assert parsed.branch is None
+
+
+def test_cli_parser_recover_publish_with_branch() -> None:
+    """recover-publish should accept optional --branch."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["recover-publish", "--issue", "5", "--branch", "feature-xyz"]
+    )
+    assert parsed.command == "recover-publish"
+    assert parsed.issue == 5
+    assert parsed.branch == "feature-xyz"
+
+
+def test_cli_parser_recover_publish_missing_issue() -> None:
+    """recover-publish should fail without --issue."""
+    import pytest as _pytest
+
+    parser = build_parser()
+    with _pytest.raises(SystemExit):
+        parser.parse_args(["recover-publish"])
