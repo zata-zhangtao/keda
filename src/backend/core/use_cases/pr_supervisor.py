@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
@@ -649,13 +650,30 @@ def run_post_pr_supervisor_cycle(
         base_sha_remote=base_sha_remote,
     )
 
-    result = run_agent_with_prompt(
-        supervisor_agent,
-        supervisor_prompt,
-        worktree_path,
-        process_runner,
-        capture_output=True,
-    )
+    try:
+        result = run_agent_with_prompt(
+            supervisor_agent,
+            supervisor_prompt,
+            worktree_path,
+            process_runner,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        # Claude stream-json may return non-zero exit code while still
+        # producing valid output in stdout; attempt to parse captured output
+        # before giving up.
+        _logger.warning(
+            "Supervisor agent exited with code %d for Issue #%d; "
+            "attempting to parse captured stdout anyway.",
+            exc.returncode,
+            issue.number,
+        )
+        result = CommandResult(
+            command=tuple(exc.cmd),
+            return_code=exc.returncode,
+            stdout=exc.output or "",
+            stderr=exc.stderr or "",
+        )
     raw_action_result = parse_supervisor_action(extract_agent_response_text(result))
     # 先经过守卫层校正，再对外暴露最终决策，确保不违背客观 PR 状态
     action_result = guard_supervisor_action_for_pr_state(
