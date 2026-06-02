@@ -70,6 +70,13 @@ def test_iar_init_writes_protects_and_force_overwrites(
     config_path = repo_path / ".iar.toml"
     first_config_text = config_path.read_text(encoding="utf-8")
 
+    # iAR-owned worktree commands must be present and the legacy
+    # `just worktree` formula must be gone, so the historical
+    # `PosixPath not found` regression cannot return.
+    assert "iar worktree create --branch issue-{issue_number}" in first_config_text
+    assert "iar worktree path --branch issue-{issue_number}" in first_config_text
+    assert "just worktree" not in first_config_text
+
     second_exit_code = main(["init"])
     protected_config_text = config_path.read_text(encoding="utf-8")
 

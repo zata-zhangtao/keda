@@ -134,8 +134,33 @@ __all__ = [
 ]
 
 
-def format_command(template: str, *, issue_number: int) -> list[str]:
-    """Format a configured command template for an Issue."""
+def format_command(
+    template: str,
+    *,
+    issue_number: int,
+    base_branch: str | None = None,
+) -> list[str]:
+    """Format a configured command template for an Issue.
+
+    Args:
+        template: Command template string. May reference ``{issue_number}``
+            and optionally ``{base_branch}`` placeholders.
+        issue_number: GitHub issue number the runner is processing.
+        base_branch: Repository base branch. Required when ``template``
+            contains the ``{base_branch}`` placeholder; ignored otherwise.
+
+    Returns:
+        Tokenized command list ready for subprocess execution.
+    """
+    if "{base_branch}" in template:
+        if base_branch is None:
+            raise ValueError(
+                "Command template references {base_branch} but no base_branch "
+                "was provided."
+            )
+        return shlex.split(
+            template.format(issue_number=issue_number, base_branch=base_branch)
+        )
     return shlex.split(template.format(issue_number=issue_number))
 
 
@@ -159,22 +184,58 @@ def create_or_reuse_worktree(
     config: AppConfig,
     process_runner: IProcessRunner,
 ) -> Path:
-    """Create or reuse a worktree for the Issue."""
+    """Create or reuse a worktree for the Issue.
+
+    The three configured commands are run in sequence:
+
+    1. ``create_command`` (best effort, ``check=False``) attempts to create
+       the worktree. Failures are tolerated here because the next command
+       may be able to recover.
+    2. ``reuse_command`` runs only when ``create_command`` failed. It
+       usually re-resolves the worktree path and is a no-op on disk.
+    3. ``path_command`` always runs to obtain the canonical absolute path.
+
+    After the three commands complete, the returned path is verified to
+    exist. If it does not, a :class:`FileNotFoundError` is raised that
+    carries the three commands' return codes and stdout excerpts so the
+    next engineer can see exactly which step went wrong.
+    """
     create_result = process_runner.run(
-        format_command(config.worktree.create_command, issue_number=issue.number),
+        format_command(
+            config.worktree.create_command,
+            issue_number=issue.number,
+            base_branch=config.worktree.base_branch,
+        ),
         cwd=repo_path,
         check=False,
     )
     if create_result.return_code != 0:
-        process_runner.run(
-            format_command(config.worktree.reuse_command, issue_number=issue.number),
+        reuse_result = process_runner.run(
+            format_command(
+                config.worktree.reuse_command,
+                issue_number=issue.number,
+            ),
             cwd=repo_path,
+            check=False,
         )
+    else:
+        reuse_result = None
     path_result = process_runner.run(
         format_command(config.worktree.path_command, issue_number=issue.number),
         cwd=repo_path,
     )
-    return Path(path_result.stdout.strip()).resolve()
+    worktree_path = Path(path_result.stdout.strip()).resolve()
+    if not worktree_path.exists():
+        raise FileNotFoundError(
+            "worktree path does not exist after create/reuse/path pipeline: "
+            f"{worktree_path}. "
+            f"create_command return_code={create_result.return_code}, "
+            f"reuse_command return_code="
+            f"{reuse_result.return_code if reuse_result is not None else 'skipped'}, "
+            f"path_command return_code={path_result.return_code}, "
+            f"path_command stdout={path_result.stdout!r}."
+        )
+    return worktree_path
 
 
 def _build_claude_command(prompt: str, worktree_path: Path) -> list[str]:  # noqa: ARG001

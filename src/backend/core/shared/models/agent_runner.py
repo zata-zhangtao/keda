@@ -86,11 +86,22 @@ class GitConfig:
 
 @dataclass(frozen=True)
 class WorktreeConfig:
-    """Commands used to create and locate target worktrees."""
+    """Commands used to create and locate target worktrees.
 
-    create_command: str = "just worktree issue-{issue_number} enter_shell=false"
-    reuse_command: str = 'bash -c \'test -d "$(dirname "$(git rev-parse --show-toplevel)")/$(basename "$(git rev-parse --show-toplevel)")-worktrees/tasks/issue-{issue_number}"\''
-    path_command: str = 'bash -c \'echo "$(dirname "$(git rev-parse --show-toplevel)")/$(basename "$(git rev-parse --show-toplevel)")-worktrees/tasks/issue-{issue_number}"\''
+    ``base_branch`` is the repository base branch (e.g. ``main``). It is
+    passed to the ``create_command`` template so ``git worktree add`` can
+    fork from the correct ref. See
+    :class:`backend.infrastructure.config.settings.AgentRunnerWorktreeSettings`
+    for the matching Pydantic defaults.
+    """
+
+    create_command: str = (
+        "iar worktree create --branch issue-{issue_number} "
+        "--base-branch {base_branch}"
+    )
+    reuse_command: str = "iar worktree path --branch issue-{issue_number}"
+    path_command: str = "iar worktree path --branch issue-{issue_number}"
+    base_branch: str = "main"
 
 
 @dataclass(frozen=True)

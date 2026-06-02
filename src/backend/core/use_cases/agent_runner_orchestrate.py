@@ -137,7 +137,14 @@ def _find_worktree_path_for_issue(
         format_command(config.worktree.path_command, issue_number=issue.number),
         cwd=repo_path,
     )
-    return Path(path_result.stdout.strip()).resolve()
+    worktree_path = Path(path_result.stdout.strip()).resolve()
+    if not worktree_path.exists():
+        raise FileNotFoundError(
+            "worktree path does not exist (path_command output): "
+            f"{worktree_path}. path_command return_code={path_result.return_code}, "
+            f"stdout={path_result.stdout!r}."
+        )
+    return worktree_path
 
 
 def _mark_issue_failed(

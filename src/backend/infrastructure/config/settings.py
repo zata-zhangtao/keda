@@ -295,11 +295,19 @@ class AgentRunnerGitSettings(BaseModel):
 
 
 class AgentRunnerWorktreeSettings(BaseModel):
-    """Commands used to create and locate target worktrees."""
+    """Commands used to create and locate target worktrees.
 
-    create_command: str = "just worktree issue-{issue_number} enter_shell=false"
-    reuse_command: str = 'bash -c \'test -d "$(dirname "$(git rev-parse --show-toplevel)")/$(basename "$(git rev-parse --show-toplevel)")-worktrees/tasks/issue-{issue_number}"\''
-    path_command: str = 'bash -c \'echo "$(dirname "$(git rev-parse --show-toplevel)")/$(basename "$(git rev-parse --show-toplevel)")-worktrees/tasks/issue-{issue_number}"\''
+    Defaults delegate to the built-in ``iar worktree`` subcommand so the
+    create / path pair can never drift apart. Override only when the target
+    repository genuinely needs a custom worktree layout.
+    """
+
+    create_command: str = (
+        "iar worktree create --branch issue-{issue_number} "
+        "--base-branch {base_branch}"
+    )
+    reuse_command: str = "iar worktree path --branch issue-{issue_number}"
+    path_command: str = "iar worktree path --branch issue-{issue_number}"
 
 
 class AgentRunnerRunnerSettings(BaseModel):

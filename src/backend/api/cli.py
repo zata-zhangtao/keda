@@ -44,7 +44,11 @@ from backend.engines.agent_runner.factory import (
 )
 from backend.engines.agent_runner.repository_local import (
     RepositoryInitOptions,
+    detect_git_repository_root,
     initialize_repository_local_config,
+)
+from backend.engines.agent_runner.worktree_cli import (
+    build_worktree_manager,
 )
 
 if TYPE_CHECKING:
@@ -259,6 +263,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--session-id", default=None, help="Optional session ID for reproducibility."
     )
     add_common_options(deliberate_parser)
+
+    worktree_parser = subparsers.add_parser(
+        "worktree",
+        help="Manage iAR-owned Git worktrees for the current repository.",
+    )
+    worktree_subparsers = worktree_parser.add_subparsers(
+        dest="worktree_command", required=True
+    )
+    worktree_create_parser = worktree_subparsers.add_parser(
+        "create", help="Create a worktree at .iar-worktrees/<branch>."
+    )
+    worktree_create_parser.add_argument(
+        "--branch", required=True, help="Branch name to create."
+    )
+    worktree_create_parser.add_argument(
+        "--base-branch", required=True, help="Existing branch to fork from."
+    )
+    worktree_path_parser = worktree_subparsers.add_parser(
+        "path", help="Print the absolute worktree path for a branch."
+    )
+    worktree_path_parser.add_argument(
+        "--branch", required=True, help="Branch name to resolve."
+    )
+    worktree_remove_parser = worktree_subparsers.add_parser(
+        "remove", help="Remove a worktree and prune Git metadata."
+    )
+    worktree_remove_parser.add_argument(
+        "--branch", required=True, help="Branch name whose worktree to remove."
+    )
     return parser
 
 
@@ -316,6 +349,25 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Label sync failed (labels may already exist): %s", exc)
         return 0
+
+    if parsed.command == "worktree":
+        try:
+            repo_root_path = detect_git_repository_root(Path.cwd(), process_runner)
+        except ValueError as exc:
+            logger.error("iar worktree failed: %s", exc)
+            return 1
+        manager = build_worktree_manager(repo_root_path, process_runner)
+        if parsed.worktree_command == "create":
+            manager.create(branch=parsed.branch, base_branch=parsed.base_branch)
+            return 0
+        if parsed.worktree_command == "path":
+            print(str(manager.worktree_path(parsed.branch)))
+            return 0
+        if parsed.worktree_command == "remove":
+            manager.remove(branch=parsed.branch)
+            return 0
+        logger.error("iar worktree: unknown subcommand %r", parsed.worktree_command)
+        return 1
 
     runner_settings = get_agent_runner_settings()
 
