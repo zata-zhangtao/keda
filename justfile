@@ -378,7 +378,9 @@ staged_changes:
 
 # Git worktree helper (implemented in scripts/worktree/)
 # Usage:
-#   just worktree <branch>                            # create/enter worktree
+#   just worktree <branch>                            # create/enter worktree (auto-checkout matching remote branch)
+#   just worktree <branch> --checkout [<src>]         # reuse existing local/remote branch
+#   just worktree <branch> --new                      # force new branch (ignore same-name remote)
 #   just worktree <branch> --cmd trae                 # open in editor
 #   just worktree <branch> enter_shell=false          # no shell
 #   just worktree -o <branch> [--cmd trae]            # open existing worktree
@@ -475,6 +477,9 @@ worktree arg1 arg2="" arg3="" arg4="" arg5="":
     enter_shell_value="true"
     expect_code_command="false"
     expect_base_branch="false"
+    expect_checkout_source="false"
+
+    known_flag_pattern='--cmd|--cmd=*|--base|--base=*|--checkout|--checkout=*|--new|enter_shell=true|enter_shell=false'
 
     for raw_arg in "{{arg2}}" "{{arg3}}" "{{arg4}}" "{{arg5}}"; do
         if [ -z "$raw_arg" ]; then
@@ -483,7 +488,7 @@ worktree arg1 arg2="" arg3="" arg4="" arg5="":
 
         if [ "$expect_code_command" = "true" ]; then
             case "$raw_arg" in
-                --cmd|--cmd=*|--base|--base=*|enter_shell=true|enter_shell=false)
+                --cmd|--cmd=*|--base|--base=*|--checkout|--checkout=*|--new|enter_shell=true|enter_shell=false)
                     expect_code_command="false"
                     ;;
                 *)
@@ -496,12 +501,25 @@ worktree arg1 arg2="" arg3="" arg4="" arg5="":
 
         if [ "$expect_base_branch" = "true" ]; then
             case "$raw_arg" in
-                --cmd|--cmd=*|--base|--base=*|enter_shell=true|enter_shell=false)
+                --cmd|--cmd=*|--base|--base=*|--checkout|--checkout=*|--new|enter_shell=true|enter_shell=false)
                     expect_base_branch="false"
                     ;;
                 *)
                     worktree_command+=("$raw_arg")
                     expect_base_branch="false"
+                    continue
+                    ;;
+            esac
+        fi
+
+        if [ "$expect_checkout_source" = "true" ]; then
+            case "$raw_arg" in
+                --cmd|--cmd=*|--base|--base=*|--checkout|--checkout=*|--new|enter_shell=true|enter_shell=false)
+                    expect_checkout_source="false"
+                    ;;
+                *)
+                    worktree_command+=("$raw_arg")
+                    expect_checkout_source="false"
                     continue
                     ;;
             esac
@@ -522,6 +540,16 @@ worktree arg1 arg2="" arg3="" arg4="" arg5="":
             --cmd=*)
                 worktree_command+=("$raw_arg")
                 ;;
+            --checkout)
+                worktree_command+=(--checkout)
+                expect_checkout_source="true"
+                ;;
+            --checkout=*)
+                worktree_command+=("$raw_arg")
+                ;;
+            --new)
+                worktree_command+=(--new)
+                ;;
             enter_shell=true)
                 enter_shell_value="true"
                 ;;
@@ -531,7 +559,7 @@ worktree arg1 arg2="" arg3="" arg4="" arg5="":
             *)
                 echo "❌ Invalid argument: $raw_arg"
                 echo "Usage:"
-                echo "  just worktree <branch> [--base branch] [--cmd [editor]] [enter_shell=false]"
+                echo "  just worktree <branch> [--checkout [<src>] | --new] [--base branch] [--cmd [editor]] [enter_shell=false]"
                 echo "  just worktree -o <branch> [--cmd editor]"
                 echo "  just worktree -d <branch>"
                 echo "  just worktree -m [<feature>] [base=main] [flags]"

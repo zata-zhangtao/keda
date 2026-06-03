@@ -88,6 +88,31 @@ just worktree feature-branch
 just worktree feature-branch --base develop
 ```
 
+### 基于远程分支创建 worktree
+
+当本地不存在同名分支、且某个 remote 下唯一存在同名分支时，`just worktree <branch>` 会**自动进入 checkout 模式**，创建一个跟踪该远程分支的本地分支，无需手动 `git fetch` + `git checkout`：
+
+```bash
+# 远程已有 origin/feature-login，本地尚无 feature-login
+just worktree feature-login
+# → 自动检测到远程分支并 checkout 成本地 worktree
+```
+
+也可以用 `--checkout` 显式指定来源分支，来源支持纯分支名或 `<remote>/<branch>` 形式：
+
+```bash
+just worktree issue-15 --checkout zata/issue-15   # 指定远程来源
+just worktree issue-15 --checkout                 # 来源默认等于分支名
+```
+
+若希望忽略同名远程分支、强制新建本地分支，使用 `--new`（与 `--checkout` 互斥）：
+
+```bash
+just worktree feature-x --new
+```
+
+可通过环境变量 `KEDA_WORKTREE_SYNC_BASE=false` 关闭远程同步，`KEDA_WORKTREE_BASE_REMOTE` 覆盖默认 remote 名。
+
 `just worktree`（底层实现位于 `scripts/worktree/create.sh`）在创建 worktree 后会自动执行两类依赖准备：
 
 - Python：如果仓库根目录存在 `pyproject.toml`，则运行 `uv sync --all-extras`。

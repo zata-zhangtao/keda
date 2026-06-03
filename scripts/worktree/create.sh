@@ -9,11 +9,20 @@
 ai_worktree_usage() {
     cat <<'EOF'
 Usage:
-  ai_worktree <new_branch_name> [--base <base_branch>] [--cmd [code_cmd]]
+  ai_worktree <branch_name> [--checkout [<source_ref>] | --new]
+                            [--base <base_branch>] [--cmd [code_cmd]]
+                            [--subdir <dir>]
 
 Options:
+  --checkout [<source>]
+                    复用已有分支而非新建。<source> 可省略，默认等于 <branch_name>。
+                    <source> 支持本地分支名、远程 tracking 形式 (例如 zata/issue-15)。
+                    不传 --checkout 时，若检测到同名远程分支会自动进入 checkout 模式。
+  --new             显式强制新建分支；同名远程分支即使存在也忽略。
+                    与 --checkout 互斥。
   --base <base_branch>
                     指定 base branch 名称。默认使用: main
+                    仅在新建分支时生效；checkout 模式下会被忽略。
   --cmd [code_cmd]  创建完成后自动执行: <code_cmd> --add <worktree_path>
                     不传 code_cmd 时默认使用: code
   --subdir <dir>    在 <repo>-worktrees/<dir>/ 下创建 worktree，
@@ -23,11 +32,18 @@ Options:
 Behavior:
   所有 worktree 统一集中到 <repo_parent>/<repo-name>-worktrees/ 下。
   issue-* 分支在未指定 --subdir 时，默认归入 tasks/ 子目录。
-  默认会同步 base branch 对应的远程 tracking ref 作为新 worktree 起点。
+  默认会同步 base/源远程的 tracking ref 作为新 worktree 起点。
   可通过环境变量控制远程同步行为:
     KEDA_WORKTREE_SYNC_BASE      默认 true，设为 false 关闭远程同步
     KEDA_WORKTREE_BASE_REMOTE    覆盖默认 remote 名
     KODA_WORKTREE_BASE_BRANCH    覆盖默认 base branch
+
+  Mode resolution:
+    --new                -> 强制新建；本地同名分支已存在则报错。
+    --checkout [<src>]   -> 显式 checkout；<src> 默认为 <branch_name>。
+    (neither)            -> 本地存在 -> 报错并提示用 --checkout；
+                          远程唯一匹配 -> 自动 checkout；
+                          均无 -> 新建分支。
 
 Examples:
   ai_worktree feature-login
@@ -36,11 +52,12 @@ Examples:
   ai_worktree feature-login --cmd code-insiders
   ai_worktree issue-3
   ai_worktree issue-3 --subdir foo
+  ai_worktree issue-15 --checkout zata/issue-15
+  ai_worktree issue-15 --checkout
+  ai_worktree feature-x --new
   KEDA_WORKTREE_SYNC_BASE=false ai_worktree feature-login
   ./scripts/worktree/create.sh feature-login
-  ./scripts/worktree/create.sh feature-login --base develop
-  ./scripts/worktree/create.sh feature-login --cmd
-  ./scripts/worktree/create.sh feature-login --cmd code-insiders
+  ./scripts/worktree/create.sh issue-15 --checkout zata/issue-15
 EOF
 }
 
@@ -367,12 +384,215 @@ resolve_worktree_start_point() {
     echo "$remote_ref"
 }
 
+local_branch_exists() {
+    local repo_root_path="$1"
+    local branch_name="$2"
+    git -C "$repo_root_path" show-ref --verify --quiet "refs/heads/$branch_name"
+}
+
+# Echo configured remote name whose prefix matches the candidate ("<remote>/<rest>"),
+# preferring the longest match if multiple remotes share prefixes.
+parse_remote_prefix() {
+    local repo_root_path="$1"
+    local candidate="$2"
+    local best_remote=""
+    local best_len=0
+    local remote_name=""
+    local remote_len=0
+
+    while IFS= read -r remote_name; do
+        [ -z "$remote_name" ] && continue
+        if [[ "$candidate" == "$remote_name/"* ]]; then
+            remote_len=${#remote_name}
+            if [ "$remote_len" -gt "$best_len" ]; then
+                best_remote="$remote_name"
+                best_len="$remote_len"
+            fi
+        fi
+    done < <(git -C "$repo_root_path" remote)
+
+    if [ -n "$best_remote" ]; then
+        echo "$best_remote"
+        return 0
+    fi
+    return 1
+}
+
+# Echo the unique remote name that has refs/remotes/<remote>/<branch_name>.
+# Return non-zero if 0 or >1 remotes match (ambiguous).
+find_unique_remote_for_branch() {
+    local repo_root_path="$1"
+    local branch_name="$2"
+    local remote_name=""
+    local match_remote=""
+    local match_count=0
+
+    while IFS= read -r remote_name; do
+        [ -z "$remote_name" ] && continue
+        if git -C "$repo_root_path" show-ref --verify --quiet "refs/remotes/$remote_name/$branch_name" 2>/dev/null; then
+            match_remote="$remote_name"
+            match_count=$((match_count + 1))
+        fi
+    done < <(git -C "$repo_root_path" remote)
+
+    if [ "$match_count" -eq 1 ]; then
+        echo "$match_remote"
+        return 0
+    fi
+    return 1
+}
+
+# Targeted fetch of a single remote branch into its tracking ref. Non-fatal on failure.
+fetch_remote_branch_ref() {
+    local repo_root_path="$1"
+    local remote_name="$2"
+    local remote_branch_name="$3"
+
+    echo "🌐 正在同步 ${remote_name}/${remote_branch_name} ..." >&2
+    if ! git -C "$repo_root_path" fetch --prune "$remote_name" \
+        "+refs/heads/${remote_branch_name}:refs/remotes/${remote_name}/${remote_branch_name}" 2>/dev/null; then
+        echo "⚠️ 同步远程分支失败 (${remote_name}/${remote_branch_name})，将使用本地已有的 tracking ref。" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Resolve the checkout source for explicit --checkout mode. Sets WORKTREE_PLAN_* globals.
+_resolve_checkout_source() {
+    local repo_root_path="$1"
+    local local_branch_name="$2"
+    local source_name="$3"
+    local sync_enabled="$4"
+    local remote_prefix=""
+    local remote_branch=""
+    local detected_remote=""
+
+    # Case 1: source matches "<remote>/<rest>" form with a configured remote.
+    if remote_prefix="$(parse_remote_prefix "$repo_root_path" "$source_name")"; then
+        remote_branch="${source_name#"$remote_prefix/"}"
+        if [ "$sync_enabled" = "true" ]; then
+            fetch_remote_branch_ref "$repo_root_path" "$remote_prefix" "$remote_branch" || true
+        fi
+        if ! git -C "$repo_root_path" show-ref --verify --quiet "refs/remotes/$remote_prefix/$remote_branch"; then
+            echo "❌ 远程分支不存在: $remote_prefix/$remote_branch" >&2
+            return 1
+        fi
+        if local_branch_exists "$repo_root_path" "$local_branch_name"; then
+            echo "❌ 本地分支 $local_branch_name 已存在，无法用 -b 重新创建。" >&2
+            echo "   若想复用本地分支，传 --checkout $local_branch_name 即可。" >&2
+            return 1
+        fi
+        WORKTREE_PLAN_MODE="CHECKOUT_REMOTE"
+        WORKTREE_PLAN_LOCAL_BRANCH="$local_branch_name"
+        WORKTREE_PLAN_START_POINT="$remote_prefix/$remote_branch"
+        return 0
+    fi
+
+    # Case 2a: source matches a local branch.
+    if local_branch_exists "$repo_root_path" "$source_name"; then
+        if [ "$local_branch_name" != "$source_name" ]; then
+            echo "❌ 本地分支 $source_name 已存在；要复用它，新 worktree 的分支名应与之一致。" >&2
+            echo "   请把第一个位置参数也写成 $source_name，或者改用 --new 创建另一个分支。" >&2
+            return 1
+        fi
+        WORKTREE_PLAN_MODE="CHECKOUT_LOCAL"
+        WORKTREE_PLAN_LOCAL_BRANCH="$source_name"
+        WORKTREE_PLAN_START_POINT="$source_name"
+        return 0
+    fi
+
+    # Case 2b: source matches a remote-tracking branch on exactly one remote.
+    if detected_remote="$(find_unique_remote_for_branch "$repo_root_path" "$source_name")"; then
+        if [ "$sync_enabled" = "true" ]; then
+            fetch_remote_branch_ref "$repo_root_path" "$detected_remote" "$source_name" || true
+        fi
+        if local_branch_exists "$repo_root_path" "$local_branch_name"; then
+            echo "❌ 本地分支 $local_branch_name 已存在，无法用 -b 重新创建。" >&2
+            return 1
+        fi
+        WORKTREE_PLAN_MODE="CHECKOUT_REMOTE"
+        WORKTREE_PLAN_LOCAL_BRANCH="$local_branch_name"
+        WORKTREE_PLAN_START_POINT="$detected_remote/$source_name"
+        return 0
+    fi
+
+    echo "❌ 找不到可 checkout 的分支: $source_name" >&2
+    echo "   尝试过: 本地 refs/heads/$source_name、各 remote 下的 $source_name、显式 <remote>/<branch> 形式。" >&2
+    echo "   先运行 \`git fetch\` 或检查分支名拼写。" >&2
+    return 1
+}
+
+# Compute creation plan. Sets globals:
+#   WORKTREE_PLAN_MODE          NEW | CHECKOUT_REMOTE | CHECKOUT_LOCAL
+#   WORKTREE_PLAN_LOCAL_BRANCH  local branch name to live in the new worktree
+#   WORKTREE_PLAN_START_POINT   start ref (empty for NEW; caller resolves base separately)
+resolve_worktree_creation_plan() {
+    local repo_root_path="$1"
+    local local_branch_arg="$2"
+    local explicit_mode="$3"        # "" | "new" | "checkout"
+    local checkout_source_arg="$4"  # may be empty even in checkout mode
+    local sync_enabled="$5"
+    local detected_remote=""
+
+    WORKTREE_PLAN_MODE=""
+    WORKTREE_PLAN_LOCAL_BRANCH=""
+    WORKTREE_PLAN_START_POINT=""
+
+    case "$explicit_mode" in
+        new)
+            if local_branch_exists "$repo_root_path" "$local_branch_arg"; then
+                echo "❌ 本地分支已存在: $local_branch_arg" >&2
+                echo "   --new 拒绝复用已有分支。请换个名字，或改用 --checkout 复用。" >&2
+                return 1
+            fi
+            WORKTREE_PLAN_MODE="NEW"
+            WORKTREE_PLAN_LOCAL_BRANCH="$local_branch_arg"
+            return 0
+            ;;
+        checkout)
+            local effective_source="${checkout_source_arg:-$local_branch_arg}"
+            _resolve_checkout_source "$repo_root_path" "$local_branch_arg" "$effective_source" "$sync_enabled"
+            return $?
+            ;;
+        "")
+            # Auto-detect.
+            if local_branch_exists "$repo_root_path" "$local_branch_arg"; then
+                echo "❌ 本地分支已存在: $local_branch_arg" >&2
+                echo "   请使用 --checkout 复用已有分支，或换个分支名。" >&2
+                echo "   (git 不允许同一分支被多个 worktree 同时占用，新建同名会失败。)" >&2
+                return 1
+            fi
+            if detected_remote="$(find_unique_remote_for_branch "$repo_root_path" "$local_branch_arg")"; then
+                echo "🔍 自动检测到远程分支: $detected_remote/$local_branch_arg" >&2
+                echo "   将进入 checkout 模式；如需强制新建同名本地分支请加 --new。" >&2
+                if [ "$sync_enabled" = "true" ]; then
+                    fetch_remote_branch_ref "$repo_root_path" "$detected_remote" "$local_branch_arg" || true
+                fi
+                WORKTREE_PLAN_MODE="CHECKOUT_REMOTE"
+                WORKTREE_PLAN_LOCAL_BRANCH="$local_branch_arg"
+                WORKTREE_PLAN_START_POINT="$detected_remote/$local_branch_arg"
+                return 0
+            fi
+            WORKTREE_PLAN_MODE="NEW"
+            WORKTREE_PLAN_LOCAL_BRANCH="$local_branch_arg"
+            return 0
+            ;;
+        *)
+            echo "❌ 内部错误: 未知 explicit_mode '$explicit_mode'" >&2
+            return 1
+            ;;
+    esac
+}
+
 function ai_worktree() {
     local branch_name=""
     local base_branch_name="${KODA_WORKTREE_BASE_BRANCH:-main}"
+    local base_branch_user_set="false"
     local enable_vscode_add="false"
     local vscode_command_name="code"
     local subdir_name=""
+    local creation_mode=""
+    local checkout_source=""
     local repo_root_path=""
     local repo_parent_path=""
     local target_abs_path=""
@@ -409,6 +629,7 @@ function ai_worktree() {
                     return 1
                 fi
                 base_branch_name="$2"
+                base_branch_user_set="true"
                 shift
                 ;;
             --base=*)
@@ -417,6 +638,7 @@ function ai_worktree() {
                     echo "❌ --base= 后需要提供基底分支名，例如: --base=develop"
                     return 1
                 fi
+                base_branch_user_set="true"
                 ;;
             --subdir)
                 if [ "$#" -le 1 ] || [[ "$2" == -* ]]; then
@@ -428,6 +650,38 @@ function ai_worktree() {
                 ;;
             --subdir=*)
                 subdir_name="${1#--subdir=}"
+                ;;
+            --new)
+                if [ "$creation_mode" = "checkout" ]; then
+                    echo "❌ --new 与 --checkout 互斥，不能同时使用。"
+                    return 1
+                fi
+                creation_mode="new"
+                ;;
+            --checkout)
+                if [ "$creation_mode" = "new" ]; then
+                    echo "❌ --new 与 --checkout 互斥，不能同时使用。"
+                    return 1
+                fi
+                creation_mode="checkout"
+                # Only consume the next token as source if the positional branch
+                # name is already set — otherwise it likely IS the positional.
+                if [ -n "$branch_name" ] && [ "$#" -gt 1 ] && [[ "$2" != -* ]]; then
+                    checkout_source="$2"
+                    shift
+                fi
+                ;;
+            --checkout=*)
+                if [ "$creation_mode" = "new" ]; then
+                    echo "❌ --new 与 --checkout 互斥，不能同时使用。"
+                    return 1
+                fi
+                creation_mode="checkout"
+                checkout_source="${1#--checkout=}"
+                if [ -z "$checkout_source" ]; then
+                    echo "❌ --checkout= 后需要提供 source，例如: --checkout=zata/issue-15"
+                    return 1
+                fi
                 ;;
             -*)
                 echo "❌ 未知参数: $1"
@@ -489,10 +743,24 @@ function ai_worktree() {
     local sync_enabled="${KEDA_WORKTREE_SYNC_BASE:-true}"
     local worktree_start_point=""
     local start_sha=""
+    local plan_mode=""
+    local local_branch_name=""
 
-    worktree_start_point="$(resolve_worktree_start_point "$repo_root_path" "$base_branch_name" "$sync_enabled")"
-    if [ $? -ne 0 ] || [ -z "$worktree_start_point" ]; then
+    if ! resolve_worktree_creation_plan \
+            "$repo_root_path" "$branch_name" "$creation_mode" "$checkout_source" "$sync_enabled"; then
         return 1
+    fi
+    plan_mode="$WORKTREE_PLAN_MODE"
+    local_branch_name="$WORKTREE_PLAN_LOCAL_BRANCH"
+    worktree_start_point="$WORKTREE_PLAN_START_POINT"
+
+    if [ "$plan_mode" = "NEW" ]; then
+        worktree_start_point="$(resolve_worktree_start_point "$repo_root_path" "$base_branch_name" "$sync_enabled")"
+        if [ $? -ne 0 ] || [ -z "$worktree_start_point" ]; then
+            return 1
+        fi
+    elif [ "$base_branch_user_set" = "true" ]; then
+        echo "⚠️ checkout 模式下 --base $base_branch_name 不生效，已忽略。" >&2
     fi
 
     start_sha="$(git -C "$repo_root_path" rev-parse "$worktree_start_point" 2>/dev/null || true)"
@@ -502,11 +770,36 @@ function ai_worktree() {
     fi
 
     echo "🚀 正在创建 Git Worktree: $target_abs_path ..."
-    echo "   起点: $worktree_start_point @ ${start_sha:0:8}"
-    if ! git -C "$repo_root_path" worktree add -b "$branch_name" "$target_abs_path" "$worktree_start_point"; then
-        echo "❌ Git worktree 创建失败。"
-        return 1
-    fi
+    case "$plan_mode" in
+        NEW)
+            echo "   模式: 新建分支 $local_branch_name"
+            echo "   起点: $worktree_start_point @ ${start_sha:0:8}"
+            if ! git -C "$repo_root_path" worktree add -b "$local_branch_name" "$target_abs_path" "$worktree_start_point"; then
+                echo "❌ Git worktree 创建失败。"
+                return 1
+            fi
+            ;;
+        CHECKOUT_REMOTE)
+            echo "   模式: checkout 远程分支 → 本地 $local_branch_name 跟踪 $worktree_start_point"
+            echo "   起点: $worktree_start_point @ ${start_sha:0:8}"
+            if ! git -C "$repo_root_path" worktree add -b "$local_branch_name" "$target_abs_path" "$worktree_start_point"; then
+                echo "❌ Git worktree 创建失败。"
+                return 1
+            fi
+            ;;
+        CHECKOUT_LOCAL)
+            echo "   模式: 复用已有本地分支 $local_branch_name"
+            echo "   起点: $worktree_start_point @ ${start_sha:0:8}"
+            if ! git -C "$repo_root_path" worktree add "$target_abs_path" "$local_branch_name"; then
+                echo "❌ Git worktree 创建失败。"
+                return 1
+            fi
+            ;;
+        *)
+            echo "❌ 内部错误: 未知 plan_mode '$plan_mode'"
+            return 1
+            ;;
+    esac
 
     echo "🔗 正在处理 .env ..."
     # 2. 复制仓库中所有以 .env 结尾的文件（保持相对路径），避免子目录环境文件丢失
