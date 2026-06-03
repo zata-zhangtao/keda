@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from backend.infrastructure.logging.logger import logger
 
@@ -221,21 +221,50 @@ def run_filtered_claude_stream(
     timeout: int | None,
     collect_stdout: bool = False,
     prompt_text: str | None = None,
+    output_sink: Callable[[str], None] | None = None,
+    display_sink: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run Claude stream-json and print a filtered live view."""
+    """Run Claude stream-json and print a filtered live view.
+
+    Args:
+        command: Command to run.
+        cwd: Working directory.
+        timeout: Optional timeout in seconds.
+        collect_stdout: Whether to collect rendered output.
+        prompt_text: Optional prompt to pass via stdin.
+        output_sink: Optional callback for rendered text chunks.
+        display_sink: Optional callback for stderr lines (display only).
+            When provided, stderr is drained on a background thread and
+            routed here instead of leaking raw onto the terminal.
+
+    Returns:
+        CompletedProcess with collected stdout if requested.
+    """
     import threading
 
     renderer = ClaudeStreamRenderer()
+    capture_stderr = display_sink is not None
     process = subprocess.Popen(
         list(command),
         cwd=cwd,
         stdout=subprocess.PIPE,
-        stderr=None,
+        stderr=subprocess.PIPE if capture_stderr else None,
         stdin=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         bufsize=1,
     )
+
+    def _pump_stderr() -> None:
+        if process.stderr is None:
+            return
+        for stderr_line in process.stderr:
+            display_sink(stderr_line.rstrip("\n"))
+
+    stderr_thread: threading.Thread | None = None
+    if capture_stderr:
+        stderr_thread = threading.Thread(target=_pump_stderr, daemon=True)
+        stderr_thread.start()
     if prompt_text is not None:
         # Write stdin in a background thread to avoid deadlock
         # when the pipe buffer fills up before the child reads.
@@ -256,6 +285,12 @@ def run_filtered_claude_stream(
                 if collect_stdout and rendered_text:
                     stdout_lines.append(rendered_text)
                 if rendered_text:
+                    if output_sink is not None:
+                        # The sink drives the live view and the workspace file;
+                        # skip stdout/logger writes that would corrupt the
+                        # live region.
+                        output_sink(rendered_text.rstrip("\n"))
+                        continue
                     timestamped = _format_timestamped_line(rendered_text)
                     print(timestamped, end="", flush=True)
 
@@ -286,6 +321,8 @@ def run_filtered_claude_stream(
         process.kill()
         process.wait()
         raise
+    if stderr_thread is not None:
+        stderr_thread.join(timeout=5)
     return subprocess.CompletedProcess(
         args=list(command),
         returncode=return_code,

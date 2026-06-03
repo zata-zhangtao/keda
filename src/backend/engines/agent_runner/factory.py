@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import dataclasses
 import subprocess
+import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import BaseModel
 
+from backend.core.shared.interfaces.agent_output_view import IAgentOutputView
 from backend.core.shared.interfaces.agent_runner import IContentGenerator
 from backend.core.shared.models.agent_deliberation import (
     DeliberationAgentProfile,
@@ -697,11 +700,18 @@ class SubprocessTranscriptRunner:
         *,
         cwd: Path,
         event_sink: "Callable[[DeliberationEvent], None]",
+        output_sink: "Callable[[str], None] | None" = None,
+        display_sink: "Callable[[str], None] | None" = None,
     ) -> "CommandResult":
         """Run an agent and emit events.
 
         Streams agent stdout to the terminal in real time while
-        collecting it for the deliberation transcript.
+        collecting it for the deliberation transcript. When
+        ``output_sink`` is provided, rendered text chunks are passed
+        to it as they arrive. When ``display_sink`` is provided, the
+        agent's stderr (its human-readable reasoning/tool log) is routed
+        to it for live display only, without being collected into the
+        transcript.
         """
         command = _build_deliberation_command(agent_name, prompt, cwd)
         _ = event_sink
@@ -717,6 +727,8 @@ class SubprocessTranscriptRunner:
                 timeout=None,
                 collect_stdout=True,
                 prompt_text=prompt,
+                output_sink=output_sink,
+                display_sink=display_sink,
             )
             return CommandResult(
                 command=tuple(command_no_prompt),
@@ -727,18 +739,22 @@ class SubprocessTranscriptRunner:
         if agent_name in ("kimi", "codex"):
             # Pass the prompt via stdin to avoid "Argument list too long"
             # when the transcript grows across rounds.
-            return _run_agent_with_stdin_prompt(command, prompt, cwd)
+            return _run_agent_with_stdin_prompt(
+                command, prompt, cwd, output_sink=output_sink, display_sink=display_sink
+            )
         process = subprocess.Popen(
             list(command),
             cwd=cwd,
             stdout=subprocess.PIPE,
-            stderr=None,
+            stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             bufsize=1,
         )
-        return_code, stdout_text = _relay_process_stdout(process)
+        return_code, stdout_text = _relay_process_stdout(
+            process, output_sink=output_sink, display_sink=display_sink
+        )
         return CommandResult(
             command=tuple(command),
             return_code=return_code,
@@ -748,16 +764,18 @@ class SubprocessTranscriptRunner:
 
 
 def _run_agent_with_stdin_prompt(
-    command: list[str], prompt: str, cwd: Path
+    command: list[str],
+    prompt: str,
+    cwd: Path,
+    output_sink: "Callable[[str], None] | None" = None,
+    display_sink: "Callable[[str], None] | None" = None,
 ) -> CommandResult:
     """Run an agent subprocess, passing the prompt via stdin."""
-    import threading
-
     process = subprocess.Popen(
         list(command),
         cwd=cwd,
         stdout=subprocess.PIPE,
-        stderr=None,
+        stderr=subprocess.PIPE,
         stdin=subprocess.PIPE,
         text=True,
         encoding="utf-8",
@@ -773,7 +791,9 @@ def _run_agent_with_stdin_prompt(
             process.stdin.close()
 
     threading.Thread(target=_write_stdin, daemon=True).start()
-    return_code, stdout_text = _relay_process_stdout(process)
+    return_code, stdout_text = _relay_process_stdout(
+        process, output_sink=output_sink, display_sink=display_sink
+    )
     return CommandResult(
         command=tuple(command),
         return_code=return_code,
@@ -782,21 +802,63 @@ def _run_agent_with_stdin_prompt(
     )
 
 
-def _relay_process_stdout(process: subprocess.Popen[str]) -> tuple[int, str]:
-    """Relay subprocess stdout to terminal and logger."""
+def _pump_stderr(
+    process: subprocess.Popen[str],
+    display_sink: "Callable[[str], None] | None",
+) -> None:
+    """Drain subprocess stderr, routing each line to the display sink.
+
+    Agents such as ``codex`` write their human-readable reasoning/tool log
+    to stderr. When a ``display_sink`` is present it shows those lines live
+    without collecting them into the transcript. With no sink we preserve
+    the prior behaviour of echoing stderr to the terminal.
+    """
+    if process.stderr is None:
+        return
+    for line in process.stderr:
+        if display_sink is not None:
+            display_sink(line.rstrip("\n"))
+        else:
+            print(_format_timestamped_line(line), end="", file=sys.stderr)
+
+
+def _relay_process_stdout(
+    process: subprocess.Popen[str],
+    output_sink: "Callable[[str], None] | None" = None,
+    display_sink: "Callable[[str], None] | None" = None,
+) -> tuple[int, str]:
+    """Relay subprocess stdout to terminal and logger.
+
+    Stderr is drained on a background thread so the agent's reasoning/tool
+    log reaches ``display_sink`` (live view) without blocking stdout or
+    leaking raw onto the terminal and corrupting the live region.
+    """
+    stderr_thread: threading.Thread | None = None
+    if process.stderr is not None:
+        stderr_thread = threading.Thread(
+            target=_pump_stderr, args=(process, display_sink), daemon=True
+        )
+        stderr_thread.start()
     stdout_lines: list[str] = []
     try:
         if process.stdout is not None:
             for line in process.stdout:
                 stdout_lines.append(line)
-                timestamped = _format_timestamped_line(line)
-                print(timestamped, end="")
-                logger.info("%s", line.rstrip("\n"))
+                if output_sink is not None:
+                    # The sink drives the live view and the workspace file;
+                    # avoid writing to stdout (would corrupt the live region).
+                    output_sink(line.rstrip("\n"))
+                else:
+                    logger.info("%s", line.rstrip("\n"))
+                    timestamped = _format_timestamped_line(line)
+                    print(timestamped, end="")
         return_code = process.wait(timeout=None)
     except Exception:
         process.kill()
         process.wait()
         raise
+    if stderr_thread is not None:
+        stderr_thread.join(timeout=5)
     return return_code, "".join(stdout_lines)
 
 
@@ -835,8 +897,16 @@ def create_transcript_runner(
 
 def create_event_sink(
     output_dir: Path,
+    output_view: "IAgentOutputView | None" = None,
 ) -> "Callable[[DeliberationEvent], None]":
-    """Create an event sink that writes to events.jsonl and prints to terminal."""
+    """Create an event sink that writes to events.jsonl and shows a summary line.
+
+    Args:
+        output_dir: Directory where ``events.jsonl`` is appended.
+        output_view: Optional live output view. When provided, the human
+            readable summary line is routed through ``output_view.log`` so it
+            does not corrupt an active live display; otherwise it is printed.
+    """
     events_path = output_dir / "events.jsonl"
     events_path.parent.mkdir(parents=True, exist_ok=True)
     import json
@@ -859,10 +929,14 @@ def create_event_sink(
         with lock:
             with open(events_path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
-        print(
+        summary = (
             f"[{event.session_id}] round={event.round} agent={event.agent} "
             f"event={event.event_type}"
         )
+        if output_view is not None:
+            output_view.log(summary)
+        else:
+            print(summary)
 
     return _sink
 

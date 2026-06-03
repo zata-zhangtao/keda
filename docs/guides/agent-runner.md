@@ -959,7 +959,13 @@ uv run iar deliberate "设计缓存策略" \
 - `workspaces/<profile_id>/round-<n>-output.md`：单个参与 agent 在对应轮次的原始输出
 - `workspaces/synthesizer/synthesis-output.md`：synthesizer 的原始结构化输出
 
-若任一参与 agent 或 synthesizer 子进程返回非 0 退出码，`iar deliberate` 会整体失败并返回非 0 退出码；已发生的事件仍保留在 `events.jsonl` 便于排查。
+### 实时输出文件
+
+每个 agent 的 workspace 输出文件在子进程运行期间实时增长，而不是等进程结束后一次性写入：
+
+- `workspaces/<profile_id>/round-<n>-output.md` 在对应 agent 子进程启动前或启动时创建
+- 每个可读输出 chunk 到达时立即追加写入对应文件
+- agent 失败时保留 partial output 文件，便于排查
 
 ### 终端实时输出
 
@@ -973,6 +979,74 @@ uv run iar deliberate "设计缓存策略" \
 [session-id] round=0 agent=synthesizer event=agent_started
 [session-id] round=0 agent=synthesizer event=agent_finished
 ```
+
+#### 交互式 TTY Live 视图
+
+在交互式终端（TTY）中运行时，`iar deliberate` 会显示实时 live view，并**按终端宽度自适应版式**：
+
+- **宽终端并排分栏**：当 `终端宽度 / 当前并发 agent 数 ≥ 40 列` 时，每个 agent 占一栏并排显示，栏数等于当前并发运行的 agent 数量（默认 `architect`、`skeptic`、`implementer` 为三栏）。
+- **窄终端竖向堆叠**：当每栏宽度不足以容纳可读文本时，自动改为整宽面板上下堆叠，避免文字被压得过窄。
+- **面板内容**：每个面板显示 round、agent、provider、状态，底部标注对应 workspace 目录，并展示最近输出。
+- **文字不截断**：正文在面板内换行，绝不横向截断；面板只保留最近若干行（按终端高度裁剪），完整内容以 workspace 文件为准。
+- **实时刷新**：输出到达时自动刷新；换轮时上一轮面板会冻结进终端滚动历史，再切换到新一轮。
+- **实时推理/工具日志**：部分 provider（如 `codex`）会把 banner、推理过程和工具调用日志写到 stderr。这些内容会被捕获并实时显示在对应面板里作为进度，但**仅用于展示**——不会写入 `round-<n>-output.md`，也不会进入 transcript。落盘和 transcript 只保留 provider 在 stdout 上的可读最终输出。这样既能在运行中看到 agent 在做什么，又能保持 workspace 文件干净。
+
+宽终端并排示例：
+
+```
+╭─ round=1 agent=architect provider=claude running ─╮ ╭─ round=1 agent=skeptic provider=kimi running ─╮ ╭─ round=1 agent=implementer provider=codex run─╮
+│ 架构师：这是我的可读输出样例。              │ │ 质疑者：这是我的可读输出样例。            │ │ implementer：这是我的可读输出样例。       │
+│ ...                                               │ │ ...                                         │ │ ...                                           │
+╰────────── workspaces/architect/ ─────────────────╯ ╰───────── workspaces/skeptic/ ────────────────╯ ╰──────── workspaces/implementer/ ─────────────╯
+```
+
+窄终端竖向堆叠示例：
+
+```
+╭─ round=1 agent=architect provider=claude running ──────────────╮
+│ 架构师：这是我的可读输出样例，正文在面板内换行，不会被横向截断。 │
+╰──────────────────────── workspaces/architect/ ─────────────────╯
+╭─ round=1 agent=skeptic provider=kimi running ──────────────────╮
+│ 质疑者：这是我的可读输出样例。                                  │
+╰───────────────────────── workspaces/skeptic/ ──────────────────╯
+╭─ round=1 agent=implementer provider=codex running ─────────────╮
+│ implementer：这是我的可读输出样例。                            │
+╰─────────────────────── workspaces/implementer/ ────────────────╯
+```
+
+#### 非 TTY / CI / Plain 模式
+
+在非交互式终端、CI 环境、重定向输出或显式 plain 模式下，退回带前缀的普通文本：
+
+```
+[round=1 agent=architect status=running] 架构师：这是我的可读输出样例。
+[round=1 agent=skeptic status=running] 质疑者：这是我的可读输出样例。
+[round=1 agent=implementer status=running] implementer：这是我的可读输出样例。
+
+[round=0 agent=synthesizer status=running] ## 综合建议
+[round=0 agent=synthesizer status=running] ...
+```
+
+### 验证命令
+
+验证默认三 agent 输出文件：
+
+```bash
+# 运行合议
+uv run iar deliberate "test prompt" --rounds 1 --session-id test-001
+
+# 检查输出文件
+ls logs/agent-runner/deliberations/test-001/workspaces/
+# 应显示：architect  implementer  skeptic  synthesizer
+
+# 查看各 agent 输出
+cat logs/agent-runner/deliberations/test-001/workspaces/architect/round-1-output.md
+cat logs/agent-runner/deliberations/test-001/workspaces/skeptic/round-1-output.md
+cat logs/agent-runner/deliberations/test-001/workspaces/implementer/round-1-output.md
+cat logs/agent-runner/deliberations/test-001/workspaces/synthesizer/synthesis-output.md
+```
+
+若任一参与 agent 或 synthesizer 子进程返回非 0 退出码，`iar deliberate` 会整体失败并返回非 0 退出码；已发生的事件和 partial output 仍保留在对应文件中便于排查。
 
 ### 安全边界
 
@@ -1009,8 +1083,10 @@ Agent Runner 的代码分布在四层架构中：
 
 - `core/shared/models/agent_runner.py` / `agent_deliberation.py` — 领域模型（frozen dataclasses）
 - `core/shared/interfaces/agent_runner.py` — 抽象端口（`IGitHubClient`、`IProcessRunner`、`IAgentTranscriptRunner`）
+- `core/shared/interfaces/agent_output_view.py` — 终端输出视图抽象端口（`IAgentOutputView`）
 - `core/use_cases/` — 业务用例（`sync_labels`、`create_issue_from_prd`、`run_agent_once`、`run_agent_repositories_once`、`run_agent_daemon`、`agent_review`、`pr_supervisor`、`review_once`、`review_daemon`、`run_agent_deliberation`）
 - `engines/agent_runner/factory.py` — 基础设施适配层（实例化实现并注入用例）
+- `engines/agent_runner/live_terminal.py` — 终端 live view 适配器（Rich 自适应分栏/竖向堆叠 / plain fallback）
 - `infrastructure/github_client.py` / `infrastructure/process_runner.py` — 外部系统实现
 - `api/cli.py` — CLI 入口
 - `api/routes/agent_runner.py` — FastAPI 只读路由
