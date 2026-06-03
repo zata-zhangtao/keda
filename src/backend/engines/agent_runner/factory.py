@@ -784,9 +784,7 @@ def _run_agent_with_stdin_prompt(
             process.stdin.close()
 
     threading.Thread(target=_write_stdin, daemon=True).start()
-    return_code, stdout_text = _relay_process_stdout(
-        process, output_sink=output_sink
-    )
+    return_code, stdout_text = _relay_process_stdout(process, output_sink=output_sink)
     return CommandResult(
         command=tuple(command),
         return_code=return_code,
