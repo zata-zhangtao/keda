@@ -73,6 +73,20 @@ class IAgentOutputView(ABC):
         ...
 
     @abstractmethod
+    def log(self, message: str) -> None:
+        """Emit a standalone log line that is not tied to an agent panel.
+
+        Used for session-level events (e.g., started/finished). When a live
+        display is active, the message must be rendered without corrupting it
+        (e.g., printed above the live region rather than written to stdout
+        directly).
+
+        Args:
+            message: The line to display.
+        """
+        ...
+
+    @abstractmethod
     def close(self) -> None:
         """Finalize and clean up the output view.
 
@@ -113,6 +127,10 @@ class NoOpOutputView(IAgentOutputView):
     ) -> None:
         """Discard status update."""
         _ = round_number, profile_id, status
+
+    def log(self, message: str) -> None:
+        """Discard log message."""
+        _ = message
 
     def close(self) -> None:
         """No-op close."""

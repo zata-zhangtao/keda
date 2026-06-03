@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from backend.api.cli import build_parser
 from backend.infrastructure.logging.logger import Logger
@@ -399,7 +399,7 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     assert exit_code == 0
     assert captured["request"].session_id == "sid-1"
     assert captured["request"].output_dir == str(expected_output_path)
-    mock_event_sink.assert_called_once_with(expected_output_path)
+    mock_event_sink.assert_called_once_with(expected_output_path, ANY)
     mock_write.assert_called_once()
     assert mock_write.call_args.args[2] == expected_output_path
     assert tuple(

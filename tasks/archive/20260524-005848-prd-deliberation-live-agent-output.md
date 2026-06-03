@@ -201,22 +201,25 @@ src/backend/api/ -> src/backend/core/ -> src/backend/engines/ -> src/backend/inf
 
 ```text
 CLI 启动 deliberate 会话
-└── run_agent_deliberation(...)
-    ├── 选择 profiles: architect, skeptic, implementer
-    ├── 初始化 output view
-    │   ├── TTY: 创建 live columns，列数等于并发 profile 数
+└── API 层 (cli.py) 装配 output view
+    ├── create_output_view()  # engines/live_terminal
+    │   ├── TTY 且非 CI/plain: 创建 live columns，列数等于并发 profile 数
     │   └── 非 TTY/CI/plain: 创建带前缀的 line logger
-    ├── 对本轮每个 profile 并发执行:
-    │   ├── 创建 workspace/<profile_id>/
-    │   ├── 为 round-<n>-output.md 创建实时 sink
-    │   ├── 调用 transcript_runner.run(..., output_sink=sink)
-    │   ├── sink 在渲染后 chunk 到达时追加写入文件
-    │   ├── sink 同步更新对应 agent 栏
-    │   └── 完成后的 stdout 返回给 transcript 组装逻辑
-    ├── 写入本轮 transcript
-    ├── synthesis 阶段切换为 synthesizer 单栏或全宽区域
-    ├── 使用 synthesis-output.md sink 运行 synthesizer
-    └── 写入 result/session 产物
+    ├── 把 output_view 注入 create_event_sink(...)
+    └── run_agent_deliberation(..., output_view=output_view)
+        ├── 选择 profiles: architect, skeptic, implementer
+        ├── output_view 为 None 时回退 NoOpOutputView
+        ├── 对本轮每个 profile 并发执行:
+        │   ├── 创建 workspace/<profile_id>/
+        │   ├── 为 round-<n>-output.md 创建实时 sink
+        │   ├── 调用 transcript_runner.run(..., output_sink=sink)
+        │   ├── sink 在渲染后 chunk 到达时追加写入文件
+        │   ├── sink 同步更新对应 agent 栏
+        │   └── 完成后的 stdout 返回给 transcript 组装逻辑
+        ├── 写入本轮 transcript
+        ├── synthesis 阶段切换为 synthesizer 单栏或全宽区域
+        ├── 使用 synthesis-output.md sink 运行 synthesizer
+        └── 写入 result/session 产物
 ```
 
 关键点：
@@ -232,6 +235,15 @@ CLI 启动 deliberate 会话
 
 ```text
 .
+├── 接口层
+│   └── src/backend/api/cli.py
+│       [修改]
+│       【总结】在 deliberate 装配处创建 output view，并注入 event sink 与 use case。
+│
+│       ├── 调用 create_output_view() 得到 live 或 plain view
+│       ├── 把 output_view 传入 create_event_sink(...)
+│       └── 把 output_view 传入 run_agent_deliberation(...)
+│
 ├── 领域层
 │   └── src/backend/core/shared/interfaces/agent_runner.py
 │       [修改]
@@ -297,8 +309,8 @@ CLI 启动 deliberate 会话
 │   │   └── 验证 per-agent 文件包含多个 chunk
 │   │
 │   ├── tests/test_process_runner.py
-│   │   [修改]
-│   │   【总结】验证 provider stream 收集结果是可读文本而不是原始事件 payload。
+│   │   [未变更，仅作回归运行]
+│   │   【总结】现有用例已覆盖 provider stream 收集为可读文本、raw stream-json 不进入 transcript-safe 输出；本次实现未触碰该文件，仅作为回归校验运行。
 │   │
 │   │   ├── 覆盖 Claude rendered collection
 │   │   └── 覆盖 raw stream-json 不进入 transcript-safe 输出
@@ -504,3 +516,6 @@ logs/agent-runner/deliberations/<session_id>/
 | D-03 | 终端可见性应该如何改进？ | 交互式 TTY 使用动态分栏 live view，非 TTY/CI/plain 使用普通文本 fallback | 只使用普通文本 agent/round attribution | 用户希望同步看到几个 agent 就分成几栏；plain 输出只作为兼容 fallback |
 | D-04 | provider stream payload 应该如何保存？ | 只保存可读渲染文本 | 保存 provider raw stdout/events | raw stream-json 不适合人读，也可能包含不该进入 transcript-safe 文件的噪声事件 |
 | D-05 | 是否允许新增 terminal rendering 依赖？ | 允许新增最小依赖 `rich`，并限制在 engines/API 展示 adapter 中使用 | 在 core 中手写 ANSI 重绘或引入复杂 TUI 框架 | Rich 官方支持 live display、layout 和 columns，能降低实现复杂度；core 仍保持无 UI 依赖 |
+| D-06 | live view 在窄终端如何保证可读？ | 改为自适应版式：`终端宽/agent 数 ≥ 40 列` 时并排分栏，否则整宽竖向堆叠；正文一律换行不横向截断 | 固定 N 栏并排并对每栏横向截断 | 归档后实测发现固定窄栏会把每行砍成约 20 余字符导致不可读；自适应保证宽屏并排、窄屏竖排都能读全 |
+| D-07 | 并排分栏用什么 Rich 原语？ | 用 `Table.grid` 强制 N 等宽列 | `rich.Columns` | `Columns` 按面板最小宽度自动决定每行列数，长标题会把它塌成 1 列；`Table.grid` 等宽列可稳定保证 N 栏 |
+| D-08 | live 运行时如何避免画面被冲花？ | 所有终端输出（事件摘要、子进程日志）经 live view 独占的 Rich `Console` 输出 | 事件 `print` 到 stdout、子进程行 `logger.info` 到 stdout StreamHandler | 多路裸写 stdout 会插进 Rich `Live` 重绘区导致错位/刷屏；统一经 Console 才能把日志打印在 live 区域上方 |

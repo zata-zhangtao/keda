@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -137,20 +138,35 @@ def _create_streaming_sink(
     each subsequent chunk is appended. This enables real-time file
     growth while the agent subprocess is running.
     """
-    import threading
-
+    # Ensure the file exists before any chunk arrives so an agent that
+    # produces no output still leaves an empty workspace file.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("", encoding="utf-8")
     lock = threading.Lock()
-    initialized = False
 
     def _sink(chunk: str) -> None:
-        nonlocal initialized
         with lock:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            if not initialized:
-                output_path.write_text("", encoding="utf-8")
-                initialized = True
             with open(output_path, "a", encoding="utf-8") as f:
-                f.write(chunk + "\n")
+                f.write(chunk)
+        output_view.append_output(round_number, profile_id, chunk)
+
+    return _sink
+
+
+def _create_display_sink(
+    output_view: IAgentOutputView,
+    round_number: int,
+    profile_id: str,
+) -> Callable[[str], None]:
+    """Create a display-only sink that updates the live view.
+
+    Unlike the streaming sink, this does not write to the workspace file
+    and its chunks are never collected into the transcript. It is used for
+    transient progress output (e.g. an agent's reasoning/tool log on stderr)
+    so the panel shows live activity without polluting the saved output.
+    """
+
+    def _sink(chunk: str) -> None:
         output_view.append_output(round_number, profile_id, chunk)
 
     return _sink
@@ -167,6 +183,7 @@ def _run_single_agent(
     agent_label: str,
     output_view: IAgentOutputView,
     output_sink: Callable[[str], None] | None = None,
+    display_sink: Callable[[str], None] | None = None,
 ) -> str:
     _emit(
         event_sink,
@@ -183,6 +200,7 @@ def _run_single_agent(
         cwd=cwd,
         event_sink=event_sink,
         output_sink=output_sink,
+        display_sink=display_sink,
     )
     output_text = result.stdout.strip()
     if output_sink is None:
@@ -229,6 +247,9 @@ def _run_round(
         streaming_sink = _create_streaming_sink(
             output_path, output_view, round_number, profile.profile_id
         )
+        display_sink = _create_display_sink(
+            output_view, round_number, profile.profile_id
+        )
         output = _run_single_agent(
             agent_name=profile.agent,
             prompt=prompt,
@@ -240,6 +261,7 @@ def _run_round(
             agent_label=profile.profile_id,
             output_view=output_view,
             output_sink=streaming_sink,
+            display_sink=display_sink,
         )
         return profile.profile_id, output
 
@@ -420,12 +442,14 @@ def run_agent_deliberation(
         synthesis_sink = _create_streaming_sink(
             synthesis_output_path, output_view, 0, "synthesizer"
         )
+        synthesis_display_sink = _create_display_sink(output_view, 0, "synthesizer")
         synthesis_result = transcript_runner.run(
             agent_name=request.synthesizer,
             prompt=synthesis_prompt,
             cwd=synthesizer_workspace,
             event_sink=_record_event,
             output_sink=synthesis_sink,
+            display_sink=synthesis_display_sink,
         )
         synthesis_output = synthesis_result.stdout.strip()
         synthesis_status = "finished" if synthesis_result.return_code == 0 else "failed"

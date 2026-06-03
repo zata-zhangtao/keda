@@ -46,6 +46,7 @@ class FakeTranscriptRunner(IAgentTranscriptRunner):
         cwd: Path,
         event_sink: Callable[[DeliberationEvent], None],
         output_sink: Callable[[str], None] | None = None,
+        display_sink: Callable[[str], None] | None = None,
     ) -> CommandResult:
         self.calls.append({"agent_name": agent_name, "prompt": prompt, "cwd": cwd})
         output = self.responses.get(agent_name, "default output")
@@ -276,15 +277,90 @@ def test_run_agent_deliberation_output_files_written(
     output_dir = Path(result.output_dir)
     assert output_dir == tmp_path
     assert (output_dir / "workspaces").is_dir()
+    # Streaming sink writes chunks verbatim (no forced newline per chunk)
     assert (output_dir / "workspaces" / "architect" / "round-1-output.md").read_text(
         encoding="utf-8"
-    ) == "architect out\n"
+    ) == "architect out"
     assert (output_dir / "workspaces" / "skeptic" / "round-1-output.md").read_text(
         encoding="utf-8"
-    ) == "skeptic out\n"
+    ) == "skeptic out"
     assert (
         output_dir / "workspaces" / "synthesizer" / "synthesis-output.md"
-    ).read_text(encoding="utf-8") == "architect out\n"
+    ).read_text(encoding="utf-8") == "architect out"
+
+
+class _DisplayEmittingRunner(IAgentTranscriptRunner):
+    """Runner that emits a progress chunk via display_sink only."""
+
+    def run(
+        self,
+        agent_name: str,
+        prompt: str,
+        *,
+        cwd: Path,
+        event_sink: Callable[[DeliberationEvent], None],
+        output_sink: Callable[[str], None] | None = None,
+        display_sink: Callable[[str], None] | None = None,
+    ) -> CommandResult:
+        if display_sink is not None:
+            display_sink(f"reasoning:{agent_name}")
+        if output_sink is not None:
+            output_sink(f"answer:{agent_name}")
+        return CommandResult(
+            command=(agent_name,),
+            return_code=0,
+            stdout=f"answer:{agent_name}",
+            stderr="",
+        )
+
+
+class _RecordingOutputView:
+    """Output view that records appended chunks per profile."""
+
+    def __init__(self) -> None:
+        self.chunks: list[tuple[str, str]] = []
+
+    def register_round_profiles(self, round_number, profiles) -> None:
+        _ = round_number, profiles
+
+    def append_output(self, round_number, profile_id, chunk) -> None:
+        _ = round_number
+        self.chunks.append((profile_id, chunk))
+
+    def update_status(self, round_number, profile_id, status) -> None:
+        _ = round_number, profile_id, status
+
+    def log(self, message) -> None:
+        _ = message
+
+    def close(self) -> None:
+        pass
+
+
+def test_display_sink_shown_but_not_persisted(tmp_path: Path) -> None:
+    """display_sink chunks reach the view but never the file or transcript."""
+    request = _make_request(agents=("skeptic",), rounds=1, output_dir=str(tmp_path))
+    config = _make_config()
+    view = _RecordingOutputView()
+
+    result = run_agent_deliberation(
+        request=request,
+        config=config,
+        transcript_runner=_DisplayEmittingRunner(),
+        event_sink=lambda _: None,
+        target_repo_path=tmp_path,
+        output_view=view,
+    )
+
+    # The reasoning (display_sink) is visible in the live view...
+    assert ("skeptic", "reasoning:kimi") in view.chunks
+    # ...but only the answer (output_sink) is persisted to the workspace file.
+    workspace_file = tmp_path / "workspaces" / "skeptic" / "round-1-output.md"
+    file_text = workspace_file.read_text(encoding="utf-8")
+    assert "answer:kimi" in file_text
+    assert "reasoning:kimi" not in file_text
+    # ...and only the answer reaches the transcript-bound outputs.
+    assert result.agent_outputs["round_1"] == {"skeptic": "answer:kimi"}
 
 
 def test_run_agent_deliberation_synthesizer_produces_result(

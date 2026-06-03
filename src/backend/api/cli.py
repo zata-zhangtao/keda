@@ -623,8 +623,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             transcript_runner = create_transcript_runner(process_runner)
             output_path.mkdir(parents=True, exist_ok=True)
-            event_sink = create_event_sink(output_path)
             output_view = create_output_view()
+            event_sink = create_event_sink(output_path, output_view)
             result = run_agent_deliberation(
                 request=request,
                 config=deliberation_config,
