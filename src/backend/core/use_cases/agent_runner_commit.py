@@ -79,6 +79,26 @@ def remove_commit_request(worktree_path: Path) -> None:
         pass
 
 
+def _verification_left_tracked_worktree_changes(
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+) -> bool:
+    """Return whether verification changed tracked files after staging."""
+    diff_result = process_runner.run(
+        ["git", "diff", "--quiet"],
+        cwd=worktree_path,
+        check=False,
+    )
+    if diff_result.return_code == 0:
+        return False
+    if diff_result.return_code == 1:
+        return True
+    raise RuntimeError(
+        "Unable to inspect worktree changes after verification: "
+        f"{diff_result.stderr.strip()}"
+    )
+
+
 def commit_requested_changes(
     issue: IssueSummary,
     worktree_path: Path,
@@ -123,6 +143,9 @@ def commit_requested_changes(
     # 在 git commit 前再次运行验证，确保 staged 内容仍通过门禁
     verification_results = run_verification(worktree_path, config, process_runner)
     ensure_verification_passed(verification_results)
+    if _verification_left_tracked_worktree_changes(worktree_path, process_runner):
+        validate_safe_changes(worktree_path, config, process_runner)
+        process_runner.run(["git", "add", "-u"], cwd=worktree_path)
     process_runner.run(["git", "commit", "-m", commit_message], cwd=worktree_path)
     return verification_results
 

@@ -1484,6 +1484,60 @@ def test_commit_requested_changes_rejects_forbidden_paths(tmp_path: Path) -> Non
     assert ("git", "add", "-A") not in commands
 
 
+def test_commit_requested_changes_restages_tracked_verification_edits(
+    tmp_path: Path,
+) -> None:
+    """Commit proxy should sync formatter edits made during verification."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: implement example")
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-123\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M tests/test_example.py\n",
+                stderr="",
+            ),
+            ("git", "diff", "--quiet"): CommandResult(
+                command=("git", "diff", "--quiet"),
+                return_code=1,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    config = AppConfig(runner=RunnerConfig(verification_commands=("just test",)))
+
+    commit_requested_changes(
+        _make_ready_issue(),
+        worktree_path,
+        config,
+        fake_runner,
+        expected_branch="issue-123",
+    )
+
+    commands = [tuple(command) for command in fake_runner.calls]
+    initial_stage_index = commands.index(("git", "add", "-A"))
+    verification_index = commands.index(("just", "test"))
+    tracked_diff_index = commands.index(("git", "diff", "--quiet"))
+    tracked_restage_index = commands.index(("git", "add", "-u"))
+    commit_index = commands.index(("git", "commit", "-m", "agent: implement example"))
+    assert (
+        initial_stage_index
+        < verification_index
+        < tracked_diff_index
+        < tracked_restage_index
+        < commit_index
+    )
+
+
 def test_run_once_no_new_commits_fails() -> None:
     """run_once should fail when the agent produces no new commits."""
     fake_client = FakeGitHubClient()
