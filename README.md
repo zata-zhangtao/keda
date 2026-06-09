@@ -1,82 +1,106 @@
-# keda
+# Keda
 
-> 项目描述：请在此处添加项目的简要描述。
+> 面向 AI Agent 与通用 Python 工程实践的模块化单体项目模板。基于 Clean Architecture 四层架构，内置 `iar`（issue-agent-runner）CLI，支持将 GitHub Issues 转为本地 AI Agent 队列并自动管理 Worktree 生命周期。
+
+## 前置要求
+
+- Python >= 3.11
+- [uv](https://docs.astral.sh/uv/) — Python 包管理器
+- [just](https://github.com/casey/just) — 命令运行器
+- Node.js（如需运行前端）
 
 ## 快速开始
 
 ```bash
+# 1. 克隆仓库并进入目录
+git clone <repository-url>
+cd keda
+
+# 2. 一键初始化开发环境（安装依赖 + pre-commit hooks）
 just dev
+
+# 3. 启动服务（后端 + 前端）
+just run
 ```
 
-`just dev` 会执行完整依赖同步并安装 pre-commit hooks，适合作为开发环境的一键启动命令。
+## 常用命令速查
 
-## 安装说明
+| 命令 | 说明 |
+|------|------|
+| `just dev` | 初始化开发环境（含 pre-commit hooks） |
+| `just run` | 同时启动后端和前端 |
+| `just run backend` | 仅启动后端 |
+| `just run frontend` | 仅启动前端 |
+| `just run docker` | 使用 Docker Compose 启动 |
+| `just test` | 运行本地测试（无需 API Key） |
+| `just test all` | 运行全部测试 |
+| `just lint` | 对暂存文件运行代码检查 |
+| `just lint --full` | 对全部文件运行代码检查 |
+| `just docs-serve` | 启动 MkDocs 文档服务（默认端口 8000） |
+| `just clean` | 清理缓存和构建产物 |
+| `just reinstall-iar` | 重装全局 `iar` CLI（依赖变更后） |
 
-### 前置要求
+## `iar` CLI 使用说明
 
-- Python >= 3.14
-- [uv](https://docs.astral.sh/uv/) - Python 包管理器
-- [just](https://github.com/casey/just) - 命令运行器
+`iar`（issue-agent-runner）是本项目的核心工具，用于将 GitHub Issues 转为本地 AI Agent 任务队列，自动创建 Git Worktree 并驱动 Agent 执行。
 
-### 安装步骤
+### 安装 `iar` 全局命令
 
-1. **克隆仓库**
-   ```bash
-   git clone <repository-url>
-   cd keda
-   ```
-
-2. **安装依赖**
-   ```bash
-   just dev
-   ```
-
-## 使用方法
+本项目通过 `pyproject.toml` 的 `[project.scripts]` 注册了 `iar` CLI。推荐将其安装为全局命令：
 
 ```bash
-# 运行主程序
-just run
+# 全局安装（首次）
+uv tool install .
 
-# 运行测试
-just test
-
-# 启动文档服务
-just docs-serve
+# 当 pyproject.toml 依赖变更后重装（修复 ModuleNotFoundError 等）
+just reinstall-iar
+# 或手动执行
+uv tool install --reinstall .
 ```
 
-### `iar` CLI
+安装后可直接使用 `iar <command>`；未安装时可用 `uv run iar <command>` 代替。
 
-本项目内置 `iar`（issue-agent-runner）CLI，用于将 GitHub Issues 转为本地 AI Agent 队列：
+### 初始化与配置
 
 ```bash
 # 在目标仓库初始化本地配置
+iar init
+# 或未安装全局命令时
 uv run iar init
 
-# 同步当前仓库 GitHub Labels
-uv run iar labels sync
+# 同步当前仓库的 GitHub Labels
+iar labels sync
 
-# 同步指定仓库
-uv run iar labels sync --repo-id keda
-
-# 从 PRD 创建 GitHub Issue，并在 ready 前发布 PRD
-uv run iar issue-from-prd tasks/pending/example.md --repo-id keda --agent codex --publish-prd --ready
-
-# 单次执行（dry-run 预览）
-uv run iar run-once --dry-run
-
-# 单次执行（当前仓库）
-uv run iar run-once
-
-# 显式处理 config.toml registry 中所有启用仓库
-uv run iar run-once --all
-
-# Daemon 模式轮询（默认每 600 秒轮询一次，当前仓库）
-uv run iar daemon
+# 同步指定仓库 Labels
+iar labels sync --repo-id keda
 ```
 
-安装后也可直接使用 `iar`（通过 `pyproject.toml` 的 `[project.scripts]` 注册）。
+### 从 PRD 创建 Issue
 
-多仓库 registry 示例（`config.toml`）：
+```bash
+# 从 PRD 创建 GitHub Issue，标记为 ready 并发布 PRD
+iar issue-from-prd tasks/pending/example.md --repo-id keda --agent codex --publish-prd --ready
+```
+
+### 运行 Agent
+
+```bash
+# 单次执行（dry-run 预览，不实际执行）
+iar run-once --dry-run
+
+# 单次执行（当前仓库）
+iar run-once
+
+# 处理 registry 中所有启用的仓库
+iar run-once --all
+
+# Daemon 模式轮询（默认每 600 秒）
+iar daemon
+```
+
+### 多仓库配置
+
+在 `config.toml` 中配置多个仓库：
 
 ```toml
 [agent_runner.repositories.keda]
@@ -88,36 +112,121 @@ path = "/Users/zata/code/backend-service"
 enabled = true
 ```
 
-`config.toml` 中的仓库列表现在是 legacy registry：仅在显式传入 `--repo-id` 或 `--all` 时使用。这里通常只保留 `path` 和 `enabled`；目标仓库自己的 display、git、runner 等配置应放在该仓库根目录的 `.iar.toml`。
+每个仓库根目录应有自己的 `.iar.toml` 文件，用于覆盖 runner、git、labels 等配置。
+
+## Git Worktree 工作流
+
+本项目内置强大的 Git Worktree 辅助命令，用于隔离开发环境：
+
+```bash
+# 创建并进入新 worktree（自动同步远程 base branch）
+just worktree feature-branch
+
+# 基于远程分支创建 worktree（自动检测 checkout）
+just worktree feature-login
+
+# 指定来源分支
+just worktree issue-15 --checkout zata/issue-15
+
+# 强制新建本地分支（忽略同名远程分支）
+just worktree feature-x --new
+
+# 打开已有 worktree
+just worktree -o feature-branch
+
+# 合并 worktree 并清理
+just worktree -m feature-branch
+
+# 删除 worktree
+just worktree -d feature-branch
+
+# 诊断 worktree 状态
+just worktree --doctor
+```
+
+创建 worktree 后会自动安装 Python 和前端依赖。
+
+## PRD 驱动开发
+
+```bash
+# 从 PRD 自动创建 worktree 并启动 AI 工具
+just implement tasks/pending/feature-x.md clauded "请根据 PRD 实现该功能"
+
+# 省略 prompt 时使用默认提示
+just implement tasks/pending/feature-x.md kim
+```
+
+## 测试
+
+```bash
+# 运行本地测试（无需 API Key，自动先运行 lint）
+just test
+
+# 运行全部测试
+just test all
+
+# 运行需要真实 API 的测试
+just test real
+
+# 运行 Playwright E2E 测试（需先安装）
+just e2e-install
+just e2e
+just e2e smoke      # 仅冒烟测试
+just e2e no-auth    # 无需登录的公开页面测试
+just e2e report     # 打开测试报告
+```
+
+## 文档
+
+```bash
+# 本地预览（带热重载）
+just docs-serve
+
+# 构建静态文档
+uv run mkdocs build --strict
+```
 
 ## 配置说明
 
-全局配置位于 `config.toml`，目标仓库 runner 配置位于 `.iar.toml`，敏感信息请使用 `.env` 文件管理。
+- **全局配置**：`config.toml` — 应用、数据库、模型、Agent Runner 等全局设置
+- **仓库级配置**：`.iar.toml` — 每个目标仓库根目录的 runner 覆盖配置
+- **敏感信息**：`.env` — 密码、API Key 等（已加入 .gitignore）
 
 主要配置项：
-- `app.name` - 应用名称
-- `app.log_level` - 日志级别
-- `database.*` - 数据库配置
-- `chat_model.*` - 聊天模型配置
-- `agent_runner.*` - Agent Runner 配置（labels、git、worktree、runner、safety），仓库级覆盖优先放在 `.iar.toml`
+- `app.name` / `app.log_level` — 应用名称与日志级别
+- `database.*` — PostgreSQL 数据库配置
+- `chat_model.*` — LLM 模型配置（provider、temperature 等）
+- `agent_runner.*` — Agent Runner 完整配置（labels、git、worktree、runner、safety、prompts）
 
-## 开发指南
+## 架构概览
 
-### 代码规范
+```
+src/backend/
+  api/           → 请求接入层（API、WebSocket、CLI）
+  core/          → 核心编排层（用例、Agent 编排、领域契约）
+  engines/       → 平台能力层（skills、RAG、可插拔能力）
+  infrastructure/ → 基础设施层（模型、存储、HTTP、配置、日志）
+```
 
-- 使用 Google Style Docstrings
-- 遵循 AI-Native 代码模式（详见 `AGENTS.md`）
+依赖方向严格向下：`api → core → engines → infrastructure`
+
+## Docker 部署
+
+```bash
+# 一键 Docker Compose 启动
+just run docker
+```
+
+详见 `docker-compose.yml` 和 `docker-compose.dokploy.yml`。
+
+## 开发规范
+
+- 公共 Python API 使用 [Google Style Docstrings](https://google.github.io/styleguide/pyguide.html)
+- 变量命名需具有来源、类型或状态语义，避免 `data`、`item`、`res`
+- Python 文本文件 I/O 必须显式写 `encoding="utf-8"`
+- 新增代码前先搜索现有实现；参数超过 4 个时收敛到对象
+- 单代码文件非空行不超过 1000 行
 - 提交前会自动运行 pre-commit hooks
-
-### 常用命令
-
-| 命令 | 说明 |
-|------|------|
-| `just dev` | 安装开发环境 |
-| `just run` | 运行主程序 |
-| `just test` | 运行测试 |
-| `just docs-serve` | 启动文档服务 |
-| `just clean` | 清理缓存文件 |
 
 ## 许可证
 

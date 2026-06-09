@@ -109,6 +109,12 @@ sync mode="": _check-completion
             ;;
     esac
 
+# Reinstall the `iar` CLI tool globally via uv
+# Usage:
+#   just reinstall-iar
+reinstall-iar:
+    uv tool install --reinstall .
+
 # Run the development entrypoint
 # Usage:
 #   just run                 # start backend + frontend
