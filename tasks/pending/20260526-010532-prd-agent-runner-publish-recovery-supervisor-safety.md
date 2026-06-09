@@ -1,5 +1,7 @@
 # PRD: Agent Runner 发布恢复后的 Supervisor 安全闭环
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/36
+
 
 ## 1. Introduction & Goals
 
