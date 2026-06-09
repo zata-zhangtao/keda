@@ -308,6 +308,62 @@ def test_run_filtered_claude_stream_buffers_text_delta(tmp_path: Path) -> None:
         logger.setLevel(original_level)
 
 
+def test_run_filtered_claude_stream_output_sink_preserves_newlines(
+    tmp_path: Path,
+) -> None:
+    """Rendered Claude newlines should reach the live output sink."""
+    from backend.infrastructure.process_runner import run_filtered_claude_stream
+
+    text_event = _json_line(
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "hello"},
+            },
+        }
+    )
+    stop_event = _json_line({"type": "stream_event", "event": {"type": "message_stop"}})
+
+    mock_process = MagicMock()
+    mock_process.stdout = iter([text_event, stop_event])
+    mock_process.wait.return_value = 0
+    mock_process.stdin = MagicMock()
+    streamed_output_chunks: list[str] = []
+
+    with patch("subprocess.Popen", return_value=mock_process):
+        completed_process = run_filtered_claude_stream(
+            ["claude", "--output-format", "stream-json"],
+            cwd=tmp_path,
+            timeout=None,
+            collect_stdout=True,
+            output_sink=streamed_output_chunks.append,
+        )
+
+    assert streamed_output_chunks == ["hello", "\n"]
+    assert completed_process.stdout == "hello\n"
+
+
+def test_relay_process_stdout_output_sink_preserves_line_boundaries() -> None:
+    """Non-Claude transcript streaming should keep stdout line endings."""
+    from backend.engines.agent_runner.factory import _relay_process_stdout
+
+    mock_process = MagicMock()
+    mock_process.stdout = iter(["first\n", "second\n"])
+    mock_process.stderr = iter([])
+    mock_process.wait.return_value = 0
+    streamed_output_chunks: list[str] = []
+
+    return_code, stdout_text = _relay_process_stdout(
+        mock_process,
+        output_sink=streamed_output_chunks.append,
+    )
+
+    assert return_code == 0
+    assert stdout_text == "first\nsecond\n"
+    assert streamed_output_chunks == ["first\n", "second\n"]
+
+
 def test_subprocess_runner_non_claude_path_uses_pipe(tmp_path: Path) -> None:
     """SubprocessRunner.run() should use PIPE for non-Claude path."""
     from backend.infrastructure.process_runner import SubprocessRunner

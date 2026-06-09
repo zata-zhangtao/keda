@@ -85,7 +85,14 @@ class _AgentPanelState:
 
     def append(self, chunk: str) -> None:
         """Append a text chunk, keeping only the most recent lines."""
-        self.lines.extend(chunk.splitlines())
+        if not chunk:
+            return
+        if not self.lines:
+            self.lines.append("")
+        normalized_chunk = chunk.replace("\r\n", "\n").replace("\r", "\n")
+        chunk_line_parts = normalized_chunk.split("\n")
+        self.lines[-1] += chunk_line_parts[0]
+        self.lines.extend(chunk_line_parts[1:])
         if len(self.lines) > _PANEL_BUFFER_LINES:
             self.lines = self.lines[-_PANEL_BUFFER_LINES:]
 

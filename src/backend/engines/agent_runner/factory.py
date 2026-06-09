@@ -817,7 +817,7 @@ def _pump_stderr(
         return
     for line in process.stderr:
         if display_sink is not None:
-            display_sink(line.rstrip("\n"))
+            display_sink(line)
         else:
             print(_format_timestamped_line(line), end="", file=sys.stderr)
 
@@ -847,7 +847,7 @@ def _relay_process_stdout(
                 if output_sink is not None:
                     # The sink drives the live view and the workspace file;
                     # avoid writing to stdout (would corrupt the live region).
-                    output_sink(line.rstrip("\n"))
+                    output_sink(line)
                 else:
                     logger.info("%s", line.rstrip("\n"))
                     timestamped = _format_timestamped_line(line)

@@ -259,7 +259,7 @@ def run_filtered_claude_stream(
         if process.stderr is None:
             return
         for stderr_line in process.stderr:
-            display_sink(stderr_line.rstrip("\n"))
+            display_sink(stderr_line)
 
     stderr_thread: threading.Thread | None = None
     if capture_stderr:
@@ -289,7 +289,7 @@ def run_filtered_claude_stream(
                         # The sink drives the live view and the workspace file;
                         # skip stdout/logger writes that would corrupt the
                         # live region.
-                        output_sink(rendered_text.rstrip("\n"))
+                        output_sink(rendered_text)
                         continue
                     timestamped = _format_timestamped_line(rendered_text)
                     print(timestamped, end="", flush=True)
