@@ -577,3 +577,34 @@ class GitHubCliClient:
         if result.return_code != 0:
             return ""
         return result.stdout.strip()
+
+    def get_issue(self, issue_number: int) -> IssueSummary:
+        """Return the Issue summary for the given issue number."""
+        result = self._runner.run(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(issue_number),
+                "--json",
+                "number,title,url,labels,body",
+            ],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code != 0:
+            raise RuntimeError(
+                f"Failed to fetch Issue #{issue_number}: {result.stderr.strip() or result.stdout}"
+            )
+        raw_issue = json.loads(result.stdout or "{}")
+        return IssueSummary(
+            number=int(raw_issue["number"]),
+            title=str(raw_issue.get("title", "")),
+            url=str(raw_issue.get("url", "")),
+            body=str(raw_issue.get("body", "") or ""),
+            labels=tuple(
+                raw_label.get("name", "")
+                for raw_label in raw_issue.get("labels", [])
+                if raw_label.get("name")
+            ),
+        )

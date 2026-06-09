@@ -20,6 +20,7 @@ from backend.core.use_cases.pr_supervisor import (
     guard_supervisor_action_for_pr_state,
     run_post_pr_supervisor_cycle,
 )
+from backend.core.use_cases.agent_runner_git import has_changes
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
@@ -157,6 +158,21 @@ def _process_review_candidate(
     worktree_path = create_or_reuse_worktree(repo_path, issue, config, process_runner)
     supervisor_agent = choose_agent(issue, config, agent)
 
+    # 只读 supervisor cycle 前必须确认 worktree 干净。
+    if has_changes(worktree_path, process_runner):
+        github_client.comment_issue(
+            issue.number,
+            "## Agent Runner Review Blocked\n\n"
+            "Worktree has uncommitted changes before supervisor cycle. "
+            "Moving to blocked.",
+        )
+        github_client.edit_issue_labels(
+            issue.number,
+            add=[config.labels.blocked],
+            remove=[config.labels.supervising],
+        )
+        return "blocked_dirty_worktree_before_supervisor"
+
     action_result = run_post_pr_supervisor_cycle(
         issue=issue,
         worktree_path=worktree_path,
@@ -170,6 +186,20 @@ def _process_review_candidate(
     action_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
 
     if action_result.action == "approve_for_human_review":
+        # 只读 supervisor cycle 后若留下未提交变更，不能 approve 进入 human review。
+        if has_changes(worktree_path, process_runner):
+            github_client.comment_issue(
+                issue.number,
+                "## Agent Runner Review Blocked\n\n"
+                "Read-only supervisor left uncommitted changes. "
+                "Moving to blocked.",
+            )
+            github_client.edit_issue_labels(
+                issue.number,
+                add=[config.labels.blocked],
+                remove=[config.labels.supervising],
+            )
+            return "blocked_dirty_read_only_supervisor"
         github_client.edit_issue_labels(
             issue.number,
             add=[config.labels.review],

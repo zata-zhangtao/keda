@@ -384,6 +384,12 @@ agent/ready  →  agent/running  →  agent/supervising  →  agent/review  → 
               （人工修复后改回 ready）
 
 agent/supervising ── supervisor 要求 rework ──→ agent/running ── 修复/rebase ──→ agent/supervising
+
+# recover-publish 恢复路径（supervisor enabled）
+agent/failed ── recover-publish ──→ agent/supervising ── supervisor approve ──→ agent/review
+
+# recover-publish 恢复路径（supervisor disabled）
+agent/failed ── recover-publish ──→ agent/review
 ```
 
 ## 发布失败恢复
@@ -409,9 +415,13 @@ agent/supervising ── supervisor 要求 rework ──→ agent/running ──
 
 > **注意**：`iar labels sync` 只同步 GitHub labels，**不**校验发布环境。`iar run-once` 在领取 Issue 前会检查 `[agent_runner.git].remote` 是否存在。
 
-### 与 pre-push review 的关系
+### 与 pre-push review 和 post-PR supervisor 的关系
 
-`recover-publish` 只做发布收尾：校验 worktree 干净、校验分支、push、创建或复用 Draft PR、更新 Issue label。它不会运行 pre-push review，也不会运行 post-PR supervisor。
+`recover-publish` 只做发布收尾：校验 worktree 干净、校验分支、push、创建或复用 Draft PR、更新 Issue label 和 comment。它不会运行 pre-push review（因为恢复路径要求本地 commit 已经由正常 runner 路径完成过 pre-push review）。
+
+**当 `post_pr_supervisor.enabled = true` 时**，成功恢复后会先进入 `agent/supervising` 并运行 post-PR supervisor；只有 supervisor `approve_for_human_review` 后，Issue 才会进入 `agent/review`。
+
+**当 `post_pr_supervisor.enabled = false` 时**，成功恢复后直接移除 `agent/failed` / `agent/running` / `agent/ready`，添加 `agent/review`。
 
 如果失败发生在 `Refusing to publish forbidden paths: ...` 这类 forbidden path 拦截处，并且人工已经确认这些文件可以提交、手动创建了本地 commit，应改走 `agent/running` 的本地 commit 复用路径，让 `run-once` 执行完整的 verification、pre-push review、publish 和 post-PR supervisor：
 
@@ -439,31 +449,59 @@ uv run iar recover-publish --issue 5
 uv run iar recover-publish --issue 5 --branch feature-xyz
 ```
 
+### 分支安全与 Issue number 边界
+
+`recover-publish` 默认要求当前分支名把 Issue number 当作**完整 token 或路径 segment** 包含在内。以下分支在恢复 Issue #42 时会被**拒绝**：
+
+- `issue-421`（42 不是完整 segment）
+- `feature/issue-420`（420 ≠ 42）
+- `task-142`（142 ≠ 42）
+
+以下分支会被**接受**：
+
+- `issue-42`
+- `feature/issue-42`
+- `task-42`
+- `issue_42`
+
+如果当前分支确实不匹配但你想强制恢复，使用 `--branch` 显式确认：
+
+```bash
+uv run iar recover-publish --issue 42 --branch issue-421
+```
+
+此时 runner 会精确比较当前分支与 `--branch` 参数，完全相等才放行。
+
 ### 恢复流程
 
 1. 解析已存在的 issue worktree 路径
 2. 校验工作区干净（无未提交变更）
-3. 校验分支安全（非 base branch、分支名引用 issue 编号或显式 `--branch` 确认）
+3. 校验分支安全（非 base branch、分支名精确引用 issue 编号或显式 `--branch` 确认）
 4. 校验配置的 remote 存在
 5. Push 当前分支到配置 remote
 6. 检查是否已有 open PR，有则复用，无则创建 draft PR
-7. 更新 Issue labels：移除 `agent/failed`、`agent/running`、`agent/ready`，添加 `agent/review`
-8. 发布成功 comment，记录分支、HEAD SHA、PR URL 和是否复用已有 PR
+7. 发布成功 comment，记录分支、HEAD SHA、PR URL 和是否复用已有 PR
+8. 更新 Issue labels：
+   - `post_pr_supervisor.enabled = true`：移除 `agent/failed` / `agent/running` / `agent/ready` / `agent/review`，添加 `agent/supervising`，然后运行 supervisor
+   - `post_pr_supervisor.enabled = false`：移除 `agent/failed` / `agent/running` / `agent/ready`，添加 `agent/review`
 
 ### 安全边界
 
 `recover-publish` **不会**执行以下操作：
 
-- 运行 Agent 命令
-- 运行 pre-push review 或 post-PR supervisor
+- 运行 implementation Agent 命令或 recovery prompt
 - 执行 `git add` 或 `git commit`
 - 创建新的 worktree
 - 合并分支或删除分支
 - 推送到非配置 remote
 
+当 `post_pr_supervisor.enabled = true` 时，`recover-publish` 会复用现有 supervisor repair loop，但 supervisor 本身仍然是只读审阅；需要代码修改时由现有 repair/rebase commit proxy 处理，不会由 supervisor 直接提交文件。
+
 ### 手动恢复回退
 
-当无法使用 `recover-publish` 命令、需要人工兜底时，可手动执行以下命令完成恢复。该流程同样会跳过 pre-push review 和 post-PR supervisor，只适用于已经完成过自动审查、仅发布收尾失败的场景：
+当无法使用 `recover-publish` 命令、需要人工兜底时，可手动执行以下命令完成恢复。
+
+**如果 `post_pr_supervisor.enabled = true`：**
 
 ```bash
 # 1. 进入 issue worktree
@@ -479,8 +517,8 @@ git push -u origin <branch>
 # 4. 创建 draft PR（如果不存在）
 gh pr create --draft --base main --title "[Agent] Issue #<number>" --body "Closes #<number>"
 
-# 5. 更新 Issue labels
-gh issue edit <number> --add-label agent/review --remove-label agent/failed,agent/running,agent/ready
+# 5. 更新 Issue labels 到 supervising（等待 supervisor 审批后再进入 review）
+gh issue edit <number> --add-label agent/supervising --remove-label agent/failed,agent/running,agent/ready
 
 # 6. 添加 comment 记录恢复结果
 gh issue comment <number> --body "## Agent Runner Publish Recovered
@@ -488,6 +526,15 @@ gh issue comment <number> --body "## Agent Runner Publish Recovered
 - Branch: \`<branch>\`
 - HEAD SHA: \`<sha>\`
 - Draft PR: <pr-url>"
+```
+
+**如果 `post_pr_supervisor.enabled = false`（直接 review fallback）：**
+
+```bash
+# ...步骤 1-4 同上...
+
+# 5. 更新 Issue labels 直接到 review
+gh issue edit <number> --add-label agent/review --remove-label agent/failed,agent/running,agent/ready
 ```
 
 ## 多机部署与操作指南

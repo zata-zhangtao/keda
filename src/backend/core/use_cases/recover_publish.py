@@ -17,6 +17,7 @@ from backend.core.shared.interfaces.agent_runner import (
 )
 from backend.core.shared.models.agent_runner import (
     AppConfig,
+    PublishFailureCategory,
     PublishRecoveryRequest,
     PublishRecoveryResult,
 )
@@ -40,7 +41,16 @@ class PublishRecoveryError(RuntimeError):
     上层调用方可统一捕获该异常类型来处理恢复失败。
     """
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        worktree_path: Path | None = None,
+        failure_category: str = "unknown",
+    ) -> None:
+        super().__init__(message)
+        self.worktree_path = worktree_path
+        self.failure_category = failure_category
 
 
 def resolve_existing_worktree(
@@ -185,15 +195,11 @@ def validate_branch_safety(
         return current_branch
 
     # 未显式指定分支时，退而用命名约定做启发式校验：分支名应包含对应的 Issue
-    # 编号引用。覆盖 issue-28 / issue_28 / tasks/issue-28 等常见命名变体。
-    issue_ref_patterns = [
-        rf"issue[-_]?{issue_number}",
-        rf"tasks[-_/]issue[-_]?{issue_number}",
-        rf"issue[-_]?{issue_number}[-_/]",
-    ]
+    # 编号作为完整 token 或路径 segment，避免 issue-421 被错误匹配到 Issue #42。
+    issue_number_token = str(issue_number)
+    branch_segments = re.split(r"[-_/]+", current_branch)
     branch_matches_issue = any(
-        re.search(pattern, current_branch, re.IGNORECASE)
-        for pattern in issue_ref_patterns
+        segment == issue_number_token for segment in branch_segments
     )
 
     if not branch_matches_issue:
@@ -204,6 +210,47 @@ def validate_branch_safety(
         )
 
     return current_branch
+
+
+def _build_recovery_failure_comment(
+    *,
+    issue_number: int,
+    failure_category: str,
+    worktree_path: Path | None,
+    exc: BaseException,
+) -> str:
+    """构建发布恢复失败后写入 Issue 的评论正文。"""
+    lines = [
+        "## Agent Runner Publish Recovery Failed",
+        "",
+        "The publish recovery command failed.",
+        "",
+        f"- Failure category: `{failure_category}`",
+    ]
+    if worktree_path is not None:
+        lines.append(f"- Worktree: `{worktree_path}`")
+    lines.extend(
+        [
+            "",
+            "```text",
+            str(exc),
+            "",
+        ]
+    )
+    if exc.__cause__ is not None:
+        lines.append(str(exc.__cause__))
+    lines.extend(
+        [
+            "```",
+            "",
+            "To retry publishing without re-running the agent:",
+            "",
+            "```bash",
+            f"uv run iar recover-publish --issue {issue_number}",
+            "```",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def recover_publish_issue(
@@ -218,8 +265,13 @@ def recover_publish_issue(
 
     本函数为“已存在本地提交”的任务安全地续做发布，整个过程不会运行 Agent、
     不会创建提交、也不会改动工作树内容；它只做校验、推送已有提交并创建/复用 PR。
+    当 post-PR supervisor 启用时，恢复后的 PR 会先进入 ``agent/supervising``，
+    运行现有 supervisor repair loop，只有 supervisor approve 后才进入
+    ``agent/review``。当 supervisor 禁用时，保留直接进入 ``agent/review`` 的 fallback。
+
     执行顺序经过精心编排：先完成全部本地安全校验与推送，确认成功后才更新标签、
-    评论 Issue，确保只有真正发布成功才会改变 Issue 的可见状态。
+    评论 Issue，确保只有真正发布成功才会改变 Issue 的可见状态。任何 push、PR lookup
+    或 PR creation 失败都不会修改 labels，只会 posting failure comment。
 
     Args:
         request (PublishRecoveryRequest): 恢复请求，含 Issue 编号与可选分支。
@@ -234,6 +286,10 @@ def recover_publish_issue(
     Raises:
         PublishRecoveryError: 当任一安全校验失败或推送失败，导致无法安全恢复时抛出。
     """
+    from backend.core.use_cases.agent_runner_git import has_changes
+    from backend.core.use_cases.agent_runner_supervisor import (
+        _run_supervisor_with_repair_loop,
+    )
     from backend.core.use_cases.run_agent_once import (
         get_head_sha,
         list_git_remotes,
@@ -271,7 +327,9 @@ def recover_publish_issue(
         raise PublishRecoveryError(
             f"Configured git remote '{configured_remote}' does not exist. "
             f"Available remotes: {available_text}. "
-            f"Update [agent_runner.git].remote in config.toml."
+            f"Update [agent_runner.git].remote in config.toml.",
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.PUSH.value,
         )
 
     # 第四步：将分支推送到配置的远端（-u 建立上游跟踪）。
@@ -287,15 +345,45 @@ def recover_publish_issue(
         check=False,
     )
     if push_result.return_code != 0:
-        raise PublishRecoveryError(
+        exc = PublishRecoveryError(
             f"Failed to push branch '{branch}' to remote '{configured_remote}'. "
             f"Exit code: {push_result.return_code}. "
-            f"Stderr: {push_result.stderr}"
+            f"Stderr: {push_result.stderr}",
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.PUSH.value,
         )
+        github_client.comment_issue(
+            issue_number,
+            _build_recovery_failure_comment(
+                issue_number=issue_number,
+                failure_category=PublishFailureCategory.PUSH.value,
+                worktree_path=worktree_path,
+                exc=exc,
+            ),
+        )
+        raise exc
 
     # 第五步：查找该分支是否已有处于 open 状态的 PR。恢复场景下 PR 可能在上次
     # 失败前已创建，复用可避免产生重复 PR。
-    existing_pr_url = github_client.find_open_pr_by_head(branch)
+    try:
+        existing_pr_url = github_client.find_open_pr_by_head(branch)
+    except Exception as lookup_exc:  # noqa: BLE001
+        exc = PublishRecoveryError(
+            f"Failed to look up open PR for branch '{branch}': {lookup_exc}",
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.PR_LOOKUP.value,
+        )
+        github_client.comment_issue(
+            issue_number,
+            _build_recovery_failure_comment(
+                issue_number=issue_number,
+                failure_category=PublishFailureCategory.PR_LOOKUP.value,
+                worktree_path=worktree_path,
+                exc=exc,
+            ),
+        )
+        raise exc
+
     pr_reused = existing_pr_url is not None
 
     if existing_pr_url:
@@ -312,43 +400,155 @@ def recover_publish_issue(
         pr_body = f"Closes #{issue_number}\n\nRecovered by issue-agent-runner.\n"
 
         _logger.info("Creating draft PR for Issue #%d", issue_number)
-        pr_url = github_client.create_draft_pr(
-            title=pr_title,
-            body=pr_body,
-            base_branch=config.git.base_branch,
-            cwd=worktree_path,
+        try:
+            pr_url = github_client.create_draft_pr(
+                title=pr_title,
+                body=pr_body,
+                base_branch=config.git.base_branch,
+                cwd=worktree_path,
+            )
+        except Exception as create_exc:  # noqa: BLE001
+            exc = PublishRecoveryError(
+                f"Failed to create draft PR for branch '{branch}': {create_exc}",
+                worktree_path=worktree_path,
+                failure_category=PublishFailureCategory.PR_CREATE.value,
+            )
+            github_client.comment_issue(
+                issue_number,
+                _build_recovery_failure_comment(
+                    issue_number=issue_number,
+                    failure_category=PublishFailureCategory.PR_CREATE.value,
+                    worktree_path=worktree_path,
+                    exc=exc,
+                ),
+            )
+            raise exc
+
+    # 第六步：推送与 PR 均成功后，写入恢复成功评论。
+    success_comment = build_recovery_success_comment(
+        branch=branch,
+        head_sha=head_sha,
+        pr_url=pr_url,
+        pr_reused=pr_reused,
+    )
+    try:
+        github_client.comment_issue(issue_number, success_comment)
+    except Exception as comment_exc:  # noqa: BLE001
+        exc = PublishRecoveryError(
+            f"Failed to post recovery success comment: {comment_exc}",
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.COMMENT_UPDATE.value,
         )
+        raise exc
 
-    # 第六步：仅在推送与 PR 均成功后才更新标签，移除 failed/running/ready 等
-    # 中间态，标记为 review，保证 Issue 状态与实际发布结果严格一致。
-    labels_to_remove = [
-        config.labels.failed,
-        config.labels.running,
-        config.labels.ready,
-    ]
-    github_client.edit_issue_labels(
-        issue_number,
-        add=[config.labels.review],
-        remove=labels_to_remove,
-    )
+    # 第七步：根据 supervisor 配置决定标签流转。
+    supervisor_action: str | None = None
+    if config.post_pr_supervisor.enabled:
+        # 成功恢复后先进入 supervising，运行 supervisor。
+        try:
+            github_client.edit_issue_labels(
+                issue_number,
+                add=[config.labels.supervising],
+                remove=[
+                    config.labels.failed,
+                    config.labels.running,
+                    config.labels.ready,
+                    config.labels.review,
+                ],
+            )
+        except Exception as label_exc:  # noqa: BLE001
+            exc = PublishRecoveryError(
+                f"Failed to update labels to supervising: {label_exc}",
+                worktree_path=worktree_path,
+                failure_category=PublishFailureCategory.LABEL_UPDATE.value,
+            )
+            raise exc
 
-    # 第七步：在 Issue 下留言，给出本次恢复的分支、SHA、PR 等摘要信息。
-    github_client.comment_issue(
-        issue_number,
-        build_recovery_success_comment(
-            branch=branch,
-            head_sha=head_sha,
-            pr_url=pr_url,
-            pr_reused=pr_reused,
-        ),
-    )
+        # 获取 Issue context 和 PR context 以运行 supervisor。
+        try:
+            issue = github_client.get_issue(issue_number)
+        except Exception as get_issue_exc:  # noqa: BLE001
+            exc = PublishRecoveryError(
+                f"Failed to fetch Issue #{issue_number} for supervisor: {get_issue_exc}",
+                worktree_path=worktree_path,
+                failure_category=PublishFailureCategory.UNKNOWN.value,
+            )
+            raise exc
+
+        pr_context = github_client.get_pull_request_context(branch)
+        if pr_context is None:
+            _logger.warning(
+                "Deferring post-PR supervisor for Issue #%d branch %s: "
+                "complete PR context is unavailable.",
+                issue_number,
+                branch,
+            )
+            supervisor_action = "deferred_pr_context_unavailable"
+        else:
+            supervisor_config = config.post_pr_supervisor
+            supervisor_agent = (
+                config.runner.default_agent
+                if supervisor_config.supervisor_agent == "auto"
+                else supervisor_config.supervisor_agent
+            )
+            # 在运行 supervisor 前再次确认工作树干净（只读 supervisor 的契约）。
+            if has_changes(worktree_path, process_runner):
+                dirty_exc = PublishRecoveryError(
+                    "Worktree has uncommitted changes before supervisor cycle. "
+                    "Recovery requires a clean worktree.",
+                    worktree_path=worktree_path,
+                    failure_category=PublishFailureCategory.UNKNOWN.value,
+                )
+                github_client.comment_issue(
+                    issue_number,
+                    _build_recovery_failure_comment(
+                        issue_number=issue_number,
+                        failure_category=PublishFailureCategory.UNKNOWN.value,
+                        worktree_path=worktree_path,
+                        exc=dirty_exc,
+                    ),
+                )
+                raise dirty_exc
+
+            _run_supervisor_with_repair_loop(
+                issue=issue,
+                worktree_path=worktree_path,
+                config=config,
+                github_client=github_client,
+                process_runner=process_runner,
+                pr_context=pr_context,
+                supervisor_agent=supervisor_agent,
+            )
+            supervisor_action = "supervisor_completed"
+    else:
+        # Supervisor 禁用时直接进入 review（fallback）。
+        try:
+            github_client.edit_issue_labels(
+                issue_number,
+                add=[config.labels.review],
+                remove=[
+                    config.labels.failed,
+                    config.labels.running,
+                    config.labels.ready,
+                ],
+            )
+        except Exception as label_exc:  # noqa: BLE001
+            exc = PublishRecoveryError(
+                f"Failed to update labels to review: {label_exc}",
+                worktree_path=worktree_path,
+                failure_category=PublishFailureCategory.LABEL_UPDATE.value,
+            )
+            raise exc
+        supervisor_action = "supervisor_disabled_fallback"
 
     _logger.info(
-        "Publish recovery complete for Issue #%d: branch=%s, pr=%s, reused=%s",
+        "Publish recovery complete for Issue #%d: branch=%s, pr=%s, reused=%s, "
+        "supervisor_action=%s",
         issue_number,
         branch,
         pr_url,
         pr_reused,
+        supervisor_action,
     )
 
     return PublishRecoveryResult(
@@ -357,6 +557,7 @@ def recover_publish_issue(
         head_sha=head_sha,
         pr_url=pr_url,
         pr_reused=pr_reused,
+        supervisor_action=supervisor_action,
     )
 
 
@@ -369,6 +570,9 @@ def build_recovery_success_comment(
 ) -> str:
     """构建发布恢复成功后写入 Issue 的评论正文。
 
+    评论包含 ``iar:event`` marker，``review_once`` 可通过该 marker 解析出
+    PR branch 上下文。
+
     Args:
         branch (str): 已推送的分支名。
         head_sha (str): 提交的 HEAD SHA。
@@ -378,10 +582,20 @@ def build_recovery_success_comment(
     Returns:
         str: Markdown 格式的评论正文。
     """
+    from backend.core.use_cases.agent_runner_events import format_event_marker
+
+    marker = format_event_marker(
+        phase="publish_recovered",
+        cycle=1,
+        head_sha=head_sha,
+        pr_branch=branch,
+    )
     # 复用与新建在文案上区分开，方便人工在 Issue 中快速识别 PR 来源。
     reuse_status = "reused" if pr_reused else "created"
     return "\n".join(
         [
+            marker,
+            "",
             "## Agent Runner Publish Recovered",
             "",
             f"- Branch: `{branch}`",

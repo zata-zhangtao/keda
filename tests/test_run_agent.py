@@ -727,6 +727,109 @@ def test_publish_changes_rejects_branch_change() -> None:
     assert ("git", "push", "-u", "origin", "main") not in commands
 
 
+def test_publish_failure_category_push_vs_pr_create() -> None:
+    """publish_changes wrapper should report push vs pr_create accurately."""
+    from backend.core.use_cases.agent_runner_failure import PublishFailureError
+    from backend.core.use_cases.agent_runner_publication import (
+        _publish_changes_with_recovery_context,
+    )
+    from backend.core.shared.models.agent_runner import PublishFailureCategory
+
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Test body",
+        labels=(),
+    )
+
+    # Scenario 1: git push fails -> category=push
+    fake_runner_push_fail = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "remote"): CommandResult(
+                command=("git", "remote"),
+                return_code=0,
+                stdout="origin\n",
+                stderr="",
+            ),
+            ("git", "push", "-u", "origin", "issue-1"): CommandResult(
+                command=("git", "push", "-u", "origin", "issue-1"),
+                return_code=1,
+                stdout="",
+                stderr="push rejected",
+            ),
+        }
+    )
+    with pytest.raises(PublishFailureError) as exc_info:
+        _publish_changes_with_recovery_context(
+            issue=issue,
+            worktree_path=Path("."),
+            config=AppConfig(),
+            github_client=FakeGitHubClient(),
+            process_runner=fake_runner_push_fail,
+            expected_branch="issue-1",
+            content_generator=None,
+        )
+    assert exc_info.value.failure_category == PublishFailureCategory.PUSH
+
+    # Scenario 2: PR creation fails -> category=pr_create
+    class _PRCreateFailClient(FakeGitHubClient):
+        def create_draft_pr(self, **kwargs: object) -> str:
+            raise RuntimeError("gh pr create failed")
+
+    fake_runner_pr_fail = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "remote"): CommandResult(
+                command=("git", "remote"),
+                return_code=0,
+                stdout="origin\n",
+                stderr="",
+            ),
+            ("git", "push", "-u", "origin", "issue-1"): CommandResult(
+                command=("git", "push", "-u", "origin", "issue-1"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    with pytest.raises(PublishFailureError) as exc_info:
+        _publish_changes_with_recovery_context(
+            issue=issue,
+            worktree_path=Path("."),
+            config=AppConfig(),
+            github_client=_PRCreateFailClient(),
+            process_runner=fake_runner_pr_fail,
+            expected_branch="issue-1",
+            content_generator=None,
+        )
+    assert exc_info.value.failure_category == PublishFailureCategory.PR_CREATE
+
+
 def test_validate_safe_changes_rejects_forbidden_path(tmp_path: Path) -> None:
     """Runner should not publish configured secret-like paths."""
     repo = tmp_path / "repo"

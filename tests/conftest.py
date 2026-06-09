@@ -133,6 +133,16 @@ class FakeGitHubClient(IGitHubClient):
         )
         return self._remote_base_sha
 
+    def get_issue(self, issue_number: int) -> IssueSummary:
+        self.calls.append({"method": "get_issue", "issue_number": issue_number})
+        return IssueSummary(
+            number=issue_number,
+            title=f"Issue #{issue_number}",
+            url=f"https://github.com/example/repo/issues/{issue_number}",
+            body="",
+            labels=(),
+        )
+
 
 class FakeContentGenerator(IContentGenerator):
     """In-memory content generator for tests."""

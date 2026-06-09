@@ -21,7 +21,15 @@ from backend.core.use_cases.generated_content import (
     generate_pr_content,
 )
 
+
+class DraftPRCreationError(RuntimeError):
+    """Raised when draft PR creation fails after a successful push."""
+
+    pass
+
+
 __all__ = [
+    "DraftPRCreationError",
     "publish_changes",
     "run_preflight_checks",
     "validate_publish_remote",
@@ -148,10 +156,13 @@ def publish_changes(
         pr_title = generated.title
         pr_body = generated.body
 
-    pr_url = github_client.create_draft_pr(
-        title=pr_title,
-        body=pr_body,
-        base_branch=config.git.base_branch,
-        cwd=worktree_path,
-    )
+    try:
+        pr_url = github_client.create_draft_pr(
+            title=pr_title,
+            body=pr_body,
+            base_branch=config.git.base_branch,
+            cwd=worktree_path,
+        )
+    except Exception as exc:
+        raise DraftPRCreationError(str(exc)) from exc
     return branch, pr_url

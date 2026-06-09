@@ -28,6 +28,7 @@ from backend.core.use_cases.pr_supervisor import (
     execute_repair,
     run_post_pr_supervisor_cycle,
 )
+from backend.core.use_cases.agent_runner_git import has_changes
 from backend.core.use_cases.run_agent_once import (
     get_head_sha,
 )
@@ -72,6 +73,28 @@ def _run_supervisor_with_repair_loop(
 
     # 循环：最多 max_repair + 1 次修复尝试
     for cycle in range(1, max_repair + 2):
+        # 只读 supervisor cycle 前必须确认 worktree 干净；
+        # 若不干净，视为协议违规并阻止继续。
+        if has_changes(worktree_path, process_runner):
+            github_client.comment_issue(
+                issue.number,
+                build_supervisor_result_comment(
+                    action="dirty_worktree_before_supervisor",
+                    supervisor=supervisor_agent,
+                    summary="Worktree has uncommitted changes before read-only supervisor cycle. Moving to blocked.",
+                    findings_counts={},
+                    verification_status="",
+                    head_sha=current_pr_context.head_sha,
+                    cycle=cycle,
+                ),
+            )
+            github_client.edit_issue_labels(
+                issue.number,
+                add=[config.labels.blocked],
+                remove=[config.labels.supervising],
+            )
+            return
+
         action_result = run_post_pr_supervisor_cycle(
             issue=issue,
             worktree_path=worktree_path,
@@ -85,6 +108,26 @@ def _run_supervisor_with_repair_loop(
 
         # 分支：根据监督者动作决定后续行为
         if action_result.action == "approve_for_human_review":
+            # 只读 supervisor cycle 后若留下未提交变更，不能 approve 进入 human review。
+            if has_changes(worktree_path, process_runner):
+                github_client.comment_issue(
+                    issue.number,
+                    build_supervisor_result_comment(
+                        action="dirty_read_only_supervisor",
+                        supervisor=supervisor_agent,
+                        summary="Read-only supervisor left uncommitted changes. Moving to blocked.",
+                        findings_counts={},
+                        verification_status="",
+                        head_sha=current_pr_context.head_sha,
+                        cycle=cycle,
+                    ),
+                )
+                github_client.edit_issue_labels(
+                    issue.number,
+                    add=[config.labels.blocked],
+                    remove=[config.labels.supervising],
+                )
+                return
             github_client.edit_issue_labels(
                 issue.number,
                 add=[config.labels.review],
