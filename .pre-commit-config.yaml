@@ -54,7 +54,7 @@ repos:
         name: Check PRD acceptance checklist
         entry: uv run python hooks/check_prd_acceptance_checklist.py
         language: system
-        files: ^tasks/(?:archive/)?[^/]+-prd-[^/]+\.md$
+        files: ^tasks/(?:archive/)?(?:[^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md$
       - id: check-guidelines-consistency
         name: Check guidelines consistency
         entry: uv run python hooks/check_guidelines_consistency.py

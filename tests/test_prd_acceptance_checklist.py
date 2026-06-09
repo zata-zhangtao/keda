@@ -94,6 +94,26 @@ def test_candidate_prd_paths_include_active_root_prd_when_provided(
     assert candidate_prd_paths == [active_prd_path]
 
 
+def test_candidate_prd_paths_include_priority_prd_naming_when_discovered(
+    tmp_path: Path,
+) -> None:
+    """Root-level priority PRD names should be discovered as active candidates."""
+
+    prd_acceptance_checklist_module = load_prd_acceptance_checklist_module()
+
+    active_prd_path = tmp_path / "tasks" / "P1-FEAT-20260609-103000-example.md"
+    active_prd_path.parent.mkdir(parents=True, exist_ok=True)
+    active_prd_path.write_text("# PRD\n", encoding="utf-8")
+
+    candidate_prd_paths = prd_acceptance_checklist_module._candidate_prd_paths(  # noqa: SLF001
+        repo_root=tmp_path,
+        provided_paths=[],
+        staged_archive_prd_paths=set(),
+    )
+
+    assert candidate_prd_paths == [active_prd_path]
+
+
 def test_candidate_prd_paths_keep_pending_prds_exempt(tmp_path: Path) -> None:
     """Pending PRDs may keep unchecked checklist items before delivery."""
 
@@ -155,6 +175,31 @@ def test_staged_archive_prd_paths_collect_added_archive_prds(tmp_path: Path) -> 
     pending_prd_path = tmp_path / "tasks" / "pending" / "20260423-100003-prd-pending.md"
     pending_prd_path.parent.mkdir(parents=True, exist_ok=True)
     pending_prd_path.write_text("# PRD\n", encoding="utf-8")
+
+    add_process = run_command(["git", "add", "tasks"], cwd_path=tmp_path)
+    assert add_process.returncode == 0
+
+    staged_archive_prd_paths = (
+        prd_acceptance_checklist_module._staged_archive_prd_paths(  # noqa: SLF001
+            tmp_path
+        )
+    )
+
+    assert staged_archive_prd_paths == {archived_relative_path}
+
+
+def test_staged_archive_prd_paths_collect_priority_prds(tmp_path: Path) -> None:
+    """Git-index discovery should include archived priority PRD names."""
+
+    prd_acceptance_checklist_module = load_prd_acceptance_checklist_module()
+
+    init_process = run_command(["git", "init", "-q"], cwd_path=tmp_path)
+    assert init_process.returncode == 0
+
+    archived_relative_path = Path("tasks/archive/P2-FIX-20260609-104500-example.md")
+    archived_prd_path = tmp_path / archived_relative_path
+    archived_prd_path.parent.mkdir(parents=True, exist_ok=True)
+    archived_prd_path.write_text("# PRD\n", encoding="utf-8")
 
     add_process = run_command(["git", "add", "tasks"], cwd_path=tmp_path)
     assert add_process.returncode == 0

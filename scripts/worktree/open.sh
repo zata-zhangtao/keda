@@ -36,7 +36,7 @@ resolve_worktree_path_by_branch() {
     # 优先通过 git worktree list 查找分支对应的 worktree 路径
     worktree_path="$(git -C "$repo_root_path" worktree list --porcelain 2>/dev/null \
         | awk -v branch="$branch_name" '
-            /^worktree / { path = substr($0, 11) }
+            /^worktree / { path = substr($0, 10) }
             /^branch / {
                 sub(/^refs\/heads\//, "", $2)
                 if ($2 == branch) { print path; exit }

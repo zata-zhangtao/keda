@@ -37,9 +37,20 @@ PROJECT_SKIP_PATH_COUNT=0
 PROJECT_INCLUDE_PATH_COUNT=0
 
 SHOW_ALL=false
-if [ "${1:-}" = "--all" ]; then
-    SHOW_ALL=true
-fi
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --all)
+            SHOW_ALL=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [--all]" >&2
+            exit 1
+            ;;
+    esac
+done
 
 # ──────────────────────────────────────────────────────────────
 # Skip rules — files that should never or optionally be synced
@@ -222,7 +233,7 @@ _is_skipped_by_default() {
     local p="$1"
     case "$p" in
         README.md|pyproject.toml|config.toml|mkdocs.yml|uv.lock) return 0 ;;
-        CLAUDE.md|main.py) return 0 ;;
+        CLAUDE.md|main.py|justfile) return 0 ;;
         findings.md|progress.md|task_plan.md) return 0 ;;
         .DS_Store) return 0 ;;
     esac

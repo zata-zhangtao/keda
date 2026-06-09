@@ -75,7 +75,7 @@ class GuidelinesChecker:
             "comments_docstrings": ["Google Style", 'encoding="utf-8"', "TODO"],
             "documentation": ["mkdocs.yml", "mkdocstrings", "UTF-8"],
             "testing": ["uv", "Playwright", "npm"],
-            "tooling": ["uv", "just"],
+            "tooling": ["uv", "just", "pre-commit"],
         }
         issues: list[str] = []
 

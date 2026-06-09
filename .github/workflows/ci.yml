@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PYTHON_VERSION: "3.14"
+  PYTHON_VERSION: "3.13"
 
 jobs:
   frontend-build:
@@ -69,7 +69,7 @@ jobs:
         run: uv run python hooks/check_max_file_lines.py --max-lines 1000 $(find src/backend -name "*.py")
 
       - name: Run local test suite
-        run: uv run pytest tests/ -v --ignore=tests/test_model_loader_real.py -m "not expensive"
+        run: uv run pytest tests/ -v -m "not expensive"
 
       - name: Build documentation
         run: uv run mkdocs build --strict

@@ -2,13 +2,12 @@
 
 import os
 from logging.config import fileConfig
-from pathlib import Path
 
 from sqlalchemy import create_engine, pool
 
 from alembic import context
 
-# Import project Base
+from backend.infrastructure.config.settings import config as app_config
 from backend.infrastructure.persistence.database import Base
 
 # Register all models so they are visible in Base.metadata for autogenerate.
@@ -25,23 +24,8 @@ if alembic_config.config_file_name is not None:
 # Target metadata for autogenerate support
 target_metadata = Base.metadata
 
-# Resolve DATABASE_URL: env var > .env > project config defaults
-_DATABASE_URL: str | None = os.getenv("DATABASE_URL")
-if not _DATABASE_URL:
-    _env_path = Path(__file__).resolve().parent.parent / ".env"
-    if _env_path.is_file():
-        with open(_env_path, encoding="utf-8") as _f:
-            for _line in _f:
-                _line = _line.strip()
-                if _line.startswith("DATABASE_URL="):
-                    _DATABASE_URL = _line.split("=", 1)[1].strip()
-                    break
-if not _DATABASE_URL:
-    from backend.infrastructure.config.settings import config as app_config
-
-    _DATABASE_URL = app_config.resolved_database_url
-
-DATABASE_URL = _DATABASE_URL
+# Resolve DATABASE_URL: env var > .env/.env.local > project config defaults
+DATABASE_URL: str = os.getenv("DATABASE_URL") or app_config.resolved_database_url
 
 
 def run_migrations_offline() -> None:

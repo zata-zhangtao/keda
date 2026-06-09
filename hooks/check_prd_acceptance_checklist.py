@@ -12,8 +12,9 @@ from typing import Iterable
 from backend.core.shared.prd_checklist import parse_prd_checklist
 
 
-ACTIVE_PRD_PATH_RE = re.compile(r"^tasks/[^/]+-prd-[^/]+\.md$")
-ARCHIVED_PRD_PATH_RE = re.compile(r"^tasks/archive/[^/]+-prd-[^/]+\.md$")
+PRD_FILENAME_PATTERN = r"(?:[^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md"
+ACTIVE_PRD_PATH_RE = re.compile(rf"^tasks/{PRD_FILENAME_PATTERN}$")
+ARCHIVED_PRD_PATH_RE = re.compile(rf"^tasks/archive/{PRD_FILENAME_PATTERN}$")
 
 
 def _repo_root() -> Path:
@@ -124,7 +125,7 @@ def _candidate_prd_paths(
         return []
 
     discovered_paths: list[Path] = []
-    for prd_path in sorted(tasks_dir.glob("*-prd-*.md")):
+    for prd_path in sorted(tasks_dir.glob("*.md")):
         if _is_active_prd_path(prd_path, repo_root):
             discovered_paths.append(prd_path)
     for archived_prd_path in sorted(staged_archive_prd_paths):

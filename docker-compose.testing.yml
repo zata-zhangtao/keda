@@ -1,0 +1,80 @@
+# -----------------------------------------------------------------------------
+# Docker Compose — Local Testing Middleware
+# -----------------------------------------------------------------------------
+# 独立于项目的本地测试中间件，用于模拟外部服务。
+# 仅用于本地开发和测试，密码明文写入，不要用于生产环境。
+#
+# Usage:
+#   docker compose -f docker-compose.testing.yml up -d
+#   docker compose -f docker-compose.testing.yml down
+#
+# Connection strings for .env:
+#   DATABASE_URL=postgresql+psycopg2://testuser:testpass@localhost:5432/testdb
+#   REDIS_URL=redis://:redis123@localhost:6379/0
+#   S3_ENDPOINT=http://localhost:9000
+#   S3_ACCESS_KEY=minioadmin
+#   S3_SECRET_KEY=minioadmin
+#   S3_BUCKET=app-assets
+#   S3_PREFIX=app-assets
+#
+# MinIO 启动后需手动创建 bucket（Console: http://localhost:9001，minioadmin/minioadmin）
+# -----------------------------------------------------------------------------
+
+services:
+  # ---------------------------------------------------------------------------
+  # MinIO — S3-compatible Object Storage
+  # ---------------------------------------------------------------------------
+# 用于本地测试 S3 文件 / 对象存储，无需连接 AWS S3。
+  # Web Console: http://localhost:9001
+  # API Endpoint: http://localhost:9000
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: test-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-test-data:/data
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Redis — In-memory Data Store
+  # ---------------------------------------------------------------------------
+  # 用于本地测试缓存 / 会话 / 任务队列。
+  # CLI: redis-cli -h localhost -p 6379
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: test-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --requirepass redis123
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 17
+  # ---------------------------------------------------------------------------
+  # 独立于主项目的测试数据库，避免污染开发库。
+  # psql -h localhost -p 5432 -U testuser -d testdb
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    container_name: test-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+      POSTGRES_DB: testdb
+    volumes:
+      - postgres-test-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  minio-test-data:
+  postgres-test-data:

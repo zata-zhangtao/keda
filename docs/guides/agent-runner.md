@@ -320,7 +320,7 @@ iar review-once
 # Review daemon 模式
 iar review-daemon --interval 600
 
-# 恢复发布失败（Agent 已完成但 push/PR 失败）
+# 恢复发布失败（仅用于已完成审查后的 push/PR 收尾失败）
 iar recover-publish --issue 5
 
 # 恢复发布失败（显式确认分支名）
@@ -385,7 +385,7 @@ agent/supervising ── supervisor 要求 rework ──→ agent/running ──
 
 ## 发布失败恢复
 
-当 Agent 已完成代码修改并生成本地 commit，但在发布阶段（push、PR 创建、label 更新等）失败时，Issue 会被标记为 `agent/failed`。此时重新运行 Agent 是浪费且可能引入不必要代码变更的。
+当 Agent 已完成代码修改、生成本地 commit，并且 runner 已经走到发布阶段（push、PR 创建、label 更新等）后失败时，Issue 会被标记为 `agent/failed`。此时重新运行 Agent 是浪费且可能引入不必要代码变更的。
 
 `iar recover-publish` 命令用于安全、幂等地完成发布收尾，无需重新启动 Agent。
 
@@ -394,6 +394,7 @@ agent/supervising ── supervisor 要求 rework ──→ agent/running ──
 - Agent 已执行完毕，本地 commit 已存在
 - 发布阶段因网络错误、GitHub CLI 认证过期、API 限流等原因失败
 - Issue 失败 comment 中包含 `iar recover-publish --issue <number>` 提示
+- 该本地 commit 已经由正常 runner 路径完成过配置启用的 pre-push review，失败点只在 push、PR 创建或 label/comment 更新等发布收尾阶段
 
 ### 不适用的情况
 
@@ -401,8 +402,29 @@ agent/supervising ── supervisor 要求 rework ──→ agent/running ──
 - 工作区有未提交变更
 - 需要修改 Agent 已生成的代码
 - 当前分支是 base branch
+- forbidden path 在 commit 阶段拦截后，由人工整理并提交了 worktree，但这些提交还没有经过 pre-push review
 
 > **注意**：`iar labels sync` 只同步 GitHub labels，**不**校验发布环境。`iar run-once` 在领取 Issue 前会检查 `[agent_runner.git].remote` 是否存在。
+
+### 与 pre-push review 的关系
+
+`recover-publish` 只做发布收尾：校验 worktree 干净、校验分支、push、创建或复用 Draft PR、更新 Issue label。它不会运行 pre-push review，也不会运行 post-PR supervisor。
+
+如果失败发生在 `Refusing to publish forbidden paths: ...` 这类 forbidden path 拦截处，并且人工已经确认这些文件可以提交、手动创建了本地 commit，应改走 `agent/running` 的本地 commit 复用路径，让 `run-once` 执行完整的 verification、pre-push review、publish 和 post-PR supervisor：
+
+```bash
+# 1. 在对应 issue worktree 中确认已有本地 commit，且工作区干净
+git status --short
+git log -1 --oneline
+
+# 2. 将 Issue 改回 running，让 run-once 通过本地 commit 恢复路径处理
+gh issue edit <number> --add-label agent/running --remove-label agent/failed,agent/ready
+
+# 3. 触发一次 runner 轮询；run-once 没有 --issue 参数，会扫描可处理的 Issues
+uv run iar run-once
+```
+
+这条恢复路径要求 worktree 相对配置的 `{remote}/{base_branch}` 有本地 commit，且 `git status --short` 为空。若当前还有 `agent/ready` backlog，runner 会先消耗 ready 配额；必要时提高 `--max-issues`，或在没有 ready backlog 时执行。
 
 ### 使用方法
 
@@ -430,6 +452,7 @@ uv run iar recover-publish --issue 5 --branch feature-xyz
 `recover-publish` **不会**执行以下操作：
 
 - 运行 Agent 命令
+- 运行 pre-push review 或 post-PR supervisor
 - 执行 `git add` 或 `git commit`
 - 创建新的 worktree
 - 合并分支或删除分支
@@ -437,7 +460,7 @@ uv run iar recover-publish --issue 5 --branch feature-xyz
 
 ### 手动恢复回退
 
-当 GitHub CLI 不可用时，可手动执行以下命令完成恢复：
+当无法使用 `recover-publish` 命令、需要人工兜底时，可手动执行以下命令完成恢复。该流程同样会跳过 pre-push review 和 post-PR supervisor，只适用于已经完成过自动审查、仅发布收尾失败的场景：
 
 ```bash
 # 1. 进入 issue worktree

@@ -10,7 +10,7 @@ all_changes_are_excluded() {
     local files
     files="$(git diff --cached --name-only)"
     if [ -z "$files" ]; then
-        files="$(git diff --name-only HEAD)"
+        files="$(quality_working_file_paths)"
     fi
     if [ -z "$files" ]; then
         return 0

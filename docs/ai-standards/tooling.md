@@ -31,6 +31,7 @@
 - `tasks/` 根目录下的 active PRD 必须完成 `Acceptance Checklist`
 - 新增、复制或重命名进入 `tasks/archive/` 的 PRD 也必须完成验收清单
 - 已存在的历史 archive PRD 不会因为普通修改被重新套用新规则
+- PRD 文件名支持旧格式 `*-prd-*.md` 和优先级格式 `P0/P1/P2/P3-<TYPE>-YYYYMMDD-HHMMSS-<slug>.md`
 - 验收清单标题支持英文 `Acceptance Checklist`、中文 `验收清单` 和双语标题
 
 这条规则的目标是让“归档”代表交付完成，同时避免历史归档文档被新标准批量翻旧账。
@@ -140,6 +141,7 @@ uv run pre-commit run --show-diff-on-failure
 - `tasks/` 根目录下的 active PRD 必须完成 `Acceptance Checklist`
 - 新增、复制或重命名进入 `tasks/archive/` 的 PRD 也必须完成验收清单
 - 已存在的历史 archive PRD 不会因为普通修改被重新套用新规则
+- PRD 文件名支持旧格式 `*-prd-*.md` 和优先级格式 `P0/P1/P2/P3-<TYPE>-YYYYMMDD-HHMMSS-<slug>.md`
 - 验收清单标题支持英文 `Acceptance Checklist`、中文 `验收清单` 和双语标题
 
 这条规则的目标是让"归档"代表交付完成，同时避免历史归档文档被新标准批量翻旧账。

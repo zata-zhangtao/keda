@@ -24,6 +24,17 @@
 - `uv run python hooks/check_guidelines_consistency.py`
 - `uv run mkdocs build`
 
+## Local Testing Middleware
+
+需要本地模拟 PostgreSQL、Redis 或 S3-compatible storage 时，可使用独立测试中间件 Compose 文件：
+
+```bash
+docker compose -f docker-compose.testing.yml up -d
+docker compose -f docker-compose.testing.yml down
+```
+
+该文件只用于本地开发和测试，不用于生产部署。
+
 ## Playwright Boundary
 
 `tests/playwright-e2e/` 是**独立的 TypeScript/Node.js 包**。

@@ -217,6 +217,7 @@ flowchart TD
 - 新增、复制或重命名进入 `tasks/archive/` 的归档 PRD
 
 `tasks/pending/` 下的草稿 PRD 不检查；历史 archive PRD 的普通修改也不会被新规则重新翻旧账。标题可使用 `Acceptance Checklist`、`验收清单` 或双语标题。
+检查范围内的 PRD 文件名支持旧格式 `*-prd-*.md` 和优先级格式 `P0/P1/P2/P3-<TYPE>-YYYYMMDD-HHMMSS-<slug>.md`。
 
 格式参考：
 
