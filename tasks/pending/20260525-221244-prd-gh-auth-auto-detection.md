@@ -1,5 +1,7 @@
 # PRD: GitHub CLI 认证自动检测与用户提示
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/40
+
 ## 1. 引言与目标
 
 **问题：** 当 `gh` CLI 的 token 过期或不存在时，`iar` 命令会抛出原始的 `CalledProcessError` 异常，暴露内部 subprocess 细节，而不是引导用户修复问题。
