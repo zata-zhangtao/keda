@@ -215,6 +215,69 @@ def test_validate_decision_plan_prd_path_outside_repo() -> None:
         validate_decision_plan(plan, Path("/tmp/repo"), auto_confirm=False)
 
 
+def test_validate_decision_plan_prd_path_traversal_absolute() -> None:
+    """Should reject absolute PRD paths with traversal components."""
+    plan = DecisionPlan(
+        decision_id="dec-1",
+        user_prompt="test",
+        intent_summary="test",
+        risk_level=DecisionRiskLevel.MEDIUM,
+        actions=(
+            DecisionAction(
+                action_id="A1",
+                action_type=DecisionActionType.CREATE_ISSUE_FROM_PRD,
+                title="Create issue",
+                rationale="test",
+                parameters={"prd_path": "/tmp/repo/../etc/passwd"},
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="PRD path outside repo"):
+        validate_decision_plan(plan, Path("/tmp/repo"), auto_confirm=False)
+
+
+def test_validate_decision_plan_missing_prd_path() -> None:
+    """Should reject create_issue_from_prd without prd_path."""
+    plan = DecisionPlan(
+        decision_id="dec-1",
+        user_prompt="test",
+        intent_summary="test",
+        risk_level=DecisionRiskLevel.MEDIUM,
+        actions=(
+            DecisionAction(
+                action_id="A1",
+                action_type=DecisionActionType.CREATE_ISSUE_FROM_PRD,
+                title="Create issue",
+                rationale="test",
+                parameters={},
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="requires 'prd_path' parameter"):
+        validate_decision_plan(plan, Path("/tmp/repo"), auto_confirm=False)
+
+
+def test_validate_decision_plan_missing_issue_number() -> None:
+    """Should reject mark_issue_ready without issue_number."""
+    plan = DecisionPlan(
+        decision_id="dec-1",
+        user_prompt="test",
+        intent_summary="test",
+        risk_level=DecisionRiskLevel.MEDIUM,
+        actions=(
+            DecisionAction(
+                action_id="A1",
+                action_type=DecisionActionType.MARK_ISSUE_READY,
+                title="Mark ready",
+                rationale="test",
+                parameters={},
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="requires 'issue_number' parameter"):
+        validate_decision_plan(plan, Path("/tmp/repo"), auto_confirm=False)
+
+
 def test_validate_decision_plan_invalid_issue_number() -> None:
     """Should reject invalid issue numbers."""
     plan = DecisionPlan(
@@ -296,6 +359,40 @@ def test_write_execution_audit_creates_files(
     decision_dir = tmp_path / "dec-test"
     assert (decision_dir / "execution.json").exists()
     assert (decision_dir / "execution.md").exists()
+
+
+def test_execute_decision_plan_skipped_action_counts_as_failure() -> None:
+    """Skipped confirmation actions should result in failed status."""
+    result = execute_decision_plan(
+        plan=DecisionPlan(
+            decision_id="dec-test",
+            user_prompt="test",
+            intent_summary="test",
+            risk_level=DecisionRiskLevel.MEDIUM,
+            actions=(
+                DecisionAction(
+                    action_id="A1",
+                    action_type=DecisionActionType.CREATE_ISSUE_FROM_PRD,
+                    title="Create issue",
+                    rationale="test",
+                    parameters={"prd_path": "tasks/pending/example.md"},
+                    writes_external_state=True,
+                    confirmation_required=True,
+                ),
+            ),
+            requires_confirmation=True,
+        ),
+        context=MagicMock(),
+        decision_context=MagicMock(),
+        config=InteractiveDecisionConfig(),
+        github_client=MagicMock(),
+        process_runner=MagicMock(),
+        content_generator=None,
+        github_client_factory=lambda path: MagicMock(),
+        auto_confirm=False,
+    )
+    assert result.status == "failed"
+    assert result.action_results[0]["status"] == "skipped"
 
 
 def test_run_interactive_decision_plan_only(

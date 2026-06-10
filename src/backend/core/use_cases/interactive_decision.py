@@ -362,19 +362,32 @@ def validate_decision_plan(
                     f"Action '{action.action_id}' has forbidden parameter: {param_key}"
                 )
 
+        # Required parameter validation
+        if action.action_type == DecisionActionType.CREATE_ISSUE_FROM_PRD:
+            if "prd_path" not in action.parameters:
+                raise ValueError(
+                    f"Action '{action.action_id}' requires 'prd_path' parameter"
+                )
+
+        if action.action_type == DecisionActionType.MARK_ISSUE_READY:
+            if "issue_number" not in action.parameters:
+                raise ValueError(
+                    f"Action '{action.action_id}' requires 'issue_number' parameter"
+                )
+
         # PRD path validation
         prd_path_param = action.parameters.get("prd_path")
         if prd_path_param is not None:
             prd_path = Path(str(prd_path_param))
             if prd_path.is_absolute():
                 try:
-                    prd_path.relative_to(repo_path.resolve())
+                    prd_path.resolve().relative_to(repo_path.resolve())
                 except ValueError as exc:
                     raise ValueError(
                         f"Action '{action.action_id}' PRD path outside repo: {prd_path}"
                     ) from exc
             else:
-                # Relative paths are validated to be within tasks/pending/
+                # Relative paths are validated to be within the repo
                 resolved = (repo_path / prd_path).resolve()
                 try:
                     resolved.relative_to(repo_path.resolve())
@@ -786,6 +799,7 @@ def execute_decision_plan(
                         "output": "User did not confirm",
                     }
                 )
+                has_failures = True
                 continue
 
         try:
