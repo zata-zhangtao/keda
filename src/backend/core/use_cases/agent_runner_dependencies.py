@@ -112,12 +112,26 @@ def parse_delivery_dependencies(prd_text: str) -> DeliveryDependencyDeclaration:
             gate_type = value.lower()
         elif key in ("notes", "note"):
             notes = value
+        else:
+            raw_key = field_match.group("key").strip()
+            raise ValueError(
+                f"Unknown field in Delivery Dependencies: {raw_key!r}. "
+                "Expected one of: Group, Depends on groups, "
+                "Depends on tasks/issues, Gate type, Notes."
+            )
+
+    normalized_gate = gate_type.lower()
+    if normalized_gate and normalized_gate not in ("none", "soft", "hard"):
+        raise ValueError(
+            f"Invalid 'Gate type' in Delivery Dependencies: {gate_type!r}. "
+            "Expected one of: none, soft, hard."
+        )
 
     return DeliveryDependencyDeclaration(
         group=group,
         depends_on_groups=tuple(depends_on_groups),
         depends_on_issues=tuple(depends_on_issues),
-        gate_type=gate_type,
+        gate_type=normalized_gate or "none",
         notes=notes,
     )
 
@@ -125,7 +139,8 @@ def parse_delivery_dependencies(prd_text: str) -> DeliveryDependencyDeclaration:
 def _parse_issue_numbers(value: str) -> list[int]:
     """Extract issue numbers from a comma/semicolon-separated string.
 
-    Accepts ``#42`` or plain ``42``.
+    Accepts ``#42`` or plain ``42``. Raises ``ValueError`` for non-empty
+    items that do not contain a digit, satisfying the fail-fast requirement.
     """
     numbers: list[int] = []
     for item in re.split(r"[,;]", value):
@@ -135,6 +150,10 @@ def _parse_issue_numbers(value: str) -> list[int]:
         num_match = re.search(r"\d+", item)
         if num_match:
             numbers.append(int(num_match.group()))
+        else:
+            raise ValueError(
+                f"Invalid issue reference in 'Depends on tasks/issues': {item!r}"
+            )
     return numbers
 
 

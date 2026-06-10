@@ -489,3 +489,47 @@ class TestResolveDependencies:
         group, gate, issues, groups = _resolve_dependencies(prd)
         assert issues == (5,)
         assert groups == ("g3",)
+
+
+# ---------------------------------------------------------------------------
+# Fail-fast validation
+# ---------------------------------------------------------------------------
+
+
+class TestFailFastValidation:
+    def test_invalid_gate_type_raises(self) -> None:
+        prd_text = """
+## Delivery Dependencies
+
+- Gate type: maybe
+"""
+        with pytest.raises(ValueError, match="Invalid 'Gate type'"):
+            parse_delivery_dependencies(prd_text)
+
+    def test_invalid_issue_reference_raises(self) -> None:
+        prd_text = """
+## Delivery Dependencies
+
+- Depends on tasks/issues: foo
+- Gate type: hard
+"""
+        with pytest.raises(ValueError, match="Invalid issue reference"):
+            parse_delivery_dependencies(prd_text)
+
+    def test_case_insensitive_gate_type_normalised(self) -> None:
+        prd_text = """
+## Delivery Dependencies
+
+- Gate type: HARD
+"""
+        result = parse_delivery_dependencies(prd_text)
+        assert result.gate_type == "hard"
+
+    def test_unknown_field_raises(self) -> None:
+        prd_text = """
+## Delivery Dependencies
+
+- Grou: my-group
+"""
+        with pytest.raises(ValueError, match="Unknown field"):
+            parse_delivery_dependencies(prd_text)
