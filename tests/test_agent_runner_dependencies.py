@@ -51,8 +51,66 @@ class TestParseDeliveryDependencies:
         assert result.group == "my-group"
         assert result.depends_on_groups == ("group-a", "group-b")
         assert result.depends_on_issues == (42, 43)
+        assert result.depends_on_prds == ()
         assert result.gate_type == "hard"
         assert result.notes == "wait for upstream"
+
+    def test_parses_markdown_list_fields(self) -> None:
+        prd_text = """
+## Delivery Dependencies
+
+- Group: my-group
+- Depends on groups:
+  - group-a
+  - group-b
+- Depends on tasks/issues:
+  - #42
+  - 43
+  - tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md
+- Gate type: hard
+- Notes:
+  - wait for upstream
+  - publish order matters
+"""
+        result = parse_delivery_dependencies(prd_text)
+        assert result.group == "my-group"
+        assert result.depends_on_groups == ("group-a", "group-b")
+        assert result.depends_on_issues == (42, 43)
+        assert result.depends_on_prds == (
+            "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md",
+        )
+        assert result.gate_type == "hard"
+        assert result.notes == "wait for upstream publish order matters"
+
+    def test_none_dependency_values_are_treated_as_empty(self) -> None:
+        prd_text = """
+## Delivery Dependencies
+
+- Group: no-deps
+- Depends on groups:
+  - none
+- Depends on tasks/issues: none
+- Gate type: none
+"""
+        result = parse_delivery_dependencies(prd_text)
+        assert result.group == "no-deps"
+        assert result.depends_on_groups == ()
+        assert result.depends_on_issues == ()
+        assert result.depends_on_prds == ()
+        assert result.gate_type == "none"
+
+    def test_prd_filename_references_are_preserved(self) -> None:
+        prd_text = """
+## Delivery Dependencies
+
+- Depends on tasks/issues:
+  - P2-FEAT-20260527-190923-prd-from-issue
+- Gate type: hard
+"""
+        result = parse_delivery_dependencies(prd_text)
+
+        assert result.depends_on_issues == ()
+        assert result.depends_on_prds == ("P2-FEAT-20260527-190923-prd-from-issue",)
 
     def test_soft_gate(self) -> None:
         prd_text = """
@@ -506,15 +564,17 @@ class TestFailFastValidation:
         with pytest.raises(ValueError, match="Invalid 'Gate type'"):
             parse_delivery_dependencies(prd_text)
 
-    def test_invalid_issue_reference_raises(self) -> None:
+    def test_plain_text_task_reference_is_preserved_for_materialization(self) -> None:
         prd_text = """
 ## Delivery Dependencies
 
 - Depends on tasks/issues: foo
 - Gate type: hard
 """
-        with pytest.raises(ValueError, match="Invalid issue reference"):
-            parse_delivery_dependencies(prd_text)
+        result = parse_delivery_dependencies(prd_text)
+
+        assert result.depends_on_issues == ()
+        assert result.depends_on_prds == ("foo",)
 
     def test_case_insensitive_gate_type_normalised(self) -> None:
         prd_text = """

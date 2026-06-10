@@ -142,6 +142,168 @@ def test_create_issue_from_prd_force_overwrite(tmp_path: Path) -> None:
     assert "https://github.com/example/repo/issues/42" in prd_text
 
 
+def test_create_issue_from_prd_materializes_prd_ref_issue_link(
+    tmp_path: Path,
+) -> None:
+    """PRD filename dependencies should resolve to upstream Issue numbers."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    task_dir = repo / "tasks" / "pending"
+    task_dir.mkdir(parents=True)
+    upstream_prd = task_dir / "P2-FEAT-20260527-190923-prd-from-issue.md"
+    upstream_prd.write_text(
+        "# PRD: Upstream\n\n"
+        "- GitHub Issue: https://github.com/example/repo/issues/77\n",
+        encoding="utf-8",
+    )
+    downstream_prd = task_dir / "P2-FEAT-20260528-110730-prd-review.md"
+    downstream_prd.write_text(
+        "# PRD: Downstream\n\n"
+        "## Delivery Dependencies\n\n"
+        "- Group: downstream-group\n"
+        "- Depends on groups:\n"
+        "- Depends on tasks/issues:\n"
+        "  - P2-FEAT-20260527-190923-prd-from-issue\n"
+        "- Gate type: hard\n",
+        encoding="utf-8",
+    )
+
+    create_issue_from_prd(
+        request=_request(
+            repo,
+            Path("tasks/pending/P2-FEAT-20260528-110730-prd-review.md"),
+        ),
+        github_client=fake_client,
+    )
+
+    create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
+    assert "<!-- iar:depends-on #77 -->" in create_calls[0]["body"]
+    assert "task-group/downstream-group" in create_calls[0]["labels"]
+    assert {"method": "ensure_label", "name": "task-group/downstream-group"} in (
+        fake_client.calls
+    )
+
+
+def test_create_issue_from_prd_materializes_prd_ref_group_fallback(
+    tmp_path: Path,
+) -> None:
+    """PRD refs without Issue links should resolve to the upstream PRD group."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    task_dir = repo / "tasks" / "pending"
+    task_dir.mkdir(parents=True)
+    upstream_prd = task_dir / "P2-FEAT-20260527-190923-prd-from-issue.md"
+    upstream_prd.write_text(
+        "# PRD: Upstream\n\n"
+        "## Delivery Dependencies\n\n"
+        "- Group: prd-from-issue-generation\n"
+        "- Depends on groups:\n"
+        "- Depends on tasks/issues:\n"
+        "- Gate type: none\n",
+        encoding="utf-8",
+    )
+    downstream_prd = task_dir / "P2-FEAT-20260528-110730-prd-review.md"
+    downstream_prd.write_text(
+        "# PRD: Downstream\n\n"
+        "## Delivery Dependencies\n\n"
+        "- Depends on groups:\n"
+        "- Depends on tasks/issues:\n"
+        "  - tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md\n"
+        "- Gate type: hard\n",
+        encoding="utf-8",
+    )
+
+    create_issue_from_prd(
+        request=_request(
+            repo,
+            Path("tasks/pending/P2-FEAT-20260528-110730-prd-review.md"),
+        ),
+        github_client=fake_client,
+    )
+
+    create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
+    assert (
+        "<!-- iar:depends-on group:prd-from-issue-generation -->"
+        in create_calls[0]["body"]
+    )
+
+
+def test_create_issue_from_prd_unresolved_prd_ref_is_actionable(
+    tmp_path: Path,
+) -> None:
+    """Unresolved PRD refs should tell the operator how to fix the field."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "tasks" / "pending" / "downstream.md"
+    prd.parent.mkdir(parents=True)
+    prd.write_text(
+        "# PRD: Downstream\n\n"
+        "## Delivery Dependencies\n\n"
+        "- Depends on tasks/issues: missing-upstream-prd\n"
+        "- Gate type: hard\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        create_issue_from_prd(
+            request=_request(repo, Path("tasks/pending/downstream.md")),
+            github_client=fake_client,
+        )
+
+    message = str(exc_info.value)
+    assert "Could not resolve PRD dependency reference" in message
+    assert "Use a GitHub Issue number" in message
+    assert "repo-relative PRD path" in message
+    assert [c for c in fake_client.calls if c["method"] == "create_issue"] == []
+
+
+def test_create_issue_from_prd_ambiguous_prd_ref_is_actionable(
+    tmp_path: Path,
+) -> None:
+    """Ambiguous filename refs should ask for a repo-relative path."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    pending_dir = repo / "tasks" / "pending"
+    archive_dir = repo / "tasks" / "archive"
+    pending_dir.mkdir(parents=True)
+    archive_dir.mkdir(parents=True)
+    filename = "P2-FEAT-20260527-190923-prd-from-issue.md"
+    (pending_dir / filename).write_text("# PRD: Pending\n", encoding="utf-8")
+    (archive_dir / filename).write_text("# PRD: Archive\n", encoding="utf-8")
+
+    prd = pending_dir / "downstream.md"
+    prd.write_text(
+        "# PRD: Downstream\n\n"
+        "## Delivery Dependencies\n\n"
+        "- Depends on tasks/issues: P2-FEAT-20260527-190923-prd-from-issue\n"
+        "- Gate type: hard\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        create_issue_from_prd(
+            request=_request(repo, Path("tasks/pending/downstream.md")),
+            github_client=fake_client,
+        )
+
+    message = str(exc_info.value)
+    assert "Ambiguous PRD dependency reference" in message
+    assert "Use a repo-relative path" in message
+    assert "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md" in message
+
+
 def test_publish_prd_adds_ready_label_after_push(tmp_path: Path) -> None:
     """--publish-prd --ready should add ready only after the PRD push succeeds."""
     repo = tmp_path / "repo"

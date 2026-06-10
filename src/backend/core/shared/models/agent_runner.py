@@ -345,6 +345,7 @@ class DeliveryDependencyDeclaration:
         group: The task group this Issue belongs to, or empty string.
         depends_on_groups: Group labels that must be fully closed.
         depends_on_issues: Specific Issue numbers that must be closed.
+        depends_on_prds: PRD paths or filenames to resolve at Issue creation time.
         gate_type: One of ``"hard"``, ``"soft"``, ``"none"``.
         notes: Free-form operator notes.
     """
@@ -352,6 +353,7 @@ class DeliveryDependencyDeclaration:
     group: str = ""
     depends_on_groups: tuple[str, ...] = ()
     depends_on_issues: tuple[int, ...] = ()
+    depends_on_prds: tuple[str, ...] = ()
     gate_type: str = "none"
     notes: str = ""
 

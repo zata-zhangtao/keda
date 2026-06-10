@@ -500,7 +500,7 @@ def build_prd_commit_message(relative_prd_path: Path) -> str:
     从文件名 ``-prd-`` 之后的段提取 slug。
     示例::
 
-        tasks/pending/20260527-190923-prd-example.md
+        tasks/pending/P2-FEAT-20260527-190923-prd-example.md
         → "docs(prd): publish example"
 
     Args:
@@ -556,6 +556,8 @@ def publish_prd_file(
 def _resolve_dependencies(
     prd_text: str,
     *,
+    repo_path: Path | None = None,
+    current_prd_path: Path | None = None,
     group: str = "",
     depends_on: tuple[int, ...] = (),
     depends_on_group: tuple[str, ...] = (),
@@ -570,6 +572,9 @@ def _resolve_dependencies(
 
     Args:
         prd_text: Full PRD Markdown text.
+        repo_path: Repository root, required when the PRD declares PRD file
+            dependencies in ``Depends on tasks/issues``.
+        current_prd_path: Current PRD path, used to reject self-dependencies.
         group: CLI override group name.
         depends_on: CLI override issue numbers.
         depends_on_group: CLI override group names.
@@ -585,6 +590,14 @@ def _resolve_dependencies(
     gate_type = from_prd.gate_type
     resolved_issues = list(from_prd.depends_on_issues)
     resolved_groups = list(from_prd.depends_on_groups)
+    if gate_type == "hard" and from_prd.depends_on_prds:
+        prd_issues, prd_groups = _materialize_prd_dependencies(
+            repo_path=repo_path,
+            current_prd_path=current_prd_path,
+            prd_refs=from_prd.depends_on_prds,
+        )
+        resolved_issues.extend(prd_issues)
+        resolved_groups.extend(prd_groups)
 
     # Merge explicit markers in PRD body (compat path)
     explicit = parse_dependency_marker(prd_text)
@@ -614,6 +627,219 @@ def _resolve_dependencies(
         tuple(deduped_issues),
         tuple(deduped_groups),
     )
+
+
+def _materialize_prd_dependencies(
+    *,
+    repo_path: Path | None,
+    current_prd_path: Path | None,
+    prd_refs: tuple[str, ...],
+) -> tuple[list[int], list[str]]:
+    """Resolve PRD path/name dependencies into Issue numbers or group names."""
+    if repo_path is None:
+        raise ValueError(
+            "Cannot resolve PRD dependencies from 'Depends on tasks/issues' "
+            "without a repository path. Use GitHub Issue numbers such as '#42', "
+            "or call issue creation with repo_path available."
+        )
+
+    repo_root = repo_path.resolve()
+    current_path = current_prd_path.resolve() if current_prd_path else None
+    issue_numbers: list[int] = []
+    group_names: list[str] = []
+
+    for prd_ref in prd_refs:
+        referenced_prd_path = _resolve_dependency_prd_path(
+            repo_root=repo_root,
+            prd_ref=prd_ref,
+        )
+        if current_path is not None and referenced_prd_path == current_path:
+            raise ValueError(
+                "Cannot materialize PRD dependency "
+                f"{prd_ref!r}: it resolves to the current PRD. Remove the "
+                "self-dependency or replace it with the intended upstream "
+                "Issue number, for example '#42'."
+            )
+
+        referenced_text = referenced_prd_path.read_text(encoding="utf-8")
+        issue_number = _extract_prd_issue_number(referenced_text)
+        if issue_number is not None:
+            issue_numbers.append(issue_number)
+            continue
+
+        try:
+            referenced_dependencies = parse_delivery_dependencies(referenced_text)
+        except ValueError as exc:
+            relative_path = _format_repo_relative_path(repo_root, referenced_prd_path)
+            raise ValueError(
+                "Cannot parse Delivery Dependencies for referenced PRD "
+                f"{relative_path!r} from dependency {prd_ref!r}: {exc}"
+            ) from exc
+
+        if referenced_dependencies.group:
+            group_names.append(referenced_dependencies.group)
+            continue
+
+        relative_path = _format_repo_relative_path(repo_root, referenced_prd_path)
+        raise ValueError(
+            "Cannot materialize PRD dependency "
+            f"{prd_ref!r} resolved to {relative_path!r}: the referenced PRD "
+            "has no '- GitHub Issue: .../issues/N' link and no "
+            "'Delivery Dependencies' Group. Publish the upstream PRD first, "
+            "add its GitHub Issue link, or add '- Group: <group-name>' to "
+            "the referenced PRD so this dependency can be materialized as "
+            "'group:<group-name>'."
+        )
+
+    return issue_numbers, group_names
+
+
+def _extract_prd_issue_number(prd_text: str) -> int | None:
+    """Extract the first GitHub Issue number linked from a PRD."""
+    for line in prd_text.splitlines():
+        if not ISSUE_LINE_RE.match(line):
+            continue
+        issue_number_match = ISSUE_NUMBER_RE.search(line)
+        if issue_number_match is None:
+            raise ValueError(f"Invalid GitHub Issue link in PRD: {line}")
+        return int(issue_number_match.group("issue_number"))
+    return None
+
+
+def _resolve_dependency_prd_path(*, repo_root: Path, prd_ref: str) -> Path:
+    """Resolve a PRD dependency reference to one Markdown file in the repo."""
+    cleaned_ref = prd_ref.strip().strip("`").strip()
+    if not cleaned_ref:
+        raise ValueError(
+            "Empty PRD dependency reference in 'Depends on tasks/issues'. "
+            "Leave the field empty or write 'none' when there is no dependency."
+        )
+
+    raw_path = Path(cleaned_ref).expanduser()
+    if raw_path.is_absolute():
+        return _validate_dependency_prd_path(
+            repo_root=repo_root,
+            candidate_path=raw_path,
+            prd_ref=cleaned_ref,
+        )
+
+    if "/" in cleaned_ref or "\\" in cleaned_ref:
+        return _resolve_repo_relative_dependency_prd_path(
+            repo_root=repo_root,
+            relative_ref=cleaned_ref,
+        )
+
+    repo_relative_matches = _existing_markdown_path_candidates(repo_root / cleaned_ref)
+    task_matches = _find_task_prd_matches(repo_root=repo_root, prd_ref=cleaned_ref)
+    matches = _dedupe_paths([*repo_relative_matches, *task_matches])
+
+    if not matches:
+        raise ValueError(_format_missing_prd_dependency_error(cleaned_ref))
+    if len(matches) > 1:
+        matched_paths = ", ".join(
+            _format_repo_relative_path(repo_root, matched_path)
+            for matched_path in matches
+        )
+        raise ValueError(
+            "Ambiguous PRD dependency reference "
+            f"{cleaned_ref!r} in 'Depends on tasks/issues'. It matches "
+            f"multiple PRD files: {matched_paths}. Use a repo-relative path, "
+            "for example 'tasks/pending/<filename>.md'."
+        )
+    return _validate_dependency_prd_path(
+        repo_root=repo_root,
+        candidate_path=matches[0],
+        prd_ref=cleaned_ref,
+    )
+
+
+def _resolve_repo_relative_dependency_prd_path(
+    *, repo_root: Path, relative_ref: str
+) -> Path:
+    """Resolve an explicit repo-relative PRD dependency path."""
+    candidate_paths = _existing_markdown_path_candidates(repo_root / relative_ref)
+    if not candidate_paths:
+        raise ValueError(_format_missing_prd_dependency_error(relative_ref))
+    return _validate_dependency_prd_path(
+        repo_root=repo_root,
+        candidate_path=candidate_paths[0],
+        prd_ref=relative_ref,
+    )
+
+
+def _existing_markdown_path_candidates(candidate_path: Path) -> list[Path]:
+    """Return existing path candidates, trying ``.md`` when omitted."""
+    candidates = [candidate_path]
+    if candidate_path.suffix == "":
+        candidates.append(candidate_path.with_suffix(".md"))
+    return [
+        path.resolve()
+        for path in candidates
+        if path.is_file() and path.suffix.lower() == ".md"
+    ]
+
+
+def _find_task_prd_matches(*, repo_root: Path, prd_ref: str) -> list[Path]:
+    """Find PRD dependency matches by filename or stem under ``tasks/``."""
+    tasks_path = repo_root / "tasks"
+    if not tasks_path.is_dir():
+        return []
+    matches: list[Path] = []
+    for candidate_path in tasks_path.rglob("*.md"):
+        if candidate_path.name == prd_ref or candidate_path.stem == prd_ref:
+            matches.append(candidate_path.resolve())
+    return sorted(matches, key=lambda path: path.as_posix())
+
+
+def _validate_dependency_prd_path(
+    *, repo_root: Path, candidate_path: Path, prd_ref: str
+) -> Path:
+    """Validate that a resolved PRD path is a Markdown file inside the repo."""
+    resolved_path = candidate_path.resolve()
+    try:
+        resolved_path.relative_to(repo_root)
+    except ValueError as exc:
+        raise ValueError(
+            "PRD dependency reference "
+            f"{prd_ref!r} resolves outside the repository. Use a GitHub Issue "
+            "number such as '#42' or a PRD path under this repository."
+        ) from exc
+    if not resolved_path.is_file() or resolved_path.suffix.lower() != ".md":
+        raise ValueError(_format_missing_prd_dependency_error(prd_ref))
+    return resolved_path
+
+
+def _dedupe_paths(candidate_paths: list[Path]) -> list[Path]:
+    """Deduplicate paths while preserving deterministic order."""
+    seen_paths: set[Path] = set()
+    deduped_paths: list[Path] = []
+    for candidate_path in candidate_paths:
+        resolved_path = candidate_path.resolve()
+        if resolved_path in seen_paths:
+            continue
+        seen_paths.add(resolved_path)
+        deduped_paths.append(resolved_path)
+    return sorted(deduped_paths, key=lambda path: path.as_posix())
+
+
+def _format_missing_prd_dependency_error(prd_ref: str) -> str:
+    """Return actionable guidance for an unresolved PRD dependency ref."""
+    return (
+        "Could not resolve PRD dependency reference "
+        f"{prd_ref!r} in 'Depends on tasks/issues'. Use a GitHub Issue number "
+        "such as '#42', a repo-relative PRD path such as "
+        "'tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md', or a "
+        "unique PRD filename/stem under 'tasks/'. For no dependency, leave "
+        "the field empty or write 'none'."
+    )
+
+
+def _format_repo_relative_path(repo_root: Path, candidate_path: Path) -> str:
+    """Format a path relative to the repository when possible."""
+    try:
+        return candidate_path.resolve().relative_to(repo_root).as_posix()
+    except ValueError:
+        return candidate_path.as_posix()
 
 
 # ---------------------------------------------------------------------------
@@ -711,6 +937,8 @@ def create_issue_from_prd(
     # ------------------------------------------------------------------
     resolved_group, gate_type, resolved_issues, resolved_groups = _resolve_dependencies(
         prd_text,
+        repo_path=request.repo_path,
+        current_prd_path=absolute_prd_path,
         group=request.group,
         depends_on=request.depends_on,
         depends_on_group=request.depends_on_group,
@@ -725,6 +953,8 @@ def create_issue_from_prd(
     if resolved_group:
         group_label = f"{effective_labels_config.group_prefix}{resolved_group}"
         github_client.ensure_label(group_label)
+        if group_label not in labels:
+            labels.append(group_label)
 
     # ------------------------------------------------------------------
     # 5. 发布预检（仅在 publish_prd=True 时执行）。

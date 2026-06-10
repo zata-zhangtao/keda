@@ -44,11 +44,13 @@ _DEPENDENCY_WAIT_MARKER_PATTERN = re.compile(
 # ---------------------------------------------------------------------------
 
 _DELIVERY_DEPENDENCIES_HEADER_RE = re.compile(
-    r"^#{2,4}\s+Delivery Dependencies\s*$",
+    r"^#{2,4}\s+(?:\d+\.\s+)?Delivery Dependencies\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
 _DELIVERY_FIELD_RE = re.compile(r"^-\s+(?P<key>[A-Za-z/\s]+?)\s*:\s*(?P<value>.*?)\s*$")
+_DELIVERY_LIST_ITEM_RE = re.compile(r"^\s+-\s+(?P<value>.*?)\s*$")
+_NONE_DEPENDENCY_VALUES = {"", "none", "n/a", "na", "-"}
 
 
 def parse_delivery_dependencies(prd_text: str) -> DeliveryDependencyDeclaration:
@@ -80,45 +82,46 @@ def parse_delivery_dependencies(prd_text: str) -> DeliveryDependencyDeclaration:
     else:
         section_text = prd_text[section_start:]
 
-    group = ""
-    depends_on_groups: list[str] = []
-    depends_on_issues: list[int] = []
-    gate_type = "none"
-    notes = ""
+    field_values: dict[str, list[str]] = {
+        "group": [],
+        "depends_on_groups": [],
+        "depends_on_issues": [],
+        "gate_type": [],
+        "notes": [],
+    }
+    current_key = ""
 
     for line in section_text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         field_match = _DELIVERY_FIELD_RE.match(stripped)
-        if not field_match:
-            continue
-        key = field_match.group("key").strip().lower().replace(" ", "_")
-        value = field_match.group("value").strip()
-
-        if key in ("group",):
-            group = value
-        elif key in ("depends_on_groups", "depends_on_group"):
-            depends_on_groups = [
-                item.strip() for item in re.split(r"[,;]", value) if item.strip()
-            ]
-        elif key in (
-            "depends_on_tasks/issues",
-            "depends_on_tasks",
-            "depends_on_issues",
-        ):
-            depends_on_issues = _parse_issue_numbers(value)
-        elif key in ("gate_type", "gate"):
-            gate_type = value.lower()
-        elif key in ("notes", "note"):
-            notes = value
-        else:
+        if field_match:
             raw_key = field_match.group("key").strip()
-            raise ValueError(
-                f"Unknown field in Delivery Dependencies: {raw_key!r}. "
-                "Expected one of: Group, Depends on groups, "
-                "Depends on tasks/issues, Gate type, Notes."
-            )
+            key = _normalize_delivery_field_key(raw_key)
+            current_key = key
+            value = field_match.group("value").strip()
+            if value:
+                field_values[key].append(value)
+            continue
+
+        list_item_match = _DELIVERY_LIST_ITEM_RE.match(line)
+        if list_item_match and current_key in (
+            "depends_on_groups",
+            "depends_on_issues",
+            "notes",
+        ):
+            value = list_item_match.group("value").strip()
+            if value:
+                field_values[current_key].append(value)
+
+    group = _parse_optional_scalar(field_values["group"])
+    depends_on_groups = _parse_group_names(field_values["depends_on_groups"])
+    depends_on_issues, depends_on_prds = _parse_issue_or_prd_refs(
+        field_values["depends_on_issues"]
+    )
+    gate_type = _parse_optional_scalar(field_values["gate_type"]) or "none"
+    notes = " ".join(field_values["notes"]).strip()
 
     normalized_gate = gate_type.lower()
     if normalized_gate and normalized_gate not in ("none", "soft", "hard"):
@@ -131,30 +134,78 @@ def parse_delivery_dependencies(prd_text: str) -> DeliveryDependencyDeclaration:
         group=group,
         depends_on_groups=tuple(depends_on_groups),
         depends_on_issues=tuple(depends_on_issues),
+        depends_on_prds=tuple(depends_on_prds),
         gate_type=normalized_gate or "none",
         notes=notes,
     )
 
 
-def _parse_issue_numbers(value: str) -> list[int]:
-    """Extract issue numbers from a comma/semicolon-separated string.
+def _normalize_delivery_field_key(raw_key: str) -> str:
+    """Normalize a structured Delivery Dependencies field name."""
+    key = raw_key.strip().lower().replace(" ", "_")
+    if key == "group":
+        return "group"
+    if key in ("depends_on_groups", "depends_on_group"):
+        return "depends_on_groups"
+    if key in (
+        "depends_on_tasks/issues",
+        "depends_on_tasks",
+        "depends_on_issues",
+    ):
+        return "depends_on_issues"
+    if key in ("gate_type", "gate"):
+        return "gate_type"
+    if key in ("notes", "note"):
+        return "notes"
+    raise ValueError(
+        f"Unknown field in Delivery Dependencies: {raw_key!r}. "
+        "Expected one of: Group, Depends on groups, "
+        "Depends on tasks/issues, Gate type, Notes."
+    )
 
-    Accepts ``#42`` or plain ``42``. Raises ``ValueError`` for non-empty
-    items that do not contain a digit, satisfying the fail-fast requirement.
+
+def _parse_optional_scalar(values: list[str]) -> str:
+    """Return the first non-empty non-placeholder scalar value."""
+    for value in values:
+        item = value.strip()
+        if item.lower() in _NONE_DEPENDENCY_VALUES:
+            continue
+        return item
+    return ""
+
+
+def _split_dependency_values(values: list[str]) -> list[str]:
+    """Split comma/semicolon fields and Markdown list values."""
+    items: list[str] = []
+    for value in values:
+        for item in re.split(r"[,;]", value):
+            normalized_item = item.strip()
+            if normalized_item.lower() in _NONE_DEPENDENCY_VALUES:
+                continue
+            items.append(normalized_item)
+    return items
+
+
+def _parse_group_names(values: list[str]) -> list[str]:
+    """Parse dependency group names from scalar or Markdown list values."""
+    return _split_dependency_values(values)
+
+
+def _parse_issue_or_prd_refs(values: list[str]) -> tuple[list[int], list[str]]:
+    """Extract issue numbers and PRD references from dependency values.
+
+    Accepts ``#42`` or plain ``42`` as GitHub Issue references. Other non-empty
+    values are preserved as PRD path/name references for Issue creation time,
+    where they can be resolved with repository context and actionable errors.
     """
     numbers: list[int] = []
-    for item in re.split(r"[,;]", value):
-        item = item.strip()
-        if not item:
+    prd_refs: list[str] = []
+    for item in _split_dependency_values(values):
+        if re.fullmatch(r"#?\d+", item):
+            numbers.append(int(item.lstrip("#")))
             continue
-        num_match = re.search(r"\d+", item)
-        if num_match:
-            numbers.append(int(num_match.group()))
-        else:
-            raise ValueError(
-                f"Invalid issue reference in 'Depends on tasks/issues': {item!r}"
-            )
-    return numbers
+        prd_refs.append(item)
+    return numbers, prd_refs
 
 
 # ---------------------------------------------------------------------------

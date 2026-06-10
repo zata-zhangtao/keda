@@ -123,7 +123,7 @@ iar labels sync --repo-id keda
 
 - Group: my-group
 - Depends on groups: upstream-group-a, upstream-group-b
-- Depends on tasks/issues: #42, 43
+- Depends on tasks/issues: #42, tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md
 - Gate type: hard
 - Notes: 等待上游 API 改造完成
 ```
@@ -134,9 +134,16 @@ iar labels sync --repo-id keda
 |---|---|
 | `Group` | 本 Issue 所属的任务组，会被物化为 `task-group/<name>` label |
 | `Depends on groups` | 上游任务组，该组下全部 Issue closed 后才满足 |
-| `Depends on tasks/issues` | 上游具体 Issue 编号，支持 `#N` 或纯数字 `N`，多个用逗号/分号分隔 |
+| `Depends on tasks/issues` | 上游 Issue 编号或 PRD 引用；Issue 支持 `#N` / `N`，PRD 支持 repo-relative 路径或 `tasks/` 下唯一文件名/文件 stem，多个用逗号/分号或 Markdown 子列表分隔 |
 | `Gate type` | `hard` = 阻塞门禁；`soft` = 仅文档信息，不阻塞；`none` = 不生成依赖 marker |
 | `Notes` | 自由备注 |
+
+PRD 引用只在 `iar issue create` 发布时解析，不会原样写入 Issue body。解析规则：
+
+- 引用 PRD 已包含 `- GitHub Issue: .../issues/N` 时，物化为 `#N` 依赖 marker。
+- 引用 PRD 没有 Issue link 但包含 `Delivery Dependencies` 的 `Group` 时，物化为 `group:<group>` 依赖 marker。
+- 引用无法唯一匹配、引用 PRD 既没有 Issue link 也没有 `Group` 时，命令 fail fast，并提示改成 Issue 编号、repo-relative PRD 路径，或先补上游 PRD 的 Issue link / Group。
+- 无依赖时可以留空或写 `none`。
 
 ### CLI 参数覆盖
 
