@@ -21,6 +21,7 @@ from backend.core.use_cases import (
     agent_runner_publication,
     agent_runner_supervisor,
 )
+from backend.core.use_cases.agent_runner_events import format_event_marker
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
 
@@ -93,6 +94,73 @@ def _make_rework_marker() -> ReviewEventMarker:
     )
 
 
+def test_running_rework_guard_finds_rework_marker_hidden_by_later_marker() -> None:
+    """A later observer marker must not mask a pending rework request."""
+    github_client = FakeGitHubClient()
+    config = AppConfig()
+    issue = _make_issue()
+    github_client._open_prs["issue-1"] = "https://github.com/example/repo/pull/1"
+    github_client._issue_comments[issue.number] = [
+        format_event_marker(
+            phase="post_pr_rework_requested",
+            cycle=1,
+            head_sha="abc123",
+            pr_branch="issue-1",
+            action="repair_pr_branch",
+        ),
+        format_event_marker(
+            phase="post_pr_supervisor",
+            cycle=2,
+            head_sha="abc123",
+            checks_state="FAILURE",
+            mergeable=True,
+        ),
+    ]
+
+    is_rework, marker = agent_runner_orchestrate._guard_running_issue_is_rework(
+        issue, config, github_client
+    )
+
+    assert is_rework is True
+    assert marker is not None
+    assert marker.phase == "post_pr_rework_requested"
+    assert marker.action == "repair_pr_branch"
+
+
+def test_running_rework_guard_ignores_completed_rework_marker() -> None:
+    """A completion marker should consume the earlier rework request."""
+    github_client = FakeGitHubClient()
+    config = AppConfig()
+    issue = _make_issue()
+    github_client._open_prs["issue-1"] = "https://github.com/example/repo/pull/1"
+    github_client._issue_comments[issue.number] = [
+        format_event_marker(
+            phase="post_pr_rework_requested",
+            cycle=1,
+            head_sha="abc123",
+            pr_branch="issue-1",
+            action="rebase_pr_branch",
+        ),
+        format_event_marker(
+            phase="rebase_repair_complete",
+            cycle=1,
+            head_sha="def456",
+        ),
+        format_event_marker(
+            phase="post_pr_supervisor",
+            cycle=2,
+            head_sha="def456",
+        ),
+    ]
+
+    is_rework, marker = agent_runner_orchestrate._guard_running_issue_is_rework(
+        issue, config, github_client
+    )
+
+    assert is_rework is False
+    assert marker is None
+
+
 def test_running_rework_defers_supervisor_without_full_pr_context(
     tmp_path: Path,
 ) -> None:
@@ -112,7 +180,7 @@ def test_running_rework_defers_supervisor_without_full_pr_context(
             return_value="issue-1",
         ),
         patch.object(agent_runner_orchestrate, "choose_agent", return_value="codex"),
-        patch.object(agent_runner_orchestrate, "execute_rebase"),
+        patch.object(agent_runner_orchestrate, "execute_rebase", return_value=[]),
         patch.object(
             agent_runner_orchestrate, "get_head_sha", return_value="after-sha"
         ),
@@ -159,7 +227,7 @@ def test_running_rework_without_supervisor_does_not_require_pr_context(
             return_value="issue-1",
         ),
         patch.object(agent_runner_orchestrate, "choose_agent", return_value="codex"),
-        patch.object(agent_runner_orchestrate, "execute_rebase"),
+        patch.object(agent_runner_orchestrate, "execute_rebase", return_value=[]),
         patch.object(
             agent_runner_orchestrate, "get_head_sha", return_value="after-sha"
         ),
@@ -204,8 +272,8 @@ def test_supervisor_loop_defers_after_rework_when_pr_context_refresh_fails(
             "run_post_pr_supervisor_cycle",
             return_value=SupervisorActionResult(action=action),
         ) as supervisor_cycle,
-        patch.object(agent_runner_supervisor, "execute_repair"),
-        patch.object(agent_runner_supervisor, "execute_rebase"),
+        patch.object(agent_runner_supervisor, "execute_repair", return_value=[]),
+        patch.object(agent_runner_supervisor, "execute_rebase", return_value=[]),
         patch.object(agent_runner_supervisor, "get_head_sha", return_value="after-sha"),
     ):
         agent_runner_supervisor._run_supervisor_with_repair_loop(
@@ -226,3 +294,10 @@ def test_supervisor_loop_defers_after_rework_when_pr_context_refresh_fails(
         call["method"] == "edit_issue_labels" and config.labels.review in call["add"]
         for call in github_client.calls
     )
+    comment_bodies = [
+        call["body"]
+        for call in github_client.calls
+        if call["method"] == "comment_issue"
+    ]
+    assert any("phase=post_pr_rework_requested" in body for body in comment_bodies)
+    assert any("phase=rebase_repair_complete" in body for body in comment_bodies)

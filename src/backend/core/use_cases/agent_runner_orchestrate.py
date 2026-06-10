@@ -32,7 +32,7 @@ from backend.core.shared.models.agent_runner import (
     ReviewEventMarker,
 )
 from backend.core.use_cases.agent_runner_events import (
-    parse_latest_event_marker,
+    parse_latest_pending_rework_marker,
 )
 from backend.core.use_cases.agent_runner_git import has_changes
 from backend.core.use_cases.agent_runner_publication import (
@@ -44,7 +44,7 @@ from backend.core.use_cases.agent_runner_supervisor import (
     _run_supervisor_with_repair_loop,
 )
 from backend.core.use_cases.pr_supervisor import (
-    build_rework_intent_comment,
+    build_rebase_repair_complete_comment,
     execute_rebase,
     execute_repair,
 )
@@ -65,8 +65,9 @@ def _has_rework_intent(
 ) -> tuple[bool, ReviewEventMarker | None]:
     """检测 Issue 是否包含事后修复请求标记。
 
-    通过解析 Issue 的评论列表，查找 post_pr_rework_requested 事件标记。
-    该标记在监督者请求修复时由监督循环写入。
+    通过解析 Issue 的评论列表，查找尚未被完成事件消费的
+    post_pr_rework_requested 事件标记。该标记在监督者请求修复时写入，
+    后续 supervisor 观察类 marker 不能掩盖仍待执行的 repair/rebase。
 
     Args:
         issue: Issue 对象
@@ -76,8 +77,8 @@ def _has_rework_intent(
         (是否存在 rework 意图, 事件标记对象)
     """
     comments = github_client.list_issue_comments(issue.number)
-    marker = parse_latest_event_marker(comments)
-    if marker is not None and marker.phase == "post_pr_rework_requested":
+    marker = parse_latest_pending_rework_marker(comments)
+    if marker is not None:
         return True, marker
     return False, None
 
@@ -398,7 +399,7 @@ def _process_running_rework(
 
     # 执行修复或 rebase
     if action == "rebase_pr_branch":
-        execute_rebase(
+        verification_results = execute_rebase(
             issue=issue,
             worktree_path=worktree_path,
             config=config,
@@ -410,14 +411,16 @@ def _process_running_rework(
         rebase_sha = get_head_sha(worktree_path, process_runner)
         github_client.comment_issue(
             issue.number,
-            build_rework_intent_comment(
+            build_rebase_repair_complete_comment(
                 action=action,
-                pr_branch=pr_branch,
                 head_sha=rebase_sha,
+                verification_passed=all(
+                    result.return_code == 0 for result in verification_results
+                ),
             ),
         )
     else:
-        execute_repair(
+        verification_results = execute_repair(
             issue=issue,
             worktree_path=worktree_path,
             config=config,
@@ -429,10 +432,12 @@ def _process_running_rework(
         repair_sha = get_head_sha(worktree_path, process_runner)
         github_client.comment_issue(
             issue.number,
-            build_rework_intent_comment(
+            build_rebase_repair_complete_comment(
                 action=action,
-                pr_branch=pr_branch,
                 head_sha=repair_sha,
+                verification_passed=all(
+                    result.return_code == 0 for result in verification_results
+                ),
             ),
         )
 

@@ -24,36 +24,76 @@ _EVENT_MARKER_PATTERN = re.compile(
 )
 
 
+_REWORK_COMPLETION_PHASES = {
+    "implementation_complete",
+    "draft_pr_created",
+    "publish_recovered",
+    "rebase_repair_complete",
+}
+
+
+def _parse_event_marker(comment_body: str) -> ReviewEventMarker | None:
+    """Parse the first iar:event marker from one Issue comment."""
+    match = _EVENT_MARKER_PATTERN.search(comment_body)
+    if not match:
+        return None
+
+    mergeable_raw = match.group("mergeable")
+    mergeable = None
+    if mergeable_raw == "true":
+        mergeable = True
+    elif mergeable_raw == "false":
+        mergeable = False
+    issue_comments_count_raw = match.group("issue_comments_count")
+    pr_comments_count_raw = match.group("pr_comments_count")
+    return ReviewEventMarker(
+        version=int(match.group("version")),
+        phase=match.group("phase"),
+        cycle=int(match.group("cycle")),
+        head_sha=match.group("head"),
+        base_sha=match.group("base"),
+        pr_branch=match.group("pr_branch"),
+        action=match.group("action"),
+        checks_state=match.group("checks_state"),
+        mergeable=mergeable,
+        issue_comments_count=int(issue_comments_count_raw)
+        if issue_comments_count_raw is not None
+        else None,
+        pr_comments_count=int(pr_comments_count_raw)
+        if pr_comments_count_raw is not None
+        else None,
+    )
+
+
 def parse_latest_event_marker(comments: list[str]) -> ReviewEventMarker | None:
     """Parse the latest iar:event marker from Issue comments."""
     for comment_body in reversed(comments):
-        match = _EVENT_MARKER_PATTERN.search(comment_body)
-        if match:
-            mergeable_raw = match.group("mergeable")
-            mergeable = None
-            if mergeable_raw == "true":
-                mergeable = True
-            elif mergeable_raw == "false":
-                mergeable = False
-            issue_comments_count_raw = match.group("issue_comments_count")
-            pr_comments_count_raw = match.group("pr_comments_count")
-            return ReviewEventMarker(
-                version=int(match.group("version")),
-                phase=match.group("phase"),
-                cycle=int(match.group("cycle")),
-                head_sha=match.group("head"),
-                base_sha=match.group("base"),
-                pr_branch=match.group("pr_branch"),
-                action=match.group("action"),
-                checks_state=match.group("checks_state"),
-                mergeable=mergeable,
-                issue_comments_count=int(issue_comments_count_raw)
-                if issue_comments_count_raw is not None
-                else None,
-                pr_comments_count=int(pr_comments_count_raw)
-                if pr_comments_count_raw is not None
-                else None,
-            )
+        marker = _parse_event_marker(comment_body)
+        if marker is not None:
+            return marker
+    return None
+
+
+def parse_latest_pending_rework_marker(
+    comments: list[str],
+) -> ReviewEventMarker | None:
+    """Parse the latest unconsumed post-PR rework marker from Issue comments.
+
+    A rework request remains pending until a later lifecycle marker proves that
+    the runner moved past it. Normal observer markers such as
+    ``post_pr_supervisor`` must not hide a pending repair request.
+    """
+    rework_has_later_completion = False
+    for comment_body in reversed(comments):
+        marker = _parse_event_marker(comment_body)
+        if marker is None:
+            continue
+        if marker.phase == "post_pr_rework_requested":
+            if rework_has_later_completion:
+                return None
+            return marker
+        if marker.phase in _REWORK_COMPLETION_PHASES:
+            rework_has_later_completion = True
     return None
 
 

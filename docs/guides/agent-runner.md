@@ -263,7 +263,8 @@ Draft PR 创建后，Issue 先进入 `agent/supervising`，并立即运行至少
    - `mark_failed` → 进入 `agent/failed`
 
 4. 需要代码修改时，runner 先写 `post_pr_rework_requested` event marker，再切到 `agent/running`
-5. 后续 `run-once` 或 `review-daemon` 检测到该 marker 和 open PR/branch 后，在现有 PR branch 上执行 rework
+5. 后续 `run-once` 检测到该 pending marker 和 open PR 后，在现有 PR branch 上执行 rework
+6. rework 成功后写 `rebase_repair_complete` marker，再进入后续 supervision/review 流程
 
 ### 持续观察
 
@@ -312,10 +313,13 @@ rebase/repair 仍由下一次 `iar run-once` 在 PR branch worktree 中执行。
 
 ### Rework Guard
 
-`run-once` 遇到 `agent/running` Issue 时，不会自动视为 rework。只有同时满足以下两个条件才会进入现有 PR branch rework 路径：
+`run-once` 遇到 `agent/running` Issue 时，不会自动视为 rework。只有同时满足以下条件才会进入现有 PR branch rework 路径：
 
-1. 存在 open PR 或已知 PR branch
-2. 最新 Issue comment 包含 `phase=post_pr_rework_requested` 的 `iar:event` marker
+1. Issue comments 中存在尚未被 `rebase_repair_complete`、`draft_pr_created`、`implementation_complete` 或 `publish_recovered` 消费的 `phase=post_pr_rework_requested` marker
+2. 该 marker 包含 PR branch
+3. 该 PR branch 仍有 open PR
+
+后续 `post_pr_supervisor` 这类观察类 marker 不会覆盖 pending rework marker；只有明确的完成/发布类 marker 才会消费旧 rework 请求。
 
 否则 `run-once` 会跳过该 Issue，避免抢占另一个 runner 正在首次执行的任务。
 
@@ -1000,6 +1004,7 @@ Marker 是幂等 cursor，不依赖本地状态文件。可读正文用于人类
 - `implementation_complete`
 - `pre_push_review`
 - `draft_pr_created`
+- `publish_recovered`
 - `post_pr_supervisor`
 - `post_pr_rework_requested`
 - `rebase_repair_complete`

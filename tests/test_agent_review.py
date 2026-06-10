@@ -21,6 +21,7 @@ from backend.core.use_cases.agent_review import (
 from backend.core.use_cases.agent_runner_events import (
     format_event_marker,
     parse_latest_event_marker,
+    parse_latest_pending_rework_marker,
 )
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
@@ -67,6 +68,61 @@ def test_parse_latest_event_marker_finds_latest() -> None:
 def test_parse_latest_event_marker_returns_none_when_missing() -> None:
     """Parser should return None when no marker exists."""
     assert parse_latest_event_marker(["no marker here"]) is None
+
+
+def test_parse_pending_rework_marker_ignores_later_observer_marker() -> None:
+    """A later supervisor marker must not hide a queued rework request."""
+    comments = [
+        format_event_marker(
+            phase="post_pr_rework_requested",
+            cycle=1,
+            head_sha="abc123",
+            pr_branch="issue-1",
+            action="repair_pr_branch",
+        ),
+        format_event_marker(
+            phase="post_pr_supervisor",
+            cycle=2,
+            head_sha="abc123",
+            checks_state="FAILURE",
+            mergeable=True,
+        ),
+    ]
+
+    latest_marker = parse_latest_event_marker(comments)
+    pending_marker = parse_latest_pending_rework_marker(comments)
+
+    assert latest_marker is not None
+    assert latest_marker.phase == "post_pr_supervisor"
+    assert pending_marker is not None
+    assert pending_marker.phase == "post_pr_rework_requested"
+    assert pending_marker.pr_branch == "issue-1"
+    assert pending_marker.action == "repair_pr_branch"
+
+
+def test_parse_pending_rework_marker_stops_after_completion() -> None:
+    """A completed rework request should not be reprocessed."""
+    comments = [
+        format_event_marker(
+            phase="post_pr_rework_requested",
+            cycle=1,
+            head_sha="abc123",
+            pr_branch="issue-1",
+            action="rebase_pr_branch",
+        ),
+        format_event_marker(
+            phase="rebase_repair_complete",
+            cycle=1,
+            head_sha="def456",
+        ),
+        format_event_marker(
+            phase="post_pr_supervisor",
+            cycle=2,
+            head_sha="def456",
+        ),
+    ]
+
+    assert parse_latest_pending_rework_marker(comments) is None
 
 
 def test_parse_event_marker_with_new_fields() -> None:

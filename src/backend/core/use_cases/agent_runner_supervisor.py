@@ -22,6 +22,7 @@ from backend.core.shared.models.agent_runner import (
     PullRequestContext,
 )
 from backend.core.use_cases.pr_supervisor import (
+    build_rebase_repair_complete_comment,
     build_rework_intent_comment,
     build_supervisor_result_comment,
     execute_rebase,
@@ -174,13 +175,20 @@ def _run_supervisor_with_repair_loop(
                 )
                 return
 
-            # 执行修复
+            github_client.comment_issue(
+                issue.number,
+                build_rework_intent_comment(
+                    action=action_result.action,
+                    pr_branch=current_pr_context.branch,
+                    head_sha=current_pr_context.head_sha,
+                ),
+            )
             github_client.edit_issue_labels(
                 issue.number,
                 add=[config.labels.running],
                 remove=[config.labels.supervising],
             )
-            execute_repair(
+            verification_results = execute_repair(
                 issue=issue,
                 worktree_path=worktree_path,
                 config=config,
@@ -192,10 +200,12 @@ def _run_supervisor_with_repair_loop(
             repair_sha = get_head_sha(worktree_path, process_runner)
             github_client.comment_issue(
                 issue.number,
-                build_rework_intent_comment(
+                build_rebase_repair_complete_comment(
                     action=action_result.action,
-                    pr_branch=current_pr_context.branch,
                     head_sha=repair_sha,
+                    verification_passed=all(
+                        result.return_code == 0 for result in verification_results
+                    ),
                 ),
             )
             github_client.edit_issue_labels(
@@ -240,12 +250,20 @@ def _run_supervisor_with_repair_loop(
                 )
                 return
 
+            github_client.comment_issue(
+                issue.number,
+                build_rework_intent_comment(
+                    action=action_result.action,
+                    pr_branch=current_pr_context.branch,
+                    head_sha=current_pr_context.head_sha,
+                ),
+            )
             github_client.edit_issue_labels(
                 issue.number,
                 add=[config.labels.running],
                 remove=[config.labels.supervising],
             )
-            execute_rebase(
+            verification_results = execute_rebase(
                 issue=issue,
                 worktree_path=worktree_path,
                 config=config,
@@ -257,10 +275,12 @@ def _run_supervisor_with_repair_loop(
             rebase_sha = get_head_sha(worktree_path, process_runner)
             github_client.comment_issue(
                 issue.number,
-                build_rework_intent_comment(
+                build_rebase_repair_complete_comment(
                     action=action_result.action,
-                    pr_branch=current_pr_context.branch,
                     head_sha=rebase_sha,
+                    verification_passed=all(
+                        result.return_code == 0 for result in verification_results
+                    ),
                 ),
             )
             github_client.edit_issue_labels(
