@@ -88,6 +88,28 @@ def test_cli_parser_issue_from_prd_publish_prd() -> None:
     assert parsed.ready is False
 
 
+def test_cli_parser_issue_from_prd_dependency_options() -> None:
+    """issue-from-prd should accept dependency gate options."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        [
+            "issue-from-prd",
+            "tasks/example.md",
+            "--group",
+            "downstream",
+            "--depends-on",
+            "42",
+            "--depends-on",
+            "43",
+            "--depends-on-group",
+            "upstream-a",
+        ]
+    )
+    assert parsed.group == "downstream"
+    assert parsed.depends_on == [42, 43]
+    assert parsed.depends_on_group == ["upstream-a"]
+
+
 def test_cli_parser_run_once() -> None:
     """run-once should accept dry-run and agent flags."""
     parser = build_parser()

@@ -160,6 +160,22 @@ class FakeGitHubClient(IGitHubClient):
             state=self._issue_states.get(issue_number, "OPEN"),
         )
 
+    def list_issues_by_label(
+        self, label: str, limit: int, state: str = "all"
+    ) -> list[IssueSummary]:
+        self.calls.append(
+            {
+                "method": "list_issues_by_label",
+                "label": label,
+                "limit": limit,
+                "state": state,
+            }
+        )
+        return []
+
+    def ensure_label(self, name: str) -> None:
+        self.calls.append({"method": "ensure_label", "name": name})
+
 
 class FakeContentGenerator(IContentGenerator):
     """In-memory content generator for tests."""

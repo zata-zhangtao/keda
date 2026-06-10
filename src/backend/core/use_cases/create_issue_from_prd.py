@@ -39,6 +39,11 @@ from backend.core.shared.models.agent_runner import (
     GeneratedContentConfig,
     LabelConfig,
 )
+from backend.core.use_cases.agent_runner_dependencies import (
+    format_dependency_marker,
+    parse_dependency_marker,
+    parse_delivery_dependencies,
+)
 from backend.core.use_cases.agent_runner_validation import (
     build_issue_validation_section,
     extract_realistic_validation_items,
@@ -91,6 +96,9 @@ class IssueFromPrdRequest:
         git_base_branch: 基础分支名称。当 ``queue_ready=True`` 且 ``publish_prd=True`` 时必需。
         generated_content_config: 可选的 AI 内容生成配置。
             为 ``None`` 或 ``enabled=False`` 时使用确定性 fallback 正文。
+        group: 可选的任务组名称，会被物化为 ``task-group/<name>`` label。
+        depends_on: 显式指定的上游 Issue 编号列表（与 PRD 声明合并去重）。
+        depends_on_group: 显式指定的上游 group 列表（与 PRD 声明合并去重）。
     """
 
     repo_path: Path
@@ -105,6 +113,9 @@ class IssueFromPrdRequest:
     git_remote: str = "origin"
     git_base_branch: str = "main"
     generated_content_config: GeneratedContentConfig | None = None
+    group: str = ""
+    depends_on: tuple[int, ...] = ()
+    depends_on_group: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -192,7 +203,12 @@ def extract_acceptance_items(prd_text: str) -> list[str]:
 
 
 def build_issue_body(
-    *, relative_prd_path: Path, title: str, acceptance_items: list[str], prd_text: str
+    *,
+    relative_prd_path: Path,
+    title: str,
+    acceptance_items: list[str],
+    prd_text: str,
+    dependency_marker: str = "",
 ) -> str:
     """基于 PRD 元数据构建确定的 Issue 正文。
 
@@ -203,12 +219,14 @@ def build_issue_body(
     3. 机器可读的 ``- PRD path: ...`` 锚点，runner 依赖它定位规范 PRD。
     4. 从 PRD 复制的验收清单。
     5. 交付说明（分支命名、worktree 命令、PR 规范）。
+    6. 可选的 ``iar:depends-on`` hidden marker（当依赖门禁启用时）。
 
     Args:
         relative_prd_path: 相对于仓库根目录的 PRD 路径。
         title: Issue 标题（用于摘要行）。
         acceptance_items: 从 PRD 提取的清单条目。
         prd_text: 完整 PRD 文本，用于提取引言章节。
+        dependency_marker: 物化的 ``iar:depends-on`` marker 字符串，为空时不写入。
 
     Returns:
         完整的 Issue 正文 Markdown 字符串。
@@ -246,6 +264,9 @@ def build_issue_body(
             "",
         ]
     )
+    if dependency_marker:
+        body_parts.append(dependency_marker)
+        body_parts.append("")
     return "\n".join(body_parts)
 
 
@@ -311,6 +332,8 @@ def build_issue_labels(
             [*effective_labels_config.agent_labels.keys(), "auto", "none"]
         )
         raise ValueError(f"issue_agent must be one of: {allowed}")
+    if request.group:
+        labels.append(f"{effective_labels_config.group_prefix}{request.group}")
     return labels
 
 
@@ -526,6 +549,74 @@ def publish_prd_file(
 
 
 # ---------------------------------------------------------------------------
+# Dependency resolution helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_dependencies(
+    prd_text: str,
+    *,
+    group: str = "",
+    depends_on: tuple[int, ...] = (),
+    depends_on_group: tuple[str, ...] = (),
+) -> tuple[str, str, tuple[int, ...], tuple[str, ...]]:
+    """Merge PRD structured dependencies, explicit markers and CLI overrides.
+
+    Three sources are merged with CLI taking highest precedence:
+
+    1. ``Delivery Dependencies`` section in the PRD.
+    2. Explicit ``iar:depends-on`` / ``iar:group`` markers in the PRD body.
+    3. CLI arguments ``--group``, ``--depends-on``, ``--depends-on-group``.
+
+    Args:
+        prd_text: Full PRD Markdown text.
+        group: CLI override group name.
+        depends_on: CLI override issue numbers.
+        depends_on_group: CLI override group names.
+
+    Returns:
+        ``(resolved_group, gate_type, resolved_issues, resolved_groups)``.
+        ``gate_type`` is the gate from the PRD section (``none`` if absent).
+    """
+    from_prd = parse_delivery_dependencies(prd_text)
+
+    # Start with PRD section values
+    resolved_group = from_prd.group or ""
+    gate_type = from_prd.gate_type
+    resolved_issues = list(from_prd.depends_on_issues)
+    resolved_groups = list(from_prd.depends_on_groups)
+
+    # Merge explicit markers in PRD body (compat path)
+    explicit = parse_dependency_marker(prd_text)
+    if explicit is not None:
+        resolved_issues.extend(explicit.issue_numbers)
+        resolved_groups.extend(explicit.groups)
+
+    # CLI overrides take precedence and are additive
+    if group:
+        resolved_group = group
+    resolved_issues.extend(depends_on)
+    resolved_groups.extend(depends_on_group)
+
+    # Deduplicate while preserving order
+    seen_issues: set[int] = set()
+    deduped_issues = [
+        n for n in resolved_issues if not (n in seen_issues or seen_issues.add(n))
+    ]
+    seen_groups: set[str] = set()
+    deduped_groups = [
+        g for g in resolved_groups if not (g in seen_groups or seen_groups.add(g))
+    ]
+
+    return (
+        resolved_group,
+        gate_type,
+        tuple(deduped_issues),
+        tuple(deduped_groups),
+    )
+
+
+# ---------------------------------------------------------------------------
 # 主流程编排
 # ---------------------------------------------------------------------------
 
@@ -616,6 +707,26 @@ def create_issue_from_prd(
     labels = build_issue_labels(request, effective_labels_config)
 
     # ------------------------------------------------------------------
+    # 4.5 解析并物化依赖声明。
+    # ------------------------------------------------------------------
+    resolved_group, gate_type, resolved_issues, resolved_groups = _resolve_dependencies(
+        prd_text,
+        group=request.group,
+        depends_on=request.depends_on,
+        depends_on_group=request.depends_on_group,
+    )
+    dependency_marker = ""
+    if gate_type == "hard" and (resolved_issues or resolved_groups):
+        dependency_marker = format_dependency_marker(
+            issue_numbers=resolved_issues,
+            groups=resolved_groups,
+        )
+    # Ensure group label exists before creating the Issue.
+    if resolved_group:
+        group_label = f"{effective_labels_config.group_prefix}{resolved_group}"
+        github_client.ensure_label(group_label)
+
+    # ------------------------------------------------------------------
     # 5. 发布预检（仅在 publish_prd=True 时执行）。
     # ------------------------------------------------------------------
     publish_context: PrdPublishContext | None = None
@@ -646,6 +757,7 @@ def create_issue_from_prd(
         title=fallback_title,
         acceptance_items=extract_acceptance_items(prd_text),
         prd_text=prd_text,
+        dependency_marker=dependency_marker,
     )
 
     # ------------------------------------------------------------------
@@ -673,6 +785,10 @@ def create_issue_from_prd(
         )
         title = generated.title
         body = generated.body
+
+    # Ensure dependency marker survives AI-generated body as well.
+    if dependency_marker and dependency_marker not in body:
+        body = f"{body.rstrip()}\n\n{dependency_marker}\n"
 
     # ------------------------------------------------------------------
     # 7.5 物化 Realistic Validation 区块。

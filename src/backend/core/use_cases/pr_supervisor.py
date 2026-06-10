@@ -205,6 +205,16 @@ def guard_supervisor_action_for_pr_state(
         )
 
     if pr_context.checks_state == "FAILURE":
+        # The Realistic Validation sign-off is an intentional manual gate;
+        # it is expected to fail until a human reviewer ticks the checkboxes.
+        # Do not block approval for human review solely because of this gate,
+        # but only when we can positively identify it as the unique failure.
+        if pr_context.checks_summary and all(
+            "Realistic Validation sign-off" in check
+            for check in pr_context.checks_summary
+        ):
+            return action_result
+
         failed_checks_text = (
             "; ".join(pr_context.checks_summary)
             if pr_context.checks_summary

@@ -324,6 +324,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Commit and push only the target PRD before adding the ready label.",
     )
     issue_parser.add_argument("--force", action="store_true")
+    issue_parser.add_argument(
+        "--group",
+        default="",
+        help="Task group name (materialised as task-group/<name> label).",
+    )
+    issue_parser.add_argument(
+        "--depends-on",
+        action="append",
+        type=int,
+        default=[],
+        help="Upstream Issue number this Issue depends on (repeatable).",
+    )
+    issue_parser.add_argument(
+        "--depends-on-group",
+        action="append",
+        type=str,
+        default=[],
+        help="Upstream group label this Issue depends on (repeatable).",
+    )
     add_common_options(issue_parser)
 
     run_parser = subparsers.add_parser("run-once")
@@ -616,6 +635,11 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     git_remote=context.config.git.remote,
                     git_base_branch=context.config.git.base_branch,
                     generated_content_config=gc_config,
+                    group=getattr(parsed, "group", "") or "",
+                    depends_on=tuple(getattr(parsed, "depends_on", []) or []),
+                    depends_on_group=tuple(
+                        getattr(parsed, "depends_on_group", []) or []
+                    ),
                 ),
                 github_client=github_client,
                 process_runner=process_runner,

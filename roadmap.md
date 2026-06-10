@@ -41,7 +41,7 @@
 - **rebase 冲突 agent 解决基础能力已落地**：post-PR supervisor 的 rebase 路径遇到冲突时可调用 agent 处理冲突、运行验证并用 `--force-with-lease` 推送。
 - **AI 生成 Issue / PR 内容已落地**：`[agent_runner.generated_content]` 支持 template 和只读 agent 两种模式，并对 Issue 的 PRD anchor 与 PR 的 `Closes #...` anchor 做 fallback 校验。
 - **只读多 agent 合议基础能力已落地**：`iar deliberate` 能运行 architect / skeptic / implementer 等 profile，输出 event stream、transcript、result、session metadata 和隔离 workspace 原始输出。
-- **基础 API 状态端点已落地**：提供 agent-runner status 和 health 只读端点，用于暴露配置摘要和 `gh` 可用性。
+- **Issue 依赖门禁已落地**：PRD `Delivery Dependencies` 小节在 `iar issue create` 时被物化为 `iar:depends-on` marker 和 `task-group/` label；runner 领取 `agent/ready` Issue 前实时判定依赖满足状态，未满足时叠加 `agent/waiting` label 并写去重 comment；支持 Issue 编号依赖和 group 依赖，空 group 防护，上游 failed/blocked 点名提示。
 - **文档与测试基础已落地**：已有 Agent Runner 使用指南、配置说明、架构规范、归档 PRD、pytest 覆盖和 `just test` 验证入口。
 
 ### Partially Completed

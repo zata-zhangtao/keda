@@ -68,8 +68,10 @@ class LabelConfig:
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
+    waiting: str = "agent/waiting"
     validation_pending: str = "validation/pending"
     validation_passed: str = "validation/passed"
+    group_prefix: str = "task-group/"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",
@@ -327,4 +329,60 @@ class PublishRecoveryResult:
     head_sha: str
     pr_url: str
     pr_reused: bool
-    supervisor_action: str | None = None
+    supervisor_action: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Dependency gate models
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DeliveryDependencyDeclaration:
+    """Structured dependency declaration parsed from a PRD.
+
+    Attributes:
+        group: The task group this Issue belongs to, or empty string.
+        depends_on_groups: Group labels that must be fully closed.
+        depends_on_issues: Specific Issue numbers that must be closed.
+        gate_type: One of ``"hard"``, ``"soft"``, ``"none"``.
+        notes: Free-form operator notes.
+    """
+
+    group: str = ""
+    depends_on_groups: tuple[str, ...] = ()
+    depends_on_issues: tuple[int, ...] = ()
+    gate_type: str = "none"
+    notes: str = ""
+
+
+@dataclass(frozen=True)
+class DependencyDeclaration:
+    """Materialised dependency declaration from an Issue body.
+
+    Attributes:
+        issue_numbers: Upstream Issue numbers this Issue depends on.
+        groups: Upstream group labels this Issue depends on.
+    """
+
+    issue_numbers: tuple[int, ...] = ()
+    groups: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DependencyBlocker:
+    """A single unsatisfied dependency."""
+
+    blocker_type: str
+    target: str
+    current_state: str
+
+
+@dataclass(frozen=True)
+class DependencyVerdict:
+    """Result of evaluating an Issue's dependencies."""
+
+    satisfied: bool
+    blockers: tuple[DependencyBlocker, ...] = ()
+    has_failed_or_blocked_upstream: bool = False
+    empty_group_names: tuple[str, ...] = ()
