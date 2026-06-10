@@ -656,6 +656,83 @@ def test_publish_changes_no_git_commit() -> None:
     assert ("git", "push", "-u", "origin", "issue-1") in commands
 
 
+def test_publish_changes_reuses_existing_open_pr() -> None:
+    """publish_changes should reuse an existing open PR instead of recreating it."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Test body",
+        labels=(),
+    )
+    fake_client = FakeGitHubClient()
+    fake_client._open_prs["issue-1"] = "https://github.com/example/repo/pull/52"
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            _git_remote_command(): _git_remote_result("origin"),
+        }
+    )
+    branch, pr_url = publish_changes(
+        issue, Path("."), AppConfig(), fake_client, fake_runner
+    )
+    assert branch == "issue-1"
+    assert pr_url == "https://github.com/example/repo/pull/52"
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "push", "-u", "origin", "issue-1") in commands
+    method_names = [call["method"] for call in fake_client.calls]
+    assert "find_open_pr_by_head" in method_names
+    assert "create_draft_pr" not in method_names
+
+
+def test_publish_changes_creates_pr_when_no_open_pr() -> None:
+    """publish_changes should create a draft PR when the branch has no open PR."""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Test body",
+        labels=(),
+    )
+    fake_client = FakeGitHubClient()
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            _git_remote_command(): _git_remote_result("origin"),
+        }
+    )
+    branch, pr_url = publish_changes(
+        issue, Path("."), AppConfig(), fake_client, fake_runner
+    )
+    assert branch == "issue-1"
+    assert pr_url == "https://github.com/example/repo/pull/1"
+    method_names = [call["method"] for call in fake_client.calls]
+    assert "find_open_pr_by_head" in method_names
+    assert "create_draft_pr" in method_names
+
+
 def test_publish_changes_rejects_missing_configured_remote() -> None:
     """publish_changes should fail instead of guessing another remote."""
     issue = IssueSummary(
