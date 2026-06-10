@@ -269,6 +269,11 @@ class GitHubCliClient:
             ("agent/failed", "D73A4A", "AI runner failed and posted details."),
             ("agent/blocked", "000000", "AI runner needs human input."),
             (
+                "agent/waiting",
+                "FEF2C0",
+                "Issue has unmet dependencies and is waiting for upstream closure.",
+            ),
+            (
                 "validation/pending",
                 "FBCA04",
                 "Realistic Validation evidence awaits human sign-off on the PR.",
@@ -305,6 +310,7 @@ class GitHubCliClient:
             "agent/review": labels.review,
             "agent/failed": labels.failed,
             "agent/blocked": labels.blocked,
+            "agent/waiting": labels.waiting,
             "validation/pending": labels.validation_pending,
             "validation/passed": labels.validation_passed,
         }
@@ -708,4 +714,59 @@ class GitHubCliClient:
                 if raw_label.get("name")
             ),
             state=str(raw_issue.get("state", "OPEN") or "OPEN"),
+        )
+
+    def list_issues_by_label(
+        self, label: str, limit: int, state: str = "all"
+    ) -> list[IssueSummary]:
+        """List Issues by label across open and closed states."""
+        result = self._runner.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--state",
+                state,
+                "--label",
+                label,
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,url,labels,body,state",
+            ],
+            cwd=self.repo_path,
+        )
+        raw_issues = json.loads(result.stdout or "[]")
+        return [
+            IssueSummary(
+                number=int(raw_issue["number"]),
+                title=str(raw_issue.get("title", "")),
+                url=str(raw_issue.get("url", "")),
+                body=str(raw_issue.get("body", "") or ""),
+                labels=tuple(
+                    raw_label.get("name", "")
+                    for raw_label in raw_issue.get("labels", [])
+                    if raw_label.get("name")
+                ),
+                state=str(raw_issue.get("state", "OPEN") or "OPEN"),
+            )
+            for raw_issue in raw_issues
+        ]
+
+    def ensure_label(self, name: str) -> None:
+        """Ensure a label exists in the repository, creating it if necessary."""
+        result = self._runner.run(
+            ["gh", "label", "list", "--json", "name"],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code == 0:
+            existing = json.loads(result.stdout or "[]")
+            existing_names = {str(label.get("name", "")) for label in existing}
+            if name in existing_names:
+                return
+        self._runner.run(
+            ["gh", "label", "create", name, "--force"],
+            cwd=self.repo_path,
+            check=False,
         )

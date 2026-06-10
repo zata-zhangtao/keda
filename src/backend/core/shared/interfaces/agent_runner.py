@@ -399,3 +399,28 @@ class IGitHubClient(ABC):
             IssueSummary: Issue 摘要信息。
         """
         ...
+
+    @abstractmethod
+    def list_issues_by_label(
+        self, label: str, limit: int, state: str = "all"
+    ) -> list[IssueSummary]:
+        """按标签列出 Issue，可跨 open/closed 状态。
+
+        Args:
+            label: 要筛选的标签名。
+            limit: 返回结果的最大数量上限。
+            state: Issue 状态筛选，``"open"``、``"closed"`` 或 ``"all"``。
+
+        Returns:
+            list[IssueSummary]: 满足条件的 Issue 摘要列表。
+        """
+        ...
+
+    @abstractmethod
+    def ensure_label(self, name: str) -> None:
+        """确保仓库中存在指定标签，不存在则创建。
+
+        Args:
+            name: 标签名称。
+        """
+        ...

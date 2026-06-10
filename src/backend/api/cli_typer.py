@@ -305,6 +305,9 @@ def _run_issue_from_prd_command(
     repo: str | None,
     repo_id: str | None,
     config: str | None,
+    group: str = "",
+    depends_on: tuple[int, ...] = (),
+    depends_on_group: tuple[str, ...] = (),
 ) -> int:
     """Run the shared PRD-to-Issue command."""
     return _run_typer_repository_command(
@@ -320,6 +323,9 @@ def _run_issue_from_prd_command(
         agent=_enum_value(agent),
         publish_prd=publish_prd,
         force=force,
+        group=group,
+        depends_on=depends_on,
+        depends_on_group=depends_on_group,
     )
 
 
@@ -353,6 +359,20 @@ def issue_from_prd_command(
         ),
     ] = False,
     force: Annotated[bool, typer.Option("--force", help="Bypass PRD checks.")] = False,
+    group: Annotated[
+        str,
+        typer.Option(
+            "--group", help="Task group name (materialised as task-group/<name> label)."
+        ),
+    ] = "",
+    depends_on: Annotated[
+        list[int] | None,
+        typer.Option("--depends-on", help="Upstream Issue number (repeatable)."),
+    ] = None,
+    depends_on_group: Annotated[
+        list[str] | None,
+        typer.Option("--depends-on-group", help="Upstream group label (repeatable)."),
+    ] = None,
     repo: RepoOption = None,
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
@@ -367,6 +387,9 @@ def issue_from_prd_command(
         agent=agent,
         publish_prd=publish_prd,
         force=force,
+        group=group,
+        depends_on=tuple(depends_on or ()),
+        depends_on_group=tuple(depends_on_group or ()),
         repo=repo,
         repo_id=repo_id,
         config=config,
@@ -397,6 +420,20 @@ def issue_create_command(
         typer.Option("--publish-prd", help="Publish the PRD before ready."),
     ] = False,
     force: Annotated[bool, typer.Option("--force", help="Bypass PRD checks.")] = False,
+    group: Annotated[
+        str,
+        typer.Option(
+            "--group", help="Task group name (materialised as task-group/<name> label)."
+        ),
+    ] = "",
+    depends_on: Annotated[
+        list[int] | None,
+        typer.Option("--depends-on", help="Upstream Issue number (repeatable)."),
+    ] = None,
+    depends_on_group: Annotated[
+        list[str] | None,
+        typer.Option("--depends-on-group", help="Upstream group label (repeatable)."),
+    ] = None,
     repo: RepoOption = None,
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
@@ -411,6 +448,9 @@ def issue_create_command(
         agent=agent,
         publish_prd=publish_prd,
         force=force,
+        group=group,
+        depends_on=tuple(depends_on or ()),
+        depends_on_group=tuple(depends_on_group or ()),
         repo=repo,
         repo_id=repo_id,
         config=config,

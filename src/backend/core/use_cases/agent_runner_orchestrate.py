@@ -31,6 +31,12 @@ from backend.core.shared.models.agent_runner import (
     IssueSummary,
     ReviewEventMarker,
 )
+from backend.core.use_cases.agent_runner_dependencies import (
+    clear_dependency_waiting,
+    evaluate_dependencies,
+    mark_dependency_waiting,
+    parse_dependency_marker,
+)
 from backend.core.use_cases.agent_runner_events import (
     parse_latest_pending_rework_marker,
 )
@@ -621,6 +627,33 @@ def run_once(
     issues_to_process: list[tuple[IssueSummary, str]] = []
 
     for issue in ready_issues:
+        declaration = parse_dependency_marker(issue.body)
+        if declaration is not None:
+            verdict = evaluate_dependencies(declaration, github_client, config.labels)
+            if not verdict.satisfied:
+                mark_dependency_waiting(
+                    issue=issue,
+                    verdict=verdict,
+                    github_client=github_client,
+                    labels_config=config.labels,
+                    dry_run=dry_run,
+                )
+                if dry_run:
+                    _logger.info(
+                        "DRY RUN: Issue #%d blocked by dependencies: %s",
+                        issue.number,
+                        ", ".join(
+                            f"{b.blocker_type}:{b.target}({b.current_state})"
+                            for b in verdict.blockers
+                        ),
+                    )
+                continue
+            clear_dependency_waiting(
+                issue=issue,
+                github_client=github_client,
+                labels_config=config.labels,
+                dry_run=dry_run,
+            )
         issues_to_process.append((issue, "ready"))
         processed_count += 1
 

@@ -74,6 +74,7 @@ iar completion show --shell zsh
 | | `agent/review` | 🔵 蓝色 | 自动总控审查已通过，当前 PR 等待人类 review |
 | | `agent/failed` | 🔴 红色 | AI runner 执行失败 |
 | | `agent/blocked` | ⬛ 黑色 | AI runner 需要人工介入 |
+| | `agent/waiting` | 🟠 橙色 | Issue 依赖未满足，等待上游 closure |
 | **工具路由** | `agent/codex` | 🟣 紫色 | 指定使用 Codex 执行 |
 | | `agent/claude` | 🩵 浅蓝 | 指定使用 Claude Code 执行 |
 | | `agent/kimi` | 🩷 粉色 | 指定使用 Kimi 执行 |
@@ -99,6 +100,80 @@ iar labels sync --repo-id keda
 ```
 
 首次使用 `iar` 时只需执行一次，后续标签会自动复用。
+
+## Issue 依赖门禁（Dependency Gate）
+
+当多个 Issue 之间存在先后依赖关系时（例如 B 组必须等 A 组全部合并），可以使用依赖门禁实现自动调度，无需人工盯着上游 PR 合并后再给下游 Issue 打 label。
+
+### 基本原理
+
+依赖门禁采用 **PRD 结构化依赖声明 + IAR materialized marker/label** 的无状态方案：
+
+- PRD 中包含工具无关的 `Delivery Dependencies` 小节
+- `iar issue create` 将 `Gate type: hard` 的依赖物化为 Issue body 中的 `<!-- iar:depends-on ... -->` marker 和 `task-group/<name>` label
+- runner 每次轮询时实时查询 GitHub 状态：依赖未满足时跳过领取、叠加 `agent/waiting` label 并写等待 comment
+- 上游 Issue 全部 closed 后，下一轮轮询自动移除 `agent/waiting` 并正常领取
+
+### PRD 中的 Delivery Dependencies 语法
+
+在 PRD 中添加如下小节：
+
+```markdown
+## Delivery Dependencies
+
+- Group: my-group
+- Depends on groups: upstream-group-a, upstream-group-b
+- Depends on tasks/issues: #42, 43
+- Gate type: hard
+- Notes: 等待上游 API 改造完成
+```
+
+字段说明：
+
+| 字段 | 说明 |
+|---|---|
+| `Group` | 本 Issue 所属的任务组，会被物化为 `task-group/<name>` label |
+| `Depends on groups` | 上游任务组，该组下全部 Issue closed 后才满足 |
+| `Depends on tasks/issues` | 上游具体 Issue 编号，支持 `#N` 或纯数字 `N`，多个用逗号/分号分隔 |
+| `Gate type` | `hard` = 阻塞门禁；`soft` = 仅文档信息，不阻塞；`none` = 不生成依赖 marker |
+| `Notes` | 自由备注 |
+
+### CLI 参数覆盖
+
+即使 PRD 中没有写依赖，也可以在 `iar issue create` 时显式指定：
+
+```bash
+# 指定本 Issue 所属组
+iar issue create tasks/pending/foo.md --group my-group
+
+# 声明依赖上游 Issue #42 和 #43
+iar issue create tasks/pending/foo.md --depends-on 42 --depends-on 43
+
+# 声明依赖上游组 upstream-a
+iar issue create tasks/pending/foo.md --depends-on-group upstream-a
+```
+
+CLI 参数与 PRD 声明会**合并去重**，CLI 参数优先级最高。
+
+### runner 行为
+
+- 无 `iar:depends-on` marker 的 Issue：行为与改动前完全一致（零破坏）
+- 依赖未满足：`agent/ready` 保持，叠加 `agent/waiting`，写 comment 说明阻塞原因
+- 依赖满足：自动移除 `agent/waiting`（若有），正常进入领取流程
+- 上游出现 `agent/failed` 或 `agent/blocked`：等待 comment 中会点名该上游 Issue，提示 operator 干预
+- 空 group（无任何成员）：判定为不满足，comment 中提示疑似拼写错误
+- 连续多轮 blockers 不变时只有一条 comment（按 blockers 集合去重）
+- `--dry-run` 模式下打印等待原因但不写任何 GitHub 状态
+
+### 状态流转补充
+
+```text
+agent/ready + 依赖未满足 → agent/waiting（跳过领取）
+agent/ready + 依赖满足   → 移除 waiting（正常领取）
+agent/waiting              → 上游 closed → 自动放行
+```
+
+依赖判定完全无状态：每次轮询现查现算，依据 GitHub 实时状态，不引入本地缓存。
 
 ## 仓库本地配置
 

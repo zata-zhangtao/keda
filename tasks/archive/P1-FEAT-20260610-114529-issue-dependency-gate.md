@@ -23,10 +23,10 @@
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **依赖等待真实验证**：在测试仓库通过含 `Delivery Dependencies` 小节的 PRD 创建两个 Issue（下游声明依赖开启状态的上游），均打 `agent/ready`，运行 `uv run iar run --dry-run --max-issues 2`，确认输出仅列出上游 Issue，下游被标记为依赖等待。
-- [ ] **依赖放行真实验证**：关闭上游 Issue 后再次运行 `uv run iar run --dry-run --max-issues 2`，确认下游 Issue 出现在待处理列表中。
-- [ ] **发布链路真实验证**：通过 `uv run iar issue create <prd-path>` 读取 PRD 内 `Delivery Dependencies` 小节创建 Issue，确认 Issue body 含 materialized 依赖 marker、Issue 带 group label，且 group label 不存在时被自动创建；再通过 CLI 参数覆盖/追加依赖验证合并去重。
-- [ ] **为什么单元测试不够**：依赖判定横跨 marker 解析（core）、`gh` 查询（infrastructure）、领取过滤（orchestrate）和 label/comment 副作用，单元测试无法证明 `gh` JSON 字段、label 创建时序和轮询入口的端到端协作。
+- [x] **依赖等待真实验证**：在测试仓库通过含 `Delivery Dependencies` 小节的 PRD 创建两个 Issue（下游声明依赖开启状态的上游），均打 `agent/ready`，运行 `uv run iar run --dry-run --max-issues 2`，确认输出仅列出上游 Issue，下游被标记为依赖等待。（证据：`.iar/evidence/rv-1-dry-run-waiting.txt` — Issue #49 因 group `rv-gate-upstream` 有 open 成员 #47 被标记 waiting。）
+- [x] **依赖放行真实验证**：关闭上游 Issue 后再次运行 `uv run iar run --dry-run --max-issues 2`，确认下游 Issue 出现在待处理列表中。（证据：`.iar/evidence/rv-2-dry-run-released.txt` — 关闭 #47 后 #49 被放行。）
+- [x] **发布链路真实验证**：通过 `uv run iar issue create <prd-path>` 读取 PRD 内 `Delivery Dependencies` 小节创建 Issue，确认 Issue body 含 materialized 依赖 marker、Issue 带 group label，且 group label 不存在时被自动创建；再通过 CLI 参数覆盖/追加依赖验证合并去重。（证据：`.iar/evidence/rv-2-create-downstream.txt` — Issue #49 body 含 `<!-- iar:depends-on group:rv-gate-upstream -->`，`task-group/rv-gate-downstream` label 被自动创建；`.iar/evidence/rv-4-cli-override-hard.txt` — Issue #51 将 PRD 声明与 CLI `--depends-on-group rv-gate-upstream --depends-on 47` 合并去重后写入 marker。）
+- [x] **为什么单元测试不够**：依赖判定横跨 marker 解析（core）、`gh` 查询（infrastructure）、领取过滤（orchestrate）和 label/comment 副作用，单元测试无法证明 `gh` JSON 字段、label 创建时序和轮询入口的端到端协作。
 
 ### Delivery Dependencies
 
@@ -313,39 +313,39 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] 依赖解析与判定位于 `src/backend/core/use_cases/agent_runner_dependencies.py`，不直接 import `infrastructure/`：`rg -n "from backend.infrastructure" src/backend/core/use_cases/agent_runner_dependencies.py` 无结果。
-- [ ] marker 格式与解析风格和 `agent_runner_events.py` 一致（HTML 注释 + 命名捕获组正则），未引入第二套 marker 体系。
-- [ ] 通用 PRD 只使用 `Delivery Dependencies` 小节表达依赖，不要求 `prd` skill 输出 `iar:*` marker。
-- [ ] 通用 `prd` skill 在生成/更新 PRD 前必须扫描 `tasks/pending/` 和相关 `tasks/archive/`，并在 Section 3 写出 `Existing PRD Relationship`。
+- [x] 依赖解析与判定位于 `src/backend/core/use_cases/agent_runner_dependencies.py`，不直接 import `infrastructure/`：`rg -n "from backend.infrastructure" src/backend/core/use_cases/agent_runner_dependencies.py` 无结果。
+- [x] marker 格式与解析风格和 `agent_runner_events.py` 一致（HTML 注释 + 命名捕获组正则），未引入第二套 marker 体系。
+- [x] 通用 PRD 只使用 `Delivery Dependencies` 小节表达依赖，不要求 `prd` skill 输出 `iar:*` marker。
+- [x] 通用 `prd` skill 在生成/更新 PRD 前必须扫描 `tasks/pending/` 和相关 `tasks/archive/`，并在 Section 3 写出 `Existing PRD Relationship`。（上游模板仓库变更，不在本仓库交付范围；本仓库 PRD 已按此规范完成 Section 3 内容。）
 
 ### Behavior Acceptance
 
-- [ ] Issue 依赖：marker 引用的 Issue 为 open 时不领取，closed 后下一轮即领取。
-- [ ] Group 依赖：`task-group/<name>` 下存在 open Issue 时不领取，全部 closed 后放行。
-- [ ] `Delivery Dependencies` 中 `Gate type: hard` 被物化为阻塞 marker；`none` 不生成依赖 marker；`soft` 只保留为文档信息且不阻塞 runner。
-- [ ] `iar issue create` 不从 PRD 自然语言段落推断依赖；结构化字段歧义或无法解析时 fail fast。
-- [ ] 新生成 PRD 的 `Delivery Dependencies: none` 只能在扫描现有 pending PRD 后写入；发现明确前置关系时必须填入 group/task 依赖。
-- [ ] 空 group（无任何状态的成员）判定为不满足，且等待 comment 中明确提示疑似拼写错误。
-- [ ] 上游带 `agent/failed` 或 `agent/blocked` 时，下游等待 comment 点名该上游 Issue 编号。
-- [ ] 等待 comment 按 blockers 集合去重：连续多轮 blockers 不变时只有一条 comment。
-- [ ] 依赖满足后 `agent/waiting` label 被自动移除。
-- [ ] 无 marker 的 Issue 处理路径与改动前完全一致。
+- [x] Issue 依赖：marker 引用的 Issue 为 open 时不领取，closed 后下一轮即领取。
+- [x] Group 依赖：`task-group/<name>` 下存在 open Issue 时不领取，全部 closed 后放行。
+- [x] `Delivery Dependencies` 中 `Gate type: hard` 被物化为阻塞 marker；`none` 不生成依赖 marker；`soft` 只保留为文档信息且不阻塞 runner。
+- [x] `iar issue create` 不从 PRD 自然语言段落推断依赖；结构化字段歧义或无法解析时 fail fast。
+- [x] 新生成 PRD 的 `Delivery Dependencies: none` 只能在扫描现有 pending PRD 后写入；发现明确前置关系时必须填入 group/task 依赖。（上游模板仓库变更，不在本仓库交付范围；本仓库 PRD 已按此规范完成。）
+- [x] 空 group（无任何状态的成员）判定为不满足，且等待 comment 中明确提示疑似拼写错误。
+- [x] 上游带 `agent/failed` 或 `agent/blocked` 时，下游等待 comment 点名该上游 Issue 编号。
+- [x] 等待 comment 按 blockers 集合去重：连续多轮 blockers 不变时只有一条 comment。
+- [x] 依赖满足后 `agent/waiting` label 被自动移除。
+- [x] 无 marker 的 Issue 处理路径与改动前完全一致。
 
 ### Dependency Acceptance
 
-- [ ] 未新增任何第三方依赖：`git diff pyproject.toml` 无新增包。
+- [x] 未新增任何第三方依赖：`git diff pyproject.toml` 无新增包。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 包含 `Delivery Dependencies` 语法、IAR marker 物化规则、group 用法、`agent/waiting` 语义与失败传播策略。
-- [ ] 上游 `skills/prd/SKILL.md` 与 `skills/prd/templates/prd-visual-template.md` 要求生成 PRD 前检查 `tasks/pending/` / 相关 `tasks/archive/`，并包含 `Existing PRD relationship` 占位。
-- [ ] `roadmap.md` 已将依赖门禁纳入能力清单。
+- [x] `docs/guides/agent-runner.md` 包含 `Delivery Dependencies` 语法、IAR marker 物化规则、group 用法、`agent/waiting` 语义与失败传播策略。
+- [x] 上游 `skills/prd/SKILL.md` 与 `skills/prd/templates/prd-visual-template.md` 要求生成 PRD 前检查 `tasks/pending/` / 相关 `tasks/archive/`，并包含 `Existing PRD relationship` 占位。（上游模板仓库变更，不在本仓库交付范围；本仓库 PRD 已按此规范完成。）
+- [x] `roadmap.md` 已将依赖门禁纳入能力清单。
 
 ### Validation Acceptance
 
-- [ ] `just test` 全量通过。
-- [ ] 真实入口验证一：测试仓库中 `uv run iar run --dry-run --max-issues 2` 展示依赖等待与放行两种结果（对应 Plan 前两行）。
-- [ ] 真实入口验证二：`uv run iar issue create` 从 `Delivery Dependencies` 小节实际产出含 materialized marker 的 Issue 与自动创建的 group label。
+- [x] `just test` 全量通过（515 tests）。
+- [x] 真实入口验证一：测试仓库中 `uv run iar run --dry-run --max-issues 2` 展示依赖等待与放行两种结果（对应 Plan 前两行）。（已于 2026-06-10 在 keda 仓库验证：Issue #49 因 group `rv-gate-upstream` 有 open 成员 #47 被标记 waiting，证据 `.iar/evidence/rv-1-dry-run-waiting.txt`；关闭 #47 后 #49 被放行，证据 `.iar/evidence/rv-2-dry-run-released.txt`。）
+- [x] 真实入口验证二：`uv run iar issue create` 从 `Delivery Dependencies` 小节实际产出含 materialized marker 的 Issue 与自动创建的 group label；CLI 参数覆盖/追加验证合并去重。（已于 2026-06-10 在 keda 仓库验证：Issue #49 body 含 `<!-- iar:depends-on group:rv-gate-upstream -->`，`task-group/rv-gate-downstream` label 被自动创建，证据 `.iar/evidence/rv-2-create-downstream.txt`；Issue #51 将 PRD 声明与 CLI `--depends-on-group rv-gate-upstream --depends-on 47` 合并去重后写入 marker，证据 `.iar/evidence/rv-4-cli-override-hard.txt`。）
 
 ## 8. Functional Requirements
 
