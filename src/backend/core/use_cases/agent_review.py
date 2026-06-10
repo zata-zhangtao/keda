@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from backend.core.use_cases.run_agent_once import (
 _logger = logging.getLogger(__name__)
 
 _VALID_REVIEW_VERDICTS = {"approved", "changes_requested"}
+_COMMIT_REQUEST_RELATIVE_PATH = Path(".agent-runner/commit-request.json")
 
 
 @dataclass(frozen=True)
@@ -139,6 +141,37 @@ def parse_reviewer_decision(text: str) -> ReviewerDecision:
         summary="Reviewer did not return a parseable verdict.",
         parseable=False,
     )
+
+
+def _read_commit_request_decision(request_path: Path) -> ReviewerDecision | None:
+    """Read optional reviewer metadata from a commit request JSON file."""
+    try:
+        with request_path.open("r", encoding="utf-8") as request_file:
+            request_payload = json.load(request_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(request_payload, dict):
+        return None
+    verdict = _normalize_review_verdict(request_payload.get("verdict"))
+    if verdict not in _VALID_REVIEW_VERDICTS:
+        return None
+    return ReviewerDecision(
+        verdict=verdict,
+        summary=str(request_payload.get("summary", "")),
+        findings_high=_int_field(request_payload, "findings_high"),
+        findings_medium=_int_field(request_payload, "findings_medium"),
+        findings_low=_int_field(request_payload, "findings_low"),
+    )
+
+
+def _merge_reviewer_decisions(
+    stdout_decision: ReviewerDecision,
+    commit_request_decision: ReviewerDecision | None,
+) -> ReviewerDecision:
+    """Prefer stdout verdicts, falling back to commit-request metadata."""
+    if stdout_decision.parseable or commit_request_decision is None:
+        return stdout_decision
+    return commit_request_decision
 
 
 def _extract_json_payload(text: str) -> dict[str, object] | None:
@@ -257,6 +290,7 @@ def run_pre_push_review(
     """
     review_config = config.pre_push_review
     if not review_config.enabled:
+        _logger.info("Pre-push review disabled for Issue #%d.", issue.number)
         return head_sha_before, verification_results
 
     reviewer_agent = selected_agent if review_config.allow_same_agent else "codex"
@@ -264,12 +298,29 @@ def run_pre_push_review(
         reviewer_agent = review_config.review_agent
 
     max_attempts = max(1, review_config.max_attempts)
+    timeout_seconds = max(1, review_config.timeout_seconds)
     current_head = head_sha_before
     current_verification = list(verification_results)
     last_failure_summary = "Pre-push review did not approve the changes."
+    _logger.info(
+        "Starting pre-push review for Issue #%d with reviewer '%s' "
+        "(max_attempts=%d, timeout=%ds, head=%s).",
+        issue.number,
+        reviewer_agent,
+        max_attempts,
+        timeout_seconds,
+        head_sha_before,
+    )
 
     for attempt_index in range(max_attempts):
         cycle = attempt_index + 1
+        attempt_started_at = time.monotonic()
+        _logger.info(
+            "Pre-push review cycle %d/%d for Issue #%d: building review packet.",
+            cycle,
+            max_attempts,
+            issue.number,
+        )
         review_prompt = build_review_packet(
             issue=issue,
             worktree_path=worktree_path,
@@ -278,20 +329,64 @@ def run_pre_push_review(
             verification_results=current_verification,
             head_sha=current_head,
         )
+        _logger.info(
+            "Pre-push review cycle %d/%d for Issue #%d: running reviewer '%s'.",
+            cycle,
+            max_attempts,
+            issue.number,
+            reviewer_agent,
+        )
         review_result = run_agent_with_prompt(
             reviewer_agent,
             review_prompt,
             worktree_path,
             process_runner,
             capture_output=True,
+            timeout_seconds=timeout_seconds,
+        )
+        elapsed_seconds = time.monotonic() - attempt_started_at
+        _logger.info(
+            "Pre-push review cycle %d/%d for Issue #%d: reviewer exited "
+            "with code %d after %.1fs.",
+            cycle,
+            max_attempts,
+            issue.number,
+            review_result.return_code,
+            elapsed_seconds,
         )
         reviewer_text = extract_agent_response_text(review_result)
-        reviewer_decision = parse_reviewer_decision(reviewer_text)
+        stdout_decision = parse_reviewer_decision(reviewer_text)
 
         # Check if reviewer requested changes via commit request
-        request_path = worktree_path / ".agent-runner" / "commit-request.json"
+        request_path = worktree_path / _COMMIT_REQUEST_RELATIVE_PATH
+        commit_request_decision = (
+            _read_commit_request_decision(request_path)
+            if request_path.is_file()
+            else None
+        )
+        reviewer_decision = _merge_reviewer_decisions(
+            stdout_decision,
+            commit_request_decision,
+        )
+        _logger.info(
+            "Pre-push review cycle %d/%d for Issue #%d: parsed verdict=%s "
+            "(stdout_parseable=%s, commit_request_verdict=%s).",
+            cycle,
+            max_attempts,
+            issue.number,
+            reviewer_decision.verdict,
+            stdout_decision.parseable,
+            commit_request_decision.verdict if commit_request_decision else "none",
+        )
         cycle_verdict = reviewer_decision.verdict
         if request_path.is_file():
+            _logger.info(
+                "Pre-push review cycle %d/%d for Issue #%d: reviewer wrote "
+                "commit request; processing through commit proxy.",
+                cycle,
+                max_attempts,
+                issue.number,
+            )
             cycle_verdict = "changes_requested"
             try:
                 current_verification = commit_requested_changes(
@@ -304,6 +399,14 @@ def run_pre_push_review(
                 current_head = get_head_sha(worktree_path, process_runner)
                 action_summary = (
                     "reviewer patched and runner committed follow-up changes"
+                )
+                _logger.info(
+                    "Pre-push review cycle %d/%d for Issue #%d: reviewer "
+                    "changes committed at head %s.",
+                    cycle,
+                    max_attempts,
+                    issue.number,
+                    current_head,
                 )
             except EmptyCommitRequestError:
                 # reviewer 写了 commit-request 却没有任何实际文件改动：这是良性
@@ -320,9 +423,24 @@ def run_pre_push_review(
                         "reviewer requested changes but produced no committable diff"
                     )
                 last_failure_summary = action_summary
+                _logger.info(
+                    "Pre-push review cycle %d/%d for Issue #%d: empty commit "
+                    "request handled as verdict=%s.",
+                    cycle,
+                    max_attempts,
+                    issue.number,
+                    reviewer_decision.verdict,
+                )
             except Exception as exc:  # noqa: BLE001
                 action_summary = f"reviewer patch failed to commit: {exc}"
                 last_failure_summary = action_summary
+                _logger.exception(
+                    "Pre-push review cycle %d/%d for Issue #%d: reviewer "
+                    "commit request failed.",
+                    cycle,
+                    max_attempts,
+                    issue.number,
+                )
                 github_client.comment_issue(
                     issue.number,
                     build_pre_push_review_result_comment(
@@ -363,11 +481,31 @@ def run_pre_push_review(
             cycle=cycle,
         )
         github_client.comment_issue(issue.number, comment_body)
+        _logger.info(
+            "Pre-push review cycle %d/%d for Issue #%d: wrote result comment "
+            "with verdict=%s and action=%s.",
+            cycle,
+            max_attempts,
+            issue.number,
+            "approved" if cycle_verdict == "approved" else "changes_requested",
+            action_summary,
+        )
         if action_summary.startswith("reviewer approved") and all(
             result.return_code == 0 for result in current_verification
         ):
+            _logger.info(
+                "Pre-push review approved Issue #%d after %d cycle(s).",
+                issue.number,
+                cycle,
+            )
             return current_head, current_verification
 
+    _logger.warning(
+        "Pre-push review did not approve Issue #%d after %d attempt(s): %s",
+        issue.number,
+        max_attempts,
+        last_failure_summary,
+    )
     raise RuntimeError(
         "Pre-push review did not approve after "
         f"{max_attempts} attempt(s): {last_failure_summary}"

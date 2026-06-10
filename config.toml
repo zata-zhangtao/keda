@@ -159,6 +159,7 @@ enabled = true
 review_agent = "auto"
 allow_same_agent = true
 max_attempts = 2
+timeout_seconds = 900
 
 [agent_runner.post_pr_supervisor]
 enabled = true

@@ -525,6 +525,90 @@ def test_run_pre_push_review_empty_commit_request_with_approval_converges(
     assert "empty commit request" in comment_calls[0]["body"]
 
 
+def test_run_pre_push_review_uses_commit_request_verdict_when_stdout_unparseable(
+    tmp_path: Path,
+) -> None:
+    """Commit-request verdict metadata should recover unparseable reviewer stdout."""
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    worktree_path = tmp_path / "issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps(
+            {
+                "commit_message": "noop",
+                "verdict": "approved",
+                "summary": "approved via request metadata",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _UnparseableApproveRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__(
+                responses={
+                    ("git", "branch", "--show-current"): CommandResult(
+                        command=("git", "branch", "--show-current"),
+                        return_code=0,
+                        stdout="issue-1\n",
+                        stderr="",
+                    ),
+                    ("git", "status", "--porcelain"): CommandResult(
+                        command=("git", "status", "--porcelain"),
+                        return_code=0,
+                        stdout="",
+                        stderr="",
+                    ),
+                }
+            )
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout="I wrote a no-op commit request.",
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    config = AppConfig(
+        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
+    )
+
+    final_sha, _verification = run_pre_push_review(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=_UnparseableApproveRunner(),
+        selected_agent="codex",
+        head_sha_before="before-sha",
+        expected_branch="issue-1",
+        verification_results=[],
+    )
+
+    assert final_sha == "before-sha"
+    assert not request_path.exists()
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "Verdict: approved" in comment_calls[0]["body"]
+    assert "empty commit request" in comment_calls[0]["body"]
+
+
 def test_run_pre_push_review_empty_commit_request_changes_requested_soft_fails(
     tmp_path: Path,
 ) -> None:
@@ -662,3 +746,57 @@ def test_run_pre_push_review_rejects_changes_requested_without_commit_request(
         "reviewer requested changes without a commit request"
         in comment_calls[0]["body"]
     )
+
+
+def test_run_pre_push_review_passes_configured_timeout(tmp_path: Path) -> None:
+    """Pre-push review should pass its configured timeout to the reviewer agent."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+
+    class _RecordingTimeoutRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_timeouts: list[int | None] = []
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                self.agent_timeouts.append(timeout)
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout='{"verdict": "approved", "summary": "ok"}',
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _RecordingTimeoutRunner()
+    config = AppConfig(
+        pre_push_review=PrePushReviewConfig(
+            enabled=True,
+            max_attempts=1,
+            timeout_seconds=42,
+        )
+    )
+
+    final_sha, _verification = run_pre_push_review(
+        issue=issue,
+        worktree_path=tmp_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=fake_runner,
+        selected_agent="codex",
+        head_sha_before="before-sha",
+        expected_branch="issue-1",
+        verification_results=[],
+    )
+
+    assert final_sha == "before-sha"
+    assert fake_runner.agent_timeouts == [42]

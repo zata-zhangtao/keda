@@ -300,6 +300,7 @@ def run_agent_with_prompt(
     process_runner: IProcessRunner,
     *,
     capture_output: bool = False,
+    timeout_seconds: int | None = None,
 ) -> CommandResult:
     """Run Codex or Claude Code with a prepared prompt."""
     builder = _AGENT_COMMAND_BUILDERS.get(agent_name)
@@ -311,6 +312,7 @@ def run_agent_with_prompt(
         command,
         cwd=worktree_path,
         capture_output=capture_output,
+        timeout=timeout_seconds,
     )
 
 

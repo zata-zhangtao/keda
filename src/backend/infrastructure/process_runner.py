@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +15,7 @@ from typing import Any, Callable, Sequence
 from backend.infrastructure.logging.logger import logger
 
 _MAX_BUFFER_SIZE = 4096
+_COMMAND_HEARTBEAT_SECONDS = 60
 
 
 def _format_timestamped_line(text: str) -> str:
@@ -63,7 +66,17 @@ class SubprocessRunner:
         capture_output: bool = True,
     ) -> CommandResult:
         """Run a subprocess and capture output."""
-        if capture_output:
+        if should_filter_claude_stream(command):
+            completed = run_filtered_claude_stream(
+                command, cwd=cwd, timeout=timeout, collect_stdout=True
+            )
+            stdout = completed.stdout
+            stderr = completed.stderr
+        elif capture_output and timeout is not None:
+            completed = _run_captured_process(command, cwd=cwd, timeout=timeout)
+            stdout = completed.stdout
+            stderr = completed.stderr
+        elif capture_output:
             completed = subprocess.run(
                 list(command),
                 cwd=cwd,
@@ -75,12 +88,6 @@ class SubprocessRunner:
             )
             stdout = completed.stdout
             stderr = completed.stderr
-        elif should_filter_claude_stream(command):
-            completed = run_filtered_claude_stream(
-                command, cwd=cwd, timeout=timeout, collect_stdout=True
-            )
-            stdout = completed.stdout
-            stderr = ""
         else:
             process = subprocess.Popen(
                 list(command),
@@ -91,6 +98,14 @@ class SubprocessRunner:
                 encoding="utf-8",
                 bufsize=1,
             )
+            watchdog = _ProcessWatchdog(
+                process,
+                command,
+                timeout=timeout,
+                heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
+                label="Command",
+            )
+            watchdog.start()
             stdout_lines: list[str] = []
             stderr_lines: list[str] = []
             try:
@@ -107,10 +122,13 @@ class SubprocessRunner:
                         logger.warning("%s", line.rstrip("\n"))
                         stderr_lines.append(line)
                 return_code = process.wait(timeout=timeout)
+                watchdog.raise_if_timed_out()
             except Exception:
                 process.kill()
                 process.wait()
                 raise
+            finally:
+                watchdog.stop()
             stdout = "".join(stdout_lines)
             stderr = "".join(stderr_lines)
             completed = subprocess.CompletedProcess(
@@ -133,6 +151,119 @@ class SubprocessRunner:
                 stderr=stderr,
             )
         return result
+
+
+def _run_captured_process(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    """Run a captured subprocess with heartbeat logging."""
+    process = subprocess.Popen(
+        list(command),
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    )
+    watchdog = _ProcessWatchdog(
+        process,
+        command,
+        timeout=timeout,
+        heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
+        label="Command",
+    )
+    watchdog.start()
+    try:
+        stdout, stderr = process.communicate()
+        watchdog.raise_if_timed_out()
+    except Exception:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        watchdog.stop()
+    return subprocess.CompletedProcess(
+        args=list(command),
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+class _ProcessWatchdog:
+    """Log long-running subprocess heartbeats and enforce wall-clock timeout."""
+
+    def __init__(
+        self,
+        process: subprocess.Popen[str],
+        command: Sequence[str],
+        *,
+        timeout: int | None,
+        heartbeat_seconds: int,
+        label: str,
+    ) -> None:
+        self._process = process
+        self._command = tuple(command)
+        self._timeout = timeout
+        self._heartbeat_seconds = heartbeat_seconds
+        self._label = label
+        self._started_at = time.monotonic()
+        self._stop_event = threading.Event()
+        self._timed_out = False
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        """Start the watchdog background thread."""
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Stop the watchdog and wait briefly for it to exit."""
+        self._stop_event.set()
+        self._thread.join(timeout=1)
+
+    def raise_if_timed_out(self) -> None:
+        """Raise TimeoutExpired when the watchdog killed the process."""
+        if self._timed_out:
+            raise subprocess.TimeoutExpired(
+                cmd=list(self._command),
+                timeout=self._timeout,
+            )
+
+    def _run(self) -> None:
+        next_heartbeat_at = self._heartbeat_seconds
+        while not self._stop_event.wait(timeout=1):
+            if self._process.poll() is not None:
+                return
+            elapsed_seconds = int(time.monotonic() - self._started_at)
+            if elapsed_seconds >= next_heartbeat_at:
+                logger.info(
+                    "%s still running after %ds: %s",
+                    self._label,
+                    elapsed_seconds,
+                    _summarize_command(self._command),
+                )
+                next_heartbeat_at += self._heartbeat_seconds
+            if self._timeout is not None and elapsed_seconds >= self._timeout:
+                self._timed_out = True
+                logger.error(
+                    "%s timed out after %ds; terminating: %s",
+                    self._label,
+                    elapsed_seconds,
+                    _summarize_command(self._command),
+                )
+                self._process.kill()
+                return
+
+
+def _summarize_command(command: Sequence[str]) -> str:
+    """Return a compact command string safe for logs."""
+    command_text = " ".join(str(part) for part in command)
+    if len(command_text) <= 240:
+        return command_text
+    return f"{command_text[:237]}..."
 
 
 class ClaudeStreamRenderer:
@@ -240,8 +371,6 @@ def run_filtered_claude_stream(
     Returns:
         CompletedProcess with collected stdout if requested.
     """
-    import threading
-
     renderer = ClaudeStreamRenderer()
     capture_stderr = display_sink is not None
     process = subprocess.Popen(
@@ -254,6 +383,14 @@ def run_filtered_claude_stream(
         encoding="utf-8",
         bufsize=1,
     )
+    watchdog = _ProcessWatchdog(
+        process,
+        command,
+        timeout=timeout,
+        heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
+        label="Claude stream",
+    )
+    watchdog.start()
 
     def _pump_stderr() -> None:
         if process.stderr is None:
@@ -317,10 +454,13 @@ def run_filtered_claude_stream(
             if buffered:
                 logger.info("Agent output: %s", buffered)
         return_code = process.wait(timeout=timeout)
+        watchdog.raise_if_timed_out()
     except Exception:
         process.kill()
         process.wait()
         raise
+    finally:
+        watchdog.stop()
     if stderr_thread is not None:
         stderr_thread.join(timeout=5)
     return subprocess.CompletedProcess(

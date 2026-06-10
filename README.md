@@ -46,19 +46,38 @@ just run
 
 ### 安装 `iar` 全局命令
 
-本项目通过 `pyproject.toml` 的 `[project.scripts]` 注册了 `iar` CLI。推荐将其安装为全局命令：
+本项目通过 `pyproject.toml` 的 `[project.scripts]` 注册了 `iar` CLI。开发本仓库时推荐以可编辑模式安装为全局命令，这样源码改动可直接反映到 `iar`，无需每次重新构建安装：
 
 ```bash
-# 全局安装（首次）
-uv tool install .
+# 在仓库根目录安装（推荐）
+uv tool install --reinstall --editable .
 
-# 当 pyproject.toml 依赖变更后重装（修复 ModuleNotFoundError 等）
-just reinstall-iar
-# 或手动执行
-uv tool install --reinstall .
+# 或从任意目录指定项目路径
+uv tool install --reinstall --editable /path/to/keda
 ```
 
-安装后可直接使用 `iar <command>`；未安装时可用 `uv run iar <command>` 代替。
+`uv tool install` 的参数应是项目目录或包名，不要传入 `README.md` 等普通文件路径。当 `pyproject.toml` 的依赖或 CLI 入口变更后，需要重新执行可编辑安装命令；也可使用项目内置命令重装：
+
+```bash
+just reinstall-iar
+```
+
+安装后可直接使用 `iar <command>`；未安装时可用 `uv run iar <command>` 代替。CLI 基于 Typer/Rich，`iar --help` 会展示分组命令、参数和别名。
+
+### 安装 shell 自动补全
+
+安装补全后，zsh 中输入 `iar is<Tab>` 可补全到 `issue` / `issue-from-prd`：
+
+```bash
+# zsh（推荐）
+iar completion install --shell zsh
+source ~/.zshrc
+
+# 仅查看补全脚本，不写入 shell 配置
+iar completion show --shell zsh
+```
+
+也支持 `--shell bash` 和 `--shell fish`。
 
 ### 初始化与配置
 
@@ -79,6 +98,9 @@ iar labels sync --repo-id keda
 
 ```bash
 # 从 PRD 创建 GitHub Issue，标记为 ready 并发布 PRD
+iar issue create tasks/pending/example.md --repo-id keda --agent codex --publish-prd --ready
+
+# 兼容旧命令
 iar issue-from-prd tasks/pending/example.md --repo-id keda --agent codex --publish-prd --ready
 ```
 
@@ -86,16 +108,19 @@ iar issue-from-prd tasks/pending/example.md --repo-id keda --agent codex --publi
 
 ```bash
 # 单次执行（dry-run 预览，不实际执行）
-iar run-once --dry-run
+iar run --dry-run
 
 # 单次执行（当前仓库）
-iar run-once
+iar run
 
 # 处理 registry 中所有启用的仓库
-iar run-once --all
+iar run --all
 
 # Daemon 模式轮询（默认每 600 秒）
 iar daemon
+
+# 兼容旧命令
+iar run-once --dry-run
 ```
 
 ### 多仓库配置

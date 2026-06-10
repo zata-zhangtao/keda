@@ -405,6 +405,118 @@ def test_subprocess_runner_non_claude_path_uses_pipe(tmp_path: Path) -> None:
         logger.setLevel(original_level)
 
 
+def test_subprocess_runner_claude_capture_uses_filtered_stream(
+    tmp_path: Path,
+) -> None:
+    """Claude capture mode should return rendered output instead of raw JSON."""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    text_event = _json_line(
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "approved"},
+            },
+        }
+    )
+    stop_event = _json_line({"type": "stream_event", "event": {"type": "message_stop"}})
+    mock_process = MagicMock()
+    mock_process.stdout = iter([text_event, stop_event])
+    mock_process.stdin = MagicMock()
+    mock_process.wait.return_value = 0
+    mock_process.returncode = 0
+    mock_process.poll.return_value = None
+
+    runner = SubprocessRunner()
+    with (
+        patch("subprocess.Popen", return_value=mock_process) as popen_mock,
+        patch("subprocess.run") as run_mock,
+    ):
+        result = runner.run(
+            ["claude", "--output-format", "stream-json", "-p", "Review."],
+            cwd=tmp_path,
+            capture_output=True,
+            timeout=900,
+        )
+
+    assert result.stdout == "approved\n"
+    assert result.stderr == ""
+    assert popen_mock.called
+    assert not run_mock.called
+
+
+def test_subprocess_runner_captured_timeout_path_uses_popen(
+    tmp_path: Path,
+) -> None:
+    """Captured non-Claude commands with timeout should use watchdog Popen path."""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    mock_process = MagicMock()
+    mock_process.communicate.return_value = ("raw output\n", "raw error\n")
+    mock_process.returncode = 0
+    mock_process.poll.return_value = None
+
+    runner = SubprocessRunner()
+    with (
+        patch("subprocess.Popen", return_value=mock_process) as popen_mock,
+        patch("subprocess.run") as run_mock,
+    ):
+        result = runner.run(
+            ["some", "command"],
+            cwd=tmp_path,
+            capture_output=True,
+            check=False,
+            timeout=900,
+        )
+
+    assert result.stdout == "raw output\n"
+    assert result.stderr == "raw error\n"
+    assert popen_mock.called
+    assert not run_mock.called
+
+
+def test_process_watchdog_logs_heartbeat_and_kills_on_timeout() -> None:
+    """Process watchdog should log progress and terminate after timeout."""
+    from backend.infrastructure import process_runner
+
+    class _NeverStoppedEvent:
+        def wait(self, timeout: float) -> bool:  # noqa: ARG002
+            return False
+
+    mock_process = MagicMock()
+    mock_process.poll.return_value = None
+    watchdog = process_runner._ProcessWatchdog(
+        mock_process,
+        ["slow", "command"],
+        timeout=2,
+        heartbeat_seconds=1,
+        label="Command",
+    )
+    watchdog._started_at = 0
+    watchdog._stop_event = _NeverStoppedEvent()
+
+    with (
+        patch.object(process_runner.time, "monotonic", side_effect=[1.1, 2.1]),
+        patch.object(process_runner, "logger") as logger_mock,
+    ):
+        watchdog._run()
+
+    logger_mock.info.assert_any_call(
+        "%s still running after %ds: %s",
+        "Command",
+        1,
+        "slow command",
+    )
+    logger_mock.error.assert_called_once_with(
+        "%s timed out after %ds; terminating: %s",
+        "Command",
+        2,
+        "slow command",
+    )
+    mock_process.kill.assert_called_once_with()
+
+
 def test_capture_output_true_not_polluted(tmp_path: Path) -> None:
     """capture_output=True should return raw stdout without timestamp prefix."""
     from backend.infrastructure.process_runner import SubprocessRunner

@@ -361,6 +361,7 @@ class AgentRunnerPrePushReviewSettings(BaseModel):
     review_agent: str = "auto"
     allow_same_agent: bool = True
     max_attempts: int = 2
+    timeout_seconds: int = 900
 
 
 class AgentRunnerPostPrSupervisorSettings(BaseModel):

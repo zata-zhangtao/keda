@@ -2,13 +2,15 @@
 
 `iar`（issue-agent-runner）是一个将 GitHub Issues 转为本地 AI Agent 队列的 CLI 工具，已按照本仓库的四层架构迁移并集成。
 
+CLI 入口基于 Typer/Rich：`iar --help` 会展示分组命令、参数和别名；脚本可继续使用历史命令，日常人工操作优先使用更短的别名。
+
 ## 功能概述
 
 - **init**：在目标 Git 仓库创建仓库本地 `.iar.toml` 配置
 - **labels sync**：在目标仓库创建或更新标准 labels（`agent/ready`、`agent/running`、`agent/supervising` 等）
-- **issue-from-prd**：从 PRD Markdown 文件创建 GitHub Issue，并可在 ready 前发布 PRD
-- **run-once**：单次轮询 `agent/ready` 的 Issues，claim 后执行 AI Agent，验证、pre-push review、创建 draft PR、进入 `agent/supervising` 并运行 post-PR supervisor
-- **review-once**：单次检查 `agent/supervising` 和 `agent/review` 的 Issues，基于 PR 上下文变化运行 supervisor cycle
+- **issue create**：从 PRD Markdown 文件创建 GitHub Issue，并可在 ready 前发布 PRD（兼容旧命令 `issue-from-prd`）
+- **run**：单次轮询 `agent/ready` 的 Issues，claim 后执行 AI Agent，验证、pre-push review、创建 draft PR、进入 `agent/supervising` 并运行 post-PR supervisor（兼容旧命令 `run-once`）
+- **review**：单次检查 `agent/supervising` 和 `agent/review` 的 Issues，基于 PR 上下文变化运行 supervisor cycle（兼容旧命令 `review-once`）
 - **review-daemon**：常驻进程，按指定间隔循环执行 `review-once`
 - **daemon**：常驻进程，按指定间隔循环执行 `run-once`
 
@@ -23,6 +25,23 @@ uv run iar --help
 # 或安装后直接使用
 iar --help
 ```
+
+### Shell 自动补全
+
+`iar` 支持生成 shell completion。zsh 用户安装后，输入 `iar is<Tab>` 可补全到 `issue` / `issue-from-prd`：
+
+```bash
+iar completion install --shell zsh
+source ~/.zshrc
+```
+
+如需只查看脚本内容而不写入配置：
+
+```bash
+iar completion show --shell zsh
+```
+
+`completion install` 同时支持 `--shell bash` 和 `--shell fish`。
 
 ## labels sync 详解
 
@@ -116,10 +135,13 @@ verification_commands = [
 
 | 命令形态 | 目标解析 |
 |---|---|
-| `iar run-once` / `iar labels sync` / `iar review-once` / `iar issue-from-prd ...` | 当前 Git 仓库，合并当前仓库 `.iar.toml` |
-| `iar run-once --repo /path/to/repo` | 指定 Git 仓库，合并 `/path/to/repo/.iar.toml` |
-| `iar run-once --repo-id keda` | 从 legacy registry 找到路径，再合并目标仓库 `.iar.toml` |
-| `iar run-once --all` | 显式处理 `config.toml` 中所有 enabled registry entries |
+| `iar run` / `iar labels sync` / `iar review` / `iar issue create ...` | 当前 Git 仓库，合并当前仓库 `.iar.toml` |
+| `iar run --repo /path/to/repo` | 指定 Git 仓库，合并 `/path/to/repo/.iar.toml` |
+| `iar --repo /path/to/repo run` | 等价的顶层 selector 写法，适合把目标仓库放在命令前 |
+| `iar run --repo-id keda` | 从 legacy registry 找到路径，再合并目标仓库 `.iar.toml` |
+| `iar run --all` | 显式处理 `config.toml` 中所有 enabled registry entries |
+
+历史命令 `iar run-once`、`iar review-once`、`iar issue-from-prd` 和 `iar recover-publish` 仍可用于脚本兼容。
 
 ## 多仓库 Registry 兼容
 
@@ -212,20 +234,20 @@ agent/ready
 
 1. Runner 写 Issue comment `Implementation Complete`
 2. Runner 构建 review packet（Issue、PRD、diff、changed paths、verification results、AI standards、review workflow）
-3. 打开新的 AI session 执行 review
+3. 打开新的 AI session 执行 review，并使用 `[agent_runner.pre_push_review].timeout_seconds` 限制最长运行时间
 4. Reviewer 可直接修改 worktree；修改后写入 `.agent-runner/commit-request.json`
 5. Runner 通过 commit proxy 提交 reviewer 修改并重新运行 `verification_commands`
 6. Runner 写 Issue comment `Pre-Push Review Result`
 7. Review 通过后才调用 `publish_changes`
 
-Pre-push review 不产生独立的 durable label，整个过程仍在 `agent/running` 内。
+Pre-push review 不产生独立的 durable label，整个过程仍在 `agent/running` 内。Runner 会记录 review start、cycle、reviewer exit code、parsed verdict、commit-request 处理和 result comment 写入等日志；底层进程 runner 对长时间运行的 agent 命令每 60 秒输出一次 heartbeat，并在达到 timeout 时终止子进程。
 
 > **空 commit request 行为**：当 reviewer 写出了 `.agent-runner/commit-request.json` 但工作树已无任何可提交改动（例如 reviewer 的建议与现状一致，或上一轮 cycle 已经提交过修复），runner 会按 reviewer 解析出的真实 verdict 处理：
 >
 > - `approved` → 写一条 `Pre-Push Review Result` 评论（action summary 为 `reviewer approved with an empty commit request`），循环正常收敛。
 > - `changes_requested` → 写一条评论（action summary 为 `reviewer requested changes but produced no committable diff`）并继续下一轮 cycle；用尽 `max_attempts` 后走 `Pre-push review did not approve after N attempt(s): ...` 软失败路径。
 >
-> 该信号由 `EmptyCommitRequestError`（`RuntimeError` 的子类，message 保持 `"Agent requested a commit but produced no file changes."`）承载，因此 `is_recoverable_commit_request_error(...)` 仍把它分类为可恢复，且不会被升级为 `Pre-push review repair failed` 硬失败。
+> 若 reviewer stdout 没有可解析的 JSON verdict，runner 会在 commit request 中读取可选的 `verdict`、`summary`、`findings_high`、`findings_medium`、`findings_low` 元数据作为兜底。空提交信号由 `EmptyCommitRequestError`（`RuntimeError` 的子类，message 保持 `"Agent requested a commit but produced no file changes."`）承载，因此 `is_recoverable_commit_request_error(...)` 仍把它分类为可恢复，且不会被升级为 `Pre-push review repair failed` 硬失败。
 
 ### Post-PR Supervisor
 
@@ -310,31 +332,37 @@ iar labels sync
 iar labels sync --repo-id keda
 
 # 从 PRD 创建 ready Issue，并先发布 PRD
-iar issue-from-prd tasks/pending/example.md --repo-id keda --type feature --agent codex --publish-prd --ready
+iar issue create tasks/pending/example.md --repo-id keda --type feature --agent codex --publish-prd --ready
 
 # 单次执行（dry-run 预览）
-iar run-once --dry-run
+iar run --dry-run
 
 # 单次执行（当前仓库）
-iar run-once
+iar run
 
 # 显式处理所有 enabled registry entries
-iar run-once --all
+iar run --all
 
 # Daemon 模式（默认每 600 秒轮询一次，当前仓库）
 iar daemon
 
 # 单次 review 检查
-iar review-once
+iar review
 
 # Review daemon 模式
 iar review-daemon --interval 600
 
 # 恢复发布失败（仅用于已完成审查后的 push/PR 收尾失败）
-iar recover-publish --issue 5
+iar recover --issue 5
 
 # 恢复发布失败（显式确认分支名）
-iar recover-publish --issue 5 --branch issue-5
+iar recover --issue 5 --branch issue-5
+
+# 兼容旧命令仍可使用
+iar issue-from-prd tasks/pending/example.md --repo-id keda --type feature --agent codex --publish-prd --ready
+iar run-once --dry-run
+iar review-once
+iar recover-publish --issue 5
 ```
 
 ## 失败重跑
@@ -818,6 +846,7 @@ enabled = true
 review_agent = "auto"
 allow_same_agent = true
 max_attempts = 2
+timeout_seconds = 900
 
 [agent_runner.post_pr_supervisor]
 enabled = true
@@ -973,7 +1002,7 @@ Marker 是幂等 cursor，不依赖本地状态文件。可读正文用于人类
 - 发布变更前会检查 `forbidden_path_patterns`，拒绝匹配的文件变更
 - Agent 执行在隔离 worktree 中进行，不影响主工作区
 - Agent 不直接执行 `git add` 或 `git commit`；完成修改后写入 `.agent-runner/commit-request.json` 请求 runner 在 host 侧提交
-- `commit-request.json` 只允许提供 `commit_message`；runner 会校验当前 branch 未变化、删除请求文件、检查 `forbidden_path_patterns`，再执行 `git add -A` 和 `git commit`
+- `commit-request.json` 必须提供 `commit_message`；pre-push reviewer 可额外提供 `verdict`、`summary` 和 `findings_*` 元数据作为空提交兜底。runner 会校验当前 branch 未变化、删除请求文件、检查 `forbidden_path_patterns`，再执行 `git add -A` 和 `git commit`
 - 不同仓库应在 `verification_commands` 中配置自己的验证命令，例如 `just test`、`npm test`、`pnpm lint` 或 `make test`
 - runner 会在提交前先运行一次 `verification_commands`；发现未提交变更并执行 `git add -A` 后，会再次运行同一组验证命令，覆盖依赖 staged 状态的 commit hook 或测试标记
 - 如果验证过程中的 formatter 或 lint 自动修复了已跟踪文件，runner 会在安全路径校验后用 `git add -u` 同步这些 tracked 修改，避免 `.last_tested_commit` 指向 working tree 而 commit hook 检查到过期 staged tree

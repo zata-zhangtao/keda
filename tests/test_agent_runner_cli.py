@@ -125,6 +125,66 @@ def test_cli_parser_repo_and_repo_id_individually_parseable() -> None:
     assert parsed_id.repo is None
 
 
+def test_main_no_args_shows_help_without_traceback(capsys) -> None:
+    """No-argument Typer entrypoint should show help without leaking internals."""
+    from backend.api.cli import main
+
+    exit_code = main([])
+    captured = capsys.readouterr()
+    combined_output = f"{captured.out}\n{captured.err}"
+
+    assert exit_code == 0
+    assert "Usage: iar" in combined_output
+    assert "Commands" in combined_output
+    assert "Traceback" not in combined_output
+    assert "NoArgsIsHelpError" not in combined_output
+
+
+def test_main_completion_show_zsh_outputs_script(capsys) -> None:
+    """completion show should print a zsh script for iAR."""
+    from backend.api.cli import main
+
+    exit_code = main(["completion", "show", "--shell", "zsh"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "#compdef iar" in captured.out
+    assert "_IAR_COMPLETE=complete_zsh" in captured.out
+
+
+def test_main_completion_install_zsh_writes_user_files(tmp_path, monkeypatch) -> None:
+    """completion install should write zsh completion under the user's home."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    exit_code = main(["completion", "install", "--shell", "zsh"])
+
+    completion_path = tmp_path / ".zsh" / "completions" / "_iar"
+    zshrc_path = tmp_path / ".zshrc"
+    assert exit_code == 0
+    assert "#compdef iar" in completion_path.read_text(encoding="utf-8")
+    zshrc_text = zshrc_path.read_text(encoding="utf-8")
+    assert "autoload -Uz compinit && compinit" in zshrc_text
+    assert f'[ -f "{completion_path}" ] && source "{completion_path}"' in zshrc_text
+
+
+def test_main_completion_protocol_matches_issue_prefix(capsys, monkeypatch) -> None:
+    """Shell completion protocol should complete iar is<Tab> to issue commands."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("_IAR_COMPLETE", "complete_bash")
+    monkeypatch.setenv("COMP_WORDS", "iar is")
+    monkeypatch.setenv("COMP_CWORD", "1")
+
+    exit_code = main([])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "issue" in captured.out.splitlines()
+    assert "issue-from-prd" in captured.out.splitlines()
+
+
 def test_main_rejects_repo_and_repo_id_together() -> None:
     """main should exit 1 when both --repo and --repo-id are given."""
     from backend.api.cli import main
@@ -164,6 +224,50 @@ def test_main_passes_all_repositories_selector() -> None:
 
     assert exit_code == 0
     assert mock_resolve.call_args.kwargs["all_repositories"] is True
+
+
+def test_main_run_alias_passes_all_repositories_selector() -> None:
+    """Modern run alias should dispatch to run-once with the same selectors."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ) as mock_resolve, patch(
+        "backend.api.cli.run_agent_repositories_once", return_value=0
+    ) as mock_run, patch("backend.api.cli.create_github_client"):
+        exit_code = main(["run", "--all", "--dry-run", "--agent", "codex"])
+
+    assert exit_code == 0
+    assert mock_resolve.call_args.kwargs["all_repositories"] is True
+    assert mock_run.call_args.kwargs["dry_run"] is True
+    assert mock_run.call_args.kwargs["agent"] == "codex"
+
+
+def test_main_typer_top_level_repo_selector_is_honored() -> None:
+    """Typer entrypoint should accept repository selectors before the command."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ) as mock_resolve, patch(
+        "backend.api.cli.run_agent_repositories_once", return_value=0
+    ), patch("backend.api.cli.create_github_client"):
+        exit_code = main(["--repo", "/tmp/repo", "run", "--dry-run"])
+
+    assert exit_code == 0
+    assert mock_resolve.call_args.kwargs["repo_path_override"] == "/tmp/repo"
 
 
 def test_main_labels_sync_iterates_multiple_repos() -> None:
@@ -206,6 +310,34 @@ def test_main_issue_from_prd_defaults_to_cwd() -> None:
     ), patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False):
         exit_code = main(["issue-from-prd", "tasks/example.md"])
         assert exit_code == 0
+
+
+def test_main_issue_create_alias_matches_issue_from_prd() -> None:
+    """Modern issue create alias should use the existing PRD issue workflow."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path.cwd()
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd",
+        return_value="https://github.com/example/issues/1",
+    ) as mock_create, patch(
+        "backend.api.cli._prompt_and_publish_prd_if_needed"
+    ) as mock_prompt:
+        exit_code = main(
+            ["issue", "create", "tasks/example.md", "--publish-prd", "--ready"]
+        )
+
+    assert exit_code == 0
+    assert mock_create.call_args.kwargs["request"].prd_path == Path("tasks/example.md")
+    assert mock_create.call_args.kwargs["request"].queue_ready is True
+    mock_prompt.assert_not_called()
 
 
 def test_main_issue_from_prd_ready_without_publish_defers_label() -> None:
@@ -408,6 +540,29 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
         "skeptic",
         "architect",
     )
+
+
+def test_main_review_alias_dispatches_review_once() -> None:
+    """Modern review alias should dispatch to the review-once workflow."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.config = MagicMock()
+    mock_context.repo_id = "repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client") as mock_client, patch(
+        "backend.api.cli.review_once", return_value=0
+    ) as mock_review:
+        exit_code = main(["review", "--dry-run", "--agent", "claude"])
+
+    assert exit_code == 0
+    mock_client.assert_called_once_with(mock_context.repo_path, ANY)
+    assert mock_review.call_args.kwargs["dry_run"] is True
+    assert mock_review.call_args.kwargs["agent"] == "claude"
 
 
 def test_cli_parser_recover_publish_required_args() -> None:

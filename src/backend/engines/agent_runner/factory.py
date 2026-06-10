@@ -174,6 +174,7 @@ def build_app_config_from_settings(
             review_agent=pre_push.review_agent,
             allow_same_agent=pre_push.allow_same_agent,
             max_attempts=pre_push.max_attempts,
+            timeout_seconds=pre_push.timeout_seconds,
         ),
         post_pr_supervisor=PostPrSupervisorConfig(
             enabled=post_supervisor.enabled,

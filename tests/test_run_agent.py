@@ -130,6 +130,38 @@ def test_run_agent_with_prompt_can_capture_output(tmp_path: Path) -> None:
     assert captured.stdout == '{"verdict": "approved"}'
 
 
+def test_run_agent_with_prompt_passes_timeout(tmp_path: Path) -> None:
+    """Prepared agent runs should pass timeout through to the process runner."""
+
+    class _RecordingTimeoutRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.timeouts: list[int | None] = []
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            self.timeouts.append(timeout)
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _RecordingTimeoutRunner()
+
+    run_agent_with_prompt(
+        "codex",
+        "Review.",
+        tmp_path,
+        fake_runner,
+        capture_output=True,
+        timeout_seconds=123,
+    )
+
+    assert fake_runner.timeouts == [123]
+
+
 def test_extract_agent_response_text_from_claude_stream_json() -> None:
     """Captured Claude stream-json should be reduced to assistant text."""
     result = CommandResult(

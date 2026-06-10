@@ -77,6 +77,7 @@ def test_settings_review_and_supervisor_match_core() -> None:
     assert pre_push.review_agent == core_pre.review_agent
     assert pre_push.allow_same_agent == core_pre.allow_same_agent
     assert pre_push.max_attempts == core_pre.max_attempts
+    assert pre_push.timeout_seconds == core_pre.timeout_seconds
 
     assert post_sup.enabled == core_post.enabled
     assert post_sup.supervisor_agent == core_post.supervisor_agent
@@ -88,6 +89,7 @@ def test_factory_build_app_config_maps_supervising() -> None:
     app_config = build_app_config()
     assert app_config.labels.supervising == "agent/supervising"
     assert app_config.pre_push_review.enabled is True
+    assert app_config.pre_push_review.timeout_seconds == 900
     assert app_config.post_pr_supervisor.enabled is True
 
 

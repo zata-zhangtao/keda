@@ -6,6 +6,8 @@ import argparse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from rich.console import Console
+
 from backend.core.use_cases.create_issue_from_prd import (
     IssueFromPrdRequest,
     PrdPublishContext,
@@ -51,6 +53,10 @@ from backend.engines.agent_runner.repository_local import (
 from backend.engines.agent_runner.worktree_cli import (
     build_worktree_manager,
 )
+
+console = Console()
+error_console = Console(stderr=True)
+
 
 if TYPE_CHECKING:
     from backend.core.shared.interfaces.agent_runner import (
@@ -313,10 +319,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the CLI."""
-    parsed = build_parser().parse_args(argv)
-
+def _run_parsed_command(parsed: argparse.Namespace) -> int:
+    """Run a command after CLI arguments have been parsed."""
     if parsed.config:
         logger.warning(
             "The --config flag is deprecated. Use config.toml or env vars instead."
@@ -358,14 +362,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         logger.info("Wrote IAR local config: %s", init_result.config_path)
+        console.print(f"[green]Wrote IAR local config:[/] {init_result.config_path}")
         try:
             github_client = create_github_client(
                 init_result.repo_root_path, process_runner
             )
             sync_labels(labels_config=LabelConfig(), github_client=github_client)
             logger.info("Labels synced for: %s", init_result.repo_root_path)
+            console.print(f"[green]Labels synced for:[/] {init_result.repo_root_path}")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Label sync failed (labels may already exist): %s", exc)
+            error_console.print(f"[yellow]Label sync failed:[/] {exc}")
         return 0
 
     if parsed.command == "worktree":
@@ -468,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
                     context.config.labels.ready,
                 )
             logger.info("Created GitHub Issue: %s", issue_url)
+            console.print(f"[green]Created GitHub Issue:[/] {issue_url}")
             return 0
 
         if parsed.command == "run-once":
@@ -591,6 +599,10 @@ def main(argv: list[str] | None = None) -> int:
                     result.issue_number,
                     result.pr_url,
                 )
+                console.print(
+                    f"[green]Publish recovered for Issue "
+                    f"#{result.issue_number}:[/] {result.pr_url}"
+                )
                 return 0
             except PublishRecoveryError as exc:
                 logger.error(
@@ -663,12 +675,20 @@ def main(argv: list[str] | None = None) -> int:
                 finished_at=result.finished_at,
             )
             write_deliberation_outputs(result, session, output_path)
-            print(f"\nDeliberation complete: {output_path}")
+            console.print(f"\n[green]Deliberation complete:[/] {output_path}")
             return 0
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
         logger.error("iar failed: %s", exc)
+        error_console.print(f"[red]iar failed:[/] {exc}")
         return 1
     return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the Typer-powered CLI."""
+    from backend.api.cli_typer import main as typer_main
+
+    return typer_main(argv)
 
 
 if __name__ == "__main__":

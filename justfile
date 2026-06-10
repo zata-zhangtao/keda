@@ -109,11 +109,11 @@ sync mode="": _check-completion
             ;;
     esac
 
-# Reinstall the `iar` CLI tool globally via uv
+# Reinstall the `iar` CLI tool globally via uv in editable mode
 # Usage:
 #   just reinstall-iar
 reinstall-iar:
-    uv tool install --reinstall .
+    uv tool install --reinstall --editable .
 
 # Run the development entrypoint
 # Usage:
