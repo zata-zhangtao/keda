@@ -59,6 +59,29 @@ def test_label_config_includes_supervising() -> None:
     assert InfraLabelConfig().supervising == "agent/supervising"
 
 
+def test_label_config_includes_waiting() -> None:
+    """All label configs must include the waiting label."""
+    assert CoreLabelConfig().waiting == "agent/waiting"
+    assert AgentRunnerLabelSettings().waiting == "agent/waiting"
+    assert InfraLabelConfig().waiting == "agent/waiting"
+
+
+def test_label_config_includes_group_prefix() -> None:
+    """All label configs must include the group prefix."""
+    assert CoreLabelConfig().group_prefix == "task-group/"
+    assert AgentRunnerLabelSettings().group_prefix == "task-group/"
+    assert InfraLabelConfig().group_prefix == "task-group/"
+
+
+def test_factory_build_app_config_maps_waiting_and_group_prefix() -> None:
+    """Factory must map waiting and group_prefix labels through to AppConfig."""
+    from backend.engines.agent_runner.factory import build_app_config
+
+    app_config = build_app_config()
+    assert app_config.labels.waiting == "agent/waiting"
+    assert app_config.labels.group_prefix == "task-group/"
+
+
 def test_app_config_has_review_and_supervisor_settings() -> None:
     """AppConfig must aggregate pre-push review and post-PR supervisor configs."""
     app_config = CoreAppConfig()

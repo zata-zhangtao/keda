@@ -116,12 +116,19 @@ def test_merge_repository_config_overrides_labels() -> None:
     global_config = AppConfig(labels=LabelConfig(ready="global/ready"))
     repo_settings = AgentRunnerRepositorySettings(
         path="/tmp/repo",
-        labels=AgentRunnerLabelSettings(ready="repo/ready", codex="repo/codex"),
+        labels=AgentRunnerLabelSettings(
+            ready="repo/ready",
+            codex="repo/codex",
+            waiting="repo/waiting",
+            group_prefix="repo-group/",
+        ),
     )
     merged = merge_repository_config(global_config, repo_settings)
     assert merged.labels.ready == "repo/ready"
     assert merged.labels.agent_labels["codex"] == "repo/codex"
     assert merged.labels.agent_labels["claude"] == "agent/claude"
+    assert merged.labels.waiting == "repo/waiting"
+    assert merged.labels.group_prefix == "repo-group/"
 
 
 def test_merge_repository_config_inherits_label_agent_labels() -> None:

@@ -144,8 +144,10 @@ def build_app_config_from_settings(
             review=label_settings.review,
             failed=label_settings.failed,
             blocked=label_settings.blocked,
+            waiting=label_settings.waiting,
             validation_pending=label_settings.validation_pending,
             validation_passed=label_settings.validation_passed,
+            group_prefix=label_settings.group_prefix,
             agent_labels=label_settings.agent_labels,
         ),
         git=GitConfig(
@@ -300,12 +302,14 @@ def _merge_label_config(
         review=override_data.get("review", base_config.review),
         failed=override_data.get("failed", base_config.failed),
         blocked=override_data.get("blocked", base_config.blocked),
+        waiting=override_data.get("waiting", base_config.waiting),
         validation_pending=override_data.get(
             "validation_pending", base_config.validation_pending
         ),
         validation_passed=override_data.get(
             "validation_passed", base_config.validation_passed
         ),
+        group_prefix=override_data.get("group_prefix", base_config.group_prefix),
         agent_labels=agent_labels,
     )
 
