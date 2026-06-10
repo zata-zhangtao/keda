@@ -32,6 +32,7 @@ from backend.core.use_cases.run_agent_deliberation import (
     create_default_session_id,
     run_agent_deliberation,
 )
+from backend.core.use_cases.interactive_decision import run_interactive_decision
 from backend.core.use_cases.run_agent_repositories_once import (
     run_agent_repositories_once,
 )
@@ -52,6 +53,7 @@ from backend.engines.agent_runner.factory import (
     create_content_generator,
     create_event_sink,
     create_github_client,
+    create_planner_runner,
     create_process_runner,
     create_transcript_runner,
     get_agent_runner_settings,
@@ -429,6 +431,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Agent runner to use.",
     )
     add_common_options(blocked_continue_parser)
+
+    ask_parser = subparsers.add_parser(
+        "ask", help="Ask the agent runner to decide the next safe action."
+    )
+    ask_parser.add_argument("prompt", help="Natural language request.")
+    ask_parser.add_argument(
+        "--agent",
+        choices=("auto", "codex", "claude", "kimi"),
+        default="auto",
+        help="Planner agent to use.",
+    )
+    ask_parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Only generate plan without executing.",
+    )
+    ask_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Allow execution after confirmation.",
+    )
+    ask_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Auto-confirm non-interactive execution.",
+    )
+    ask_parser.add_argument(
+        "--output",
+        default=None,
+        help="Output directory for decision audit.",
+    )
+    add_common_options(ask_parser)
 
     deliberate_parser = subparsers.add_parser(
         "deliberate", help="Run a multi-agent deliberation session."
@@ -921,6 +955,61 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 logger.error("blocked-continue failed: %s", exc)
                 error_console.print(f"[red]blocked-continue failed:[/] {exc}")
                 return 1
+
+        if parsed.command == "ask":
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
+                repo_id=repo_id,
+                repo_override=repo_override,
+            )
+            if len(contexts) != 1:
+                logger.error(
+                    "ask requires exactly one target repository. "
+                    "Use --repo or --repo-id to specify."
+                )
+                return 1
+            context = contexts[0]
+            _ensure_gh_auth_or_prompt(context.repo_path, process_runner)
+            github_client = create_github_client(context.repo_path, process_runner)
+            planner_runner = create_planner_runner(process_runner)
+            content_generator = create_content_generator(process_runner)
+            agent = parsed.agent
+            if agent == "auto":
+                agent = context.config.interactive_decision.default_agent
+            output_dir = None
+            if parsed.output:
+                output_dir = Path(parsed.output)
+            deliberation_config = build_deliberation_config_from_settings(
+                runner_settings
+            )
+            transcript_runner = create_transcript_runner(process_runner)
+            output_view = create_output_view()
+            event_sink = create_event_sink(
+                Path(context.config.interactive_decision.default_output_dir),
+                output_view,
+            )
+            return run_interactive_decision(
+                user_prompt=parsed.prompt,
+                context=context,
+                config=context.config.interactive_decision,
+                agent=agent,
+                plan_only=parsed.plan_only,
+                execute=parsed.execute,
+                auto_confirm=parsed.yes,
+                output_dir=output_dir,
+                planner_runner=planner_runner,
+                github_client=github_client,
+                process_runner=process_runner,
+                content_generator=content_generator,
+                github_client_factory=github_client_factory,
+                deliberation_deps={
+                    "config": deliberation_config,
+                    "transcript_runner": transcript_runner,
+                    "event_sink": event_sink,
+                    "output_view": output_view,
+                },
+            )
 
         if parsed.command == "deliberate":
             deliberation_settings = runner_settings.deliberation

@@ -424,6 +424,17 @@ class AgentRunnerDeliberationProfileSettings(BaseModel):
     behavior_prompt: str = "Analyze requirements carefully."
 
 
+class AgentRunnerInteractiveDecisionSettings(BaseModel):
+    """Interactive decision (`iar ask`) configuration."""
+
+    enabled: bool = True
+    default_agent: str = "codex"
+    default_output_dir: str = "logs/agent-runner/decisions"
+    planner_timeout_seconds: int = 120
+    max_context_chars: int = 24000
+    allow_execute_yes: bool = True
+
+
 class AgentRunnerDeliberationSettings(BaseModel):
     """Multi-agent deliberation configuration."""
 
@@ -523,6 +534,7 @@ class _AgentRunnerRepositoryOverrideSettings(BaseModel):
     pre_push_review: AgentRunnerPrePushReviewSettings | None = None
     post_pr_supervisor: AgentRunnerPostPrSupervisorSettings | None = None
     generated_content: AgentRunnerGeneratedContentSettings | None = None
+    interactive_decision: AgentRunnerInteractiveDecisionSettings | None = None
 
 
 class AgentRunnerRepositorySettings(_AgentRunnerRepositoryOverrideSettings):
@@ -599,6 +611,7 @@ def load_agent_runner_local_settings(
         pre_push_review=local_settings.pre_push_review,
         post_pr_supervisor=local_settings.post_pr_supervisor,
         generated_content=local_settings.generated_content,
+        interactive_decision=local_settings.interactive_decision,
     )
 
 
@@ -637,6 +650,9 @@ class AgentRunnerSettings(BaseSettings):
     )
     generated_content: AgentRunnerGeneratedContentSettings = Field(
         default_factory=AgentRunnerGeneratedContentSettings
+    )
+    interactive_decision: AgentRunnerInteractiveDecisionSettings = Field(
+        default_factory=AgentRunnerInteractiveDecisionSettings
     )
     repositories: dict[str, AgentRunnerRepositorySettings] = Field(default_factory=dict)
 

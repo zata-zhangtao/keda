@@ -123,6 +123,27 @@ behavior_prompt = "You are a pragmatic implementer..."
 - `default_output_dir`：默认输出根目录。
 - `profiles.<profile_id>`：自定义参与者 profile，至少包含 `agent`、`role`、`behavior_prompt`。
 
+## Agent Runner Interactive Decision 配置
+
+`config.toml` 的 `[agent_runner.interactive_decision]` 段配置 `iar ask` 行为：
+
+```toml
+[agent_runner.interactive_decision]
+enabled = true
+default_agent = "codex"
+default_output_dir = "logs/agent-runner/decisions"
+planner_timeout_seconds = 120
+max_context_chars = 24000
+allow_execute_yes = true
+```
+
+- `enabled`：是否启用 `iar ask`。
+- `default_agent`：默认 planner agent（当前仅 `codex` 有验证安全的只读命令）。
+- `default_output_dir`：决策审计文件默认输出目录。
+- `planner_timeout_seconds`：planner agent 超时时间（秒）。
+- `max_context_chars`：传入 planner 的上下文最大字符数。
+- `allow_execute_yes`：是否允许 `--yes` 非交互确认。
+
 ## 日志相关配置
 
 日志位于 `logs/` 目录，按日期命名，格式为 `app-YYYY-MM-DD.log`：

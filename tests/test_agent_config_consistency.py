@@ -18,8 +18,11 @@ from backend.infrastructure.config.settings import (
     AgentRunnerLabelSettings,
     AgentRunnerPostPrSupervisorSettings,
     AgentRunnerPrePushReviewSettings,
+    AgentRunnerSettings,
 )
 from backend.infrastructure.github_client import LabelConfig as InfraLabelConfig
+
+import pytest
 
 
 def test_agent_runner_reads_root_config_toml() -> None:
@@ -125,3 +128,39 @@ def test_deliberation_profiles_reference_runnable_agents() -> None:
         assert (
             profile.agent in supported
         ), f"Deliberation profile '{profile_id}' references unrunnable agent '{profile.agent}'"
+
+
+def test_default_planner_agent_has_safe_command_builder() -> None:
+    """Default planner agent must have a verified read-only command builder."""
+    from backend.engines.agent_runner.factory import _build_planner_command
+
+    settings = AgentRunnerSettings()
+    default_agent = settings.interactive_decision.default_agent
+    # Must not raise for the default agent
+    command = _build_planner_command(default_agent, "test prompt", Path("/tmp"))
+    assert isinstance(command, list)
+    assert len(command) > 0
+
+
+def test_unsafe_planner_agent_fails_fast() -> None:
+    """Unsafe agents must raise ValueError for planner command builder."""
+    from backend.engines.agent_runner.factory import _build_planner_command
+
+    with pytest.raises(ValueError, match="does not have a verified read-only"):
+        _build_planner_command("claude", "test prompt", Path("/tmp"))
+
+    with pytest.raises(ValueError, match="does not have a verified read-only"):
+        _build_planner_command("kimi", "test prompt", Path("/tmp"))
+
+
+def test_interactive_decision_settings_have_sane_defaults() -> None:
+    """Interactive decision settings should have safe defaults."""
+    from backend.infrastructure.config.settings import (
+        AgentRunnerInteractiveDecisionSettings,
+    )
+
+    ids = AgentRunnerInteractiveDecisionSettings()
+    assert ids.enabled is True
+    assert ids.default_agent == "codex"
+    assert ids.planner_timeout_seconds > 0
+    assert ids.allow_execute_yes is True

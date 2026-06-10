@@ -319,6 +319,14 @@ prompt = [
   "{diff_stat}",
 ]
 
+[agent_runner.interactive_decision]
+enabled = true
+default_agent = "codex"
+default_output_dir = "logs/agent-runner/decisions"
+planner_timeout_seconds = 120
+max_context_chars = 24000
+allow_execute_yes = true
+
 [agent_runner.deliberation]
 default_rounds = 2
 default_synthesizer = "claude"

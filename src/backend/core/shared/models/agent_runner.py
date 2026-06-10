@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from backend.core.shared.models.agent_decision import InteractiveDecisionConfig
+
 
 @dataclass(frozen=True)
 class AgentCommitResult:
@@ -301,6 +303,9 @@ class AppConfig:
     post_pr_supervisor: PostPrSupervisorConfig = PostPrSupervisorConfig()
     generated_content: GeneratedContentConfig = field(
         default_factory=GeneratedContentConfig
+    )
+    interactive_decision: InteractiveDecisionConfig = field(
+        default_factory=InteractiveDecisionConfig
     )
 
 

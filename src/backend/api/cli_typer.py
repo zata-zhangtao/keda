@@ -597,6 +597,50 @@ def blocked_continue_command(
     )
 
 
+@app.command("ask")
+def ask_command(
+    ctx: typer.Context,
+    prompt: Annotated[str, typer.Argument(help="Natural language request.")],
+    agent: Annotated[
+        RunAgentChoice,
+        typer.Option("--agent", help="Planner agent to use."),
+    ] = RunAgentChoice.auto,
+    plan_only: Annotated[
+        bool,
+        typer.Option("--plan-only", help="Only generate plan without executing."),
+    ] = False,
+    execute: Annotated[
+        bool,
+        typer.Option("--execute", help="Allow execution after confirmation."),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Auto-confirm non-interactive execution."),
+    ] = False,
+    output: Annotated[
+        str | None,
+        typer.Option("--output", help="Output directory for decision audit."),
+    ] = None,
+    repo: RepoOption = None,
+    repo_id: RepoIdOption = None,
+    config: ConfigOption = None,
+) -> int:
+    """Ask the agent runner to decide the next safe action."""
+    selector_options = _typer_selector_options(
+        ctx, repo=repo, repo_id=repo_id, config=config
+    )
+    return _run_typer_command(
+        "ask",
+        **selector_options,
+        prompt=prompt,
+        agent=_enum_value(agent),
+        plan_only=plan_only,
+        execute=execute,
+        yes=yes,
+        output=output,
+    )
+
+
 @app.command("deliberate")
 @app.command("deliberate")
 def deliberate_command(

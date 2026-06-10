@@ -24,6 +24,7 @@ from backend.core.shared.models.agent_deliberation import (
     DeliberationConfig,
     DeliberationEvent,
 )
+from backend.core.shared.models.agent_decision import InteractiveDecisionConfig
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
@@ -84,6 +85,7 @@ __all__ = [
     "create_github_client",
     "create_process_runner",
     "create_transcript_runner",
+    "create_planner_runner",
     "get_agent_runner_settings",
     "get_agent_runner_status_data",
     "build_app_config",
@@ -148,6 +150,7 @@ def build_app_config_from_settings(
     generated_content = _build_generated_content_config(
         agent_runner_settings.generated_content
     )
+    interactive_decision = agent_runner_settings.interactive_decision
 
     return AppConfig(
         labels=LabelConfig(
@@ -215,6 +218,14 @@ def build_app_config_from_settings(
             ),
         ),
         generated_content=generated_content,
+        interactive_decision=InteractiveDecisionConfig(
+            enabled=interactive_decision.enabled,
+            default_agent=interactive_decision.default_agent,
+            default_output_dir=interactive_decision.default_output_dir,
+            planner_timeout_seconds=interactive_decision.planner_timeout_seconds,
+            max_context_chars=interactive_decision.max_context_chars,
+            allow_execute_yes=interactive_decision.allow_execute_yes,
+        ),
     )
 
 
@@ -446,6 +457,9 @@ def merge_repository_config(
     generated_content = _merge_generated_content_config(
         global_config.generated_content, repo_settings.generated_content
     )
+    interactive_decision = _merge_optional_model(
+        global_config.interactive_decision, repo_settings.interactive_decision
+    )
     return AppConfig(
         labels=labels,
         git=git,
@@ -457,6 +471,7 @@ def merge_repository_config(
         pre_push_review=pre_push_review,
         post_pr_supervisor=post_pr_supervisor,
         generated_content=generated_content,
+        interactive_decision=interactive_decision,
     )
 
 
@@ -745,6 +760,63 @@ def _build_content_generation_command(
         "exec",
         prompt,
     ]
+
+
+class SafePlannerContentGenerator(IContentGenerator):
+    """Generate decision plans via a verified read-only agent subprocess.
+
+    Only agents that can be run with a verifiably read-only command are
+    accepted.  Unsafe agents raise ``ValueError`` instead of silently
+    downgrading safety.
+    """
+
+    def __init__(self, process_runner: SubprocessRunner) -> None:
+        self._process_runner = process_runner
+
+    def generate(
+        self,
+        agent_name: str,
+        prompt: str,
+        *,
+        cwd: Path,
+        timeout: int | None = None,
+    ) -> CommandResult:
+        """Run a verified read-only planner and return its output."""
+        command = _build_planner_command(agent_name, prompt, cwd)
+        return self._process_runner.run(
+            command, cwd=cwd, capture_output=True, timeout=timeout, check=False
+        )
+
+
+def _build_planner_command(agent_name: str, prompt: str, cwd: Path) -> list[str]:
+    """Return a verified read-only command for the given planner agent.
+
+    Raises:
+        ValueError: If the agent does not have a safe read-only command builder.
+    """
+    if agent_name == "codex":
+        return [
+            "codex",
+            "--cd",
+            str(cwd),
+            "--sandbox",
+            "read-only",
+            "--ask-for-approval",
+            "never",
+            "exec",
+            prompt,
+        ]
+    raise ValueError(
+        f"Agent '{agent_name}' does not have a verified read-only command builder "
+        f"for interactive decision planning. Use 'codex' instead."
+    )
+
+
+def create_planner_runner(
+    process_runner: SubprocessRunner | None = None,
+) -> SafePlannerContentGenerator:
+    """Create a safe planner runner instance."""
+    return SafePlannerContentGenerator(process_runner or SubprocessRunner())
 
 
 def create_content_generator(
