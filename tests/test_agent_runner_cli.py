@@ -100,6 +100,17 @@ def test_cli_parser_run_once() -> None:
     assert parsed.max_issues == 5
 
 
+def test_cli_parser_worktree_cleanup() -> None:
+    """worktree cleanup should expose dry-run, yes, and force flags."""
+    parser = build_parser()
+    parsed = parser.parse_args(["worktree", "cleanup", "--dry-run", "--force"])
+    assert parsed.command == "worktree"
+    assert parsed.worktree_command == "cleanup"
+    assert parsed.dry_run is True
+    assert parsed.yes is False
+    assert parsed.force is True
+
+
 def test_cli_parser_daemon() -> None:
     """daemon should accept interval and max-issues."""
     parser = build_parser()

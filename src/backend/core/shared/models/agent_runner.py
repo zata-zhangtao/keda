@@ -55,6 +55,7 @@ class IssueSummary:
     url: str
     body: str
     labels: tuple[str, ...]
+    state: str = "OPEN"
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,8 @@ class LabelConfig:
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
+    validation_pending: str = "validation/pending"
+    validation_passed: str = "validation/passed"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",
@@ -140,6 +143,22 @@ class PromptConfig:
 
 
 @dataclass(frozen=True)
+class ValidationConfig:
+    """Realistic Validation evidence gate configuration.
+
+    ``evidence_dir`` is relative to the worktree root and is excluded from
+    git tracking via ``info/exclude``, so evidence files can never reach the
+    code diff. ``branch_prefix`` names the orphan branches that carry
+    evidence to reviewers (``<branch_prefix>issue-<N>``); these branches are
+    never merged and are deleted once the Issue closes.
+    """
+
+    enabled: bool = True
+    evidence_dir: str = ".iar/evidence"
+    branch_prefix: str = "iar-evidence/"
+
+
+@dataclass(frozen=True)
 class PrePushReviewConfig:
     """Pre-push AI review gate configuration."""
 
@@ -170,6 +189,8 @@ class PullRequestContext:
     mergeable: bool | None = None
     checks_state: str | None = None
     checks_summary: tuple[str, ...] = ()
+    number: int | None = None
+    body: str = ""
 
 
 @dataclass(frozen=True)
@@ -259,6 +280,7 @@ class AppConfig:
     worktree: WorktreeConfig = WorktreeConfig()
     runner: RunnerConfig = RunnerConfig()
     safety: SafetyConfig = SafetyConfig()
+    validation: ValidationConfig = ValidationConfig()
     prompts: PromptConfig = field(default_factory=PromptConfig)
     pre_push_review: PrePushReviewConfig = PrePushReviewConfig()
     post_pr_supervisor: PostPrSupervisorConfig = PostPrSupervisorConfig()

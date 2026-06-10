@@ -86,6 +86,13 @@ from backend.core.use_cases.agent_runner_publish import (
     validate_publish_remote,
     validate_safe_changes,
 )
+from backend.core.use_cases.agent_runner_validation import (
+    ValidationEvidenceError,
+    build_validation_prompt_line,
+    ensure_evidence_dir_excluded,
+    ensure_validation_evidence_ready,
+    format_validation_evidence_failure,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -243,6 +250,8 @@ def create_or_reuse_worktree(
             f"path_command return_code={path_result.return_code}, "
             f"path_command stdout={path_result.stdout!r}."
         )
+    # 证据目录本地排除：截图/输出证据永远不进代码 diff。
+    ensure_evidence_dir_excluded(worktree_path, config, process_runner)
     return worktree_path
 
 
@@ -291,7 +300,13 @@ def run_agent(
     process_runner: IProcessRunner,
 ) -> CommandResult:
     """Run Codex or Claude Code in non-interactive mode."""
-    prompt = build_prompt(issue, worktree_path, config.prompts, phase="execution")
+    prompt = build_prompt(
+        issue,
+        worktree_path,
+        config.prompts,
+        phase="execution",
+        validation_line=build_validation_prompt_line(issue, config),
+    )
     return run_agent_with_prompt(agent_name, prompt, worktree_path, process_runner)
 
 
@@ -579,6 +594,39 @@ def run_agent_until_committed(
             recovery_failure_summary = format_prd_delivery_failure(str(exc))
             _logger.warning(
                 "PRD delivery check failed for Issue #%d; "
+                "asking agent to recover (%d/%d).",
+                issue.number,
+                attempt_index + 1,
+                max_recovery_attempts,
+            )
+            continue
+
+        # Phase 3.5: Realistic Validation 证据门禁（要求验证且无豁免时）
+        try:
+            ensure_validation_evidence_ready(issue, worktree_path, config)
+        except ValidationEvidenceError as exc:
+            after_sha = get_head_sha(worktree_path, process_runner)
+            failure_type = classify_failure(
+                before_sha=before_sha,
+                after_sha=after_sha,
+                has_uncommitted=False,
+                agent_result=CommandResult(("",), 0, "", ""),
+                verification_results=verification_results,
+                exc=exc,
+            )
+            attempt_results.append(
+                AttemptResult(
+                    attempt_number=attempt_index + 1,
+                    failure_type=failure_type,
+                    recovered=False,
+                    detail=format_validation_evidence_failure(str(exc)),
+                )
+            )
+            if attempt_index >= max_recovery_attempts:
+                raise MaxRetriesExceededError(attempt_results) from exc
+            recovery_failure_summary = format_validation_evidence_failure(str(exc))
+            _logger.warning(
+                "Validation evidence check failed for Issue #%d; "
                 "asking agent to recover (%d/%d).",
                 issue.number,
                 attempt_index + 1,

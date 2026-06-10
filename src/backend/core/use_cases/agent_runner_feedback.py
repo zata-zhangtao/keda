@@ -42,6 +42,7 @@ _DEFAULT_EXECUTION_TEMPLATE = "\n".join(
         "Issue URL: {issue_url}",
         "Worktree: {worktree_path}",
         "{prd_line}",
+        "{validation_line}",
         "",
         "Issue body:",
         "{issue_body}",
@@ -90,8 +91,19 @@ def build_prompt(
     worktree_path: Path,
     prompt_config: PromptConfig,
     phase: str = "execution",
+    *,
+    validation_line: str = "",
 ) -> str:
-    """Build the prompt sent to the local AI agent from a template."""
+    """Build the prompt sent to the local AI agent from a template.
+
+    Args:
+        issue: 当前处理的 Issue。
+        worktree_path: agent 工作的 worktree 路径。
+        prompt_config: prompt 模板配置。
+        phase: 模板阶段名。
+        validation_line: Realistic Validation 强制执行指令；不要求证据的
+            Issue 传空字符串。仅当模板含 ``{validation_line}`` 占位符时生效。
+    """
     template = prompt_config.phases.get(phase, _DEFAULT_EXECUTION_TEMPLATE)
     prd_line = _build_prd_line(issue)
     return template.format(
@@ -101,6 +113,7 @@ def build_prompt(
         worktree_path=worktree_path,
         issue_body=issue.body,
         prd_line=prd_line,
+        validation_line=validation_line,
     )
 
 

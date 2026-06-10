@@ -43,6 +43,10 @@ from backend.core.use_cases.agent_runner_publication import (
 from backend.core.use_cases.agent_runner_supervisor import (
     _run_supervisor_with_repair_loop,
 )
+from backend.core.use_cases.agent_runner_validation import (
+    process_validation_gate,
+    publish_validation_evidence,
+)
 from backend.core.use_cases.pr_supervisor import (
     build_rebase_repair_complete_comment,
     execute_rebase,
@@ -441,6 +445,26 @@ def _process_running_rework(
             ),
         )
 
+    # 修复后刷新验证证据：新 head 需要新证据与新一轮人工签收
+    rework_pr_url = github_client.find_open_pr_by_head(pr_branch)
+    if rework_pr_url is not None:
+        try:
+            publish_validation_evidence(
+                issue=issue,
+                worktree_path=worktree_path,
+                config=config,
+                github_client=github_client,
+                process_runner=process_runner,
+                pr_url=rework_pr_url,
+                head_sha=get_head_sha(worktree_path, process_runner),
+            )
+        except Exception as evidence_exc:  # noqa: BLE001 - refresh is best effort.
+            _logger.warning(
+                "Failed to refresh validation evidence for Issue #%d: %s",
+                issue.number,
+                evidence_exc,
+            )
+
     # 标记为 supervising 并获取 PR 上下文
     github_client.edit_issue_labels(
         issue.number,
@@ -576,6 +600,20 @@ def run_once(
         except Exception as exc:  # noqa: BLE001 - report preflight failure cleanly.
             _logger.error("Agent runner preflight failed: %s", exc)
             return 1
+
+    # Realistic Validation 软门禁：维护 review 阶段 Issue 的勾选状态
+    # label、重置过期签收并清理已关闭 Issue 的证据分支。
+    # 与 Issue 领取相互独立，失败不影响本轮处理。
+    if not dry_run:
+        try:
+            process_validation_gate(
+                repo_path=repo_path,
+                config=config,
+                github_client=github_client,
+                process_runner=process_runner,
+            )
+        except Exception as gate_exc:  # noqa: BLE001 - gate must not break polling.
+            _logger.error("Validation gate pass failed: %s", gate_exc)
 
     # 发现 ready Issue
     ready_issues = github_client.list_ready_issues(config.labels.ready, max_issues)

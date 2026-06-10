@@ -517,6 +517,38 @@ def test_process_watchdog_logs_heartbeat_and_kills_on_timeout() -> None:
     mock_process.kill.assert_called_once_with()
 
 
+def test_subprocess_runner_replaces_invalid_utf8_in_captured_output(
+    tmp_path: Path,
+) -> None:
+    """Binary bytes in stdout (e.g. PDF content in git diff) must not crash decoding."""
+    import sys
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    emit_binary_stdout = "import sys; sys.stdout.buffer.write(b'diff --git a/source.pdf\\n\\x78\\xda\\xff\\n')"
+    runner = SubprocessRunner()
+
+    captured_result = runner.run(
+        [sys.executable, "-c", emit_binary_stdout],
+        cwd=tmp_path,
+        capture_output=True,
+        check=False,
+    )
+    assert captured_result.return_code == 0
+    assert "diff --git a/source.pdf" in captured_result.stdout
+    assert "�" in captured_result.stdout
+
+    watchdog_result = runner.run(
+        [sys.executable, "-c", emit_binary_stdout],
+        cwd=tmp_path,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert watchdog_result.return_code == 0
+    assert "�" in watchdog_result.stdout
+
+
 def test_capture_output_true_not_polluted(tmp_path: Path) -> None:
     """capture_output=True should return raw stdout without timestamp prefix."""
     from backend.infrastructure.process_runner import SubprocessRunner

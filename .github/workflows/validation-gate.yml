@@ -1,0 +1,66 @@
+name: Validation Gate
+
+# Realistic Validation 人工签收硬门禁：
+# 解析 PR body 中由 iar 注入的 <!-- iar:realistic-validation ... --> 区块，
+# 存在未勾选项则 check 失败。配合 branch protection 将本 check 设为
+# required，即可物理阻止未经人工确认验证证据的 PR 被合并。
+# 人工在 PR body 点勾会触发 `edited` 事件自动重跑本 check。
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validation-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-sign-off:
+    name: Realistic Validation sign-off
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Realistic Validation checklist
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'CHECK_SCRIPT'
+          import os
+          import re
+          import sys
+
+          pr_body = os.environ.get("PR_BODY") or ""
+          block_match = re.search(
+              r"<!--\s*iar:realistic-validation\s+version=\d+\s+total=(\d+)\s*-->"
+              r"(.*?)"
+              r"(?:<!--\s*iar:realistic-validation-end\s*-->|\Z)",
+              pr_body,
+              re.S,
+          )
+          if not block_match:
+              print("No realistic-validation block in PR body; gate passes.")
+              sys.exit(0)
+
+          declared_total = int(block_match.group(1))
+          block_text = block_match.group(2)
+          checked_count = len(
+              re.findall(r"^\s*[-*] \[[xX]\] ", block_text, re.M)
+          )
+          unchecked_count = len(
+              re.findall(r"^\s*[-*] \[ \] ", block_text, re.M)
+          )
+          print(
+              f"declared_total={declared_total} "
+              f"checked={checked_count} unchecked={unchecked_count}"
+          )
+          if unchecked_count > 0 or checked_count < declared_total:
+              print(
+                  "Realistic Validation sign-off incomplete: a human must "
+                  "review the evidence comment on this PR and tick every "
+                  "checklist item in the PR description before merge."
+              )
+              sys.exit(1)
+          print("Realistic Validation sign-off complete; gate passes.")
+          CHECK_SCRIPT

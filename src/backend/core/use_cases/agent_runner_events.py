@@ -74,6 +74,23 @@ def parse_latest_event_marker(comments: list[str]) -> ReviewEventMarker | None:
     return None
 
 
+def parse_latest_event_marker_for_phases(
+    comments: list[str],
+    phases: set[str],
+) -> ReviewEventMarker | None:
+    """Parse the latest iar:event marker whose phase is in ``phases``.
+
+    Used by gates that need the most recent event of a specific kind (for
+    example deduplicating ``validation_passed`` audit comments) without
+    being masked by unrelated later markers.
+    """
+    for comment_body in reversed(comments):
+        marker = _parse_event_marker(comment_body)
+        if marker is not None and marker.phase in phases:
+            return marker
+    return None
+
+
 def parse_latest_pending_rework_marker(
     comments: list[str],
 ) -> ReviewEventMarker | None:

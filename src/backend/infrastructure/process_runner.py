@@ -64,9 +64,24 @@ class SubprocessRunner:
         check: bool = True,
         timeout: int | None = None,
         capture_output: bool = True,
+        input_text: str | None = None,
     ) -> CommandResult:
         """Run a subprocess and capture output."""
-        if should_filter_claude_stream(command):
+        if input_text is not None:
+            completed = subprocess.run(
+                list(command),
+                cwd=cwd,
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                input=input_text,
+            )
+            stdout = completed.stdout
+            stderr = completed.stderr
+        elif should_filter_claude_stream(command):
             completed = run_filtered_claude_stream(
                 command, cwd=cwd, timeout=timeout, collect_stdout=True
             )
@@ -84,6 +99,7 @@ class SubprocessRunner:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
             )
             stdout = completed.stdout
@@ -96,6 +112,7 @@ class SubprocessRunner:
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
+                errors="replace",
                 bufsize=1,
             )
             watchdog = _ProcessWatchdog(
@@ -167,6 +184,7 @@ def _run_captured_process(
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
+        errors="replace",
     )
     watchdog = _ProcessWatchdog(
         process,
@@ -381,6 +399,7 @@ def run_filtered_claude_stream(
         stdin=subprocess.PIPE,
         text=True,
         encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
     watchdog = _ProcessWatchdog(

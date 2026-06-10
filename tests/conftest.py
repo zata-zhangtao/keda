@@ -41,6 +41,7 @@ class FakeGitHubClient(IGitHubClient):
         self._pr_contexts: dict[str, object | None] = {}
         self._open_prs: dict[str, str | None] = {}
         self._remote_base_sha: str = "remote-base-sha"
+        self._issue_states: dict[int, str] = {}
 
     def sync_labels(self, labels: LabelConfig) -> None:
         self.calls.append({"method": "sync_labels", "labels": labels})
@@ -68,6 +69,21 @@ class FakeGitHubClient(IGitHubClient):
             {"method": "comment_issue", "issue_number": issue_number, "body": body}
         )
         self._issue_comments.setdefault(issue_number, []).append(body)
+
+    def comment_pr(self, pr_number: int, body: str) -> None:
+        self.calls.append(
+            {"method": "comment_pr", "pr_number": pr_number, "body": body}
+        )
+        self._pr_comments.setdefault(pr_number, []).append(body)
+
+    def update_pull_request_body(self, pr_number: int, body: str) -> None:
+        self.calls.append(
+            {
+                "method": "update_pull_request_body",
+                "pr_number": pr_number,
+                "body": body,
+            }
+        )
 
     def create_issue(self, *, title: str, body: str, labels: Sequence[str]) -> str:
         self.calls.append(
@@ -141,6 +157,7 @@ class FakeGitHubClient(IGitHubClient):
             url=f"https://github.com/example/repo/issues/{issue_number}",
             body="",
             labels=(),
+            state=self._issue_states.get(issue_number, "OPEN"),
         )
 
 
@@ -176,6 +193,7 @@ class FakeProcessRunner(IProcessRunner):
     ) -> None:
         self.responses = responses or {}
         self.calls: list[list[str]] = []
+        self.input_texts: list[str | None] = []
 
     def run(
         self,
@@ -185,8 +203,10 @@ class FakeProcessRunner(IProcessRunner):
         check: bool = True,
         timeout: int | None = None,
         capture_output: bool = True,
+        input_text: str | None = None,
     ) -> CommandResult:
         self.calls.append(list(command))
+        self.input_texts.append(input_text)
         key = tuple(command)
         if key in self.responses:
             result = self.responses[key]

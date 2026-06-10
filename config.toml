@@ -122,6 +122,8 @@ supervising = "agent/supervising"
 review = "agent/review"
 failed = "agent/failed"
 blocked = "agent/blocked"
+validation_pending = "validation/pending"
+validation_passed = "validation/passed"
 codex = "agent/codex"
 claude = "agent/claude"
 kimi = "agent/kimi"
@@ -131,9 +133,9 @@ remote = "zata"
 base_branch = "main"
 
 [agent_runner.worktree]
-create_command = "just worktree issue-{issue_number} enter_shell=false"
-reuse_command = "bash -c 'test -d \"$(dirname \"$(git rev-parse --show-toplevel)\")/$(basename \"$(git rev-parse --show-toplevel)\")-worktrees/tasks/issue-{issue_number}\"'"
-path_command = "bash -c 'echo \"$(dirname \"$(git rev-parse --show-toplevel)\")/$(basename \"$(git rev-parse --show-toplevel)\")-worktrees/tasks/issue-{issue_number}\"'"
+create_command = "iar worktree create --branch issue-{issue_number} --base-branch {base_branch}"
+reuse_command = "iar worktree path --branch issue-{issue_number}"
+path_command = "iar worktree path --branch issue-{issue_number}"
 
 [agent_runner.runner]
 default_agent = "claude"
@@ -153,6 +155,17 @@ forbidden_path_patterns = [
   "secrets/*",
   "docker-compose.prod.yml",
 ]
+
+# =============================================================================
+# Realistic Validation 证据门禁
+# =============================================================================
+# 证据写入 worktree 内 evidence_dir（runner 通过 info/exclude 本地排除，
+# 永不进入代码 diff），发布时推送到 orphan 分支 <branch_prefix>issue-<N>
+# 并在 PR 上发证据评论；人工在 PR body 勾选清单后才允许合并。
+[agent_runner.validation]
+enabled = true
+evidence_dir = ".iar/evidence"
+branch_prefix = "iar-evidence/"
 
 [agent_runner.pre_push_review]
 enabled = true
@@ -176,6 +189,7 @@ max_repair_attempts = 2
 #   {worktree_path} - Absolute path to the assigned worktree
 #   {issue_body}    - Full Issue body markdown
 #   {prd_line}      - Auto-generated PRD reference line
+#   {validation_line} - Auto-generated Realistic Validation evidence rule
 [agent_runner.prompts]
 default_phase = "execution"
 
@@ -186,6 +200,7 @@ execution = [
   "Issue URL: {issue_url}",
   "Worktree: {worktree_path}",
   "{prd_line}",
+  "{validation_line}",
   "",
   "Issue body:",
   "{issue_body}",

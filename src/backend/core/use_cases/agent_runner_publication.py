@@ -37,6 +37,10 @@ from backend.core.use_cases.agent_review import run_pre_push_review
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from backend.core.use_cases.agent_runner_failure import PublishFailureError
 from backend.core.use_cases.agent_runner_publish import DraftPRCreationError
+from backend.core.use_cases.agent_runner_validation import (
+    ensure_validation_evidence_ready,
+    publish_validation_evidence,
+)
 from backend.core.use_cases.run_agent_once import (
     ensure_prd_delivery_ready,
     ensure_verification_passed,
@@ -230,6 +234,34 @@ def _comment_issue_after_publish(
         ) from exc
 
 
+def _publish_validation_evidence_after_pr(
+    *,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    pr_url: str,
+) -> None:
+    """Upload evidence and post the PR evidence comment after PR creation."""
+    try:
+        publish_validation_evidence(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            github_client=github_client,
+            process_runner=process_runner,
+            pr_url=pr_url,
+            head_sha=get_head_sha(worktree_path, process_runner),
+        )
+    except Exception as exc:  # noqa: BLE001 - surface category for recovery.
+        raise PublishFailureError(
+            f"Failed to publish validation evidence: {exc}",
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.COMMENT_UPDATE,
+        ) from exc
+
+
 def _count_local_commits_since_base(
     worktree_path: Path,
     config: AppConfig,
@@ -299,6 +331,9 @@ def _reuse_existing_local_commit(
 
     # PRD 交付物检查：确保必要文件存在
     ensure_prd_delivery_ready(issue, worktree_path, process_runner)
+
+    # Realistic Validation 证据门禁：复用路径同样不允许缺证据发布
+    ensure_validation_evidence_ready(issue, worktree_path, config)
 
     # 二次检查：验证后可能有新变更
     if has_changes(worktree_path, process_runner):
@@ -422,6 +457,16 @@ def _finish_implementation_publication(
         ),
         worktree_path=worktree_path,
         github_client=github_client,
+    )
+
+    # 证据上传与 PR 证据评论（要求验证的 Issue）
+    _publish_validation_evidence_after_pr(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=github_client,
+        process_runner=process_runner,
+        pr_url=pr_url,
     )
 
     # 步骤 4: PR 后监督（可选）
@@ -567,6 +612,16 @@ def _finish_existing_commit_publication(
         ),
         worktree_path=worktree_path,
         github_client=github_client,
+    )
+
+    # 证据上传与 PR 证据评论（要求验证的 Issue）
+    _publish_validation_evidence_after_pr(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=github_client,
+        process_runner=process_runner,
+        pr_url=pr_url,
     )
 
     # 步骤 4: PR 后监督（可选）

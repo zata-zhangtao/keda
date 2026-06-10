@@ -39,6 +39,7 @@ from backend.core.shared.models.agent_runner import (
     RepositoryRunContext,
     RunnerConfig,
     SafetyConfig,
+    ValidationConfig,
     WorktreeConfig,
 )
 from backend.engines.agent_runner.repository_local import detect_git_repository_root
@@ -126,6 +127,7 @@ def build_app_config_from_settings(
     worktree_settings = agent_runner_settings.worktree
     runner_settings = agent_runner_settings.runner
     safety_settings = agent_runner_settings.safety
+    validation_settings = agent_runner_settings.validation
     prompt_settings = agent_runner_settings.prompts
 
     pre_push = agent_runner_settings.pre_push_review
@@ -142,6 +144,8 @@ def build_app_config_from_settings(
             review=label_settings.review,
             failed=label_settings.failed,
             blocked=label_settings.blocked,
+            validation_pending=label_settings.validation_pending,
+            validation_passed=label_settings.validation_passed,
             agent_labels=label_settings.agent_labels,
         ),
         git=GitConfig(
@@ -164,6 +168,11 @@ def build_app_config_from_settings(
         safety=SafetyConfig(
             auto_merge=safety_settings.auto_merge,
             forbidden_path_patterns=tuple(safety_settings.forbidden_path_patterns),
+        ),
+        validation=ValidationConfig(
+            enabled=validation_settings.enabled,
+            evidence_dir=validation_settings.evidence_dir,
+            branch_prefix=validation_settings.branch_prefix,
         ),
         prompts=PromptConfig(
             default_phase=prompt_settings.default_phase,
@@ -291,6 +300,12 @@ def _merge_label_config(
         review=override_data.get("review", base_config.review),
         failed=override_data.get("failed", base_config.failed),
         blocked=override_data.get("blocked", base_config.blocked),
+        validation_pending=override_data.get(
+            "validation_pending", base_config.validation_pending
+        ),
+        validation_passed=override_data.get(
+            "validation_passed", base_config.validation_passed
+        ),
         agent_labels=agent_labels,
     )
 
@@ -382,6 +397,9 @@ def merge_repository_config(
     worktree = _merge_optional_model(global_config.worktree, repo_settings.worktree)
     runner = _merge_optional_model(global_config.runner, repo_settings.runner)
     safety = _merge_optional_model(global_config.safety, repo_settings.safety)
+    validation = _merge_optional_model(
+        global_config.validation, repo_settings.validation
+    )
     prompts = _merge_prompt_config(global_config.prompts, repo_settings.prompts)
     pre_push_review = _merge_optional_model(
         global_config.pre_push_review, repo_settings.pre_push_review
@@ -398,6 +416,7 @@ def merge_repository_config(
         worktree=worktree,
         runner=runner,
         safety=safety,
+        validation=validation,
         prompts=prompts,
         pre_push_review=pre_push_review,
         post_pr_supervisor=post_pr_supervisor,
@@ -751,6 +770,7 @@ class SubprocessTranscriptRunner:
             stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         return_code, stdout_text = _relay_process_stdout(
@@ -780,6 +800,7 @@ def _run_agent_with_stdin_prompt(
         stdin=subprocess.PIPE,
         text=True,
         encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
 

@@ -23,6 +23,7 @@ class IssueSummary:
     url: str
     body: str
     labels: tuple[str, ...]
+    state: str = "OPEN"
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,8 @@ class LabelConfig:
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
+    validation_pending: str = "validation/pending"
+    validation_passed: str = "validation/passed"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",
@@ -55,6 +58,8 @@ class PullRequestContext:
     mergeable: bool | None = None
     checks_state: str | None = None
     checks_summary: tuple[str, ...] = ()
+    number: int | None = None
+    body: str = ""
 
 
 @dataclass(frozen=True)
@@ -264,6 +269,16 @@ class GitHubCliClient:
             ("agent/failed", "D73A4A", "AI runner failed and posted details."),
             ("agent/blocked", "000000", "AI runner needs human input."),
             (
+                "validation/pending",
+                "FBCA04",
+                "Realistic Validation evidence awaits human sign-off on the PR.",
+            ),
+            (
+                "validation/passed",
+                "0E8A16",
+                "A human verified the validation evidence and signed off.",
+            ),
+            (
                 "source/prd",
                 "0052CC",
                 "Issue has a canonical PRD tracked in the repository.",
@@ -290,6 +305,8 @@ class GitHubCliClient:
             "agent/review": labels.review,
             "agent/failed": labels.failed,
             "agent/blocked": labels.blocked,
+            "validation/pending": labels.validation_pending,
+            "validation/passed": labels.validation_passed,
         }
         configured_names.update(
             {f"agent/{k}": v for k, v in labels.agent_labels.items()}
@@ -325,7 +342,7 @@ class GitHubCliClient:
                 "--limit",
                 str(limit),
                 "--json",
-                "number,title,url,labels,body",
+                "number,title,url,labels,body,state",
             ],
             cwd=self.repo_path,
         )
@@ -341,6 +358,7 @@ class GitHubCliClient:
                     for raw_label in raw_issue.get("labels", [])
                     if raw_label.get("name")
                 ),
+                state=str(raw_issue.get("state", "OPEN") or "OPEN"),
             )
             for raw_issue in raw_issues
         ]
@@ -475,7 +493,7 @@ class GitHubCliClient:
                     "--limit",
                     str(limit),
                     "--json",
-                    "number,title,url,labels,body",
+                    "number,title,url,labels,body,state",
                 ],
                 cwd=self.repo_path,
             )
@@ -496,6 +514,7 @@ class GitHubCliClient:
                             for raw_label in raw_issue.get("labels", [])
                             if raw_label.get("name")
                         ),
+                        state=str(raw_issue.get("state", "OPEN") or "OPEN"),
                     )
                 )
         return candidates
@@ -512,7 +531,7 @@ class GitHubCliClient:
                 "--state",
                 "open",
                 "--json",
-                "url,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollup",
+                "url,number,body,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollup",
             ],
             cwd=self.repo_path,
             check=False,
@@ -531,6 +550,7 @@ class GitHubCliClient:
         checks_state, checks_summary = _aggregate_status_check_rollup(
             raw_pr.get("statusCheckRollup")
         )
+        raw_pr_number = raw_pr.get("number")
         return PullRequestContext(
             pr_url=str(raw_pr.get("url", "")),
             branch=str(raw_pr.get("headRefName", branch)),
@@ -539,6 +559,8 @@ class GitHubCliClient:
             mergeable=_normalize_mergeable(raw_pr.get("mergeable")),
             checks_state=checks_state,
             checks_summary=checks_summary,
+            number=int(raw_pr_number) if raw_pr_number is not None else None,
+            body=str(raw_pr.get("body", "") or ""),
         )
 
     def list_issue_comments(self, issue_number: int) -> list[str]:
@@ -561,6 +583,40 @@ class GitHubCliClient:
         raw_data = json.loads(result.stdout or "{}")
         comments = raw_data.get("comments", [])
         return [str(c.get("body", "")) for c in comments if c.get("body")]
+
+    def comment_pr(self, pr_number: int, body: str) -> None:
+        """Post a Markdown comment to a Pull Request."""
+        with tempfile.TemporaryDirectory(prefix="iar-pr-comment-") as temp_dir:
+            comment_path = Path(temp_dir) / "comment.md"
+            comment_path.write_text(body, encoding="utf-8")
+            self._runner.run(
+                [
+                    "gh",
+                    "pr",
+                    "comment",
+                    str(pr_number),
+                    "--body-file",
+                    str(comment_path),
+                ],
+                cwd=self.repo_path,
+            )
+
+    def update_pull_request_body(self, pr_number: int, body: str) -> None:
+        """Replace the description body of a Pull Request."""
+        with tempfile.TemporaryDirectory(prefix="iar-pr-body-") as temp_dir:
+            body_path = Path(temp_dir) / "body.md"
+            body_path.write_text(body, encoding="utf-8")
+            self._runner.run(
+                [
+                    "gh",
+                    "pr",
+                    "edit",
+                    str(pr_number),
+                    "--body-file",
+                    str(body_path),
+                ],
+                cwd=self.repo_path,
+            )
 
     def list_pr_comments(self, pr_number: int) -> list[str]:
         """Return raw comment bodies for a PR."""
@@ -631,7 +687,7 @@ class GitHubCliClient:
                 "view",
                 str(issue_number),
                 "--json",
-                "number,title,url,labels,body",
+                "number,title,url,labels,body,state",
             ],
             cwd=self.repo_path,
             check=False,
@@ -651,4 +707,5 @@ class GitHubCliClient:
                 for raw_label in raw_issue.get("labels", [])
                 if raw_label.get("name")
             ),
+            state=str(raw_issue.get("state", "OPEN") or "OPEN"),
         )

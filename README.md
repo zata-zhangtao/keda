@@ -123,6 +123,26 @@ iar daemon
 iar run-once --dry-run
 ```
 
+### 清理已关闭 Issue 的本地分支
+
+`iar worktree cleanup` 用于清理本地遗留的 `issue-<number>` 分支及
+`.iar-worktrees/issue-<number>` worktree。默认只预览；只有传入 `--yes` 才会删除。
+清理前会执行 `git fetch <remote> --prune`，并且默认只删除同时满足“GitHub Issue
+已关闭、远端同名分支已不存在、worktree 干净、分支已合入远端 base branch”的分支。
+历史 `<repo>-worktrees/tasks/issue-<number>` worktree 不会被该命令自动删除，应按需
+手动清理。
+
+```bash
+# 预览将会清理哪些本地 issue 分支
+iar worktree cleanup --dry-run
+
+# 执行安全清理
+iar worktree cleanup --yes
+
+# 同时删除脏 worktree 或未合入分支（谨慎）
+iar worktree cleanup --yes --force
+```
+
 ### 多仓库配置
 
 在 `config.toml` 中配置多个仓库：

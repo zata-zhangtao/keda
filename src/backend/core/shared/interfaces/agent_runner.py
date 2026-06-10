@@ -58,6 +58,7 @@ class IProcessRunner(ABC):
         check: bool = True,
         timeout: int | None = None,
         capture_output: bool = True,
+        input_text: str | None = None,
     ) -> CommandResult:
         """运行一条命令并捕获其结果。
 
@@ -80,6 +81,9 @@ class IProcessRunner(ABC):
                 被收集到返回值中；为 ``False`` 时输出直接透传到当前
                 终端（用于需要实时可见的交互场景），此时返回的
                 ``CommandResult`` 中的输出字段为空字符串。
+            input_text: 可选的标准输入文本。提供时会原样写入子进程的
+                stdin（如 ``git mktree`` 这类从标准输入读取的 plumbing
+                命令），并强制以捕获模式运行；为 ``None`` 时不写 stdin。
 
         Returns:
             CommandResult: 包含退出码与（按需）捕获到的 stdout/stderr
@@ -322,6 +326,28 @@ class IGitHubClient(ABC):
 
         Returns:
             list[str]: 按时间顺序排列的评论正文（原始文本）列表。
+        """
+        ...
+
+    @abstractmethod
+    def comment_pr(self, pr_number: int, body: str) -> None:
+        """向某个 Pull Request 发布一条 Markdown 评论。
+
+        Args:
+            pr_number: 目标 PR 编号。
+            body: 评论正文，支持 Markdown。
+        """
+        ...
+
+    @abstractmethod
+    def update_pull_request_body(self, pr_number: int, body: str) -> None:
+        """整体替换某个 Pull Request 的描述正文。
+
+        用于验证门禁在 PR head 漂移后重置 body 中的人工勾选清单。
+
+        Args:
+            pr_number: 目标 PR 编号。
+            body: 新的 PR 描述正文，支持 Markdown。
         """
         ...
 

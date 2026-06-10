@@ -32,6 +32,12 @@ from backend.core.use_cases.run_agent_repositories_once import (
 from backend.core.use_cases.review_daemon import run_review_daemon
 from backend.core.use_cases.review_once import review_once
 from backend.core.use_cases.sync_labels import sync_labels
+from backend.core.use_cases.worktree_cleanup import (
+    WorktreeCleanupRequest,
+    WorktreeCleanupResult,
+    WorktreeCleanupStatus,
+    cleanup_iar_worktrees,
+)
 from backend.core.shared.models.agent_deliberation import DeliberationSession
 from backend.core.shared.models.agent_runner import LabelConfig
 from backend.engines.agent_runner.factory import (
@@ -202,6 +208,46 @@ def add_all_repositories_option(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         dest="all_repositories",
         help="Process all enabled configured repositories.",
+    )
+
+
+def _print_worktree_cleanup_result(cleanup_result: WorktreeCleanupResult) -> None:
+    """Print a concise branch cleanup summary."""
+    if not cleanup_result.branches:
+        console.print("[green]No local iAR issue branches found.[/]")
+        return
+
+    for branch_result in cleanup_result.branches:
+        worktree_suffix = (
+            f" ({branch_result.worktree_path})" if branch_result.worktree_path else ""
+        )
+        if branch_result.status is WorktreeCleanupStatus.WOULD_DELETE:
+            console.print(
+                f"[yellow]Would delete:[/] {branch_result.branch}{worktree_suffix} - "
+                f"{branch_result.reason}"
+            )
+        elif branch_result.status is WorktreeCleanupStatus.DELETED:
+            console.print(
+                f"[green]Deleted:[/] {branch_result.branch}{worktree_suffix} - "
+                f"{branch_result.reason}"
+            )
+        elif branch_result.status is WorktreeCleanupStatus.FAILED:
+            console.print(
+                f"[red]Failed:[/] {branch_result.branch}{worktree_suffix} - "
+                f"{branch_result.reason}"
+            )
+        else:
+            console.print(
+                f"[dim]Skipped:[/] {branch_result.branch}{worktree_suffix} - "
+                f"{branch_result.reason}"
+            )
+
+    console.print(
+        "Cleanup summary: "
+        f"deleted={cleanup_result.deleted_count}, "
+        f"would_delete={cleanup_result.would_delete_count}, "
+        f"skipped={cleanup_result.skipped_count}, "
+        f"failed={cleanup_result.failed_count}"
     )
 
 
@@ -388,6 +434,25 @@ def build_parser() -> argparse.ArgumentParser:
     worktree_remove_parser.add_argument(
         "--branch", required=True, help="Branch name whose worktree to remove."
     )
+    worktree_cleanup_parser = worktree_subparsers.add_parser(
+        "cleanup",
+        help="Delete stale local issue branches whose Issue is closed.",
+    )
+    worktree_cleanup_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview cleanup without deleting anything.",
+    )
+    worktree_cleanup_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Actually delete eligible branches and worktrees.",
+    )
+    worktree_cleanup_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Also delete dirty or unmerged eligible branches.",
+    )
     return parser
 
 
@@ -463,6 +528,33 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
         if parsed.worktree_command == "remove":
             manager.remove(branch=parsed.branch)
             return 0
+        if parsed.worktree_command == "cleanup":
+            runner_settings = get_agent_runner_settings()
+            contexts = resolve_repository_targets(
+                runner_settings,
+                fallback_path=str(repo_root_path),
+            )
+            if len(contexts) != 1:
+                logger.error("iar worktree cleanup requires exactly one repository.")
+                return 1
+            context = contexts[0]
+            _ensure_gh_auth_or_prompt(context.repo_path, process_runner)
+            github_client = create_github_client(context.repo_path, process_runner)
+            cleanup_request = WorktreeCleanupRequest(
+                repo_path=context.repo_path,
+                remote=context.config.git.remote,
+                base_branch=context.config.git.base_branch,
+                dry_run=parsed.dry_run or not parsed.yes,
+                force=parsed.force,
+                managed_worktree_root_path=manager.worktree_root,
+            )
+            cleanup_result = cleanup_iar_worktrees(
+                cleanup_request,
+                github_client=github_client,
+                process_runner=process_runner,
+            )
+            _print_worktree_cleanup_result(cleanup_result)
+            return 1 if cleanup_result.failed_count else 0
         logger.error("iar worktree: unknown subcommand %r", parsed.worktree_command)
         return 1
 

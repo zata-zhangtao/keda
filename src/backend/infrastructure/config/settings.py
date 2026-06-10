@@ -273,6 +273,8 @@ class AgentRunnerLabelSettings(BaseModel):
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
+    validation_pending: str = "validation/pending"
+    validation_passed: str = "validation/passed"
     codex: str = "agent/codex"
     claude: str = "agent/claude"
     kimi: str = "agent/kimi"
@@ -337,6 +339,14 @@ class AgentRunnerSafetySettings(BaseModel):
             "docker-compose.prod.yml",
         ]
     )
+
+
+class AgentRunnerValidationSettings(BaseModel):
+    """Realistic Validation evidence gate configuration."""
+
+    enabled: bool = True
+    evidence_dir: str = ".iar/evidence"
+    branch_prefix: str = "iar-evidence/"
 
 
 class AgentRunnerPromptSettings(BaseModel):
@@ -474,6 +484,7 @@ class _AgentRunnerRepositoryOverrideSettings(BaseModel):
     worktree: AgentRunnerWorktreeSettings | None = None
     runner: AgentRunnerRunnerSettings | None = None
     safety: AgentRunnerSafetySettings | None = None
+    validation: AgentRunnerValidationSettings | None = None
     prompts: AgentRunnerPromptSettings | None = None
     pre_push_review: AgentRunnerPrePushReviewSettings | None = None
     post_pr_supervisor: AgentRunnerPostPrSupervisorSettings | None = None
@@ -570,6 +581,9 @@ class AgentRunnerSettings(BaseSettings):
     )
     runner: AgentRunnerRunnerSettings = Field(default_factory=AgentRunnerRunnerSettings)
     safety: AgentRunnerSafetySettings = Field(default_factory=AgentRunnerSafetySettings)
+    validation: AgentRunnerValidationSettings = Field(
+        default_factory=AgentRunnerValidationSettings
+    )
     prompts: AgentRunnerPromptSettings = Field(
         default_factory=AgentRunnerPromptSettings
     )

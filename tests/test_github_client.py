@@ -85,7 +85,7 @@ def test_get_pull_request_context_uses_supported_rollup_field(
         "--state",
         "open",
         "--json",
-        "url,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollup",
+        "url,number,body,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollup",
     )
     fake_runner = FakeProcessRunner(
         responses={
@@ -148,7 +148,7 @@ def test_get_pull_request_context_empty_rollup_has_no_checks_state(
         "--state",
         "open",
         "--json",
-        "url,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollup",
+        "url,number,body,headRefName,headRefOid,baseRefOid,mergeable,statusCheckRollup",
     )
     fake_runner = FakeProcessRunner(
         responses={
@@ -275,7 +275,7 @@ def test_list_review_candidate_issues_uses_or_label_semantics(
         "--limit",
         "20",
         "--json",
-        "number,title,url,labels,body",
+        "number,title,url,labels,body,state",
     )
     review_command = (
         "gh",
@@ -288,7 +288,7 @@ def test_list_review_candidate_issues_uses_or_label_semantics(
         "--limit",
         "20",
         "--json",
-        "number,title,url,labels,body",
+        "number,title,url,labels,body,state",
     )
     fake_runner = FakeProcessRunner(
         responses={
@@ -357,3 +357,41 @@ def test_list_review_candidate_issues_uses_or_label_semantics(
     # 92 must appear exactly once even though it matches both labels.
     assert len(candidates) == 3
     assert fake_runner.calls == [list(supervising_command), list(review_command)]
+
+
+def test_get_issue_requests_state(tmp_path: Path) -> None:
+    """Issue lookup should include state so cleanup can require closed Issues."""
+    command = (
+        "gh",
+        "issue",
+        "view",
+        "42",
+        "--json",
+        "number,title,url,labels,body,state",
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            command: CommandResult(
+                command=command,
+                return_code=0,
+                stdout=json.dumps(
+                    {
+                        "number": 42,
+                        "title": "cleanup",
+                        "url": "https://example/42",
+                        "labels": [{"name": "agent/review"}],
+                        "body": "",
+                        "state": "CLOSED",
+                    }
+                ),
+                stderr="",
+            )
+        }
+    )
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    issue = github_client.get_issue(42)
+
+    assert issue.state == "CLOSED"
+    assert issue.labels == ("agent/review",)
+    assert fake_runner.calls == [list(command)]

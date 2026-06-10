@@ -39,6 +39,11 @@ from backend.core.shared.models.agent_runner import (
     GeneratedContentConfig,
     LabelConfig,
 )
+from backend.core.use_cases.agent_runner_validation import (
+    build_issue_validation_section,
+    extract_realistic_validation_items,
+    extract_validation_waiver_reason,
+)
 from backend.core.use_cases.generated_content import (
     build_issue_context,
     extract_prd_section,
@@ -668,6 +673,21 @@ def create_issue_from_prd(
         )
         title = generated.title
         body = generated.body
+
+    # ------------------------------------------------------------------
+    # 7.5 物化 Realistic Validation 区块。
+    # 确定性步骤，独立于 AI 生成正文：waiver 声明物化为 hidden marker，
+    # 否则把 PRD 的验证清单复制为 Issue body 的未勾选清单，
+    # 供 runner 的证据门禁与 PR 人工签收清单消费。
+    # ------------------------------------------------------------------
+    validation_checklist_items = extract_realistic_validation_items(prd_text)
+    validation_waiver_reason = extract_validation_waiver_reason(prd_text)
+    if validation_checklist_items or validation_waiver_reason is not None:
+        validation_section = build_issue_validation_section(
+            checklist_items=validation_checklist_items,
+            waiver_reason=validation_waiver_reason,
+        )
+        body = f"{body.rstrip()}\n\n{validation_section}\n"
 
     # ------------------------------------------------------------------
     # 8. 创建 GitHub Issue。

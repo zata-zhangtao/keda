@@ -16,6 +16,12 @@ from backend.core.use_cases.agent_runner_git import (
     list_changed_paths,
     list_git_remotes,
 )
+from backend.core.use_cases.agent_runner_validation import (
+    build_validation_checklist_block,
+    ensure_no_evidence_paths_in_changes,
+    extract_realistic_validation_items,
+    validation_required,
+)
 from backend.core.use_cases.generated_content import (
     build_pr_context,
     generate_pr_content,
@@ -125,6 +131,8 @@ def publish_changes(
         )
     # push 前再次检查 forbidden paths，防止 commit 后又被修改
     validate_safe_changes(worktree_path, config, process_runner)
+    # 证据文件绝不允许进入代码 diff（info/exclude 之外的双保险）
+    ensure_no_evidence_paths_in_changes(worktree_path, config, process_runner)
     publish_remote_name = validate_publish_remote(worktree_path, config, process_runner)
     process_runner.run(
         ["git", "push", "-u", publish_remote_name, branch], cwd=worktree_path
@@ -155,6 +163,17 @@ def publish_changes(
         )
         pr_title = generated.title
         pr_body = generated.body
+
+    # 要求验证的 Issue：PR body 末尾追加 marker 包裹的人工签收清单。
+    # 人工 reviewer 查看证据 comment 后直接在 GitHub 上点勾，
+    # validation-gate required check 据此放行合并。
+    if validation_required(issue.body, config):
+        validation_checklist_items = extract_realistic_validation_items(issue.body)
+        if validation_checklist_items:
+            checklist_block = build_validation_checklist_block(
+                validation_checklist_items
+            )
+            pr_body = f"{pr_body.rstrip()}\n\n{checklist_block}\n"
 
     try:
         pr_url = github_client.create_draft_pr(

@@ -17,9 +17,16 @@ from backend.core.shared.interfaces.agent_runner import (
 )
 from backend.core.shared.models.agent_runner import (
     AppConfig,
+    IssueSummary,
     PublishFailureCategory,
     PublishRecoveryRequest,
     PublishRecoveryResult,
+)
+from backend.core.use_cases.agent_runner_validation import (
+    build_validation_checklist_block,
+    extract_realistic_validation_items,
+    publish_validation_evidence,
+    validation_required,
 )
 
 _logger = logging.getLogger(__name__)
@@ -386,6 +393,18 @@ def recover_publish_issue(
 
     pr_reused = existing_pr_url is not None
 
+    # Realistic Validation 上下文：恢复发布的 PR 同样需要人工签收清单与证据。
+    recovered_issue: IssueSummary | None
+    try:
+        recovered_issue = github_client.get_issue(issue_number)
+    except Exception as issue_lookup_exc:  # noqa: BLE001 - validation is best effort here.
+        recovered_issue = None
+        _logger.warning(
+            "Could not load Issue #%d for validation materialization: %s",
+            issue_number,
+            issue_lookup_exc,
+        )
+
     if existing_pr_url:
         pr_url = existing_pr_url
         _logger.info(
@@ -398,6 +417,17 @@ def recover_publish_issue(
         # 对应 Issue。
         pr_title = f"[Agent] Issue #{issue_number}"
         pr_body = f"Closes #{issue_number}\n\nRecovered by issue-agent-runner.\n"
+        if recovered_issue is not None and validation_required(
+            recovered_issue.body, config
+        ):
+            validation_checklist_items = extract_realistic_validation_items(
+                recovered_issue.body
+            )
+            if validation_checklist_items:
+                checklist_block = build_validation_checklist_block(
+                    validation_checklist_items
+                )
+                pr_body = f"{pr_body.rstrip()}\n\n{checklist_block}\n"
 
         _logger.info("Creating draft PR for Issue #%d", issue_number)
         try:
@@ -423,6 +453,26 @@ def recover_publish_issue(
                 ),
             )
             raise exc
+
+    # 第 5.5 步：上传验证证据并发 PR 证据评论（要求验证且证据存在时）。
+    if recovered_issue is not None:
+        try:
+            publish_validation_evidence(
+                issue=recovered_issue,
+                worktree_path=worktree_path,
+                config=config,
+                github_client=github_client,
+                process_runner=process_runner,
+                pr_url=pr_url,
+                head_sha=head_sha,
+            )
+        except Exception as evidence_exc:  # noqa: BLE001 - recovery must not abort here.
+            _logger.warning(
+                "Failed to publish validation evidence during recovery for "
+                "Issue #%d: %s",
+                issue_number,
+                evidence_exc,
+            )
 
     # 第六步：推送与 PR 均成功后，写入恢复成功评论。
     success_comment = build_recovery_success_comment(

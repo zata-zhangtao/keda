@@ -762,6 +762,35 @@ def worktree_remove_command(
     )
 
 
+@worktree_app.command("cleanup")
+def worktree_cleanup_command(
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Preview cleanup without deleting.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Actually delete eligible branches.")
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Also delete dirty or unmerged eligible branches.",
+        ),
+    ] = False,
+) -> int:
+    """Delete stale local issue branches whose Issue is closed."""
+    return _run_typer_command(
+        "worktree",
+        repo=None,
+        repo_id=None,
+        config=None,
+        worktree_command="cleanup",
+        dry_run=dry_run,
+        yes=yes,
+        force=force,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the Typer-powered CLI."""
     args = sys.argv[1:] if argv is None else argv
