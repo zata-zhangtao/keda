@@ -253,10 +253,13 @@ uv run iar review-daemon --interval 600
   - `head_sha` 或 `base_sha` 变化
   - `checks_state` 变化（如 CI 从 `PENDING` 变为 `FAILURE`）
   - `mergeable` 状态变化（如冲突出现或消失）
-  - Issue comments 数量增加
+  - Issue comments 数量超过最新 supervisor marker 记录的游标
   - PR review comments 数量增加
 - 任一维度变化时，先移回 `agent/supervising`，运行 supervisor cycle
 - 无变化时直接 skip，避免无意义重评
+
+Supervisor 结果评论会把自身写入后的 Issue comment 数量记录进 marker，
+因此 runner 自己写出的 `Agent Runner Post-PR Supervisor` 评论不会触发下一轮重审。
 
 PR context 读取使用当前 GitHub CLI 支持的 `statusCheckRollup` 字段聚合
 checks 状态：

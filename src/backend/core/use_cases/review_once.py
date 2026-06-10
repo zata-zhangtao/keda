@@ -41,7 +41,7 @@ def _context_changed_wide(
         return True
     if last_marker.head_sha != pr_context.head_sha:
         return True
-    if last_marker.base_sha != base_sha_remote:
+    if base_sha_remote and last_marker.base_sha != base_sha_remote:
         return True
     if (
         last_marker.checks_state is not None

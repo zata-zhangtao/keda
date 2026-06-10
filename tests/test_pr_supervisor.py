@@ -13,6 +13,7 @@ from backend.core.shared.models.agent_runner import (
     PullRequestContext,
     SupervisorActionResult,
 )
+from backend.core.use_cases.agent_runner_events import parse_latest_event_marker
 from backend.core.use_cases.pr_supervisor import (
     build_conflict_resolution_prompt,
     build_rework_intent_comment,
@@ -414,6 +415,7 @@ def test_run_post_pr_supervisor_cycle_writes_comment() -> None:
     """Supervisor cycle should write a result comment to the Issue."""
     issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     fake_client = FakeGitHubClient()
+    fake_client._remote_base_sha = "def456"
     fake_runner = FakeProcessRunner()
     pr_context = PullRequestContext(
         pr_url="https://github.com/example/repo/pull/1",
@@ -437,6 +439,10 @@ def test_run_post_pr_supervisor_cycle_writes_comment() -> None:
     assert len(comment_calls) == 1
     assert "<!-- iar:event" in comment_calls[0]["body"]
     assert "phase=post_pr_supervisor" in comment_calls[0]["body"]
+    marker = parse_latest_event_marker([comment_calls[0]["body"]])
+    assert marker is not None
+    assert marker.base_sha == "def456"
+    assert marker.issue_comments_count == 1
 
 
 def test_run_post_pr_supervisor_cycle_parses_action() -> None:

@@ -235,6 +235,7 @@ def build_supervisor_result_comment(
     verification_status: str,
     head_sha: str | None,
     cycle: int,
+    base_sha: str | None = None,
     checks_state: str | None = None,
     mergeable: bool | None = None,
     issue_comments_count: int | None = None,
@@ -245,6 +246,7 @@ def build_supervisor_result_comment(
         phase="post_pr_supervisor",
         cycle=cycle,
         head_sha=head_sha,
+        base_sha=base_sha,
         checks_state=checks_state,
         mergeable=mergeable,
         issue_comments_count=issue_comments_count,
@@ -689,9 +691,10 @@ def run_post_pr_supervisor_cycle(
         verification_status=action_result.verification_status,
         head_sha=action_result.head_sha or pr_context.head_sha,
         cycle=cycle,
+        base_sha=base_sha_remote,
         checks_state=pr_context.checks_state,
         mergeable=pr_context.mergeable,
-        issue_comments_count=len(issue_comments),
+        issue_comments_count=len(issue_comments) + 1,
         pr_comments_count=len(pr_comments),
     )
     # 评论写入 Issue 而非 PR，确保事件时间线与原始需求单保持一致，

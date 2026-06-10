@@ -13,6 +13,7 @@ from backend.core.shared.models.agent_runner import (
     PullRequestContext,
 )
 from backend.core.use_cases.agent_runner_events import format_event_marker
+from backend.core.use_cases.pr_supervisor import build_supervisor_result_comment
 from backend.core.use_cases.review_once import (
     _process_review_candidate,
     review_once,
@@ -433,6 +434,69 @@ def test_review_once_skips_when_no_context_change() -> None:
             process_runner=FakeProcessRunner(),
         )
 
+    assert mock_cycle.called is False
+    label_calls = [c for c in client.calls if c["method"] == "edit_issue_labels"]
+    assert len(label_calls) == 0
+
+
+def test_review_once_skips_after_supervisor_writes_its_own_comment() -> None:
+    """Supervisor result comments must not retrigger the next review pass."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="B",
+        labels=("agent/review",),
+    )
+    client = FakeGitHubClient()
+    client._remote_base_sha = "def456"
+    client._issue_comments[1] = [
+        "\n".join(
+            [
+                format_event_marker(
+                    phase="draft_pr_created",
+                    cycle=1,
+                    head_sha="abc123",
+                    pr_branch="issue-1",
+                ),
+                "",
+                "## Agent Runner Draft PR Created",
+                "",
+                "- Branch: `issue-1`",
+            ]
+        ),
+        build_supervisor_result_comment(
+            action="approve_for_human_review",
+            supervisor="codex",
+            summary="LGTM",
+            findings_counts={},
+            verification_status="passed",
+            head_sha="abc123",
+            cycle=1,
+            base_sha="def456",
+            checks_state="PENDING",
+            mergeable=True,
+            issue_comments_count=2,
+            pr_comments_count=1,
+        ),
+    ]
+    client._pr_contexts["issue-1"] = _make_pr_context()
+    client._pr_comments[1] = ["one"]
+
+    with patch(
+        "backend.core.use_cases.review_once.run_post_pr_supervisor_cycle",
+        return_value=_supervisor_approve(),
+    ) as mock_cycle:
+        outcome = _process_review_candidate(
+            issue=issue,
+            repo_path=Path("."),
+            config=AppConfig(),
+            agent="auto",
+            github_client=client,
+            process_runner=FakeProcessRunner(),
+        )
+
+    assert outcome == "skipped_context_unchanged"
     assert mock_cycle.called is False
     label_calls = [c for c in client.calls if c["method"] == "edit_issue_labels"]
     assert len(label_calls) == 0
