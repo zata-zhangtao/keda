@@ -36,6 +36,7 @@ from backend.core.shared.models.agent_runner import (
     IssueSummary,
 )
 from backend.core.use_cases.agent_runner_commit import (
+    EmptyCommitRequestError,
     commit_requested_changes,
     read_commit_request,
     remove_commit_request,
@@ -92,6 +93,7 @@ __all__ = [
     "MaxRetriesExceededError",
     "PrdDeliveryError",
     "PublishFailureError",
+    "EmptyCommitRequestError",
     "UnrecoverableError",
     "VerificationFailedError",
     "build_prompt",

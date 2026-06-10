@@ -18,6 +18,7 @@ from backend.core.use_cases.agent_runner_events import (
     format_event_marker,
 )
 from backend.core.use_cases.run_agent_once import (
+    EmptyCommitRequestError,
     commit_requested_changes,
     extract_agent_response_text,
     extract_prd_path,
@@ -304,6 +305,21 @@ def run_pre_push_review(
                 action_summary = (
                     "reviewer patched and runner committed follow-up changes"
                 )
+            except EmptyCommitRequestError:
+                # reviewer 写了 commit-request 却没有任何实际文件改动：这是良性
+                # 空操作（例如建议的改动与现状一致，或上一轮 cycle 已提交修复），
+                # 不应被当成 "patch failed" 而让整个 runner 硬失败。
+                # 回退到 reviewer 解析出的真实 verdict：若为 approved 则收敛，
+                # 若为 changes_requested 则继续循环并在用尽次数后走软失败路径。
+                # commit_requested_changes 在抛出前已移除残留的 commit-request 文件。
+                cycle_verdict = reviewer_decision.verdict
+                if reviewer_decision.verdict == "approved":
+                    action_summary = "reviewer approved with an empty commit request"
+                else:
+                    action_summary = (
+                        "reviewer requested changes but produced no committable diff"
+                    )
+                last_failure_summary = action_summary
             except Exception as exc:  # noqa: BLE001
                 action_summary = f"reviewer patch failed to commit: {exc}"
                 last_failure_summary = action_summary

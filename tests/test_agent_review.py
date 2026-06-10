@@ -438,6 +438,177 @@ def test_run_pre_push_review_commits_reviewer_changes(tmp_path: Path) -> None:
     assert "Verdict: approved" in comment_calls[1]["body"]
 
 
+def test_run_pre_push_review_empty_commit_request_with_approval_converges(
+    tmp_path: Path,
+) -> None:
+    """Reviewer writing a commit request with no diff must not hard-fail.
+
+    A reviewer that signals a commit but produces no actual file changes is a
+    benign no-op (e.g. the suggested change matches the current state). When the
+    reviewer's real verdict is ``approved`` the gate should converge instead of
+    raising ``Pre-push review repair failed``.
+    """
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    worktree_path = tmp_path / "issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "noop"}),
+        encoding="utf-8",
+    )
+
+    class _EmptyCommitApproveRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__(
+                responses={
+                    ("git", "branch", "--show-current"): CommandResult(
+                        command=("git", "branch", "--show-current"),
+                        return_code=0,
+                        stdout="issue-1\n",
+                        stderr="",
+                    ),
+                    # 空工作树：移除 commit-request 后没有任何改动可提交
+                    ("git", "status", "--porcelain"): CommandResult(
+                        command=("git", "status", "--porcelain"),
+                        return_code=0,
+                        stdout="",
+                        stderr="",
+                    ),
+                }
+            )
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout='{"verdict": "approved", "summary": "all good"}',
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    config = AppConfig(
+        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
+    )
+
+    final_sha, _verification = run_pre_push_review(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=_EmptyCommitApproveRunner(),
+        selected_agent="codex",
+        head_sha_before="before-sha",
+        expected_branch="issue-1",
+        verification_results=[],
+    )
+
+    # head 未推进，且循环正常收敛而非硬失败
+    assert final_sha == "before-sha"
+    # 残留的 commit-request 应被清理，避免污染后续轮次
+    assert not request_path.exists()
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "Verdict: approved" in comment_calls[0]["body"]
+    assert "empty commit request" in comment_calls[0]["body"]
+
+
+def test_run_pre_push_review_empty_commit_request_changes_requested_soft_fails(
+    tmp_path: Path,
+) -> None:
+    """An empty commit request with a changes_requested verdict soft-fails.
+
+    The runner must NOT raise the hard ``Pre-push review repair failed`` error
+    (the bug seen on Issue #5); it should fall through to the regular
+    "did not approve after N attempts" path with an accurate action summary.
+    """
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    worktree_path = tmp_path / "issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "noop"}),
+        encoding="utf-8",
+    )
+
+    class _EmptyCommitChangesRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__(
+                responses={
+                    ("git", "branch", "--show-current"): CommandResult(
+                        command=("git", "branch", "--show-current"),
+                        return_code=0,
+                        stdout="issue-1\n",
+                        stderr="",
+                    ),
+                    ("git", "status", "--porcelain"): CommandResult(
+                        command=("git", "status", "--porcelain"),
+                        return_code=0,
+                        stdout="",
+                        stderr="",
+                    ),
+                }
+            )
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout=('{"verdict": "changes_requested", "summary": "still off"}'),
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    config = AppConfig(
+        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
+    )
+
+    with pytest.raises(RuntimeError, match="did not approve") as exc_info:
+        run_pre_push_review(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            github_client=fake_client,
+            process_runner=_EmptyCommitChangesRunner(),
+            selected_agent="codex",
+            head_sha_before="before-sha",
+            expected_branch="issue-1",
+            verification_results=[],
+        )
+
+    # 关键：不能是 "repair failed" 硬失败
+    assert "repair failed" not in str(exc_info.value)
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "Verdict: changes requested" in comment_calls[0]["body"]
+    assert "produced no committable diff" in comment_calls[0]["body"]
+
+
 def test_run_pre_push_review_rejects_changes_requested_without_commit_request(
     tmp_path: Path,
 ) -> None:

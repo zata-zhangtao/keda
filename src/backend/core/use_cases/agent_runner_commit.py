@@ -27,7 +27,13 @@ from backend.core.use_cases.agent_runner_publish import validate_safe_changes
 _COMMIT_REQUEST_RELATIVE_PATH = Path(".agent-runner/commit-request.json")
 _MAX_COMMIT_MESSAGE_LENGTH = 200
 
+# 空提交请求的固定文案；保留原始字符串以兼容 is_recoverable_commit_request_error
+# 等基于 message 前缀匹配的旧逻辑。
+EMPTY_COMMIT_REQUEST_MESSAGE = "Agent requested a commit but produced no file changes."
+
 __all__ = [
+    "EMPTY_COMMIT_REQUEST_MESSAGE",
+    "EmptyCommitRequestError",
     "commit_requested_changes",
     "default_commit_message",
     "read_commit_request",
@@ -35,6 +41,19 @@ __all__ = [
     "sanitize_commit_message",
     "unstage_changes",
 ]
+
+
+class EmptyCommitRequestError(RuntimeError):
+    """Agent 写了 commit-request 却没有任何实际文件改动。
+
+    这是一个良性的空操作信号，而非真正的提交失败：调用方可据此区分
+    "无内容可提交"（可安全收敛）与分支不匹配、禁改路径、验证失败等
+    必须升级为硬失败的情况。继承 RuntimeError 以兼容既有的
+    ``except RuntimeError`` 与基于 message 前缀的失败分类逻辑。
+    """
+
+    def __init__(self, message: str = EMPTY_COMMIT_REQUEST_MESSAGE) -> None:
+        super().__init__(message)
 
 
 def default_commit_message(issue: IssueSummary) -> str:
@@ -127,7 +146,8 @@ def commit_requested_changes(
         staging 后验证命令的结果列表。
 
     Raises:
-        RuntimeError: 分支不匹配、无 commit request、无文件变更。
+        RuntimeError: 分支不匹配或 commit request 无效。
+        EmptyCommitRequestError: 写了 commit request 但没有任何文件变更（良性空操作）。
         VerificationFailedError: staging 后验证未通过。
         subprocess.CalledProcessError: git add 或 git commit 命令失败。
     """
@@ -137,7 +157,7 @@ def commit_requested_changes(
     commit_message = read_commit_request(worktree_path, issue)
     remove_commit_request(worktree_path)
     if not has_changes(worktree_path, process_runner):
-        raise RuntimeError("Agent requested a commit but produced no file changes.")
+        raise EmptyCommitRequestError()
     validate_safe_changes(worktree_path, config, process_runner)
     process_runner.run(["git", "add", "-A"], cwd=worktree_path)
     # 在 git commit 前再次运行验证，确保 staged 内容仍通过门禁

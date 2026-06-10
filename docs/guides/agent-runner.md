@@ -220,6 +220,13 @@ agent/ready
 
 Pre-push review 不产生独立的 durable label，整个过程仍在 `agent/running` 内。
 
+> **空 commit request 行为**：当 reviewer 写出了 `.agent-runner/commit-request.json` 但工作树已无任何可提交改动（例如 reviewer 的建议与现状一致，或上一轮 cycle 已经提交过修复），runner 会按 reviewer 解析出的真实 verdict 处理：
+>
+> - `approved` → 写一条 `Pre-Push Review Result` 评论（action summary 为 `reviewer approved with an empty commit request`），循环正常收敛。
+> - `changes_requested` → 写一条评论（action summary 为 `reviewer requested changes but produced no committable diff`）并继续下一轮 cycle；用尽 `max_attempts` 后走 `Pre-push review did not approve after N attempt(s): ...` 软失败路径。
+>
+> 该信号由 `EmptyCommitRequestError`（`RuntimeError` 的子类，message 保持 `"Agent requested a commit but produced no file changes."`）承载，因此 `is_recoverable_commit_request_error(...)` 仍把它分类为可恢复，且不会被升级为 `Pre-push review repair failed` 硬失败。
+
 ### Post-PR Supervisor
 
 Draft PR 创建后，Issue 先进入 `agent/supervising`，并立即运行至少一次 supervisor cycle：
