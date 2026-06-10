@@ -204,7 +204,7 @@ def _mark_issue_failed(
     elif attempt_results is not None:
         comment_body = format_failure_comment(exc, attempt_results)
     else:
-        comment_body = f"## Agent Runner Failed\n\n```text\n{exc}\n```\n"
+        comment_body = format_failure_comment(exc)
     try:
         github_client.comment_issue(issue.number, comment_body)
     except Exception as comment_exc:  # noqa: BLE001 - preserve original failure.

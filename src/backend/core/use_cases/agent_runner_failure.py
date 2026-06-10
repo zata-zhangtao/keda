@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -23,6 +24,7 @@ __all__ = [
     "PublishFailureError",
     "UnrecoverableError",
     "classify_failure",
+    "detect_usage_limit_root_cause",
     "format_agent_execution_failure",
     "format_attempt_history",
     "format_failure_comment",
@@ -156,6 +158,62 @@ def classify_failure(
     return FailureType.SUCCESS
 
 
+_ATTEMPT_DETAIL_SUMMARY_MAX_LENGTH = 200
+_ATTEMPT_DETAIL_SCAFFOLD_LINES = frozenset({"```", "```text", "stdout:", "stderr:"})
+
+_USAGE_LIMIT_HINT_PATTERN = re.compile(
+    r"usage limit (?:exceeded|reached)|request rejected \(429\)",
+    re.IGNORECASE,
+)
+_USAGE_LIMIT_RESET_AT_PATTERN = re.compile(r"resets at (\S+)")
+
+
+def detect_usage_limit_root_cause(failure_text: str) -> str | None:
+    """Return a human-readable root-cause line for API usage limit failures.
+
+    Args:
+        failure_text: Combined exception messages and attempt details to inspect.
+
+    Returns:
+        A Markdown summary line with the reset time when available,
+        or None when no usage-limit signature is found.
+    """
+    if _USAGE_LIMIT_HINT_PATTERN.search(failure_text) is None:
+        return None
+    reset_match = _USAGE_LIMIT_RESET_AT_PATTERN.search(failure_text)
+    if reset_match is not None:
+        reset_at = reset_match.group(1).rstrip(".,;)")
+        return (
+            "**Root cause:** Claude API usage limit reached (429). "
+            f"The limit resets at `{reset_at}`; retries before then will fail the same way."
+        )
+    return (
+        "**Root cause:** Claude API usage limit reached (429). "
+        "Retries will keep failing until the usage window resets."
+    )
+
+
+def _summarize_attempt_detail(detail: str) -> str:
+    """Pick the most informative single line of an attempt detail.
+
+    Attempt details are multi-line reports whose actual error almost always
+    sits on the last content line (command output tail, exception message),
+    so the summary keeps that line instead of head-truncating boilerplate.
+    """
+    stripped_lines = (line.strip() for line in detail.splitlines())
+    informative_lines = [
+        line
+        for line in stripped_lines
+        if line and line not in _ATTEMPT_DETAIL_SCAFFOLD_LINES
+    ]
+    if not informative_lines:
+        return ""
+    summary = informative_lines[-1].replace("|", "\\|")
+    if len(summary) > _ATTEMPT_DETAIL_SUMMARY_MAX_LENGTH:
+        return summary[: _ATTEMPT_DETAIL_SUMMARY_MAX_LENGTH - 1] + "…"
+    return summary
+
+
 def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
     """Format attempt results as a Markdown table."""
     if not attempt_results:
@@ -168,7 +226,7 @@ def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
         "|---------|-------------|-----------|--------|",
     ]
     for result in attempt_results:
-        detail = result.detail.replace("\n", " ")[:100]
+        detail = _summarize_attempt_detail(result.detail)
         recovered = "Yes" if result.recovered else "No"
         lines.append(
             f"| {result.attempt_number} | {result.failure_type.value} | {recovered} | {detail} |"
@@ -180,17 +238,39 @@ def format_failure_comment(
     exc: BaseException,
     attempt_results: list[AttemptResult] | None = None,
 ) -> str:
-    """Build a failure comment with optional attempt history."""
+    """Build a failure comment with root-cause summary and attempt history.
+
+    Known failure signatures (currently API usage limits) are surfaced as a
+    bolded root-cause line at the top. A ``CalledProcessError`` cause is
+    rendered with the short command name and truncated output instead of
+    ``str(exc)``, which would echo the entire agent prompt.
+    """
+    cause = exc.__cause__
+    if isinstance(cause, subprocess.CalledProcessError):
+        cause_text = "\n".join([str(cause.output or ""), str(cause.stderr or "")])
+    elif cause is not None:
+        cause_text = str(cause)
+    else:
+        cause_text = ""
+    searchable_failure_text = "\n".join(
+        [str(exc), cause_text] + [result.detail for result in attempt_results or []]
+    )
+
     lines = ["## Agent Runner Failed", ""]
+
+    root_cause_summary = detect_usage_limit_root_cause(searchable_failure_text)
+    if root_cause_summary is not None:
+        lines.extend([root_cause_summary, ""])
 
     if attempt_results:
         lines.append(format_attempt_history(attempt_results))
         lines.append("")
 
-    lines.extend(["```text", str(exc)])
-    if exc.__cause__ is not None:
-        lines.append(str(exc.__cause__))
-    lines.extend(["```", ""])
+    lines.extend(["```text", str(exc), "```", ""])
+    if isinstance(cause, subprocess.CalledProcessError):
+        lines.extend([format_agent_execution_failure(cause), ""])
+    elif cause is not None:
+        lines.extend(["```text", str(cause), "```", ""])
     return "\n".join(lines)
 
 

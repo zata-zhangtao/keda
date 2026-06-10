@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -24,17 +25,21 @@ from backend.core.shared.models.agent_runner import (
     WorktreeConfig,
 )
 from backend.core.use_cases.run_agent_once import (
+    MaxRetriesExceededError,
     PrdDeliveryError,
     build_recovery_prompt,
     build_prompt,
     choose_agent,
     classify_failure,
     commit_requested_changes,
+    detect_usage_limit_root_cause,
     ensure_prd_delivery_ready,
     extract_agent_response_text,
     extract_prd_path,
+    format_agent_execution_failure,
     format_attempt_history,
     format_command,
+    format_failure_comment,
     get_head_sha,
     publish_changes,
     resolve_prd_archive_path,
@@ -1772,8 +1777,7 @@ def test_run_once_success(tmp_path: Path) -> None:
                         command=command_tuple,
                         return_code=0,
                         stdout=(
-                            '{"action": "approve_for_human_review", '
-                            '"summary": "LGTM"}'
+                            '{"action": "approve_for_human_review", "summary": "LGTM"}'
                         )
                         if capture_output
                         else "",
@@ -2867,6 +2871,100 @@ def test_format_attempt_history_table() -> None:
     assert "| Attempt | Failure Type | Recovered | Detail |" in table
     assert "| 1 | no_commits | No | No commits produced. |" in table
     assert "| 2 | success | Yes | Agent fixed the issue. |" in table
+
+
+_USAGE_LIMIT_STDOUT = (
+    "\n[agent error] API Error: Request rejected (429) · usage limit exceeded, "
+    "5-hour usage limit reached for Token Plan Max (9917000/9917000 used), "
+    "resets at 2026-06-10T15:00:00+08:00 (2056)\n"
+)
+
+
+def _usage_limit_agent_error() -> subprocess.CalledProcessError:
+    return subprocess.CalledProcessError(
+        1,
+        ["claude", "--dangerously-skip-permissions", "-p", "HUGE_RECOVERY_PROMPT"],
+        output=_USAGE_LIMIT_STDOUT,
+        stderr="",
+    )
+
+
+def test_format_attempt_history_keeps_error_tail() -> None:
+    """The Detail column should surface the actual error, not boilerplate."""
+    detail = format_agent_execution_failure(_usage_limit_agent_error())
+    table = format_attempt_history(
+        [
+            AttemptResult(
+                attempt_number=1,
+                failure_type=FailureType.AGENT_ERROR,
+                recovered=False,
+                detail=detail,
+            )
+        ]
+    )
+    assert "usage limit exceeded" in table
+    assert "resets at 2026-06-10T15:00:00+08:00" in table
+    assert "Agent command failed before runner verification" not in table
+
+
+def test_format_attempt_history_escapes_table_pipes() -> None:
+    """Pipes in the detail must not break the Markdown table."""
+    table = format_attempt_history(
+        [
+            AttemptResult(
+                attempt_number=1,
+                failure_type=FailureType.AGENT_ERROR,
+                recovered=False,
+                detail="left | right",
+            )
+        ]
+    )
+    assert "left \\| right" in table
+
+
+def test_detect_usage_limit_root_cause() -> None:
+    """Usage-limit errors should yield a summary with the reset time."""
+    summary = detect_usage_limit_root_cause(_USAGE_LIMIT_STDOUT)
+    assert summary is not None
+    assert "429" in summary
+    assert "2026-06-10T15:00:00+08:00" in summary
+    assert detect_usage_limit_root_cause("just lint failed with exit code 1") is None
+
+
+def test_format_failure_comment_surfaces_usage_limit_root_cause() -> None:
+    """The comment should lead with a root-cause line for usage limit failures."""
+    attempt_history = [
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.AGENT_ERROR,
+            recovered=False,
+            detail=format_agent_execution_failure(_usage_limit_agent_error()),
+        )
+    ]
+    body = format_failure_comment(
+        MaxRetriesExceededError(attempt_history), attempt_history
+    )
+    root_cause_index = body.index("**Root cause:**")
+    assert "2026-06-10T15:00:00+08:00" in body
+    assert root_cause_index < body.index("### Attempt History")
+
+
+def test_format_failure_comment_omits_agent_prompt_from_cause() -> None:
+    """A CalledProcessError cause must not echo the full agent prompt."""
+    attempt_history = [
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.AGENT_ERROR,
+            recovered=False,
+            detail="Agent command failed.",
+        )
+    ]
+    failure = MaxRetriesExceededError(attempt_history)
+    failure.__cause__ = _usage_limit_agent_error()
+    body = format_failure_comment(failure, attempt_history)
+    assert "HUGE_RECOVERY_PROMPT" not in body
+    assert "Command: `claude`" in body
+    assert "usage limit exceeded" in body
 
 
 def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
