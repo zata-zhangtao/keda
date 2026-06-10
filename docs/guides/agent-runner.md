@@ -636,6 +636,8 @@ uv run --project /path/to/keda iar issue-from-prd tasks/pending/feature-login.md
 
 Ready 发布要求当前分支等于 `[agent_runner.git].base_branch`，因为 runner 默认从 base branch 创建 worktree。若当前分支不是 base branch，命令会失败并提示切换到 base branch 或改用 `--no-ready`。
 
+如果 PRD 发布阶段的 Git 命令失败，例如 `git commit` 被 pre-commit hook 拦截，`iar issue create` / `iar issue-from-prd` 会在终端和日志中展示失败命令、退出码以及捕获到的 stdout/stderr，便于直接看到 hook 或 Git 返回的原始错误。
+
 Runner 新建 issue worktree 时，默认会同步 base branch 的远程 tracking ref 作为起点，使新分支基于最新远程提交，而非可能过期的本地 base branch。复用已存在的 worktree 时不会自动 rebase 或 reset；如需更新基线，请手动处理或删除旧 worktree 后重建。
 
 #### 4. 查看结果

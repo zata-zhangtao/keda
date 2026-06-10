@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
@@ -347,6 +348,57 @@ def test_main_issue_create_alias_matches_issue_from_prd() -> None:
     assert mock_create.call_args.kwargs["request"].prd_path == Path("tasks/example.md")
     assert mock_create.call_args.kwargs["request"].queue_ready is True
     mock_prompt.assert_not_called()
+
+
+def test_main_issue_create_failure_prints_command_output(capsys) -> None:
+    """issue create failures should include captured command stdout and stderr."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path.cwd()
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    commit_error = subprocess.CalledProcessError(
+        1,
+        [
+            "git",
+            "commit",
+            "-m",
+            "docs(prd): publish example",
+            "--",
+            "tasks/example.md",
+        ],
+        output="pre-commit stdout\n",
+        stderr="trailing whitespace\n",
+    )
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd",
+        return_value="https://github.com/example/issues/1",
+    ), patch(
+        "backend.api.cli._prompt_and_publish_prd_if_needed",
+        side_effect=commit_error,
+    ):
+        exit_code = main(["issue", "create", "tasks/example.md"])
+
+    captured = capsys.readouterr()
+    combined_output = f"{captured.out}\n{captured.err}"
+
+    assert exit_code == 1
+    assert "iar failed:" in combined_output
+    assert (
+        "Command: git commit -m 'docs(prd): publish example' -- tasks/example.md"
+        in (combined_output)
+    )
+    assert "Exit code: 1" in combined_output
+    assert "stdout:" in combined_output
+    assert "pre-commit stdout" in combined_output
+    assert "stderr:" in combined_output
+    assert "trailing whitespace" in combined_output
 
 
 def test_main_issue_from_prd_ready_without_publish_defers_label() -> None:
