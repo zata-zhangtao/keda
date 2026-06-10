@@ -361,3 +361,15 @@ class IGitHubClient(ABC):
             str: 该远端基线分支当前指向的提交 SHA。
         """
         ...
+
+    @abstractmethod
+    def get_issue(self, issue_number: int) -> IssueSummary:
+        """返回指定 Issue 编号的摘要信息。
+
+        Args:
+            issue_number: 目标 Issue 编号。
+
+        Returns:
+            IssueSummary: Issue 摘要信息。
+        """
+        ...

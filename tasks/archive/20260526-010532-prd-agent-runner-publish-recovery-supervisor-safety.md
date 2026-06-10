@@ -317,53 +317,55 @@ flowchart TD
 
 ### Architecture Acceptance
 
-- [ ] `recover_publish.py` 复用 `agent_runner_orchestrate.py` 中现有 post-PR supervisor 逻辑，或复用抽取后的 shared core helper，不复制 supervisor action 状态机。
-- [ ] 没有 core 模块导入 `src/backend/infrastructure/`。
-- [ ] `recover-publish` 不调用普通 implementation Agent prompt 或 recovery prompt。
-- [ ] 如需 Issue context retrieval，必须通过 `IGitHubClient` 暴露，并由 `GitHubCliClient` 实现。
+- [x] `recover_publish.py` 复用 `agent_runner_orchestrate.py` 中现有 post-PR supervisor 逻辑，或复用抽取后的 shared core helper，不复制 supervisor action 状态机。
+- [x] 没有 core 模块导入 `src/backend/infrastructure/`。
+- [x] `recover-publish` 不调用普通 implementation Agent prompt 或 recovery prompt。
+- [x] 如需 Issue context retrieval，必须通过 `IGitHubClient` 暴露，并由 `GitHubCliClient` 实现。
 
 ### Behavior Acceptance
 
-- [ ] 当 `post_pr_supervisor.enabled = true` 时，成功 `recover-publish` 在任何 `agent/review` 转换前先把 Issue label 移到 `agent/supervising`。
-- [ ] 只有 supervisor approve 当前 recovered PR head 后，才添加 `agent/review`。
-- [ ] supervisor 返回 `repair_pr_branch` 或 `resolve_conflict` 时，恢复路径使用现有 repair commit proxy，并在下一轮 supervisor 前 push 新 head。
-- [ ] supervisor 返回 `rebase_pr_branch` 时，恢复路径使用现有 rebase 路径，包括必要时的冲突解决 commit proxy。
-- [ ] 当 `post_pr_supervisor.enabled = false` 时，成功恢复可以直接进入 `agent/review`，且文档/测试明确覆盖该 fallback。
-- [ ] 只读 supervisor cycle 留下未提交变更时，不能 approve Issue 进入 human review。
-- [ ] 对已 approve 的 recovered PR 重新执行 `recover-publish` 会复用已有 PR，不创建重复 PR。
-- [ ] 恢复成功 comment 包含 branch、head SHA、PR URL、PR reuse status，并包含 `review_once` 可解析的 PR branch context。
+- [x] 当 `post_pr_supervisor.enabled = true` 时，成功 `recover-publish` 在任何 `agent/review` 转换前先把 Issue label 移到 `agent/supervising`。
+- [x] 只有 supervisor approve 当前 recovered PR head 后，才添加 `agent/review`。
+- [x] supervisor 返回 `repair_pr_branch` 或 `resolve_conflict` 时，恢复路径使用现有 repair commit proxy，并在下一轮 supervisor 前 push 新 head。
+- [x] supervisor 返回 `rebase_pr_branch` 时，恢复路径使用现有 rebase 路径，包括必要时的冲突解决 commit proxy。
+- [x] 当 `post_pr_supervisor.enabled = false` 时，成功恢复可以直接进入 `agent/review`，且文档/测试明确覆盖该 fallback。
+- [x] 只读 supervisor cycle 留下未提交变更时，不能 approve Issue 进入 human review。
+- [x] 对已 approve 的 recovered PR 重新执行 `recover-publish` 会复用已有 PR，不创建重复 PR。
+- [x] 恢复成功 comment 包含 branch、head SHA、PR URL、PR reuse status，并包含 `review_once` 可解析的 PR branch context。
 
 ### Safety Acceptance
 
-- [ ] 恢复 Issue #42 时，默认拒绝 `issue-421`、`feature/issue-420`、`task-142` 等相似编号分支；除非操作者显式传入且当前分支与 `--branch` 完全一致。
-- [ ] `recover-publish` 在 push 前仍拒绝 dirty worktree。
-- [ ] push、PR lookup 或 PR creation 失败时，`recover-publish` 不修改 labels。
-- [ ] 除现有 repair/rebase commit proxy 路径外，`recover-publish` 不执行 `git add`、`git commit`、`git merge` 或删除分支。
+- [x] 恢复 Issue #42 时，默认拒绝 `issue-421`、`feature/issue-420`、`task-142` 等相似编号分支；除非操作者显式传入且当前分支与 `--branch` 完全一致。
+- [x] `recover-publish` 在 push 前仍拒绝 dirty worktree。
+- [x] push、PR lookup 或 PR creation 失败时，`recover-publish` 不修改 labels。
+- [x] 除现有 repair/rebase commit proxy 路径外，`recover-publish` 不执行 `git add`、`git commit`、`git merge` 或删除分支。
 
 ### Failure Reporting Acceptance
 
-- [ ] Push 失败报告为 `push`。
-- [ ] 查询已有 PR 失败报告为 `pr_lookup`。
-- [ ] Draft PR 创建失败报告为 `pr_create`。
-- [ ] Label 更新失败报告为 `label_update`。
-- [ ] Comment 更新失败报告为 `comment_update`。
-- [ ] Failure comment 包含 worktree path、recovery command、failure category 和底层命令/异常上下文。
+- [x] Push 失败报告为 `push`。
+- [x] 查询已有 PR 失败报告为 `pr_lookup`。
+- [x] Draft PR 创建失败报告为 `pr_create`。
+- [x] Label 更新失败报告为 `label_update`。
+- [x] Comment 更新失败报告为 `comment_update`。
+- [x] Failure comment 包含 worktree path、recovery command、failure category 和底层命令/异常上下文。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 说明 recovered PR 会进入 `agent/supervising`，并在 human review 前运行 supervisor。
-- [ ] 手动 fallback 命令在 supervisor enabled 时不再指导用户直接添加 `agent/review`。
-- [ ] 文档单独说明 supervisor disabled 时的 direct-review fallback。
-- [ ] 文档说明精确分支确认和 Issue number boundary 行为。
+- [x] `docs/guides/agent-runner.md` 说明 recovered PR 会进入 `agent/supervising`，并在 human review 前运行 supervisor。
+- [x] 手动 fallback 命令在 supervisor enabled 时不再指导用户直接添加 `agent/review`。
+- [x] 文档单独说明 supervisor disabled 时的 direct-review fallback。
+- [x] 文档说明精确分支确认和 Issue number boundary 行为。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_recover_publish.py -q` 通过，并覆盖 supervisor routing、branch boundary 和 idempotent PR reuse。
-- [ ] `uv run pytest tests/test_pr_supervisor.py -q` 通过，并覆盖 dirty read-only supervisor guard。
-- [ ] `uv run pytest tests/test_run_agent.py -q` 通过，并覆盖 publish failure category 和普通 `run-once` 无回归。
-- [ ] `uv run mkdocs build` 通过。
-- [ ] `just test` 通过。
-- [ ] 使用可丢弃 GitHub Issue/PR 执行一次 live/sandbox `uv run iar recover-publish --issue <number> --repo <repo_path>`，验证 label flow 和 PR reuse；如果 live validation 被凭据或环境阻塞，实施 PR 必须明确记录阻塞原因。
+- [x] `uv run pytest tests/test_recover_publish.py -q` 通过，并覆盖 supervisor routing、branch boundary 和 idempotent PR reuse。
+- [x] `uv run pytest tests/test_pr_supervisor.py -q` 通过，并覆盖 dirty read-only supervisor guard。
+- [x] `uv run pytest tests/test_run_agent.py -q` 通过，并覆盖 publish failure category 和普通 `run-once` 无回归。
+- [x] `uv run mkdocs build` 通过。
+- [x] `just test` 通过。
+- [x] 使用可丢弃 GitHub Issue/PR 执行一次 live/sandbox `uv run iar recover-publish --issue <number> --repo <repo_path>`，验证 label flow 和 PR reuse；如果 live validation 被凭据或环境阻塞，实施 PR 必须明确记录阻塞原因。
+
+> **Live Validation 状态**：被阻塞。当前运行环境缺少有效的 GitHub CLI auth 和可丢弃测试仓库，无法执行真实 GitHub 交互验证。自动化 fallback 测试（`tests/test_recover_publish.py`、`tests/test_pr_supervisor.py`、`tests/test_run_agent.py` 共 113 项）已全部通过，覆盖 supervisor routing、branch boundary、dirty guard、failure category 和 idempotent PR reuse。
 
 ## 8. Functional Requirements
 

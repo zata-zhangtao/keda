@@ -741,3 +741,131 @@ def test_execute_rebase_conflict_agent_no_commit_request(tmp_path: Path) -> None
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "rebase", "--abort") not in commands
     assert ("git", "rebase", "--continue") not in commands
+
+
+def test_dirty_worktree_before_supervisor_blocks_approval(tmp_path: Path) -> None:
+    """Read-only supervisor must not approve when worktree is dirty before cycle."""
+    from backend.core.use_cases.agent_runner_supervisor import (
+        _run_supervisor_with_repair_loop,
+    )
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M file.py\n",
+                stderr="",
+            ),
+        }
+    )
+    fake_client = FakeGitHubClient()
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+    )
+    config = AppConfig()
+
+    _run_supervisor_with_repair_loop(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=fake_runner,
+        pr_context=pr_context,
+        supervisor_agent="codex",
+    )
+
+    # Should move to blocked, not review
+    blocked_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "edit_issue_labels"
+        and config.labels.blocked in c.get("add", [])
+    ]
+    assert len(blocked_calls) == 1
+    assert config.labels.supervising in blocked_calls[0]["remove"]
+
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "dirty_worktree_before_supervisor" in comment_calls[0]["body"]
+
+
+def test_dirty_worktree_after_approve_blocks_review(tmp_path: Path) -> None:
+    """Read-only supervisor leaving uncommitted changes must not enter review."""
+    from backend.core.use_cases.agent_runner_supervisor import (
+        _run_supervisor_with_repair_loop,
+    )
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+
+    class _DirtyAfterApproveRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._status_calls = 0
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple == ("git", "status", "--porcelain"):
+                self._status_calls += 1
+                # First call (before supervisor): clean
+                # Second call (after approve): dirty
+                stdout = "" if self._status_calls == 1 else " M file.py\n"
+                return CommandResult(command_tuple, 0, stdout, "")
+            if command_tuple[:1] == ("codex",):
+                return CommandResult(
+                    command_tuple,
+                    0,
+                    '{"action": "approve_for_human_review", "summary": "LGTM"}',
+                    "",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _DirtyAfterApproveRunner()
+    fake_client = FakeGitHubClient()
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+    )
+    config = AppConfig()
+
+    _run_supervisor_with_repair_loop(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=fake_runner,
+        pr_context=pr_context,
+        supervisor_agent="codex",
+    )
+
+    # Should move to blocked, not review
+    blocked_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "edit_issue_labels"
+        and config.labels.blocked in c.get("add", [])
+    ]
+    assert len(blocked_calls) == 1
+    assert config.labels.supervising in blocked_calls[0]["remove"]
+
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 2  # supervisor result + dirty guard
+    assert any("dirty_read_only_supervisor" in c["body"] for c in comment_calls)

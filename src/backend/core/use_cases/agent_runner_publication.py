@@ -36,6 +36,7 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_review import run_pre_push_review
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from backend.core.use_cases.agent_runner_failure import PublishFailureError
+from backend.core.use_cases.agent_runner_publish import DraftPRCreationError
 from backend.core.use_cases.run_agent_once import (
     ensure_prd_delivery_ready,
     ensure_verification_passed,
@@ -174,6 +175,12 @@ def _publish_changes_with_recovery_context(
             expected_branch=expected_branch,
             content_generator=content_generator,
         )
+    except DraftPRCreationError as exc:
+        raise PublishFailureError(
+            str(exc),
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.PR_CREATE,
+        ) from exc
     except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
         raise PublishFailureError(
             str(exc),

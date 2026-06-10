@@ -304,3 +304,4 @@ class PublishRecoveryResult:
     head_sha: str
     pr_url: str
     pr_reused: bool
+    supervisor_action: str | None = None

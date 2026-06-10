@@ -593,7 +593,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
             except PublishRecoveryError as exc:
-                logger.error("Publish recovery failed: %s", exc)
+                logger.error(
+                    "Publish recovery failed (category=%s): %s",
+                    exc.failure_category,
+                    exc,
+                )
                 return 1
 
         if parsed.command == "deliberate":
