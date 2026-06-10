@@ -6,12 +6,25 @@
 
 **Goal**: 当 forbidden path 拦截发生时，Issue 进入 `agent/blocked`；人工确认 forbidden 文件并将 worktree 整理到可继续状态后，写入 `blocked_resolution_requested` marker。后续 `iar run-once` 扫描 `agent/blocked` Issue，通过竞争认领机制将其中一个 Issue 从 `blocked -> running`，并在现有 worktree 上让 Agent 继续完成剩余任务，不需要从头重跑。
 
+### Proposed Solution Summary
+
+Extend the existing Agent Runner failure classification and GitHub Issue workflow state path so commit-stage forbidden path failures become a recoverable `agent/blocked` state. The operator supplies an explicit `blocked_resolution_requested` marker after manually resolving forbidden files; the runner only consumes that marker through the existing `run-once` orchestration path and reuses the shared workflow transition / marker-history helpers planned by the CI rework recovery PRD. The change updates Issue labels, event markers, and continuation prompts while intentionally avoiding a new `agent/forbidden` label, database-backed queue, or parallel recovery command.
+
 ### Realistic Validation
 
 - [ ] **Forbidden 拦截后进入 blocked**: 运行 iar run-once 处理一个会触发 forbidden 拦截的 Issue，验证 Issue 进入 `agent/blocked` 而非 `agent/failed`，失败 comment 包含 blocked 状态说明
 - [ ] **人工处理后竞争认领继续**: 人工处理 forbidden 文件、确保 worktree 满足继续条件并写 marker comment 后，两个 iar run-once 实例同时运行，验证只有一个成功将 Issue 从 `agent/blocked` 认领到 `agent/running` 并继续，其余跳过
 - [ ] **继续 prompt 导向正确**: 验证 Agent 收到的是"继续完成剩余任务"的 prompt，而非从头开始或修复模式
 - [ ] **完成后的工作流正确**: 验证 PRD closeout、publish、label 流转等行为符合预期
+
+### Delivery Dependencies
+
+- Group: agent-runner-blocked-recovery
+- Depends on groups:
+  - agent-runner-workflow-recovery
+- Depends on tasks/issues:
+- Gate type: hard
+- Notes: This PRD depends on the shared workflow transition and marker-history helpers from the CI rework recovery PRD. Without those helpers, this task would duplicate label transition and marker scanning logic.
 
 ---
 
@@ -56,6 +69,19 @@
 - **多 runner 竞争**: 必须通过某种原子操作避免两个 runner 同时处理同一个 blocked Issue
 - **worktree 完整性**: 人工处理 forbidden 文件时可能产生新 commit 或 revert，runner 必须处理这些边界情况
 - **PRD 交付检查**: 如果 Issue 有 PRD，recovery prompt 仍需引导 Agent 完成 Acceptance Checklist
+
+### Existing PRD Relationship
+
+- Depends on `tasks/pending/P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery.md` for shared workflow transition and marker-history helpers.
+- Related to `tasks/pending/P1-BUG-20260527-173500-process-runner-error-diagnosability.md` because both improve operator-facing failure handling, but the scopes are independent.
+- Related to `tasks/pending/P1-BUG-20260528-095136-agent-runner-rebase-detached-head-branch-guard.md` because both recover interrupted post-agent work, but they operate on different guards.
+- Does not duplicate any current pending PRD; it extends the blocked recovery path that the CI recovery PRD intentionally leaves for a follow-up.
+
+### Potential Redundancy Risks
+
+- Duplicating workflow label remove lists in this PRD would repeat the CI recovery bug class; use the shared helper instead.
+- Introducing a dedicated `agent/forbidden` state would overlap with the existing `agent/blocked` operator-intervention semantics.
+- Adding a bespoke recovery command would bypass the existing `run-once` orchestration and PRD closeout path.
 
 ---
 
@@ -208,7 +234,18 @@ docs/guides/agent-runner.md
     - blocked 恢复操作步骤
 ```
 
-### 5.3 Flow Diagram
+### 5.3 Executor Drift Guard
+
+Before implementation, search for existing and hidden references rather than trusting this file list as exhaustive:
+
+```bash
+rg -n "FORBIDDEN_BLOCKED|Refusing to publish forbidden paths|forbidden_path_patterns|agent/blocked|blocked_resolution" src tests docs tasks/pending
+rg -n "workflow_state|post_pr_rework_requested|format_event_marker|parse_latest_event_marker|edit_issue_labels" src/backend/core src/backend/infrastructure tests
+```
+
+If the shared workflow helper from `P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery` does not exist yet, implement that dependency first instead of creating a one-off blocked-resolution helper here. If CAS-style label updates fail in sandbox validation, inspect `src/backend/infrastructure/github_client.py` and the GitHub CLI/REST label update boundary before changing core orchestration.
+
+### 5.4 Flow Diagram
 
 ```mermaid
 flowchart TD
@@ -258,7 +295,7 @@ flowchart TD
     end
 ```
 
-### 5.4 Realistic Validation Plan
+### 5.5 Realistic Validation Plan
 
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
 |----------|-----------------|------------|---------------|-----------------|---------------------|----------------------|
@@ -289,13 +326,21 @@ flowchart TD
    # 两个应该只有一个真正处理该 Issue
    ```
 
-### 5.5 Low-Fidelity Prototype
+### 5.6 Low-Fidelity Prototype
 
 无。核心逻辑是文本处理和 label 操作，不需要 UI 或交互原型。
 
-### 5.6 ER Diagram
+### 5.7 ER Diagram
 
 No data model changes in this PRD.
+
+### 5.8 Interactive Prototype Change Log
+
+No interactive prototype file changes in this PRD.
+
+### 5.9 External Validation
+
+No external validation required; repository evidence and sandbox runner validation are sufficient.
 
 ---
 

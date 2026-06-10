@@ -115,7 +115,7 @@ backend.api.cli:main
 - No duplicate pending PRD found for `iar worktree cleanup` or local stale issue branch cleanup.
 - `tasks/archive/20260602-193717-prd-iar-worktree-builtin.md` is a prior completed dependency in the broad sense: it established `.iar-worktrees/<branch>` as the iAR-owned layout and `iar worktree` as the command group.
 - `tasks/archive/20260521-145500-prd-issue-worktree-default-tasks-subdir.md` established the historical `<repo>-worktrees/tasks/issue-<number>` layout. This PRD intentionally does not make cleanup auto-delete that legacy/manual layout.
-- `tasks/pending/20260527-112400-prd-worktree-sync.md` concerns preparing/reconciling active worktrees before agent work; it is independent from post-close cleanup.
+- `tasks/pending/P1-BUG-20260527-112400-agent-runner-worktree-sync.md` concerns preparing/reconciling active worktrees before agent work; it is independent from post-close cleanup.
 - `tasks/pending/P1-FEAT-20260610-143013-validation-evidence-gate.md` contains remote evidence branch cleanup, but it does not duplicate this local worktree cleanup feature.
 
 ### Potential Redundancy Risks

@@ -19,6 +19,10 @@ Refusing to commit on unexpected branch:
 - 错误信息必须区分“真的不是预期分支”和“Git rebase 状态无法确认”，便于 operator 从 Issue 评论定位根因。
 - 覆盖 fake process runner、真实 Git rebase 状态和 CLI/post-PR rework 入口，防止该问题再次出现在真实 runner 中。
 
+### Proposed Solution Summary
+
+Refine the existing `pr_supervisor.execute_rebase(...)` conflict recovery branch guard so it accepts detached HEAD only when Git active-rebase metadata proves the rebase target is the expected PR branch. The runner derives this state from real Git metadata through the existing `IProcessRunner` boundary and keeps ordinary commit-proxy branch validation strict. The user-visible change is that legitimate PR branch rebase conflicts can continue through `git rebase --continue`, while mismatched or unknown rebase state fails with actionable diagnostics. This avoids a new rebase executor, a broader branch-guard relaxation, or any destructive reset/abort on unverifiable state.
+
 ### Realistic Validation
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
@@ -27,6 +31,16 @@ Refusing to commit on unexpected branch:
 - [ ] **错误分支拒绝真实验证**：通过同一入口制造 active rebase 目标分支与 PR 分支不一致，验证 runner 拒绝 staging、verification、`rebase --continue` 和 push。
 - [ ] **CLI rework 消费验证**：通过 `uv run iar run-once --repo <fixture-repo> --max-issues 1` 等真实 CLI 路径或其 subprocess fixture，验证 pending `resolve_conflict` / `rebase_pr_branch` 请求不会因 detached HEAD 被误判失败。
 - [ ] **为什么单元测试不够**：该 bug 依赖真实 Git rebase 元数据、worktree detached 状态、commit-request 协议和 runner supervisor 路由组合；只 mock `git branch --show-current` 无法证明真实 rebase 中间状态可恢复。
+
+### Delivery Dependencies
+
+- Group: agent-runner-rebase-recovery
+- Depends on groups:
+  - none
+- Depends on tasks/issues:
+  - none
+- Gate type: none
+- Notes: Related to CI rework recovery and worktree sync PRDs, but this branch guard can be implemented independently in the existing rebase conflict path.
 
 ## 2. Requirement Shape
 
@@ -116,6 +130,12 @@ review-once / run-once
 - 不应把 ordinary commit proxy 的 guard 改成“空分支也允许”；这会扩大安全面。
 - 不应在多个文件复制 rebase metadata 解析；如果需要 helper，应保持单一入口。
 - 不应通过跳过 branch guard 修复该 bug；目标是更精确的 guard，而不是取消 guard。
+
+### Existing PRD Relationship
+
+- Related to `tasks/pending/P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery.md`; both affect post-PR rework, but this PRD is specifically about Git rebase branch safety and can run independently.
+- Related to `tasks/pending/P1-BUG-20260527-112400-agent-runner-worktree-sync.md`; both protect Git worktree state, but worktree sync happens before agent execution while this PRD happens during rebase conflict recovery.
+- Does not depend on or duplicate any pending PRD. If shared workflow helpers from CI recovery are already available during implementation, use them only for state transitions and do not move rebase target detection into them.
 
 ## 4. Recommendation
 
@@ -311,7 +331,7 @@ Failure triage:
 - If CLI fixture setup is noisy, first verify `execute_rebase(...)` integration test, then inspect `agent_runner_orchestrate.py` rework marker routing.
 - If `just test` fails on unrelated environment setup, record the failure command, stderr, and whether targeted tests passed.
 
-### Data Model Changes
+### ER Diagram
 
 No data model changes in this PRD.
 

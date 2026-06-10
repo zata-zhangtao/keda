@@ -18,6 +18,10 @@
 5. `run-once` 能通过真实 CLI 路径消费 rework marker，并在现有 PR branch 上执行修复。
 6. 本 PRD 负责抽取通用 workflow label transition 和 marker-history helper；后续 forbidden blocked resolution 等恢复任务必须复用这些 helper，不再复制 label remove list、latest-marker 扫描或 claim 状态机。
 
+### Proposed Solution Summary
+
+Strengthen the existing post-PR Agent Runner workflow by fixing the GitHub CLI PR checks adapter, adding a deterministic core gate that prevents failed checks from being approved into human review, and extracting shared workflow-label transition plus marker-history helpers. The runner continues to use GitHub labels, comments, PR context, and the current `review-once` / `run-once` entry points as durable state; operators and supervisors only supply normal Issue labels and event comments. This avoids a new queue, database, webhook service, or prompt-only safety rule while making CI rework recovery reusable by later blocked-resolution tasks.
+
 ### Realistic Validation
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
@@ -26,6 +30,16 @@
 - [ ] **pending rework run-once 真实验证**：通过 `uv run iar run-once --repo <fixture-repo> --max-issues 1`，验证带 `post_pr_rework_requested` marker 的 `agent/running` Issue 会执行 existing PR branch repair，而不是被最新 approval marker 或残留 `agent/review` 跳过。
 - [ ] **label 互斥真实验证**：通过真实 CLI fixture 检查任意一次 state transition 后 Issue 不会同时包含 `agent/running`、`agent/review`、`agent/supervising`、`agent/blocked`、`agent/failed`。
 - [ ] **为什么单元测试不够**：该问题发生在 CLI 目标解析、GitHub CLI JSON 字段、Issue comments marker 顺序、labels 当前状态和本地 worktree 路径共同作用时；单元测试无法证明真实入口组合路径收敛。
+
+### Delivery Dependencies
+
+- Group: agent-runner-workflow-recovery
+- Depends on groups:
+  - none
+- Depends on tasks/issues:
+  - none
+- Gate type: none
+- Notes: This PRD blocks `P1-BUG-20260526-185149-agent-runner-forbidden-blocked-resolution` because that blocked-recovery PRD must reuse the shared workflow transition and marker-history helpers defined here.
 
 ### Implementation Progress
 
@@ -124,6 +138,13 @@ review-once
 - 直接在 `review_once.py`、`agent_runner_orchestrate.py` 各自复制 label remove list，会再次出现状态残留。
 - 直接在 prompt 中要求 supervisor 不 approve failed CI，而没有 core hard gate，会继续受 agent 判断波动影响。
 - 新建持久 rework queue 会复制 GitHub labels/comments 已承担的 durable state，增加恢复复杂度。
+
+**Existing PRD Relationship**:
+
+- Blocks `tasks/pending/P1-BUG-20260526-185149-agent-runner-forbidden-blocked-resolution.md`, which depends on this PRD's shared workflow transition and marker-history helpers.
+- Related to `tasks/pending/P1-BUG-20260528-095136-agent-runner-rebase-detached-head-branch-guard.md`; both affect post-PR rework, but this PRD owns CI/check and marker-state recovery while the rebase PRD owns detached-HEAD branch safety.
+- Related to `tasks/pending/P1-BUG-20260527-112400-agent-runner-worktree-sync.md`; both protect runner worktrees, but this PRD operates after PR creation while worktree sync operates before agent execution.
+- Does not duplicate any pending PRD; it consolidates shared workflow helpers that downstream recovery PRDs must consume.
 
 ## 4. Recommendation
 
@@ -342,6 +363,18 @@ checks_summary: tuple[str, ...] = ()
         [修改]
         【总结】记录 CI gate、互斥 workflow labels、pending rework 和恢复操作。
 ```
+
+### Executor Drift Guard
+
+Use repository searches to find current helper names and hidden workflow-state references before editing:
+
+```bash
+rg -n "statusCheckRollup|statusCheckRollupState|checks_state|checks_summary" src tests docs
+rg -n "post_pr_rework_requested|repair_pr_branch|rebase_pr_branch|resolve_conflict|agent/review|agent/running|agent/supervising" src tests docs tasks/pending
+rg -n "edit_issue_labels|workflow_state|parse_latest_event_marker|format_event_marker" src/backend/core src/backend/infrastructure tests
+```
+
+The files listed in the Change Impact Tree are the starting point, not an exhaustive guarantee. If CLI smoke validation fails, triage the GitHub CLI JSON field boundary in `src/backend/infrastructure/github_client.py`, then the marker-history search in `src/backend/core/use_cases/agent_runner_events.py`, then label replacement call sites in `review_once.py` and `agent_runner_orchestrate.py`.
 
 ### Flow Or Architecture Diagram
 

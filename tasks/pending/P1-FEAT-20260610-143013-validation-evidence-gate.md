@@ -42,11 +42,9 @@
 
 - Group: agent-runner-validation-gate
 - Depends on groups:
-  - none
 - Depends on tasks/issues:
-  - P1-FEAT-20260610-114529-issue-dependency-gate（soft：双方都修改 `create_issue_from_prd.py` 的 body 组装点与 orchestrate 轮询入口，先后实施可减少冲突，但无功能依赖）
 - Gate type: soft
-- Notes: 工具无关声明；与 dependency-gate 仅存在文件级合并冲突风险，无行为耦合。
+- Notes: 与 archived `P1-FEAT-20260610-114529-issue-dependency-gate` 仅存在文件级合并冲突风险，无行为耦合；不物化为 GitHub Issue 依赖。
 
 ## 2. Requirement Shape
 
@@ -270,15 +268,15 @@ flowchart TD
 
 ```text
 <!-- iar:validation-evidence version=1 head=abc1234 branch=iar-evidence/issue-42 count=2 -->
-## Realistic Validation Evidence
+### Realistic Validation Evidence
 
 Evidence branch: `iar-evidence/issue-42`（never merged; auto-deleted after the issue closes）
 
-### rv-1-dependency-wait.png
+#### rv-1-dependency-wait.png
 ![rv-1](https://github.com/<owner>/<repo>/blob/iar-evidence/issue-42/rv-1-dependency-wait.png?raw=true)
 [Open file](https://github.com/<owner>/<repo>/blob/iar-evidence/issue-42/rv-1-dependency-wait.png)
 
-### rv-2-cli-output.txt
+#### rv-2-cli-output.txt
 ```text
 $ uv run iar run --dry-run --max-issues 2
 DRY RUN: would process Issue #41 ...
@@ -289,7 +287,7 @@ PR body 追加区块的目标形态：
 
 ```text
 <!-- iar:realistic-validation version=1 total=3 -->
-## Realistic Validation (human sign-off required)
+### Realistic Validation Human Sign-Off Shape
 
 Review the evidence comment on this PR, then tick每一项 once verified:
 

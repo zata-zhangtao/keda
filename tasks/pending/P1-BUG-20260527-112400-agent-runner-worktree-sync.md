@@ -1,6 +1,6 @@
 # PRD: Agent Runner Worktree 远程分支安全对齐
 
-## 1. 引言与目标 (Introduction & Goals)
+## 1. Introduction & Goals
 
 ### 问题说明
 
@@ -19,7 +19,11 @@
 - 对 dirty worktree 或 diverged branch 这类需要 destructive reset、rebase 或人工判断的状态显式失败。
 - 使用配置中的 remote 名称，不硬编码 `origin`。
 
-### 真实验证 (Realistic Validation)
+### Proposed Solution Summary
+
+Extend the existing `create_or_reuse_worktree()` preparation path with a core-layer remote branch reconcile helper that fetches the configured remote's same-named branch, classifies local/remote ancestry, and performs only clean fast-forward updates before returning the worktree path. The runner consumes explicit Git state from the configured remote and current branch; it does not infer issue branch names or rewrite local history. The user-visible behavior is safer agent execution on reused worktrees while preserving local-ahead commits and dirty worktrees. This avoids a separate sync service, destructive reset, automatic rebase, or changes to publish/rebase recovery semantics.
+
+### Realistic Validation
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 helper 中通过。
 
@@ -28,14 +32,24 @@
 - [ ] **保护本地状态真实验证**：通过真实 Git 临时仓库制造 dirty worktree、local-ahead、diverged 三类状态，验证 runner 不执行 destructive reset，且 dirty/diverged 给出明确失败。
 - [ ] **为什么单元测试不够**：单元测试可以验证命令序列，但不能证明 Git refspec、remote-tracking ref、fast-forward 判定和真实 worktree 状态在实际 Git 仓库中正确工作。
 
-## 2. 需求形态 (Requirement Shape)
+### Delivery Dependencies
+
+- Group: agent-runner-worktree-safety
+- Depends on groups:
+  - none
+- Depends on tasks/issues:
+  - none
+- Gate type: none
+- Notes: Related PRDs touch other worktree lifecycle moments, but this PRD can be implemented independently because it only changes pre-agent worktree preparation.
+
+## 2. Requirement Shape
 
 - **执行者 (Actor)**: Agent runner 的 worktree preparation 路径，主要入口为 `run_agent_once.create_or_reuse_worktree()`，调用者包括 `agent_runner_orchestrate` 和 `review_once`。
 - **触发条件 (Trigger)**: runner 开始处理一个 issue，并完成 create/reuse command 后、返回 `worktree_path` 前。
 - **预期行为 (Expected Behavior)**: worktree 当前分支与 `{config.git.remote}/<current-branch>` 完成安全 reconcile；只有 clean fast-forward 场景移动本地 `HEAD`。
 - **范围边界 (Scope Boundary)**: 仅处理 worktree 准备阶段的远程分支对齐；不改变 agent commit proxy、pre-push review、post-PR repair/rebase、push、PR 创建逻辑。
 
-## 3. 仓库上下文与架构适配 (Repository Context And Architecture Fit)
+## 3. Repository Context And Architecture Fit
 
 ### 当前相关模块
 
@@ -63,9 +77,22 @@
 - `core` 层只能依赖 `core/shared/interfaces` 和现有 use case helper，不导入 `engines`、`infrastructure`、`api`。
 - 不修改 `scripts/worktree/create.sh` 的 base branch fetch 行为；本 PRD 关注 create/reuse 后的当前分支 reconcile。
 
-## 4. 建议方案 (Recommendation)
+### Existing PRD Relationship
 
-### 推荐做法
+- Related to archived `tasks/archive/P2-FEAT-20260610-144433-iar-worktree-cleanup.md`; cleanup owns post-close local worktree deletion, while this PRD owns pre-agent branch freshness and can run independently.
+- Related to `tasks/pending/P1-BUG-20260528-095136-agent-runner-rebase-detached-head-branch-guard.md`; both protect Git worktree safety, but this PRD runs before agent execution and the rebase PRD runs during conflict recovery.
+- Related to `tasks/pending/P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery.md`; both affect runner recovery safety, but this PRD does not require workflow helper changes.
+- Does not duplicate or block any pending PRD.
+
+### Potential Redundancy Risks
+
+- Do not add a separate worktree synchronization service for a single branch reconcile step.
+- Do not move issue branch reconcile into `scripts/worktree/create.sh`; that script does not cover reused worktrees.
+- Do not share this helper with post-PR rebase code until real duplication exists, because preparation and conflict recovery have different safety semantics.
+
+## 4. Recommendation
+
+### Recommended Approach
 
 在 `create_or_reuse_worktree()` 获取 `worktree_path` 后调用 `_reconcile_worktree_with_remote_branch()`。
 
@@ -83,7 +110,7 @@
    - 两者分叉：失败并要求人工处理
 7. 如果 worktree dirty 且需要移动 `HEAD`，直接失败；禁止 reset、rebase 或 merge 覆盖本地改动。
 
-### 为什么适合当前架构
+### Why This Is The Best Fit
 
 - 只扩展 worktree preparation 的既有路径，所有调用者自动受益。
 - 保留现有 publish recovery 语义：本地领先远程时不回滚本地 commit。
@@ -91,7 +118,13 @@
 - 保持 `scripts/worktree/create.sh` 的职责稳定，不把 runner workflow 状态判断塞进 shell 脚本。
 - 使用真实 Git ancestor 判断，避免用 `local_sha != remote_sha` 把 local-ahead、remote-ahead、diverged 混为一类。
 
-### 备选方案
+### Rationale For Rejecting Redundant Abstractions
+
+- 不新增 worktree sync service；当前单一入口可以作为 `create_or_reuse_worktree()` 的 file-private helper。
+- 不扩展 shell create script；Python runner 才有 issue workflow、remote config 和错误传播上下文。
+- 不自动 rebase/diverged 分支；这会把 preparation 变成历史改写流程。
+
+### Alternatives Considered
 
 **方案 B：无条件 `git reset --hard {remote}/{branch}`**
 
@@ -105,11 +138,11 @@
 
 - 拒绝原因：该脚本只覆盖新建 worktree；复用 worktree 属于 Python runner 流程。把 reconcile 放进 Python 层更容易测试、记录错误，并复用 `config.git.remote`。
 
-## 5. 实施指南 (Implementation Guide)
+## 5. Implementation Guide
 
 本节是基于当前仓库分析形成的动态实施指南。如果实现过程中发现额外受影响文件、隐藏依赖、边界情况或更合适的路径，应先更新本 PRD 再继续实现。
 
-### 核心逻辑
+### Core Logic
 
 ```text
 create_or_reuse_worktree(repo_path, issue, config, process_runner)
@@ -130,7 +163,7 @@ create_or_reuse_worktree(repo_path, issue, config, process_runner)
   └─ 返回 worktree_path
 ```
 
-### 变更影响树 (Change Impact Tree)
+### Change Impact Tree
 
 ```text
 src/backend/core/use_cases/run_agent_once.py
@@ -151,7 +184,18 @@ docs/guides/agent-runner.md
     记录复用 worktree 的安全远程分支 reconcile 行为
 ```
 
-### 流程图
+### Executor Drift Guard
+
+Run these searches before editing because the listed files are starting points, not an exhaustive guarantee:
+
+```bash
+rg -n "create_or_reuse_worktree|path_command|reuse_command|worktree_path" src tests docs
+rg -n "config.git.remote|merge-base|ff-only|remote-tracking|dirty worktree|diverged" src tests docs tasks/pending
+```
+
+If validation fails in real Git fixtures, first inspect `create_or_reuse_worktree()` call order in `src/backend/core/use_cases/run_agent_once.py`, then custom worktree commands in config fixtures, then the precise `git fetch` refspec and remote-tracking ref naming. Do not weaken dirty/diverged refusal to make a flaky fixture pass.
+
+### Flow Diagram
 
 ```mermaid
 flowchart TD
@@ -171,7 +215,7 @@ flowchart TD
     I --> Z
 ```
 
-### 真实验证计划 (Realistic Validation Plan)
+### Realistic Validation Plan
 
 | 行为 | 真实入口点 | 测试层级 | Mock 边界 | 所需数据/环境 | 命令或流程 | 是否验收必需 |
 |------|------------|----------|-----------|---------------|------------|--------------|
@@ -181,7 +225,7 @@ flowchart TD
 | dirty 或 diverged worktree 显式失败 | `create_or_reuse_worktree()` | Integration | 真实 Git command | 临时 repo，制造 dirty file、remote-ahead、diverged branch 状态 | `uv run pytest tests/test_run_agent.py -k "worktree_reconcile_dirty or worktree_reconcile_diverged" -v` | Yes |
 | 全量回归仍通过 | 仓库测试命令 | Regression | 沿用现有测试套件边界 | 现有本地开发环境 | `just test` | Yes |
 
-### 低保真原型
+### Low-Fidelity Prototype
 
 ```python
 def _reconcile_worktree_with_remote_branch(
@@ -236,19 +280,19 @@ def _reconcile_worktree_with_remote_branch(
     )
 ```
 
-### ER 图 (ER Diagram)
+### ER Diagram
 
 不适用。本变更不引入持久化数据或 schema 变更。
 
-### 交互原型变更记录 (Interactive Prototype Change Log)
+### Interactive Prototype Change Log
 
 不适用。本变更没有 UI 或 prototype artifact。
 
-### 外部验证 (External Validation)
+### External Validation
 
 未使用外部网络调研。仓库代码、仓库文档和通过本地集成测试验证的 Git 行为足以支撑本 PRD。
 
-## 6. 完成定义 (Definition Of Done)
+## 6. Definition Of Done
 
 - [ ] `create_or_reuse_worktree()` 在返回 `worktree_path` 前调用 reconcile helper。
 - [ ] Reconcile 使用 `config.git.remote` 和真实当前分支名。
@@ -260,16 +304,16 @@ def _reconcile_worktree_with_remote_branch(
 - [ ] `just test` 通过。
 - [ ] 架构检查通过，且没有新增跨层 import。
 
-## 7. 验收清单 (Acceptance Checklist)
+## 7. Acceptance Checklist
 
-### 架构验收
+### Architecture Acceptance
 
 - [ ] 新增逻辑保留在 `src/backend/core/use_cases/run_agent_once.py`。
 - [ ] 不新增 service class、module、infrastructure adapter 或外部依赖。
 - [ ] `core` 层 import 方向保持合法。
 - [ ] Worktree shell script 继续只负责创建和 base branch 起点准备。
 
-### 行为验收
+### Behavior Acceptance
 
 - [ ] 远程分支名称基于当前 worktree 分支；默认 `issue-{n}` 行为仍然有效。
 - [ ] Remote 名称来自 `config.git.remote`；测试覆盖非 `origin` remote。
@@ -280,7 +324,7 @@ def _reconcile_worktree_with_remote_branch(
 - [ ] Diverged branch 给出明确错误，要求人工 reconcile。
 - [ ] 已确认需要检查远程分支后，network/fetch failure 不会静默放行过期状态。
 
-### 验证验收
+### Validation Acceptance
 
 - [ ] 单元测试覆盖命令序列和错误信息。
 - [ ] 真实 Git 集成测试覆盖 remote-ahead、local-ahead、dirty、missing-remote-branch、diverged 状态。
@@ -288,12 +332,12 @@ def _reconcile_worktree_with_remote_branch(
 - [ ] `uv run pytest tests/test_run_agent.py -k "worktree_reconcile" -v` 通过。
 - [ ] 完成 PRD 前 `just test` 通过。
 
-### 文档验收
+### Documentation Acceptance
 
 - [ ] `docs/guides/agent-runner.md` 不再声称复用 worktree 永远不会自动 reconcile。
 - [ ] 文档明确说明安全行为：只 fast-forward、保留 local-ahead、dirty/diverged 时失败。
 
-## 8. 功能需求 (Functional Requirements)
+## 8. Functional Requirements
 
 | ID | 需求 |
 |----|-------------|
@@ -309,7 +353,7 @@ def _reconcile_worktree_with_remote_branch(
 | FR-10 | 如果本地和远程已分叉，reconcile MUST 抛出可行动错误，且 MUST NOT rebase、merge、reset 或 push。 |
 | FR-11 | 对于已存在远程分支的 fetch/network failure，MUST 暴露为失败，不得静默让 agent 基于过期状态运行。 |
 
-## 9. 非目标 (Non-Goals)
+## 9. Non-Goals
 
 - 不改变 `.agent-runner/commit-request.json` 语义。
 - 不让空 commit request 成功。
@@ -318,7 +362,7 @@ def _reconcile_worktree_with_remote_branch(
 - 不实现自动冲突解决、自动 rebase 或自动 force-push。
 - 不改变 `scripts/worktree/create.sh` 的 base branch sync 行为。
 
-## 10. 风险与后续事项 (Risks And Follow-Ups)
+## 10. Risks And Follow-Ups
 
 ### 风险
 
@@ -333,7 +377,7 @@ def _reconcile_worktree_with_remote_branch(
 - 只有当实现后出现有意义的重复逻辑时，再考虑与 `pr_supervisor` 共享 Git relation helper。
 - 可后续考虑添加 operator-facing diagnostic command，但不要放入本次最小变更。
 
-## 11. 决策记录 (Decision Log)
+## 11. Decision Log
 
 | ID | 决策点 | 选择 | 拒绝 | 理由 |
 |----|----------|--------|----------|-----------|

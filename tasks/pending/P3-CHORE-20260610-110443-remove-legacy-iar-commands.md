@@ -26,6 +26,10 @@
 - 保留底层 use case、函数名和内部领域语义，不因为 CLI 命令名变化而重命名 core use case。
 - 给用户清晰的失败提示或迁移说明，避免旧命令删除后出现难以理解的 Typer usage error。
 
+### Proposed Solution Summary
+
+Remove legacy Typer command registrations after the newer `iar issue create`, `iar run`, `iar review`, and `iar recover` aliases are stable. The implementation changes only the API/CLI command surface and documentation/tests that reference executable commands; existing core use cases remain the implementation targets. The user-visible behavior is a smaller command list and explicit old-command failure/migration behavior, while avoiding core renames, shell aliases, or a second compatibility layer.
+
 ### Realistic Validation
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为：
@@ -34,6 +38,16 @@
 - [ ] **旧命令删除真实验证**：通过 `uv run iar run-once --help`、`uv run iar issue-from-prd --help`、`uv run iar review-once --help`、`uv run iar recover-publish --help` 验证旧命令不再作为有效入口出现，并给出可理解的迁移提示或 Typer 错误。
 - [ ] **仓库引用清理验证**：通过 `rg -n "issue-from-prd|run-once|review-once|recover-publish" README.md docs src tests tasks/pending` 验证仅保留必要的历史归档引用或明确迁移说明。
 - [ ] **为什么单元测试不够**：删除 CLI 命令会影响 console script 入口、help 输出、文档命令和用户脚本；必须通过真实 `uv run iar ...` 入口证明生产路径行为。
+
+### Delivery Dependencies
+
+- Group: iar-cli-surface-cleanup
+- Depends on groups:
+  - none
+- Depends on tasks/issues:
+  - none
+- Gate type: none
+- Notes: The prerequisite Typer/Rich alias stabilization has already been archived as prior work. No pending PRD blocks this cleanup.
 
 ## 2. Requirement Shape
 
@@ -122,9 +136,17 @@ backend.api.cli._run_parsed_command(...)
 - 用 shell wrapper 做迁移提示会绕开 Typer 并增加额外入口；不推荐。
 - 删除 `build_parser()` 前必须确认没有测试或工具直接依赖它；否则应先收窄再删除。
 
-## 4. Options And Recommendation
+### Existing PRD Relationship
 
-### Option A: Hard Remove Legacy Commands From Typer (Recommended)
+- Independent from current pending PRDs; no pending PRD must complete first.
+- Related to archived `tasks/archive/P2-FEAT-20260610-110442-iar-typer-rich-cli.md`, which established the newer command aliases this PRD cleans up after.
+- Related to `tasks/pending/P2-FEAT-20260527-162000-agent-runner-unified-entry.md` as another CLI-surface PRD, but this cleanup must not modify that file per user instruction.
+
+## 4. Recommendation
+
+### Recommended Approach
+
+Hard remove legacy commands from Typer.
 
 从 `cli_typer.py` 删除旧命令注册，保留新命令。旧命令执行时走 Typer 的 unknown command 错误；可通过顶层 help 和文档提供迁移说明。
 
@@ -139,7 +161,9 @@ backend.api.cli._run_parsed_command(...)
 - 旧脚本会立刻失败。
 - 需要确保文档和 pending PRD 不再复制旧命令。
 
-### Option B: Keep Legacy Commands With Deprecation Error
+### Alternatives Considered
+
+#### Option B: Keep Legacy Commands With Deprecation Error
 
 保留旧命令注册，但命令体只打印迁移提示并返回非零。
 
@@ -152,13 +176,13 @@ backend.api.cli._run_parsed_command(...)
 - 旧命令仍出现在 Typer command tree 中，删除不彻底。
 - 仍需维护旧命令注册和测试。
 
-### Option C: Keep Legacy Commands Indefinitely
+#### Option C: Keep Legacy Commands Indefinitely
 
 不删除旧命令，只在文档中推荐新命令。
 
 **Rejected**：这与本 PRD 的收敛目标冲突，长期会保留两套 CLI 表面。
 
-### Recommendation
+### Why This Is The Best Fit
 
 推荐 **Option A**，但执行前必须满足稳定条件：
 
@@ -168,6 +192,12 @@ backend.api.cli._run_parsed_command(...)
 - 用户确认可以接受旧脚本失败，或已完成脚本迁移。
 
 如稳定期内发现外部脚本仍大量依赖旧命令，可改用 Option B 作为短期过渡，但必须设置明确删除日期。
+
+### Rationale For Rejecting Redundant Abstractions
+
+- Hidden deprecated commands would keep two public command surfaces alive and preserve the maintenance cost this PRD removes.
+- Shell wrappers would create another command entry outside Typer and make tests/documentation less authoritative.
+- Renaming core use cases would conflate CLI naming with domain behavior and create unnecessary churn.
 
 ## 5. Implementation Guide
 
@@ -180,6 +210,17 @@ rg -n "issue-from-prd|run-once|review-once|recover-publish" README.md docs src t
 rg -n "@app.command\\(\"issue-from-prd\"\\)|@app.command\\(\"run-once\"\\)|@app.command\\(\"review-once\"\\)|@app.command\\(\"recover-publish\"\\)" src/backend/api
 rg -n "build_parser\\(|parse_args\\(" src tests
 ```
+
+### Executor Drift Guard
+
+The listed files are starting points, not an exhaustive guarantee. Before deleting registrations, search for old command strings across runtime code, tests, docs, and pending PRDs, then explicitly classify each remaining hit as migration guidance or historical archive content:
+
+```bash
+rg -n "issue-from-prd|run-once|review-once|recover-publish" README.md docs src tests tasks/pending
+rg -n "iar issue create|iar run|iar review|iar recover" README.md docs src tests
+```
+
+If `uv run iar <old-command> --help` still exits 0 after implementation, inspect `src/backend/api/cli_typer.py` first, then any legacy `argparse` facade in `src/backend/api/cli.py`, before touching core use cases.
 
 ### Core Steps
 
@@ -279,47 +320,31 @@ flowchart TD
 | References cleaned | Repository search | Real repo files | `rg -n "issue-from-prd|run-once|review-once|recover-publish" README.md docs src tests tasks/pending` | Only approved migration/history references remain |
 | Full repo remains green | Project task runner | Real lint/test stack | `just test` | Full lint and pytest pass |
 
-## 6. Functional Requirements
+### Low-Fidelity Prototype
 
-- **FR-1**: `iar issue-from-prd` must no longer be registered as a valid Typer command.
-- **FR-2**: `iar run-once` must no longer be registered as a valid Typer command.
-- **FR-3**: `iar review-once` must no longer be registered as a valid Typer command.
-- **FR-4**: `iar recover-publish` must no longer be registered as a valid Typer command.
-- **FR-5**: `iar issue create` must remain available and behaviorally equivalent to the current PRD issue workflow.
-- **FR-6**: `iar run` must remain available and behaviorally equivalent to the current single-run workflow.
-- **FR-7**: `iar review` must remain available and behaviorally equivalent to the current single-review workflow.
-- **FR-8**: `iar recover` must remain available and behaviorally equivalent to the current publish recovery workflow.
-- **FR-9**: `iar --help` must not list removed commands.
-- **FR-10**: Documentation must use new commands as the only executable examples outside explicit migration notes.
+No low-fidelity prototype required for this PRD; behavior is CLI command availability and documentation.
 
-## 7. Non-Goals
+### ER Diagram
 
-- No change to core use case names.
-- No change to GitHub labels or Issue state machine.
-- No change to `.iar.toml`.
-- No removal of `daemon`, `review-daemon`, `labels`, `worktree`, `deliberate`, or `init`.
-- No shell alias installation.
-- No live GitHub migration automation.
+No data model changes in this PRD.
 
-## 8. Risks And Follow-Ups
+### Interactive Prototype Change Log
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| Existing local scripts still call old commands | Scripts fail after removal | Require explicit user confirmation before implementation; document mapping |
-| Hidden docs or pending PRDs keep old examples | Future agents may reintroduce old commands | Use repository-wide `rg` cleanup and add tests for removed commands |
-| `build_parser()` removal breaks internal tests | Test suite failure or hidden callers | Search before removal; if still needed, narrow parser facade rather than delete immediately |
-| Typer unknown-command message is less helpful than custom migration text | Poor UX for old command users | If needed, switch to Option B temporarily with explicit deletion date |
+No interactive prototype file changes in this PRD.
 
-## 9. Decision Log
+### External Validation
 
-| ID | Decision | Rationale |
-|---|---|---|
-| D-01 | Wait until Typer/Rich aliases stabilize before deletion | Avoids breaking scripts immediately after migration |
-| D-02 | Prefer hard removal over hidden deprecated commands | Keeps final CLI surface simple |
-| D-03 | Do not rename core use cases | CLI naming and business use case naming are separate concerns |
-| D-04 | Clean pending PRDs but not historical archive facts by default | Pending docs guide future work; archive docs are historical records |
+No external validation required; repository evidence and CLI entry validation are sufficient.
 
-## 10. Acceptance Checklist
+## 6. Definition Of Done
+
+- Legacy Typer command registrations are removed or intentionally converted to non-zero migration errors according to the final chosen implementation path.
+- New commands remain available and route to the same core use cases.
+- README, `docs/guides/agent-runner.md`, tests, and pending PRDs no longer recommend removed commands outside migration notes.
+- Repository search confirms old command strings are limited to approved migration/history contexts.
+- `uv run pytest tests/test_agent_runner_cli.py -q`, `uv run mkdocs build --strict`, and `just test` pass.
+
+## 7. Acceptance Checklist
 
 ### Architecture Acceptance
 
@@ -351,3 +376,43 @@ flowchart TD
 - [ ] `uv run mkdocs build --strict` passes.
 - [ ] `just test` passes.
 - [ ] Repository search confirms old command strings appear only in approved migration/history contexts.
+
+## 8. Functional Requirements
+
+- **FR-1**: `iar issue-from-prd` must no longer be registered as a valid Typer command.
+- **FR-2**: `iar run-once` must no longer be registered as a valid Typer command.
+- **FR-3**: `iar review-once` must no longer be registered as a valid Typer command.
+- **FR-4**: `iar recover-publish` must no longer be registered as a valid Typer command.
+- **FR-5**: `iar issue create` must remain available and behaviorally equivalent to the current PRD issue workflow.
+- **FR-6**: `iar run` must remain available and behaviorally equivalent to the current single-run workflow.
+- **FR-7**: `iar review` must remain available and behaviorally equivalent to the current single-review workflow.
+- **FR-8**: `iar recover` must remain available and behaviorally equivalent to the current publish recovery workflow.
+- **FR-9**: `iar --help` must not list removed commands.
+- **FR-10**: Documentation must use new commands as the only executable examples outside explicit migration notes.
+
+## 9. Non-Goals
+
+- No change to core use case names.
+- No change to GitHub labels or Issue state machine.
+- No change to `.iar.toml`.
+- No removal of `daemon`, `review-daemon`, `labels`, `worktree`, `deliberate`, or `init`.
+- No shell alias installation.
+- No live GitHub migration automation.
+
+## 10. Risks And Follow-Ups
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Existing local scripts still call old commands | Scripts fail after removal | Require explicit user confirmation before implementation; document mapping |
+| Hidden docs or pending PRDs keep old examples | Future agents may reintroduce old commands | Use repository-wide `rg` cleanup and add tests for removed commands |
+| `build_parser()` removal breaks internal tests | Test suite failure or hidden callers | Search before removal; if still needed, narrow parser facade rather than delete immediately |
+| Typer unknown-command message is less helpful than custom migration text | Poor UX for old command users | If needed, switch to Option B temporarily with explicit deletion date |
+
+## 11. Decision Log
+
+| ID | Decision | Chosen | Rejected | Rationale |
+|---|---|---|---|---|
+| D-01 | Deletion timing | Wait until Typer/Rich aliases stabilize before deletion | Delete immediately during alias introduction | Waiting avoids breaking scripts during the migration window. |
+| D-02 | Legacy command behavior | Prefer hard removal over hidden deprecated commands | Keep legacy commands indefinitely | Hard removal keeps the final CLI surface simple and prevents permanent dual-command support. |
+| D-03 | Core naming | Do not rename core use cases | Rename core use cases to match CLI aliases | CLI naming and business use case naming are separate concerns, and renaming core adds churn without behavior value. |
+| D-04 | Documentation cleanup scope | Clean pending PRDs but not historical archive facts by default | Rewrite all archive history | Pending docs guide future work; archive docs are historical records. |

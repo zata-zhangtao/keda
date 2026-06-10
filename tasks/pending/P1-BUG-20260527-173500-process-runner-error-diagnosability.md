@@ -14,11 +14,25 @@ Command '['git', 'commit', '-m', '...']' returned non-zero exit status 1.
 
 目标：让 `process_runner.run()` 在命令失败时抛出的异常，其 `str()` 输出包含 stderr（以及可选的 stdout），确保上层日志记录和 GitHub Issue 评论自动携带可操作的诊断信息。
 
+### Proposed Solution Summary
+
+Enhance the existing infrastructure-layer `SubprocessRunner.run()` failure path by raising a `subprocess.CalledProcessError`-compatible subclass whose string representation includes captured stderr or stdout with bounded truncation. Callers continue to use the same process runner interface and existing exception handling, while logs and GitHub Issue comments automatically gain actionable command diagnostics through `str(exc)`. This avoids modifying every runner call site, changing global logging formatters, or adding a second command execution abstraction.
+
 ### Realistic Validation
 
 - [ ] **Git commit pre-commit 失败真实验证**：通过 `uv run iar run-once` 触发一个已知会因 pre-commit hook 失败的 Issue，验证 runner 日志和 GitHub 评论中包含 pre-commit 的具体失败行（如 `Check just test flag.....................................................Failed`）。
 - [ ] **Git push 被拒绝真实验证**：通过本地 fixture 模拟 remote rejection，验证 `git push` 失败时日志包含 remote 返回的拒绝原因。
 - [ ] **现有测试不回归**：`uv run pytest tests/test_process_runner.py -q` 通过，且不破坏已有 `CalledProcessError` 捕获逻辑。
+
+### Delivery Dependencies
+
+- Group: process-runner-diagnostics
+- Depends on groups:
+  - none
+- Depends on tasks/issues:
+  - none
+- Gate type: none
+- Notes: This is a cross-cutting diagnosability improvement. It can be implemented independently and may make other runner recovery PRDs easier to debug, but it does not block them.
 
 ## 2. Requirement Shape
 
@@ -81,6 +95,11 @@ raise subprocess.CalledProcessError(
 - 不在每个调用 `process_runner.run()` 的地方单独拼接 stderr；应在 `process_runner.py` 中统一处理，一次修复覆盖所有调用点。
 - 不新增全局日志拦截器；只增强异常对象本身的信息量。
 
+### Existing PRD Relationship
+
+- Related to `tasks/pending/P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery.md`, `tasks/pending/P1-BUG-20260526-185149-agent-runner-forbidden-blocked-resolution.md`, and `tasks/pending/P1-BUG-20260528-095136-agent-runner-rebase-detached-head-branch-guard.md` because those tasks benefit from better command diagnostics.
+- Does not depend on any pending PRD and does not duplicate their recovery behavior; it only improves the shared command failure message surface.
+
 ## 4. Recommendation
 
 ### Recommended Approach
@@ -114,6 +133,8 @@ raise subprocess.CalledProcessError(
 | 使用 `subprocess.run(text=False)` 保留 bytes 输出 | 避免编码问题 | 当前已统一使用 `text=True, encoding="utf-8"`；改为 bytes 会引入大量下游改动 |
 
 ## 5. Implementation Guide
+
+This section is a living implementation guide based on current repository analysis. If implementation discovers additional affected files, hidden dependencies, edge cases, or a better path, update this PRD before proceeding.
 
 ### Core Logic
 
@@ -165,6 +186,29 @@ raise CommandFailedError(
     └── 新增/更新断言：验证失败命令的异常消息包含 stderr
 ```
 
+### Executor Drift Guard
+
+Run repository searches before editing because future call sites may rely on exact exception type behavior:
+
+```bash
+rg -n "process_runner\\.run|CalledProcessError|str\\(exc\\)|stderr|stdout" src tests docs
+rg -n "SubprocessRunner|CommandResult|capture_output|check=True" src/backend/infrastructure tests
+```
+
+If validation shows a caller inspects `exc.output` or `exc.stderr`, preserve those attributes exactly. If Issue comments still omit stderr, inspect `format_failure_comment()` and `_mark_issue_failed()` only after confirming `str(CommandFailedError(...))` contains the expected detail.
+
+### Flow Diagram
+
+```mermaid
+flowchart TD
+    A["SubprocessRunner.run(command, check=True)"] --> B["subprocess returns non-zero"]
+    B --> C["Capture stdout/stderr"]
+    C --> D["Raise CommandFailedError"]
+    D --> E["Existing except CalledProcessError handlers"]
+    E --> F["str(exc) includes command, return code, stderr/stdout"]
+    F --> G["Runner logs and GitHub Issue comments show actionable cause"]
+```
+
 ### Realistic Validation Plan
 
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
@@ -172,6 +216,22 @@ raise CommandFailedError(
 | 失败消息包含 stderr | `tests/test_process_runner.py` | unit | 无 | 无 | `uv run pytest tests/test_process_runner.py -q` | Yes |
 | pre-commit 失败消息进入日志 | `uv run iar run-once` | real entry | 真实 pre-commit hook | 一个已知 pre-commit 会失败的 worktree | 观察 runner 日志是否包含 pre-commit 失败详情 | Yes |
 | 现有异常捕获不回归 | `tests/` | unit/integration | 无 | 无 | `uv run pytest tests/ -q` | Yes |
+
+### Low-Fidelity Prototype
+
+No low-fidelity prototype required for this PRD; behavior is CLI/log diagnostic output.
+
+### ER Diagram
+
+No data model changes in this PRD.
+
+### Interactive Prototype Change Log
+
+No interactive prototype file changes in this PRD.
+
+### External Validation
+
+No external validation required; repository evidence and local command fixtures are sufficient.
 
 ## 6. Definition Of Done
 

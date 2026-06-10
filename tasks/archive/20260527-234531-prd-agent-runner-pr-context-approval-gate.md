@@ -47,7 +47,7 @@
 - 不实现完整 workflow label transition helper。
 - 不实现 pending rework marker history scanner。
 - 不运行 live `iar review-once` 修改真实 GitHub Issue。
-- 不归档 `tasks/pending/20260527-093356-prd-agent-runner-ci-rework-state-recovery.md`，因为该 PRD 仍有未完成范围。
+- 不归档 `tasks/pending/P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery.md`，因为该 PRD 仍有未完成范围。
 
 ## 3. Repository Context And Architecture Fit
 
@@ -67,7 +67,7 @@
 | `tests/test_pr_supervisor.py` | supervisor action tests | 覆盖 conflict / failed checks approval gate |
 | `tests/test_review_once.py` | review-once tests | 覆盖 conflicting PR approval 不进入 `agent/review` |
 | `tests/test_agent_runner_supervisor_entrypoints.py` | post-PR entry point tests | 覆盖发布、rework、循环 refresh 的 incomplete context defer |
-| `tasks/pending/20260527-093356-prd-agent-runner-ci-rework-state-recovery.md` | 更大范围 pending PRD | 更新 Implementation Progress 和已完成 acceptance items |
+| `tasks/pending/P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery.md` | 更大范围 pending PRD | 更新 Implementation Progress 和已完成 acceptance items |
 | `tasks/pending/20260524-162356-prd-agent-runner-operations-console.md` | 监控面板 pending PRD | 记录底层 runner 已降低 `pr_dirty_in_review` 新增概率 |
 
 ### Existing Path
@@ -256,7 +256,7 @@ Required behavior:
 │       【总结】记录 checks 聚合和 approval gate operator 语义。
 │
 └── Tasks
-    ├── tasks/pending/20260527-093356-prd-agent-runner-ci-rework-state-recovery.md
+    ├── tasks/pending/P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery.md
     │   [修改]
     │   【总结】记录本切片已完成范围并保留未完成大范围任务。
     │
@@ -368,7 +368,7 @@ No external validation required; repository evidence and local GitHub CLI behavi
 
 - [x] `docs/guides/agent-runner.md` documents `statusCheckRollup` aggregation.
 - [x] `docs/guides/agent-runner.md` documents conflict and failed-check approval gates.
-- [x] `tasks/pending/20260527-093356-prd-agent-runner-ci-rework-state-recovery.md` records this completed slice while leaving broader unchecked scope pending.
+- [x] `tasks/pending/P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery.md` records this completed slice while leaving broader unchecked scope pending.
 - [x] `tasks/pending/20260524-162356-prd-agent-runner-operations-console.md` explains why `pr_dirty_in_review` monitoring remains relevant.
 
 ### Validation Acceptance
@@ -424,7 +424,7 @@ No external validation required; repository evidence and local GitHub CLI behavi
 ## 10. Risks And Follow-Ups
 
 - `statusCheckRollup` JSON shape may vary across GitHub CLI versions; fixture tests cover known CheckRun and StatusContext forms, but future changes should update adapter tests first.
-- Pending checks are currently documented as aggregation output, but this slice does not introduce a separate waiting state; broader pending-check behavior remains in `tasks/pending/20260527-093356-prd-agent-runner-ci-rework-state-recovery.md`.
+- Pending checks are currently documented as aggregation output, but this slice does not introduce a separate waiting state; broader pending-check behavior remains in `tasks/pending/P1-BUG-20260527-093356-agent-runner-ci-rework-state-recovery.md`.
 - Workflow label exclusivity is still incomplete in the broader runner; mixed historical labels can still require the pending helper work.
 - Live `iar review-once` validation remains opt-in because it writes GitHub state and may invoke agents.
 

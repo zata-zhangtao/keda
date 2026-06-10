@@ -4,12 +4,16 @@
 
 ### Problem Statement
 
-当前 `prd-from-issue` 工作流（定义在 `tasks/pending/20260527-190923-prd-prd-from-issue.md`）使用单 agent 一次生成 PRD 初稿。这引入了固有风险：
+当前 `prd-from-issue` 工作流（定义在 `tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md`）使用单 agent 一次生成 PRD 初稿。这引入了固有风险：
 
 1. **架构幻觉**：agent 可能编造不存在的模块、接口或架构模式。
 2. **需求遗漏**：忽略 issue 评论中的关键共识、边界条件或修正意见。
 3. **格式漂移**：PRD 结构可能偏离项目标准，导致下游执行 agent 理解困难。
 4. **与现有代码冲突**：生成的 PRD 可能未充分考虑仓库的真实架构约束和既有实现路径。
+
+### Proposed Solution Summary
+
+Extend the pending `prd-from-issue` workflow with an optional PRD review step that reuses the existing `run_agent_deliberation` infrastructure and writes a structured `PrdReviewReport` back to the Issue. The system consumes the generated draft PRD, original Issue context, repository summary, and configured reviewer personas; it does not infer new requirements outside that input. The integration point is the `create_prd_from_issue` flow after draft generation and before automatic `agent/ready`, so the user-visible change is a review report comment and stricter auto-ready gating. This avoids a separate PRD review CLI, direct PRD mutation by reviewer agents, or a new multi-agent orchestration layer.
 
 ### Measurable Objectives
 
@@ -25,6 +29,15 @@
 - [ ] **PRD Review Deliberation 真实验证**：通过 `uv run iar run-once --max-issues 1` 处理一个带有 `agent/rework-prd` 的测试 Issue，确认 Issue comment 中出现结构化 review report。
 - [ ] **Review 报告人类确认流程真实验证**：在 review report comment 中确认 verdict 和后续操作指引清晰，人类可以通过重新打 `agent/rework-prd` 触发重写，或直接打 `agent/ready` 跳过。
 - [ ] **为什么单元测试不够**：deliberation 涉及多 agent 并发编排、prompt 构建、report 解析和 Issue comment 写入，这些跨层交互需要真实 entry point 验证端到端行为。
+
+### Delivery Dependencies
+
+- Group: prd-from-issue-review
+- Depends on groups:
+  - prd-from-issue-generation
+- Depends on tasks/issues:
+- Gate type: hard
+- Notes: This PRD enhances the PRD-from-Issue generation flow and should wait until the base generation/rewrite workflow exists.
 
 ---
 
@@ -50,7 +63,7 @@
 | `src/backend/infrastructure/config/settings.py` | Pydantic-settings 配置定义 |
 | `src/backend/core/shared/models/agent_runner.py` | `AppConfig`、`GeneratedContentConfig`、`GeneratedContentTargetConfig` |
 | `config.toml` | 已有 `[agent_runner.deliberation]` 配置段和默认 profiles |
-| `tasks/pending/20260527-190923-prd-prd-from-issue.md` | `prd-from-issue` pending PRD，定义 `create_prd_from_issue` 基础流程 |
+| `tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md` | `prd-from-issue` pending PRD，定义 `create_prd_from_issue` 基础流程 |
 
 ### Architecture Patterns To Preserve
 
@@ -71,6 +84,12 @@ create_prd_from_issue (core use case)
   │   └─ parse_prd_review_report (解析 synthesizer 输出)
   └─ github_client.comment_issue / edit_issue_labels
 ```
+
+### Existing PRD Relationship
+
+- Depends on `tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md` because this PRD reviews the PRD draft produced by that workflow.
+- Related to `tasks/pending/P2-FEAT-20260527-162000-agent-runner-unified-entry.md` because `iar ask` may call deliberation as a read-only action, but it must not replace this automated PRD review step.
+- Does not duplicate current pending work; it adds a review gate downstream of PRD generation rather than redefining issue-to-PRD creation.
 
 ---
 
@@ -126,22 +145,22 @@ PRD review 专用 prompt 的核心结构：
 ```
 You are a panel of technical reviewers evaluating a Product Requirements Document.
 
-## Original Requirement Context
+Prompt Section: Original Requirement Context
 [Issue title, body, comments]
 
-## PRD Under Review
+Prompt Section: PRD Under Review
 [prd_draft_text]
 
-## Repository Structure Summary
+Prompt Section: Repository Structure Summary
 [repo_structure_summary]
 
-## Review Dimensions
+Prompt Section: Review Dimensions
 1. Architecture Fit: Does the PRD align with existing module boundaries and dependency directions?
 2. Requirement Completeness: Are all requirements from the Issue and comments captured? Any omissions or contradictions?
 3. Format Compliance: Does the PRD follow the project's standard structure (Introduction, Requirement Shape, Architecture Fit, Implementation Guide, Acceptance Checklist)?
 4. Implementation Feasibility: Are the recommended solutions realistic given the current codebase?
 
-## Output Requirements
+Prompt Section: Output Requirements
 Finish with a single JSON object in a markdown code block:
 {
   "verdict": "approved" | "changes_requested",
@@ -173,23 +192,23 @@ Finish with a single JSON object in a markdown code block:
 ```markdown
 <!-- iar:event version=1 phase=prd_review verdict=changes_requested -->
 
-## PRD Review Report
+PRD Review Report
 
 - **Verdict**: changes_requested
 - **Reviewers**: architect, skeptic, implementer
 - **Findings**: 2 high, 1 medium, 0 low
 
-### Key Findings
+Key Findings
 
 1. **[high] [architecture]** The PRD proposes a new use case in `core/use_cases/` that directly imports from `infrastructure/`, violating the four-layer dependency rule.
 2. **[high] [requirements]** Issue comment #3 requested idempotent label updates, but the PRD Acceptance Checklist does not include this.
 3. **[medium] [format]** Section 5 (Implementation Guide) is missing the required `Executor Drift Guard` subsection.
 
-### Risks
+Risks
 
 - Direct infrastructure import may pass unit tests but fail architecture checks in CI.
 
-### Next Actions
+Next Actions
 
 - If you agree with this review, edit the PRD file and re-add the `agent/rework-prd` label to regenerate.
 - If you disagree, add the `agent/ready` label to proceed with the current PRD.
