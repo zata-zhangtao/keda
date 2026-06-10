@@ -94,6 +94,55 @@ def test_supervisor_action_gate_blocks_failed_check_approval() -> None:
     assert "lint" in gated_result.summary
 
 
+def test_supervisor_action_gate_allows_approval_for_validation_sign_off_only() -> None:
+    """The intentional manual Realistic Validation gate alone must not block approval."""
+    action_result = SupervisorActionResult(
+        action="approve_for_human_review",
+        summary="LGTM",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=True,
+        checks_state="FAILURE",
+        checks_summary=(
+            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
+        ),
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "approve_for_human_review"
+    assert gated_result.summary == "LGTM"
+
+
+def test_supervisor_action_gate_blocks_when_validation_and_other_checks_fail() -> None:
+    """If other checks fail alongside the validation gate, repair is still required."""
+    action_result = SupervisorActionResult(
+        action="approve_for_human_review",
+        summary="LGTM",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=True,
+        checks_state="FAILURE",
+        checks_summary=(
+            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
+            "lint (conclusion=FAILURE)",
+        ),
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "repair_pr_branch"
+    assert "lint" in gated_result.summary
+
+
 def test_build_rework_intent_comment_has_marker() -> None:
     """Rework intent comment should include an iar:event marker."""
     body = build_rework_intent_comment(
