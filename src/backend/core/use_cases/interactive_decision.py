@@ -78,13 +78,6 @@ _ACTION_TYPE_TO_RISK: dict[DecisionActionType, DecisionRiskLevel] = {
     DecisionActionType.NO_OP: DecisionRiskLevel.LOW,
 }
 
-_ACTION_TYPE_WRITES_EXTERNAL: set[DecisionActionType] = {
-    DecisionActionType.CREATE_ISSUE_FROM_PRD,
-    DecisionActionType.MARK_ISSUE_READY,
-    DecisionActionType.RUN_ONCE,
-    DecisionActionType.REVIEW_ONCE,
-}
-
 _ACTION_TYPE_REQUIRES_CONFIRMATION: set[DecisionActionType] = {
     DecisionActionType.CREATE_ISSUE_FROM_PRD,
     DecisionActionType.MARK_ISSUE_READY,
@@ -355,6 +348,16 @@ def validate_decision_plan(
                 f"Action '{action.action_id}' has forbidden type: {action.action_type.value}"
             )
 
+        # Write actions must require confirmation (defense in depth)
+        if (
+            action.action_type in _ACTION_TYPE_REQUIRES_CONFIRMATION
+            and not action.confirmation_required
+        ):
+            raise ValueError(
+                f"Action '{action.action_id}' ({action.action_type.value}) writes external state "
+                f"and must have confirmation_required=true"
+            )
+
         # Check forbidden action names in parameters (defense in depth)
         for param_key in action.parameters:
             if param_key.lower() in _FORBIDDEN_ACTIONS:
@@ -407,15 +410,6 @@ def validate_decision_plan(
                 raise ValueError(
                     f"Action '{action.action_id}' has invalid issue_number: {issue_number}"
                 ) from exc
-
-        # run_once default max_issues=1
-        if action.action_type in (
-            DecisionActionType.RUN_ONCE,
-            DecisionActionType.RUN_ONCE_DRY_RUN,
-        ):
-            if "max_issues" not in action.parameters:
-                # This is a recommendation; we don't mutate the plan here
-                pass
 
         # High risk + auto_confirm check
         if auto_confirm and action.action_type in _HIGH_RISK_ACTIONS:
@@ -892,6 +886,10 @@ def run_interactive_decision(
     Returns:
         Exit code (0 on success, 1 on failure).
     """
+    if auto_confirm and not config.allow_execute_yes:
+        _logger.error("Auto-confirm (--yes) is disabled in configuration.")
+        return 1
+
     if output_dir is None:
         output_dir = Path(config.default_output_dir)
 
@@ -946,8 +944,8 @@ def run_interactive_decision(
         print("\nWarnings:")
         for warning in plan.warnings:
             print(f"  - {warning}")
-    print("\nNo changes were made.")
     if plan_only or not execute:
+        print("\nNo changes were made.")
         print("\nTo execute in this terminal:")
         print(f'  uv run iar ask "{user_prompt}" --execute')
         return 0

@@ -153,8 +153,8 @@ def test_parse_decision_plan_unknown_action_type() -> None:
         parse_decision_plan("test", raw)
 
 
-def test_validate_decision_plan_unknown_action() -> None:
-    """Should reject plans with unknown action types."""
+def test_validate_decision_plan_valid_action_passes() -> None:
+    """Should accept plans with allowed action types."""
     plan = DecisionPlan(
         decision_id="dec-1",
         user_prompt="test",
@@ -208,6 +208,7 @@ def test_validate_decision_plan_prd_path_outside_repo() -> None:
                 title="Create issue",
                 rationale="test",
                 parameters={"prd_path": "/etc/passwd"},
+                confirmation_required=True,
             ),
         ),
     )
@@ -229,6 +230,7 @@ def test_validate_decision_plan_prd_path_traversal_absolute() -> None:
                 title="Create issue",
                 rationale="test",
                 parameters={"prd_path": "/tmp/repo/../etc/passwd"},
+                confirmation_required=True,
             ),
         ),
     )
@@ -250,6 +252,7 @@ def test_validate_decision_plan_missing_prd_path() -> None:
                 title="Create issue",
                 rationale="test",
                 parameters={},
+                confirmation_required=True,
             ),
         ),
     )
@@ -271,6 +274,7 @@ def test_validate_decision_plan_missing_issue_number() -> None:
                 title="Mark ready",
                 rationale="test",
                 parameters={},
+                confirmation_required=True,
             ),
         ),
     )
@@ -292,6 +296,7 @@ def test_validate_decision_plan_invalid_issue_number() -> None:
                 title="Mark ready",
                 rationale="test",
                 parameters={"issue_number": -1},
+                confirmation_required=True,
             ),
         ),
     )
@@ -514,6 +519,84 @@ def test_run_interactive_decision_validation_failure(
         user_prompt="test",
         context=mock_context,
         config=InteractiveDecisionConfig(default_output_dir=str(tmp_path)),
+        agent="codex",
+        plan_only=False,
+        execute=True,
+        auto_confirm=True,
+        output_dir=tmp_path,
+        planner_runner=mock_planner_runner,
+        github_client=mock_github_client,
+        process_runner=mock_process_runner,
+        content_generator=None,
+        github_client_factory=lambda path: MagicMock(),
+    )
+    assert exit_code == 1
+
+
+def test_validate_decision_plan_write_action_missing_confirmation() -> None:
+    """Should reject write actions that do not require confirmation."""
+    plan = DecisionPlan(
+        decision_id="dec-1",
+        user_prompt="test",
+        intent_summary="test",
+        risk_level=DecisionRiskLevel.MEDIUM,
+        actions=(
+            DecisionAction(
+                action_id="A1",
+                action_type=DecisionActionType.CREATE_ISSUE_FROM_PRD,
+                title="Create issue",
+                rationale="test",
+                parameters={"prd_path": "tasks/pending/example.md"},
+                writes_external_state=True,
+                confirmation_required=False,
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="must have confirmation_required=true"):
+        validate_decision_plan(plan, Path("/tmp/repo"), auto_confirm=False)
+
+
+def test_run_interactive_decision_rejects_yes_when_disabled(
+    tmp_path: Path,
+    mock_context: MagicMock,
+    mock_planner_runner: MagicMock,
+    mock_github_client: MagicMock,
+    mock_process_runner: MagicMock,
+) -> None:
+    """Should return 1 when --yes is used but allow_execute_yes is false."""
+    mock_planner_runner.generate.return_value = MagicMock(
+        return_code=0,
+        stdout=json.dumps(
+            {
+                "decision_id": "dec-20260101-000000-0005",
+                "user_prompt": "test",
+                "intent_summary": "Do nothing",
+                "risk_level": "low",
+                "actions": [
+                    {
+                        "action_id": "A1",
+                        "action_type": "no_op",
+                        "title": "No action",
+                        "rationale": "Nothing to do",
+                        "parameters": {},
+                        "writes_external_state": False,
+                        "confirmation_required": False,
+                    }
+                ],
+                "assumptions": [],
+                "warnings": [],
+                "requires_confirmation": False,
+            }
+        ),
+    )
+    config = InteractiveDecisionConfig(
+        default_output_dir=str(tmp_path),
+        allow_execute_yes=False,
+    )
+    exit_code = run_interactive_decision(
+        user_prompt="test",
+        context=mock_context,
+        config=config,
         agent="codex",
         plan_only=False,
         execute=True,
