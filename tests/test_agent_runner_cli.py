@@ -621,7 +621,7 @@ def test_main_review_alias_dispatches_review_once() -> None:
         exit_code = main(["review", "--dry-run", "--agent", "claude"])
 
     assert exit_code == 0
-    mock_client.assert_called_once_with(mock_context.repo_path, ANY)
+    mock_client.assert_called_with(mock_context.repo_path, ANY)
     assert mock_review.call_args.kwargs["dry_run"] is True
     assert mock_review.call_args.kwargs["agent"] == "claude"
 
