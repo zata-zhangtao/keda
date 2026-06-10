@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.infrastructure.process_runner import (
     ClaudeStreamRenderer,
+    _TimestampedStreamFormatter,
     _format_timestamped_line,
     should_filter_claude_stream,
 )
@@ -199,6 +200,21 @@ def test_format_timestamped_line_empty_string() -> None:
     assert result == ""
 
 
+def test_timestamped_stream_formatter_keeps_chunks_on_same_line() -> None:
+    """Streaming chunks should not receive timestamps inside one physical line."""
+    formatter = _TimestampedStreamFormatter()
+
+    first_line = "".join(
+        formatter.format_chunk(chunk) for chunk in ("{", '"action"', ": true", "\n")
+    )
+    second_line = formatter.format_chunk('"next"')
+
+    assert first_line.count("[") == 1
+    assert first_line.endswith('{"action": true\n')
+    assert second_line.count("[") == 1
+    assert second_line.endswith('"next"')
+
+
 def test_run_filtered_claude_stream_logs_structured_events(tmp_path: Path) -> None:
     """run_filtered_claude_stream should log tool/result/error events."""
     from backend.infrastructure.process_runner import run_filtered_claude_stream
@@ -251,6 +267,46 @@ def test_run_filtered_claude_stream_logs_structured_events(tmp_path: Path) -> No
     finally:
         logger.removeHandler(handler)
         logger.setLevel(original_level)
+
+
+def test_run_filtered_claude_stream_stdout_timestamp_does_not_split_text_delta(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Live Claude output should prefix lines, not every text_delta chunk."""
+    from backend.infrastructure.process_runner import run_filtered_claude_stream
+
+    text_events = [
+        _json_line(
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": text_chunk},
+                },
+            }
+        )
+        for text_chunk in ("{", '"action"', ": true", "\n")
+    ]
+    stop_event = _json_line({"type": "stream_event", "event": {"type": "message_stop"}})
+
+    mock_process = MagicMock()
+    mock_process.stdout = iter([*text_events, stop_event])
+    mock_process.wait.return_value = 0
+    mock_process.stdin = MagicMock()
+
+    with patch("subprocess.Popen", return_value=mock_process):
+        completed_process = run_filtered_claude_stream(
+            ["claude", "--output-format", "stream-json"],
+            cwd=tmp_path,
+            timeout=None,
+            collect_stdout=True,
+        )
+
+    captured_output = capsys.readouterr().out
+    assert captured_output.count("[") == 1
+    assert captured_output.endswith('{"action": true\n\n')
+    assert completed_process.stdout == '{"action": true\n\n'
 
 
 def test_run_filtered_claude_stream_buffers_text_delta(tmp_path: Path) -> None:

@@ -39,6 +39,27 @@ def _format_timestamped_line(text: str) -> str:
     return "".join(result)
 
 
+class _TimestampedStreamFormatter:
+    """Prefix non-empty output lines while preserving streaming chunks."""
+
+    def __init__(self) -> None:
+        self._at_line_start = True
+
+    def format_chunk(self, text: str) -> str:
+        """Return ``text`` with timestamps only at physical line starts."""
+        if not text:
+            return ""
+        result: list[str] = []
+        for character in text:
+            if self._at_line_start and character != "\n":
+                result.append(f"[{datetime.now().strftime('%H:%M:%S')}] ")
+                self._at_line_start = False
+            result.append(character)
+            if character == "\n":
+                self._at_line_start = True
+        return "".join(result)
+
+
 @dataclass(frozen=True)
 class CommandResult:
     """Captured subprocess result."""
@@ -434,6 +455,7 @@ def run_filtered_claude_stream(
         process.stdin.close()
     stdout_lines: list[str] = []
     text_buffer: list[str] = []
+    stream_formatter = _TimestampedStreamFormatter()
     try:
         if process.stdout is not None:
             for output_line in process.stdout:
@@ -447,7 +469,7 @@ def run_filtered_claude_stream(
                         # live region.
                         output_sink(rendered_text)
                         continue
-                    timestamped = _format_timestamped_line(rendered_text)
+                    timestamped = stream_formatter.format_chunk(rendered_text)
                     print(timestamped, end="", flush=True)
 
                     # Structured events go straight to logger
