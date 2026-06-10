@@ -386,4 +386,3 @@ class DependencyVerdict:
     blockers: tuple[DependencyBlocker, ...] = ()
     has_failed_or_blocked_upstream: bool = False
     empty_group_names: tuple[str, ...] = ()
-    supervisor_action: str | None = None

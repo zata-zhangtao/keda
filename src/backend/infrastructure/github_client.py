@@ -36,8 +36,10 @@ class LabelConfig:
     review: str = "agent/review"
     failed: str = "agent/failed"
     blocked: str = "agent/blocked"
+    waiting: str = "agent/waiting"
     validation_pending: str = "validation/pending"
     validation_passed: str = "validation/passed"
+    group_prefix: str = "task-group/"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",
