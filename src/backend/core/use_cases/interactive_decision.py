@@ -886,6 +886,10 @@ def run_interactive_decision(
     Returns:
         Exit code (0 on success, 1 on failure).
     """
+    if not config.enabled:
+        _logger.error("Interactive decision is disabled in configuration.")
+        return 1
+
     if auto_confirm and not config.allow_execute_yes:
         _logger.error("Auto-confirm (--yes) is disabled in configuration.")
         return 1

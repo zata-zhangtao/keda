@@ -609,3 +609,33 @@ def test_run_interactive_decision_rejects_yes_when_disabled(
         github_client_factory=lambda path: MagicMock(),
     )
     assert exit_code == 1
+
+
+def test_run_interactive_decision_rejects_when_disabled(
+    tmp_path: Path,
+    mock_context: MagicMock,
+    mock_planner_runner: MagicMock,
+    mock_github_client: MagicMock,
+    mock_process_runner: MagicMock,
+) -> None:
+    """Should return 1 when interactive decision is disabled in config."""
+    config = InteractiveDecisionConfig(
+        default_output_dir=str(tmp_path),
+        enabled=False,
+    )
+    exit_code = run_interactive_decision(
+        user_prompt="test",
+        context=mock_context,
+        config=config,
+        agent="codex",
+        plan_only=True,
+        execute=False,
+        auto_confirm=False,
+        output_dir=tmp_path,
+        planner_runner=mock_planner_runner,
+        github_client=mock_github_client,
+        process_runner=mock_process_runner,
+        content_generator=None,
+        github_client_factory=lambda path: MagicMock(),
+    )
+    assert exit_code == 1
