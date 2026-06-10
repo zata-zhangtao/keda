@@ -180,6 +180,32 @@ base_branch = "develop"
     assert contexts[0].config.git.base_branch == "develop"
 
 
+def test_resolve_repository_targets_local_config_disables_validation(
+    tmp_path: Path,
+) -> None:
+    """A repository-local [agent_runner.validation] override must reach AppConfig.
+
+    Regression guard: the local-settings repack used to drop the validation
+    section, so `enabled = false` in .iar.toml was silently ignored and the
+    evidence gate still fired.
+    """
+    repo_path = _init_git_repository(tmp_path, "target")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "target-local"
+
+[agent_runner.validation]
+enabled = false
+""",
+    )
+    settings = _make_settings()
+    contexts = resolve_repository_targets(settings, repo_path_override=str(repo_path))
+    assert len(contexts) == 1
+    assert contexts[0].config.validation.enabled is False
+
+
 def test_resolve_repository_targets_by_repo_id(tmp_path: Path) -> None:
     """--repo-id should return a single configured repository context."""
     repo_path = _init_git_repository(tmp_path, "keda")

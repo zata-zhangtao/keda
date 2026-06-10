@@ -50,7 +50,7 @@
   "config": {
     "max_issues": 1,
     "default_agent": "auto",
-    "max_recovery_attempts": 2,
+    "max_recovery_attempts": 5,
     "recovery_retry_delay_seconds": 30,
     "ready_label": "agent/ready",
     "running_label": "agent/running",

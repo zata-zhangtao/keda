@@ -95,6 +95,7 @@ class WorktreeManager:
         """
         target_path = self.worktree_path(branch)
         self.worktree_root.mkdir(parents=True, exist_ok=True)
+        self._ensure_worktree_dir_excluded()
         self._process_runner.run(
             [
                 "git",
@@ -109,6 +110,46 @@ class WorktreeManager:
             check=True,
         )
         return target_path
+
+    def _ensure_worktree_dir_excluded(self) -> None:
+        """Keep the worktree directory out of the parent repository's index.
+
+        Worktrees live inside the repository, so a repository-wide
+        ``git add -A`` (commit proxies, quality hooks) would otherwise stage
+        them as embedded-repository gitlinks. Writing ``info/exclude`` keeps
+        the exclusion local instead of forcing a tracked ``.gitignore`` change
+        on every target repository. Best effort: failures must never block
+        worktree creation.
+        """
+        exclude_line = f"/{WORKTREE_DIR_NAME}/"
+        rev_parse_result = self._process_runner.run(
+            ["git", "rev-parse", "--git-path", "info/exclude"],
+            cwd=self._repo_root_path,
+            check=False,
+        )
+        exclude_path_text = rev_parse_result.stdout.strip()
+        if rev_parse_result.return_code != 0 or not exclude_path_text:
+            return
+        exclude_path = Path(exclude_path_text)
+        if not exclude_path.is_absolute():
+            exclude_path = self._repo_root_path / exclude_path
+        try:
+            existing_text = (
+                exclude_path.read_text(encoding="utf-8")
+                if exclude_path.is_file()
+                else ""
+            )
+            if exclude_line in existing_text.splitlines():
+                return
+            exclude_path.parent.mkdir(parents=True, exist_ok=True)
+            separator = (
+                "" if not existing_text or existing_text.endswith("\n") else "\n"
+            )
+            exclude_path.write_text(
+                f"{existing_text}{separator}{exclude_line}\n", encoding="utf-8"
+            )
+        except OSError:
+            return
 
     def remove(self, branch: str) -> None:
         """Remove the worktree for ``branch`` and prune Git's metadata.

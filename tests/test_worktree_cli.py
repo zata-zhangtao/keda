@@ -76,6 +76,33 @@ def test_worktree_create_creates_directory(tmp_path: Path) -> None:
     assert rev_parse.stdout.strip() == head_in_worktree.stdout.strip()
 
 
+def test_worktree_create_excludes_worktree_dir_from_index(tmp_path: Path) -> None:
+    """``create`` writes info/exclude so ``git add -A`` cannot stage worktrees.
+
+    Regression guard: without the exclusion, a repository-wide ``git add -A``
+    stages the embedded worktree as a gitlink and git emits the
+    ``adding embedded git repository`` warning.
+    """
+    repo_path = _init_git_repository(tmp_path, "target")
+    manager = WorktreeManager(repo_path, SubprocessRunner())
+    manager.create(branch="issue-9", base_branch="main")
+
+    exclude_path = repo_path / ".git" / "info" / "exclude"
+    assert (
+        f"/{WORKTREE_DIR_NAME}/"
+        in exclude_path.read_text(encoding="utf-8").splitlines()
+    )
+
+    _run_git(repo_path, "add", "-A")
+    staged_result = _run_git(repo_path, "diff", "--cached", "--name-only")
+    assert WORKTREE_DIR_NAME not in staged_result.stdout
+
+    # Idempotent: a second create for another branch adds no duplicate line.
+    manager.create(branch="issue-10", base_branch="main")
+    exclude_lines = exclude_path.read_text(encoding="utf-8").splitlines()
+    assert exclude_lines.count(f"/{WORKTREE_DIR_NAME}/") == 1
+
+
 def test_worktree_remove_cleans_up(tmp_path: Path) -> None:
     """``remove`` deletes the directory and prunes git's metadata."""
     repo_path = _init_git_repository(tmp_path, "target")

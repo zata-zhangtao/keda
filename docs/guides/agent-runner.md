@@ -844,7 +844,7 @@ path_command = "iar worktree path --branch issue-{issue_number}"
 
 [agent_runner.runner]
 default_agent = "auto"
-max_recovery_attempts = 2
+max_recovery_attempts = 5
 recovery_retry_delay_seconds = 30
 verification_commands = [
   "git diff --check",

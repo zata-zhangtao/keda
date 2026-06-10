@@ -317,7 +317,7 @@ class AgentRunnerRunnerSettings(BaseModel):
 
     max_issues: int = 1
     default_agent: str = "auto"
-    max_recovery_attempts: int = 2
+    max_recovery_attempts: int = 5
     recovery_retry_delay_seconds: int = 30
     verification_commands: list[str] = Field(
         default_factory=lambda: [
@@ -560,6 +560,7 @@ def load_agent_runner_local_settings(
         worktree=local_settings.worktree,
         runner=local_settings.runner,
         safety=local_settings.safety,
+        validation=local_settings.validation,
         prompts=local_settings.prompts,
         pre_push_review=local_settings.pre_push_review,
         post_pr_supervisor=local_settings.post_pr_supervisor,

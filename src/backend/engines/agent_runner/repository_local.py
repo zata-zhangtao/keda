@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from backend.infrastructure.config.settings import (
     AgentRunnerRepositoryMetadataSettings,
     AgentRunnerRunnerSettings,
     AgentRunnerSafetySettings,
+    AgentRunnerValidationSettings,
     AgentRunnerWorktreeSettings,
     AgentRunnerPostPrSupervisorSettings,
     IAR_REPOSITORY_CONFIG_FILENAME,
@@ -124,6 +126,73 @@ def _filter_none_dict(data: dict) -> dict:
     return filter_dict(data)
 
 
+def _dependency_name_matches(dependency_spec: str, package_name: str) -> bool:
+    """Check whether a PEP 508 dependency spec names the given package."""
+    spec_package_name = re.split(r"[<>=!~\[ ;]", dependency_spec.strip(), maxsplit=1)[0]
+    return spec_package_name.replace("_", "-").lower() == package_name
+
+
+def _uv_dependency_flag(
+    pyproject_data: dict[str, Any], package_name: str
+) -> str | None:
+    """Return the ``uv run`` flag needed to reach a declared dependency.
+
+    Returns ``""`` when the package is in the main dependencies or in the
+    default ``dev`` dependency group (both installed by ``uv run`` without
+    extra flags), ``" --group <name>"`` / ``" --extra <name>"`` when it lives
+    in a non-default group or an optional-dependencies extra, and ``None``
+    when the package is not declared at all.
+    """
+    project_table = pyproject_data.get("project") or {}
+    for dependency_spec in project_table.get("dependencies") or []:
+        if _dependency_name_matches(dependency_spec, package_name):
+            return ""
+    dependency_groups = pyproject_data.get("dependency-groups") or {}
+    for group_name, group_entries in dependency_groups.items():
+        group_specs = [entry for entry in group_entries if isinstance(entry, str)]
+        if any(_dependency_name_matches(spec, package_name) for spec in group_specs):
+            return "" if group_name == "dev" else f" --group {group_name}"
+    optional_extras = project_table.get("optional-dependencies") or {}
+    for extra_name, extra_specs in optional_extras.items():
+        if any(_dependency_name_matches(spec, package_name) for spec in extra_specs):
+            return f" --extra {extra_name}"
+    return None
+
+
+def detect_verification_commands(repo_root_path: Path) -> list[str]:
+    """Detect verification commands that actually run in the target repository.
+
+    ``iar init`` previously copied this tool's own defaults (such as
+    ``uv run mkdocs build``) into every repository, which fails in any project
+    that does not install mkdocs by default. Detection keeps the safe
+    ``git diff --check`` baseline and adds tool commands only when the target
+    repository declares the tool in ``pyproject.toml``, using the ``uv run``
+    invocation (``--extra`` / ``--group``) that matches where the dependency
+    is declared.
+    """
+    verification_commands = ["git diff --check"]
+    pyproject_path = repo_root_path / "pyproject.toml"
+    if not pyproject_path.is_file():
+        return verification_commands
+    try:
+        with open(pyproject_path, "rb") as pyproject_file:
+            pyproject_data: dict[str, Any] = tomllib.load(pyproject_file)
+    except tomllib.TOMLDecodeError:
+        return verification_commands
+
+    if (repo_root_path / "mkdocs.yml").is_file():
+        mkdocs_flag = _uv_dependency_flag(pyproject_data, "mkdocs")
+        if mkdocs_flag is not None:
+            verification_commands.append(f"uv run{mkdocs_flag} mkdocs build")
+
+    if (repo_root_path / "tests").is_dir():
+        pytest_flag = _uv_dependency_flag(pyproject_data, "pytest")
+        if pytest_flag is not None:
+            verification_commands.append(f"uv run{pytest_flag} pytest -q")
+
+    return verification_commands
+
+
 def build_repository_local_config_text(
     options: RepositoryInitOptions,
     process_runner: SubprocessRunner | None = None,
@@ -161,8 +230,11 @@ def build_repository_local_config_text(
             base_branch=selected_base_branch,
         ),
         worktree=AgentRunnerWorktreeSettings(),
-        runner=AgentRunnerRunnerSettings(),
+        runner=AgentRunnerRunnerSettings(
+            verification_commands=detect_verification_commands(repo_root_path)
+        ),
         safety=AgentRunnerSafetySettings(),
+        validation=AgentRunnerValidationSettings(),
         prompts=AgentRunnerPromptSettings(),
         pre_push_review=AgentRunnerPrePushReviewSettings(),
         post_pr_supervisor=AgentRunnerPostPrSupervisorSettings(),
