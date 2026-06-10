@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
 from backend.api.cli import build_parser
 from backend.infrastructure.logging.logger import Logger
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove terminal color/control sequences from captured CLI output."""
+    return _ANSI_ESCAPE_RE.sub("", text)
 
 
 def _reset_logger_singleton() -> None:
@@ -131,7 +140,7 @@ def test_main_no_args_shows_help_without_traceback(capsys) -> None:
 
     exit_code = main([])
     captured = capsys.readouterr()
-    combined_output = f"{captured.out}\n{captured.err}"
+    combined_output = _strip_ansi(f"{captured.out}\n{captured.err}")
 
     assert exit_code == 0
     assert "Usage: iar" in combined_output

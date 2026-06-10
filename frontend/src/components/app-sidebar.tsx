@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/sidebar";
 
 const navItems = [
-  { title: "Dashboard", url: "/dashboard", icon: IconDashboard },
+  { title: "Agent Runner Monitor", url: "/dashboard", icon: IconDashboard },
   // TODO: 添加更多导航项
   { title: "设置", url: "/settings", icon: IconSettings },
 ];
