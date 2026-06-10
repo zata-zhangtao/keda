@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -160,6 +161,23 @@ def _prompt_and_publish_prd_if_needed(
             add=[labels_config.ready],
         )
     return True
+
+
+def _ensure_gh_auth_or_prompt(
+    repo_path: Path, process_runner: "IProcessRunner"
+) -> None:
+    """Check gh auth status and exit with a friendly message if not authenticated."""
+    if os.environ.get("IAR_SKIP_GH_AUTH_CHECK") == "1":
+        return
+    github_client = create_github_client(repo_path, process_runner)
+    auth_status = github_client.check_auth_status()
+    if auth_status.authenticated:
+        return
+    error_console.print("[red]GitHub CLI 认证失败。[/]")
+    if auth_status.failure_reason:
+        error_console.print(f"[red]{auth_status.failure_reason}[/]")
+    error_console.print("[yellow]请运行: gh auth login -h github.com[/]")
+    raise SystemExit(1)
 
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
@@ -461,6 +479,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            if contexts:
+                _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             for context in contexts:
                 github_client = github_client_factory(context.repo_path)
                 sync_labels(
@@ -476,6 +496,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_path_override=repo_override,
                 cwd=Path.cwd(),
             )
+            _ensure_gh_auth_or_prompt(context.repo_path, process_runner)
             github_client = create_github_client(context.repo_path, process_runner)
             _, relative_prd_path = resolve_prd_paths(
                 context.repo_path, Path(parsed.prd_path)
@@ -539,6 +560,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            if contexts:
+                _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             content_generator = create_content_generator(process_runner)
             return run_agent_repositories_once(
                 contexts=contexts,
@@ -557,6 +580,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            if contexts:
+                _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             run_agent_daemon(
                 contexts=contexts,
                 interval=parsed.interval,
@@ -574,6 +599,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            if contexts:
+                _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             aggregated_exit_code = 0
             for context in contexts:
                 github_client = github_client_factory(context.repo_path)
@@ -606,6 +633,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            if contexts:
+                _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             run_review_daemon(
                 contexts=contexts,
                 interval=parsed.interval,

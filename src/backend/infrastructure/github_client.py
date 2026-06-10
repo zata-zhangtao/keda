@@ -57,6 +57,15 @@ class PullRequestContext:
     checks_summary: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class GhAuthStatus:
+    """GitHub CLI authentication status."""
+
+    authenticated: bool
+    account: str | None = None
+    failure_reason: str | None = None
+
+
 _CHECK_FAILURE_STATES = {
     "ACTION_REQUIRED",
     "CANCELLED",
@@ -201,6 +210,41 @@ class GitHubCliClient:
         """
         self.repo_path = repo_path
         self._runner = process_runner or SubprocessRunner()
+
+    def check_auth_status(self) -> GhAuthStatus:
+        """Run ``gh auth status`` and parse the result.
+
+        Returns:
+            GhAuthStatus indicating whether the user is authenticated.
+        """
+        result = self._runner.run(
+            ["gh", "auth", "status", "--hostname", "github.com"],
+            cwd=self.repo_path,
+            check=False,
+        )
+        combined_output = (result.stdout or "") + "\n" + (result.stderr or "")
+
+        if "✓ Logged in" in combined_output:
+            account: str | None = None
+            for line in combined_output.splitlines():
+                if "✓ Logged in" in line and " as " in line:
+                    account = line.split(" as ", 1)[1].strip().split()[0]
+                    break
+            return GhAuthStatus(authenticated=True, account=account)
+
+        failure_reason: str | None = None
+        for line in combined_output.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("X Failed to log in"):
+                failure_reason = stripped
+                break
+            if "invalid" in stripped.lower() or "expired" in stripped.lower():
+                failure_reason = stripped
+
+        if not failure_reason:
+            failure_reason = "GitHub CLI 认证失败"
+
+        return GhAuthStatus(authenticated=False, failure_reason=failure_reason)
 
     def sync_labels(self, labels: LabelConfig) -> None:
         """Create or update standard labels."""

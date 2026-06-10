@@ -188,12 +188,12 @@ flowchart TD
 
 ## 6. 完成定义
 
-- [ ] 实现通过所有单元和集成测试
-- [ ] `just test` 通过，无回归
-- [ ] 通过 `iar labels sync` 真实验证：无效认证时显示友好提示
-- [ ] 若 CLI 行为变更，更新 `docs/` 文档
-- [ ] 未引入新依赖
-- [ ] 架构边界受尊重（api → infrastructure，无 core 变更）
+- [x] 实现通过所有单元和集成测试
+- [x] `just test` 通过，无回归
+- [x] 通过 `iar labels sync` 真实验证：无效认证时显示友好提示
+- [x] 若 CLI 行为变更，更新 `docs/` 文档
+- [x] 未引入新依赖
+- [x] 架构边界受尊重（api → infrastructure，无 core 变更）
 
 ---
 
@@ -201,34 +201,34 @@ flowchart TD
 
 ### 架构验收
 
-- [ ] `check_auth_status()` 方法添加到 `src/backend/infrastructure/github_client.py` 的 `GitHubCliClient`
-- [ ] `_ensure_gh_auth_or_prompt()` 辅助函数添加到 `src/backend/api/cli.py`
-- [ ] 无 `src/backend/core/` 层变更
-- [ ] `pyproject.toml` 无新依赖
+- [x] `check_auth_status()` 方法添加到 `src/backend/infrastructure/github_client.py` 的 `GitHubCliClient`
+- [x] `_ensure_gh_auth_or_prompt()` 辅助函数添加到 `src/backend/api/cli.py`
+- [x] 无 `src/backend/core/` 层变更
+- [x] `pyproject.toml` 无新依赖
 
 ### 依赖验收
 
-- [ ] `GhAuthStatus` 数据类定义在 `github_client.py`（非新文件）
-- [ ] 认证检查使用现有 `SubprocessRunner` 基础设施
+- [x] `GhAuthStatus` 数据类定义在 `github_client.py`（非新文件）
+- [x] 认证检查使用现有 `SubprocessRunner` 基础设施
 
 ### 行为验收
 
-- [ ] 当 `gh auth status` 显示 "✓ Logged in" 时，命令正常继续
-- [ ] 当 `gh auth status` 显示 "X Failed to log in" 时，CLI 打印错误并提示用户
-- [ ] 错误信息包含："请运行: gh auth login -h github.com"
-- [ ] 认证失败时 CLI 以退出码 1 退出
-- [ ] `IAR_SKIP_GH_AUTH_CHECK=1` 环境变量跳过认证检查
-- [ ] 认证检查在以下命令前执行：`labels sync`、`issue-from-prd`、`run-once`、`daemon`、`review-once`、`review-daemon`
+- [x] 当 `gh auth status` 显示 "✓ Logged in" 时，命令正常继续
+- [x] 当 `gh auth status` 显示 "X Failed to log in" 时，CLI 打印错误并提示用户
+- [x] 错误信息包含："请运行: gh auth login -h github.com"
+- [x] 认证失败时 CLI 以退出码 1 退出
+- [x] `IAR_SKIP_GH_AUTH_CHECK=1` 环境变量跳过认证检查
+- [x] 认证检查在以下命令前执行：`labels sync`、`issue-from-prd`、`run-once`、`daemon`、`review-once`、`review-daemon`
 
 ### 文档验收
 
-- [ ] 若 CLI 使用方式变更，更新 `docs/`（可选，仅当存在面向用户的文档时）
+- [x] 若 CLI 使用方式变更，更新 `docs/`（可选，仅当存在面向用户的文档时）
 
 ### 验证验收
 
-- [ ] `tests/test_gh_auth_check.py` 单元测试覆盖认证状态解析
-- [ ] 集成测试验证 `iar labels sync` 在 mock 认证失败时的行为
-- [ ] `just test` 通过，无回归
+- [x] `tests/test_gh_auth_check.py` 单元测试覆盖认证状态解析
+- [x] 集成测试验证 `iar labels sync` 在 mock 认证失败时的行为
+- [x] `just test` 通过，无回归
 
 ---
 

@@ -771,6 +771,13 @@ uv run --project /path/to/keda iar daemon
 | API Key 已设置？ | `echo $OPENAI_API_KEY` / `echo $ANTHROPIC_API_KEY` |
 | 目标仓库路径正确？ | `ls /path/to/target-repo/.git` |
 
+> **自动认证检测**：执行 `iar labels sync`、`iar issue create`、`iar run`、`iar daemon`、`iar review`、`iar review-daemon` 等需要 GitHub API 的命令前，`iar` 会自动检测 `gh` 认证状态。如果认证失效，会提示运行 `gh auth login -h github.com` 并以退出码 1 退出，避免暴露原始异常。
+>
+> 在 CI 或脚本环境中，可设置环境变量跳过该检查：
+> ```bash
+> IAR_SKIP_GH_AUTH_CHECK=1 iar labels sync
+> ```
+
 ## 配置
 
 Agent Runner 的默认配置来自 keda 的 `config.toml`，目标仓库细节优先来自目标仓库 `.iar.toml`。两者使用相同的 `[agent_runner.*]` section shape；通常把通用默认值放在 `config.toml`，把仓库特定的 `git`、`runner`、`labels` 等覆盖项放在 `.iar.toml`。
