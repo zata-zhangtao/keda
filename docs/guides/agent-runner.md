@@ -1036,6 +1036,52 @@ Agent Runner 同时暴露只读状态端点：
 - `GET /api/v1/agent-runner/status` — 返回 runner 配置摘要与仓库列表
 - `GET /api/v1/agent-runner/health` — 返回 runner 健康状态（GitHub CLI 可用性等）
 
+## Agent Runner Monitoring Dashboard
+
+Dashboard 路由 `/dashboard`（即 `frontend/src/pages/dashboard-page.tsx`）展示 Agent Runner 的**只读**监控面板。运维者打开 Web 就能看到当前队列、PR 状态、事件时间线和异常。**所有恢复操作仍由 `iar` CLI 完成，面板不替代 CLI，只让状态"打开即见"。**
+
+### 端点
+
+监控面板复用两个只读 API：
+
+- `GET /api/v1/agent-runner/overview` — 按仓库返回健康、队列统计、Issue 摘要、最近事件和异常计数。
+- `GET /api/v1/agent-runner/issues/{issue_number}` — 单个 Issue 的 label、PR context、worktree 状态、event timeline、anomalies 和建议 CLI 命令。
+
+两个端点都只读，不暴露任何修改 GitHub label、comment、PR 或 worktree 的能力。
+
+### 异常检测
+
+后端按以下规则对每个 Issue 推导异常，每条异常都带 `severity`、`message` 和 `suggested_cli`：
+
+| 异常类型 | 触发条件 | severity | 推荐 CLI |
+|---|---|---|---|
+| `label_pr_mismatch` | PR 已创建但 Issue label 不在 `agent/supervising` / `agent/review` / `agent/blocked` / `agent/failed` 中 | warning | `iar labels sync`、`iar review-once --dry-run` |
+| `pr_dirty_in_review` | PR `mergeable_state` 为 dirty/conflicted 且 label 是 `agent/review` | error | `iar review-once`、`iar run-once --max-issues 1` |
+| `dirty_worktree_mismatch` | worktree 有未提交变更但 label 不是 `agent/running` | warning | `iar run-once --dry-run`、`git status` |
+| `event_label_mismatch` | 最新 `iar:event` phase 隐含的状态与当前 label 不一致 | warning | `iar labels sync` |
+
+Overview 还会按 severity 汇总 `anomaly_count` 和 `anomaly_summary`（`warning` / `error`），并把 `has_anomaly` 标在对应 Issue 行上。
+
+### 事件时间线
+
+`GET /api/v1/agent-runner/issues/{issue_number}` 返回 `timeline`，按时间顺序列出所有 `<!-- iar:event ... -->` 标记，附带 phase、cycle、head SHA、PR branch、checks_state、mergeable、action 等字段。解析复用 `backend.core.use_cases.agent_runner_events`，不会复制 marker parser。
+
+### 建议 CLI 文本
+
+每个 Issue 详情区都会列出当前状态推荐的 `iar` 命令文本（如 `iar review-once`）。命令旁有**复制**按钮，但**不直接执行**——所有恢复动作仍走 CLI，保留操作审计、避免 UI 端任意 shell。
+
+### 显式非目标
+
+监控面板故意**不**做的事：
+
+- 不暴露任何修改 label、comment、PR、worktree 的 API。
+- 不执行任意 shell 命令、不能从 UI 改 label 或触发 agent。
+- 不替代 `iar run-once` / `iar review-once` / `iar labels sync` 等恢复命令。
+- 不新增数据库、后台任务队列或 WebSocket；GitHub label/comment/PR 和本地 worktree 仍是事实来源。
+- 不实现自动 rebase 冲突解决；冲突的 Issue 会带 `agent/blocked` 状态出现在监控面板，由人类决定下一步。
+
+如果以后想加入"在 UI 点按钮触发命令"，先单独再开一个 PRD——本面板的契约是只读。
+
 ## deliberate 多 Agent 合议
 
 `iar deliberate` 启动一次只读的多 Agent 合议会话，适合在编码前对复杂需求做多视角推演。

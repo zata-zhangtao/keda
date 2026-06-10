@@ -258,3 +258,102 @@ def test_edit_issue_labels_skips_noop_update(tmp_path: Path) -> None:
     )
 
     assert fake_runner.calls == [list(view_command)]
+
+
+def test_list_review_candidate_issues_uses_or_label_semantics(
+    tmp_path: Path,
+) -> None:
+    """Review candidate query must combine results across labels (OR semantics)."""
+    supervising_command = (
+        "gh",
+        "issue",
+        "list",
+        "--state",
+        "open",
+        "--label",
+        "agent/supervising",
+        "--limit",
+        "20",
+        "--json",
+        "number,title,url,labels,body",
+    )
+    review_command = (
+        "gh",
+        "issue",
+        "list",
+        "--state",
+        "open",
+        "--label",
+        "agent/review",
+        "--limit",
+        "20",
+        "--json",
+        "number,title,url,labels,body",
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            supervising_command: CommandResult(
+                command=supervising_command,
+                return_code=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "number": 90,
+                            "title": "supervising only",
+                            "url": "https://example/90",
+                            "labels": [{"name": "agent/supervising"}],
+                            "body": "",
+                        },
+                        {
+                            "number": 92,
+                            "title": "both labels",
+                            "url": "https://example/92",
+                            "labels": [
+                                {"name": "agent/supervising"},
+                                {"name": "agent/review"},
+                            ],
+                            "body": "",
+                        },
+                    ]
+                ),
+                stderr="",
+            ),
+            review_command: CommandResult(
+                command=review_command,
+                return_code=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "number": 91,
+                            "title": "review only",
+                            "url": "https://example/91",
+                            "labels": [{"name": "agent/review"}],
+                            "body": "",
+                        },
+                        {
+                            "number": 92,
+                            "title": "both labels",
+                            "url": "https://example/92",
+                            "labels": [
+                                {"name": "agent/supervising"},
+                                {"name": "agent/review"},
+                            ],
+                            "body": "",
+                        },
+                    ]
+                ),
+                stderr="",
+            ),
+        }
+    )
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    candidates = github_client.list_review_candidate_issues(
+        ["agent/supervising", "agent/review"], 20
+    )
+
+    candidate_numbers = {candidate.number for candidate in candidates}
+    assert candidate_numbers == {90, 91, 92}
+    # 92 must appear exactly once even though it matches both labels.
+    assert len(candidates) == 3
+    assert fake_runner.calls == [list(supervising_command), list(review_command)]

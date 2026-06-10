@@ -708,55 +708,55 @@ No web research was used. This PRD is based on repository code, local Agent Runn
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/api/routes/agent_runner.py` remains a thin HTTP adapter and delegates workflow decisions to core use cases.
-- [ ] New core monitoring logic lives under `src/backend/core/use_cases/` and does not import `backend.infrastructure`.
-- [ ] Any new GitHub operations are added to `IGitHubClient` before implementation in `GitHubCliClient`.
-- [ ] Frontend calls only `/api/v1/agent-runner/*` and does not execute GitHub/Git logic directly.
-- [ ] No database table, migration, background queue, WebSocket service or command-shell endpoint is added.
-- [ ] No write/modify API endpoint is exposed from the monitoring panel.
+- [x] `src/backend/api/routes/agent_runner.py` remains a thin HTTP adapter and delegates workflow decisions to core use cases.
+- [x] New core monitoring logic lives under `src/backend/core/use_cases/` and does not import `backend.infrastructure`.
+- [x] Any new GitHub operations are added to `IGitHubClient` before implementation in `GitHubCliClient`.
+- [x] Frontend calls only `/api/v1/agent-runner/*` and does not execute GitHub/Git logic directly.
+- [x] No database table, migration, background queue, WebSocket service or command-shell endpoint is added.
+- [x] No write/modify API endpoint is exposed from the monitoring panel.
 
 ### Backend Behavior Acceptance
 
-- [ ] `GitHubCliClient.list_issue_comments()` and `list_pr_comments()` request `--json comments` and return actual comment bodies.
-- [ ] Review candidate listing supports Issues that have any one of `agent/supervising` or `agent/review`, not only Issues that have both.
-- [ ] `GET /api/v1/agent-runner/overview` returns repository health, queue counts, Issue summaries, latest event markers and anomaly counts.
-- [ ] `GET /api/v1/agent-runner/issues/{issue_number}` returns labels, PR context, worktree status, event timeline and anomaly list.
-- [ ] Anomaly `label_pr_mismatch` is detected when PR exists but label is not `supervising`/`review`/`blocked`/`failed`.
-- [ ] Anomaly `pr_dirty_in_review` is detected when PR mergeable_state is dirty/conflicted and label is `review`.
-- [ ] Anomaly `dirty_worktree_mismatch` is detected when worktree has uncommitted changes but label is not `running`.
-- [ ] Anomaly `event_label_mismatch` is detected when latest event phase implies a different state than current label.
-- [ ] Each anomaly includes `severity` (`warning` or `error`), `message`, and `suggested_cli` list.
-- [ ] Overview aggregates `anomaly_count` and `anomaly_summary` by severity.
+- [x] `GitHubCliClient.list_issue_comments()` and `list_pr_comments()` request `--json comments` and return actual comment bodies.
+- [x] Review candidate listing supports Issues that have any one of `agent/supervising` or `agent/review`, not only Issues that have both.
+- [x] `GET /api/v1/agent-runner/overview` returns repository health, queue counts, Issue summaries, latest event markers and anomaly counts.
+- [x] `GET /api/v1/agent-runner/issues/{issue_number}` returns labels, PR context, worktree status, event timeline and anomaly list.
+- [x] Anomaly `label_pr_mismatch` is detected when PR exists but label is not `supervising`/`review`/`blocked`/`failed`.
+- [x] Anomaly `pr_dirty_in_review` is detected when PR mergeable_state is dirty/conflicted and label is `review`.
+- [x] Anomaly `dirty_worktree_mismatch` is detected when worktree has uncommitted changes but label is not `running`.
+- [x] Anomaly `event_label_mismatch` is detected when latest event phase implies a different state than current label.
+- [x] Each anomaly includes `severity` (`warning` or `error`), `message`, and `suggested_cli` list.
+- [x] Overview aggregates `anomaly_count` and `anomaly_summary` by severity.
 
 ### Frontend Acceptance
 
-- [ ] `frontend/src/pages/dashboard-page.tsx` is replaced with an Agent Runner monitoring overview.
-- [ ] `frontend/shared/api/agentRunner.ts` or equivalent wrapper is added and reuses `frontend/shared/api/client.ts`.
-- [ ] `frontend/shared/api/types.ts` contains typed DTOs for overview, Issue detail, event timeline, anomaly and monitoring response.
-- [ ] Sidebar/navigation labels reflect the Agent Runner monitoring panel.
-- [ ] Issue rows show label state, PR state, checks state, latest event, anomaly indicator and whether worktree state is actionable.
-- [ ] Issue detail shows a chronological event timeline and recent failed/blocked details.
-- [ ] Anomalies are visually highlighted (color/icon) with severity distinction.
-- [ ] Suggested CLI commands are displayed as copyable text, not as executable buttons.
-- [ ] UI uses existing component conventions and avoids nested cards or marketing-style hero layout.
+- [x] `frontend/src/pages/dashboard-page.tsx` is replaced with an Agent Runner monitoring overview.
+- [x] `frontend/shared/api/agentRunner.ts` or equivalent wrapper is added and reuses `frontend/shared/api/client.ts`.
+- [x] `frontend/shared/api/types.ts` contains typed DTOs for overview, Issue detail, event timeline, anomaly and monitoring response.
+- [x] Sidebar/navigation labels reflect the Agent Runner monitoring panel.
+- [x] Issue rows show label state, PR state, checks state, latest event, anomaly indicator and whether worktree state is actionable.
+- [x] Issue detail shows a chronological event timeline and recent failed/blocked details.
+- [x] Anomalies are visually highlighted (color/icon) with severity distinction.
+- [x] Suggested CLI commands are displayed as copyable text, not as executable buttons.
+- [x] UI uses existing component conventions and avoids nested cards or marketing-style hero layout.
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` documents the monitoring panel and its read-only nature.
-- [ ] Docs explain that the monitoring panel does not execute actions; all recovery operations still use CLI.
-- [ ] Docs list the anomaly types the panel can detect and what they mean.
-- [ ] Docs describe why arbitrary shell commands and arbitrary label editing are intentionally out of scope for the panel.
-- [ ] `mkdocs.yml` is checked; if no new docs page is added, no nav change is required.
+- [x] `docs/guides/agent-runner.md` documents the monitoring panel and its read-only nature.
+- [x] Docs explain that the monitoring panel does not execute actions; all recovery operations still use CLI.
+- [x] Docs list the anomaly types the panel can detect and what they mean.
+- [x] Docs describe why arbitrary shell commands and arbitrary label editing are intentionally out of scope for the panel.
+- [x] `mkdocs.yml` is checked; if no new docs page is added, no nav change is required.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_agent_runner_api.py -q` passes.
-- [ ] `uv run pytest tests/test_agent_runner_monitor.py -q` or equivalent new focused suite passes.
-- [ ] `uv run pytest tests/test_pr_supervisor.py tests/test_run_agent.py -q` passes (no regression).
-- [ ] `just frontend build` passes.
-- [ ] `uv run mkdocs build --strict` passes.
-- [ ] `just test` passes after all implementation changes.
-- [ ] Playwright smoke or equivalent frontend real-route validation covers dashboard rendering with mocked Agent Runner API data including anomalies.
+- [x] `uv run pytest tests/test_agent_runner_api.py -q` passes.
+- [x] `uv run pytest tests/test_agent_runner_monitor.py -q` or equivalent new focused suite passes.
+- [x] `uv run pytest tests/test_pr_supervisor.py tests/test_run_agent.py -q` passes (no regression).
+- [x] `just frontend build` passes.
+- [x] `uv run mkdocs build --strict` passes.
+- [x] `just test` passes after all implementation changes.
+- [x] Playwright smoke or equivalent frontend real-route validation covers dashboard rendering with mocked Agent Runner API data including anomalies.
 
 ## 9. Functional Requirements
 
