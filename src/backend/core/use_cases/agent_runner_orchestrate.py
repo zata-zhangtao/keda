@@ -84,6 +84,10 @@ from backend.core.use_cases.run_agent_once import (
 
 _logger = logging.getLogger(__name__)
 
+# Scan past dependency-blocked ready Issues without letting them consume the
+# per-pass processing quota. ``max_issues`` still caps actual claims.
+_READY_DISCOVERY_LIMIT = 100
+
 
 def _has_rework_intent(
     issue: IssueSummary,
@@ -829,7 +833,7 @@ def run_once(
     发现并处理 ready 和 running 状态的 Issue。
 
     Issue 发现逻辑：
-    1. 收集所有 ready 标签的 Issue（最多 max_issues 个）
+    1. 扫描 ready 标签的 Issue，跳过依赖未满足的条目后最多处理 max_issues 个
     2. 对 remaining 配额，从 running 标签 Issue 中筛选候选：
        - 有 rework 标记 → running_rework
        - 有已就绪的本地 commit → running_publish_recovery
@@ -878,11 +882,16 @@ def run_once(
             _logger.error("Validation gate pass failed: %s", gate_exc)
 
     # 发现 ready Issue
-    ready_issues = github_client.list_ready_issues(config.labels.ready, max_issues)
+    ready_discovery_limit = max(max_issues, _READY_DISCOVERY_LIMIT)
+    ready_issues = github_client.list_ready_issues(
+        config.labels.ready, ready_discovery_limit
+    )
     processed_count = 0
     issues_to_process: list[tuple[IssueSummary, str]] = []
 
     for issue in ready_issues:
+        if processed_count >= max_issues:
+            break
         declaration = parse_dependency_marker(issue.body)
         if declaration is not None:
             verdict = evaluate_dependencies(declaration, github_client, config.labels)

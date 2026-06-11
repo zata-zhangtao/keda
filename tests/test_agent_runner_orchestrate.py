@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+import pytest
 
 from backend.core.shared.models.agent_runner import (
     AppConfig,
@@ -15,6 +18,7 @@ from backend.core.use_cases.agent_runner_failure import (
     ForbiddenBlockedError,
 )
 from backend.core.use_cases.agent_runner_orchestrate import (
+    _READY_DISCOVERY_LIMIT,
     _guard_blocked_issue_has_resolution,
     _mark_issue_blocked,
     _mark_issue_failed,
@@ -88,6 +92,52 @@ def test_run_once_dry_run_skips_blocked_ready_issue() -> None:
     assert exit_code == 0
     process_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
     assert len(process_calls) == 0
+
+
+def test_run_once_dry_run_continues_after_dependency_blocked_ready_issue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Blocked ready Issues must not starve later actionable ready Issues."""
+    fake_client = FakeGitHubClient()
+    ready_query_limits: list[int] = []
+
+    def list_ready_issues(ready_label: str, limit: int) -> list[IssueSummary]:
+        ready_query_limits.append(limit)
+        return [
+            _make_ready_issue(
+                5,
+                "<!-- iar:depends-on #3 -->",
+                ("agent/ready",),
+            ),
+            _make_ready_issue(
+                4,
+                "PRD path: `tasks/example.md`",
+                ("agent/ready",),
+            ),
+        ]
+
+    fake_client.list_ready_issues = list_ready_issues
+    fake_client._issue_states[3] = "OPEN"
+    fake_runner = FakeProcessRunner()
+    caplog.set_level(
+        logging.INFO,
+        logger="backend.core.use_cases.agent_runner_orchestrate",
+    )
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=AppConfig(),
+        dry_run=True,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    assert ready_query_limits == [_READY_DISCOVERY_LIMIT]
+    assert "Issue #5 blocked by dependencies" in caplog.text
+    assert "would process Issue #4 (ready)" in caplog.text
 
 
 def test_run_once_dry_run_processes_unblocked_ready_issue() -> None:

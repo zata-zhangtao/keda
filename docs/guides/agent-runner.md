@@ -122,6 +122,7 @@ iar labels sync --repo-id keda
 - PRD 中包含工具无关的 `Delivery Dependencies` 小节
 - `iar issue create` 将 `Gate type: hard` 的依赖物化为 Issue body 中的 `<!-- iar:depends-on ... -->` marker 和 `task-group/<name>` label
 - runner 每次轮询时实时查询 GitHub 状态：依赖未满足时跳过领取、叠加 `agent/waiting` label 并写等待 comment
+- 依赖未满足的 ready Issue 不消耗 `max_issues` 的处理额度；runner 会继续扫描后续 ready Issue，直到找到可领取任务或扫描窗口耗尽
 - 上游 Issue 全部 closed 后，下一轮轮询自动移除 `agent/waiting` 并正常领取
 
 ### PRD 中的 Delivery Dependencies 语法
