@@ -414,8 +414,13 @@ def recover_publish_issue(
         )
     else:
         # 不存在可复用 PR 时创建草稿 PR；正文中的 Closes #N 用于在合并后自动关闭
-        # 对应 Issue。
-        pr_title = f"[Agent] Issue #{issue_number}"
+        # 对应 Issue。优先使用 Issue 标题让 PR 标题更具可读性，取不到时回退到编号。
+        issue_title = recovered_issue.title if recovered_issue is not None else None
+        pr_title = (
+            f"[Agent] {issue_title}"
+            if issue_title
+            else f"[Agent] Issue #{issue_number}"
+        )
         pr_body = f"Closes #{issue_number}\n\nRecovered by issue-agent-runner.\n"
         if recovered_issue is not None and validation_required(
             recovered_issue.body, config

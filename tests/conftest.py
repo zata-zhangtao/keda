@@ -42,6 +42,7 @@ class FakeGitHubClient(IGitHubClient):
         self._open_prs: dict[str, str | None] = {}
         self._remote_base_sha: str = "remote-base-sha"
         self._issue_states: dict[int, str] = {}
+        self._issue_title: str | None = None
 
     def sync_labels(self, labels: LabelConfig) -> None:
         self.calls.append({"method": "sync_labels", "labels": labels})
@@ -151,9 +152,14 @@ class FakeGitHubClient(IGitHubClient):
 
     def get_issue(self, issue_number: int) -> IssueSummary:
         self.calls.append({"method": "get_issue", "issue_number": issue_number})
+        title = (
+            self._issue_title
+            if self._issue_title is not None
+            else f"Issue #{issue_number}"
+        )
         return IssueSummary(
             number=issue_number,
-            title=f"Issue #{issue_number}",
+            title=title,
             url=f"https://github.com/example/repo/issues/{issue_number}",
             body="",
             labels=(),

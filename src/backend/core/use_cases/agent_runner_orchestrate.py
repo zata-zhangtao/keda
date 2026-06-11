@@ -212,9 +212,11 @@ def _mark_issue_failed(
             failure_category=exc.failure_category,
         )
     elif attempt_results is not None:
-        comment_body = format_failure_comment(exc, attempt_results)
+        comment_body = format_failure_comment(
+            exc, attempt_results, issue_number=issue.number
+        )
     else:
-        comment_body = format_failure_comment(exc)
+        comment_body = format_failure_comment(exc, issue_number=issue.number)
     try:
         github_client.comment_issue(issue.number, comment_body)
     except Exception as comment_exc:  # noqa: BLE001 - preserve original failure.

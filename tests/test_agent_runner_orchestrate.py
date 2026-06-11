@@ -6,7 +6,10 @@ from pathlib import Path
 
 
 from backend.core.shared.models.agent_runner import AppConfig, IssueSummary
-from backend.core.use_cases.agent_runner_orchestrate import run_once
+from backend.core.use_cases.agent_runner_orchestrate import (
+    _mark_issue_failed,
+    run_once,
+)
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
 
@@ -17,6 +20,31 @@ def _make_ready_issue(number: int, body: str, labels: tuple[str, ...]) -> IssueS
         url=f"https://github.com/example/repo/issues/{number}",
         body=body,
         labels=labels,
+    )
+
+
+def test_mark_issue_failed_comment_includes_recovery_guidance() -> None:
+    """The failure comment posted to GitHub must tell the operator how to recover."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue(53, "PRD path: `tasks/example.md`", ("agent/running",))
+
+    _mark_issue_failed(
+        issue=issue,
+        config=AppConfig(),
+        github_client=fake_client,
+        exc=RuntimeError("Pre-push review did not approve after 2 attempt(s)"),
+    )
+
+    label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
+    assert len(label_calls) == 1
+    assert "agent/failed" in label_calls[0]["add"]
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    body = comment_calls[0]["body"]
+    assert "## Agent Runner Failed" in body
+    assert "### How To Recover" in body
+    assert (
+        "gh issue edit 53 --add-label agent/ready --remove-label agent/failed" in body
     )
 
 

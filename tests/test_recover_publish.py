@@ -344,6 +344,7 @@ class TestRecoverPublishIssue:
         runner = _make_process_runner_with_worktree(worktree_path, branch="issue-42")
         github_client = FakeGitHubClient()
         github_client._open_prs["issue-42"] = None
+        github_client._issue_title = "Fix login timeout"
 
         request = PublishRecoveryRequest(issue_number=42)
 
@@ -362,12 +363,66 @@ class TestRecoverPublishIssue:
         assert result.pr_reused is False
         assert result.supervisor_action == "supervisor_disabled_fallback"
 
+        pr_create_calls = [
+            c for c in github_client.calls if c["method"] == "create_draft_pr"
+        ]
+        assert len(pr_create_calls) == 1
+        assert pr_create_calls[0]["title"] == "[Agent] Fix login timeout"
+
         label_calls = [
             c for c in github_client.calls if c["method"] == "edit_issue_labels"
         ]
         assert len(label_calls) == 1
         assert "agent/review" in label_calls[0]["add"]
         assert "agent/failed" in label_calls[0]["remove"]
+
+    def test_success_uses_fallback_title_when_issue_lookup_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Should fallback to issue-number title when get_issue fails."""
+        config = _make_config(supervisor_enabled=False)
+        worktree_path = tmp_path / "issue-42"
+        worktree_path.mkdir()
+
+        config = AppConfig(
+            labels=LabelConfig(
+                ready="agent/ready",
+                running="agent/running",
+                supervising="agent/supervising",
+                review="agent/review",
+                failed="agent/failed",
+            ),
+            worktree=config.worktree.__class__(path_command=f"echo {worktree_path}"),
+            post_pr_supervisor=PostPrSupervisorConfig(enabled=False),
+        )
+
+        runner = _make_process_runner_with_worktree(worktree_path, branch="issue-42")
+        github_client = FakeGitHubClient()
+        github_client._open_prs["issue-42"] = None
+
+        # Make get_issue raise so recovered_issue becomes None
+        def _raise_get_issue(issue_number: int) -> None:
+            raise RuntimeError("network error")
+
+        github_client.get_issue = _raise_get_issue
+
+        request = PublishRecoveryRequest(issue_number=42)
+
+        result = recover_publish_issue(
+            request=request,
+            repo_path=tmp_path,
+            config=config,
+            github_client=github_client,
+            process_runner=runner,
+        )
+
+        assert result.issue_number == 42
+
+        pr_create_calls = [
+            c for c in github_client.calls if c["method"] == "create_draft_pr"
+        ]
+        assert len(pr_create_calls) == 1
+        assert pr_create_calls[0]["title"] == "[Agent] Issue #42"
 
     def test_success_supervisor_enabled_goes_to_supervising(
         self, tmp_path: Path

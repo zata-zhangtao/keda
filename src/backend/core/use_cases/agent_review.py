@@ -401,9 +401,20 @@ def run_pre_push_review(
                     expected_branch=expected_branch,
                 )
                 current_head = get_head_sha(worktree_path, process_runner)
-                action_summary = (
-                    "reviewer patched and runner committed follow-up changes"
-                )
+                # commit_requested_changes 正常返回意味着补丁已通过 staging 后
+                # 的 verification 重跑（失败会抛 VerificationFailedError）。
+                # 因此 approved + 补丁提交成功应当轮收敛，而不是被强制降级为
+                # changes_requested 后在最后一轮必然硬失败。
+                if reviewer_decision.verdict == "approved":
+                    cycle_verdict = "approved"
+                    action_summary = (
+                        "reviewer approved and runner committed follow-up patch"
+                    )
+                else:
+                    action_summary = (
+                        "reviewer patched and runner committed follow-up changes"
+                    )
+                    last_failure_summary = action_summary
                 _logger.info(
                     "Pre-push review cycle %d/%d for Issue #%d: reviewer "
                     "changes committed at head %s.",

@@ -363,6 +363,8 @@ Pre-push review 不产生独立的 durable label，整个过程仍在 `agent/run
 >
 > 若 reviewer stdout 没有可解析的 JSON verdict，runner 会在 commit request 中读取可选的 `verdict`、`summary`、`findings_high`、`findings_medium`、`findings_low` 元数据作为兜底。空提交信号由 `EmptyCommitRequestError`（`RuntimeError` 的子类，message 保持 `"Agent requested a commit but produced no file changes."`）承载，因此 `is_recoverable_commit_request_error(...)` 仍把它分类为可恢复，且不会被升级为 `Pre-push review repair failed` 硬失败。
 
+> **approved + 非空补丁行为**：当 reviewer verdict 为 `approved` 且写出了非空 `.agent-runner/commit-request.json` 时，runner 通过 commit proxy 提交补丁并重跑 `verification_commands`，成功后该轮直接收敛通过（action summary 为 `reviewer approved and runner committed follow-up patch`），不会被降级为 `changes_requested` 后在最后一轮硬失败。若 verdict 为 `changes_requested` 且补丁提交成功，则继续下一轮 cycle；用尽 `max_attempts` 时，软失败信息反映最后一轮的实际结果（`reviewer patched and runner committed follow-up changes`），不会显示更早 cycle 的陈旧摘要。
+
 ### Post-PR Supervisor
 
 Draft PR 创建后，Issue 先进入 `agent/supervising`，并立即运行至少一次 supervisor cycle：
@@ -486,6 +488,8 @@ iar recover-publish --issue 5
 ## 失败重跑
 
 Issue 执行失败后会被标记为 `agent/failed`，runner 不会再自动处理。以下是将失败 Issue 重新置为可执行状态的完整流程。
+
+> 非 publish 阶段失败的 `Agent Runner Failed` 评论末尾自带 `How To Recover` 段，包含可直接复制的 relabel 命令和本章节指向；publish 阶段失败的评论则提示 `iar recover-publish`。两类评论的指引与本章节命令保持一致。
 
 ### 何时适合重跑
 

@@ -3073,6 +3073,41 @@ def test_format_failure_comment_omits_agent_prompt_from_cause() -> None:
     assert "usage limit exceeded" in body
 
 
+def test_format_failure_comment_includes_recovery_guidance() -> None:
+    """With an issue number, the comment must end with relabel recovery steps."""
+    attempt_history = [
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.AGENT_ERROR,
+            recovered=False,
+            detail="Agent command failed.",
+        )
+    ]
+    failure = MaxRetriesExceededError(attempt_history)
+    body = format_failure_comment(failure, attempt_history, issue_number=53)
+    assert "### How To Recover" in body
+    assert (
+        "gh issue edit 53 --add-label agent/ready --remove-label agent/failed" in body
+    )
+    assert "docs/guides/agent-runner.md" in body
+    assert body.index("### How To Recover") > body.index("### Attempt History")
+
+
+def test_format_failure_comment_without_issue_number_unchanged() -> None:
+    """Without an issue number, no recovery guidance is appended."""
+    attempt_history = [
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.AGENT_ERROR,
+            recovered=False,
+            detail="Agent command failed.",
+        )
+    ]
+    body = format_failure_comment(MaxRetriesExceededError(attempt_history))
+    assert "gh issue edit" not in body
+    assert "How To Recover" not in body
+
+
 def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
     """Scene B: Agent committed, just lint failed, recovery fixed, 2nd pass.
 

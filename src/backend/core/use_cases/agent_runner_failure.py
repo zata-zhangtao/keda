@@ -237,6 +237,8 @@ def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
 def format_failure_comment(
     exc: BaseException,
     attempt_results: list[AttemptResult] | None = None,
+    *,
+    issue_number: int | None = None,
 ) -> str:
     """Build a failure comment with root-cause summary and attempt history.
 
@@ -244,6 +246,12 @@ def format_failure_comment(
     bolded root-cause line at the top. A ``CalledProcessError`` cause is
     rendered with the short command name and truncated output instead of
     ``str(exc)``, which would echo the entire agent prompt.
+
+    Args:
+        exc: The exception that caused the failure.
+        attempt_results: Optional attempt history rendered as a table.
+        issue_number: When provided, a recovery guidance section with a
+            copy-pastable relabel command is appended to the comment.
     """
     cause = exc.__cause__
     if isinstance(cause, subprocess.CalledProcessError):
@@ -271,6 +279,26 @@ def format_failure_comment(
         lines.extend([format_agent_execution_failure(cause), ""])
     elif cause is not None:
         lines.extend(["```text", str(cause), "```", ""])
+    if issue_number is not None:
+        lines.extend(
+            [
+                "### How To Recover",
+                "",
+                "After fixing the root cause, relabel the Issue so the "
+                "runner picks it up on its next poll:",
+                "",
+                "```bash",
+                f"gh issue edit {issue_number} "
+                "--add-label agent/ready --remove-label agent/failed",
+                "```",
+                "",
+                "If the worktree is dirty, remove it first "
+                f"(`git worktree remove <repo>-worktrees/tasks/issue-{issue_number}`). "
+                "See the 失败重跑 section in `docs/guides/agent-runner.md` "
+                "for the full procedure.",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 

@@ -523,6 +523,136 @@ def test_run_pre_push_review_commits_reviewer_changes(tmp_path: Path) -> None:
     assert "Verdict: approved" in comment_calls[1]["body"]
 
 
+class _PatchingReviewRunner(FakeProcessRunner):
+    """Fake runner: reviewer returns a fixed verdict and git commands succeed."""
+
+    def __init__(self, verdict: str) -> None:
+        super().__init__(
+            responses={
+                ("git", "branch", "--show-current"): CommandResult(
+                    command=("git", "branch", "--show-current"),
+                    return_code=0,
+                    stdout="issue-1\n",
+                    stderr="",
+                ),
+                ("git", "status", "--porcelain"): CommandResult(
+                    command=("git", "status", "--porcelain"),
+                    return_code=0,
+                    stdout=" M file.py\n",
+                    stderr="",
+                ),
+                ("git", "rev-parse", "HEAD"): CommandResult(
+                    command=("git", "rev-parse", "HEAD"),
+                    return_code=0,
+                    stdout="after-sha\n",
+                    stderr="",
+                ),
+            }
+        )
+        self._verdict = verdict
+
+    def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        command_tuple = tuple(command)
+        if command_tuple[:1] == ("codex",):
+            self.calls.append(list(command))
+            return CommandResult(
+                command=command_tuple,
+                return_code=0,
+                stdout=f'{{"verdict": "{self._verdict}", "summary": "done"}}',
+                stderr="",
+            )
+        return super().run(
+            command,
+            cwd=cwd,
+            check=check,
+            timeout=timeout,
+            capture_output=capture_output,
+        )
+
+
+def _write_commit_request(worktree_path: Path) -> None:
+    import json
+
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "reviewer fix"}),
+        encoding="utf-8",
+    )
+
+
+def test_run_pre_push_review_approved_with_patch_converges(tmp_path: Path) -> None:
+    """Approved verdict plus a committed patch must converge in the same cycle."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    worktree_path = tmp_path / "fake-worktree"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    _write_commit_request(worktree_path)
+
+    fake_runner = _PatchingReviewRunner("approved")
+    from backend.core.shared.models.agent_runner import RunnerConfig
+
+    config = AppConfig(
+        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1),
+        runner=RunnerConfig(verification_commands=("just test",)),
+    )
+
+    final_sha, _verification = run_pre_push_review(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=fake_runner,
+        selected_agent="codex",
+        head_sha_before="before-sha",
+        expected_branch="issue-1",
+        verification_results=[],
+    )
+    assert final_sha == "after-sha"
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "Verdict: approved" in comment_calls[0]["body"]
+    assert (
+        "reviewer approved and runner committed follow-up patch"
+        in comment_calls[0]["body"]
+    )
+
+
+def test_run_pre_push_review_patched_soft_fail_reports_last_cycle_summary(
+    tmp_path: Path,
+) -> None:
+    """Exhausted attempts must report the last cycle's patched summary, not a stale one."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    worktree_path = tmp_path / "fake-worktree"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    _write_commit_request(worktree_path)
+
+    fake_runner = _PatchingReviewRunner("changes_requested")
+    from backend.core.shared.models.agent_runner import RunnerConfig
+
+    config = AppConfig(
+        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1),
+        runner=RunnerConfig(verification_commands=("just test",)),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        run_pre_push_review(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            github_client=fake_client,
+            process_runner=fake_runner,
+            selected_agent="codex",
+            head_sha_before="before-sha",
+            expected_branch="issue-1",
+            verification_results=[],
+        )
+    assert "reviewer patched and runner committed follow-up changes" in str(
+        exc_info.value
+    )
+
+
 def test_run_pre_push_review_empty_commit_request_with_approval_converges(
     tmp_path: Path,
 ) -> None:
