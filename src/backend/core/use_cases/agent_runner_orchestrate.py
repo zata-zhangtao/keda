@@ -18,7 +18,6 @@ Issue 有三条处理路径：
 from __future__ import annotations
 
 import logging
-import os
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +44,11 @@ from backend.core.use_cases.agent_runner_dependencies import (
 )
 from backend.core.use_cases.agent_runner_events import (
     parse_latest_pending_rework_marker,
+)
+from backend.core.use_cases.agent_runner_blocked_claim import (
+    BlockedWorktreeClaimedError,
+    _acquire_blocked_claim_lock,
+    _release_blocked_claim_lock,
 )
 from backend.core.use_cases.agent_runner_git import has_changes
 from backend.core.use_cases.agent_runner_workflow import (
@@ -337,79 +341,6 @@ _BLOCKED_RESOLUTION_COMPLETION_PHASES = {
     "rebase_repair_complete",
     "blocked_resolution_complete",
 }
-
-
-class BlockedWorktreeClaimedError(RuntimeError):
-    """Raised when another runner is already processing the blocked worktree."""
-
-    pass
-
-
-def _acquire_blocked_claim_lock(lock_path: Path, issue_number: int) -> None:
-    """Acquire an atomic filesystem lock for blocked issue processing.
-
-    Uses ``O_CREAT | O_EXCL`` for atomic creation. If the lock already exists,
-    checks whether the owning process is still alive; if dead, steals the lock.
-    """
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(f"{os.getpid()}\n")
-        return
-    except FileExistsError:
-        pass
-
-    # Lock exists — check if owner is still alive
-    try:
-        raw_text = lock_path.read_text(encoding="utf-8").strip()
-        owner_pid = int(raw_text.splitlines()[0])
-    except (OSError, ValueError, IndexError):
-        owner_pid = None
-
-    if owner_pid is not None:
-        try:
-            os.kill(owner_pid, 0)
-            _logger.info(
-                "Blocked Issue #%d worktree already claimed by alive process %d.",
-                issue_number,
-                owner_pid,
-            )
-            raise BlockedWorktreeClaimedError(
-                f"Blocked Issue #{issue_number} worktree is already being processed."
-            )
-        except OSError:
-            # Process is dead — steal the lock
-            _logger.warning(
-                "Stealing stale blocked claim lock for Issue #%d from dead PID %d.",
-                issue_number,
-                owner_pid,
-            )
-
-    # Remove stale lock and retry once
-    try:
-        lock_path.unlink()
-    except OSError:
-        pass
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(f"{os.getpid()}\n")
-    except FileExistsError:
-        raise BlockedWorktreeClaimedError(
-            f"Blocked Issue #{issue_number} worktree claim race lost after lock steal attempt."
-        )
-
-
-def _release_blocked_claim_lock(lock_path: Path) -> None:
-    """Release the blocked claim lock if it belongs to the current process."""
-    try:
-        raw_text = lock_path.read_text(encoding="utf-8").strip()
-        owner_pid = int(raw_text.splitlines()[0])
-        if owner_pid == os.getpid():
-            lock_path.unlink()
-    except (OSError, ValueError, IndexError):
-        pass
 
 
 def _guard_blocked_issue_has_resolution(

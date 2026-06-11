@@ -39,6 +39,13 @@ from backend.core.use_cases.agent_runner_events import (
     parse_latest_event_marker,
     parse_latest_event_marker_for_phases,
 )
+from backend.core.use_cases.agent_runner_evidence_format import (
+    EvidenceKindRule as EvidenceKindRule,
+    IMAGE_EVIDENCE_SUFFIXES,
+    collect_evidence_coverage_problems,
+    demanded_evidence_kinds as demanded_evidence_kinds,
+    extract_evidence_format_markers as extract_evidence_format_markers,
+)
 from backend.core.use_cases.agent_runner_git import list_changed_paths
 
 _logger = logging.getLogger(__name__)
@@ -80,19 +87,8 @@ _PR_URL_PATTERN = re.compile(
     r"https?://[^/]+/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)"
 )
 
-_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _INLINE_TEXT_SUFFIXES = {".txt", ".log", ".md", ".out"}
 _MAX_INLINE_EVIDENCE_CHARS = 3000
-
-_EVIDENCE_ITEM_FILE_PATTERN = re.compile(r"^rv-(?P<item>\d+)[-.]", re.IGNORECASE)
-_MAX_ITEM_SUMMARY_CHARS = 120
-_EVIDENCE_FORMAT_MARKER_PATTERN = re.compile(
-    r"<!--\s*iar:evidence-format\s+item=(?P<item>\d+)\s+kind=(?P<kind>[a-z]+)\s*-->",
-    re.IGNORECASE,
-)
-_KNOWN_EVIDENCE_KINDS: frozenset[str] = frozenset(
-    {"screenshot", "pdf", "txt", "word", "excel", "csv", "video", "none"}
-)
 
 
 class ValidationEvidenceError(RuntimeError):
@@ -409,172 +405,6 @@ def ensure_evidence_dir_excluded(
     exclude_path.write_text(appended_text, encoding="utf-8")
 
 
-@dataclass(frozen=True)
-class EvidenceKindRule:
-    """A demanded evidence format: trigger keywords and accepted suffixes."""
-
-    label: str
-    requirement_pattern: re.Pattern[str]
-    accepted_suffixes: frozenset[str]
-
-
-_EVIDENCE_KIND_RULES: tuple[EvidenceKindRule, ...] = (
-    EvidenceKindRule(
-        label="screenshot/image",
-        requirement_pattern=re.compile(
-            r"截图|screen\s*shot|screenshot|\bpng\b|\bjpe?g\b", re.IGNORECASE
-        ),
-        accepted_suffixes=frozenset(_IMAGE_SUFFIXES),
-    ),
-    EvidenceKindRule(
-        label="PDF",
-        requirement_pattern=re.compile(r"\bpdf\b", re.IGNORECASE),
-        accepted_suffixes=frozenset({".pdf"}),
-    ),
-    EvidenceKindRule(
-        label="plain-text capture (.txt/.log)",
-        requirement_pattern=re.compile(r"\btxt\b|\blog\b|日志", re.IGNORECASE),
-        accepted_suffixes=frozenset({".txt", ".log"}),
-    ),
-    EvidenceKindRule(
-        label="Word document",
-        requirement_pattern=re.compile(
-            r"\bdocx\b|\bword\s*文档|\bword\s+document", re.IGNORECASE
-        ),
-        accepted_suffixes=frozenset({".doc", ".docx"}),
-    ),
-    EvidenceKindRule(
-        label="Excel spreadsheet",
-        requirement_pattern=re.compile(r"\bxlsx?\b|\bexcel\b", re.IGNORECASE),
-        accepted_suffixes=frozenset({".xls", ".xlsx"}),
-    ),
-    EvidenceKindRule(
-        label="CSV",
-        requirement_pattern=re.compile(r"\bcsv\b", re.IGNORECASE),
-        accepted_suffixes=frozenset({".csv"}),
-    ),
-    EvidenceKindRule(
-        label="video/screen recording",
-        requirement_pattern=re.compile(
-            r"录屏|视频|\bvideo\b|\bmp4\b|\bscreen\s*recording", re.IGNORECASE
-        ),
-        accepted_suffixes=frozenset({".mp4", ".mov", ".webm", ".gif"}),
-    ),
-)
-
-
-def extract_evidence_format_markers(issue_body: str) -> dict[int, str]:
-    """Parse ``iar:evidence-format`` markers from an Issue body.
-
-    Returns a mapping ``{item_number: kind}`` for each marker found.
-    Unknown kinds are ignored so that future extensions do not break
-    current validation.
-    """
-    markers: dict[int, str] = {}
-    for match in _EVIDENCE_FORMAT_MARKER_PATTERN.finditer(issue_body):
-        item_number = int(match.group("item"))
-        kind = match.group("kind").lower()
-        if kind in _KNOWN_EVIDENCE_KINDS and kind != "none":
-            markers[item_number] = kind
-    return markers
-
-
-def _kind_to_evidence_rules(kind: str) -> list[EvidenceKindRule]:
-    """Map a marker kind string to the corresponding EvidenceKindRule(s)."""
-    for rule in _EVIDENCE_KIND_RULES:
-        if kind in rule.label.lower():
-            return [rule]
-    # Fallback: try direct label match for txt / pdf / csv / video
-    kind_lower = kind.lower()
-    for rule in _EVIDENCE_KIND_RULES:
-        if kind_lower in rule.label.lower():
-            return [rule]
-    return []
-
-
-def demanded_evidence_kinds(
-    item_text: str,
-    *,
-    issue_body: str | None = None,
-    item_number: int | None = None,
-) -> list[EvidenceKindRule]:
-    """Return the evidence formats a checklist item explicitly names.
-
-    优先读取 Issue body 中的 ``iar:evidence-format`` marker；无 marker 时
-    回退到正则关键词匹配 item 文本。
-    """
-    if issue_body is not None and item_number is not None:
-        markers = extract_evidence_format_markers(issue_body)
-        if item_number in markers:
-            return _kind_to_evidence_rules(markers[item_number])
-    return [
-        kind_rule
-        for kind_rule in _EVIDENCE_KIND_RULES
-        if kind_rule.requirement_pattern.search(item_text)
-    ]
-
-
-def _summarize_checklist_item(item_text: str) -> str:
-    """Strip the checkbox prefix and truncate the item for error messages."""
-    item_summary = re.sub(r"^[-*]\s*\[[ xX]\]\s*", "", item_text.strip())
-    if len(item_summary) > _MAX_ITEM_SUMMARY_CHARS:
-        item_summary = item_summary[:_MAX_ITEM_SUMMARY_CHARS] + "…"
-    return item_summary
-
-
-def collect_evidence_coverage_problems(
-    checklist_items: list[str],
-    evidence_files: list[Path],
-    issue_body: str | None = None,
-) -> list[str]:
-    """逐项对账：清单条目要求什么证据，就必须存在对应形态的文件。
-
-    规则（确定性、不读文件内容）：
-
-    1. 第 ``n`` 个清单条目必须至少有一个 ``rv-<n>-*``（或 ``rv-<n>.*``）
-       证据文件。
-    2. 条目点名的每种格式（见 :func:`demanded_evidence_kinds`：截图、
-       pdf、txt、word、excel、csv、录屏……）都必须有对应后缀的文件。
-
-    Returns:
-        人类可读的问题描述列表；全部满足时为空列表。
-    """
-    files_by_item_number: dict[int, list[Path]] = {}
-    for evidence_file in evidence_files:
-        file_match = _EVIDENCE_ITEM_FILE_PATTERN.match(evidence_file.name)
-        if file_match:
-            files_by_item_number.setdefault(int(file_match.group("item")), []).append(
-                evidence_file
-            )
-
-    coverage_problems: list[str] = []
-    for item_number, item_text in enumerate(checklist_items, start=1):
-        item_evidence_files = files_by_item_number.get(item_number, [])
-        item_summary = _summarize_checklist_item(item_text)
-        if not item_evidence_files:
-            coverage_problems.append(
-                f"Checklist item {item_number} has no evidence file named "
-                f"`rv-{item_number}-<slug>.<ext>`: {item_summary}"
-            )
-            continue
-        for demanded_kind in demanded_evidence_kinds(
-            item_text, issue_body=issue_body, item_number=item_number
-        ):
-            if any(
-                item_file.suffix.lower() in demanded_kind.accepted_suffixes
-                for item_file in item_evidence_files
-            ):
-                continue
-            accepted_suffixes_text = "/".join(sorted(demanded_kind.accepted_suffixes))
-            coverage_problems.append(
-                f"Checklist item {item_number} explicitly demands "
-                f"{demanded_kind.label} evidence, but its `rv-{item_number}-*` "
-                f"files contain no such file ({accepted_suffixes_text}): "
-                f"{item_summary}"
-            )
-    return coverage_problems
-
-
 def ensure_validation_evidence_ready(
     issue: IssueSummary,
     worktree_path: Path,
@@ -865,7 +695,7 @@ def build_evidence_comment(
         file_suffix = Path(file_name).suffix.lower()
         file_blob_url = _blob_url(pr_url, upload.branch, file_name)
         comment_lines.extend(["", f"### {file_name}"])
-        if file_blob_url and file_suffix in _IMAGE_SUFFIXES:
+        if file_blob_url and file_suffix in IMAGE_EVIDENCE_SUFFIXES:
             comment_lines.append(f"![{file_name}]({file_blob_url}?raw=true)")
             comment_lines.append(f"[Open image]({file_blob_url})")
             continue
