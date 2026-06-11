@@ -3467,3 +3467,221 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
     assert "| 1 |" in failure_comment["body"]
     assert "| 2 |" in failure_comment["body"]
     assert "| 3 |" in failure_comment["body"]
+
+
+def test_run_once_rebase_conflict_detached_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pending rework rebase_pr_branch should succeed even with detached HEAD."""
+    import json
+
+    from backend.core.use_cases.agent_runner_events import format_event_marker
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    issue = IssueSummary(
+        number=73,
+        title="Rebase detached head test",
+        url="https://github.com/example/repo/issues/73",
+        body="",
+        labels=("agent/running", "agent/codex"),
+    )
+    worktree_path = tmp_path / "issue-73"
+    worktree_path.mkdir()
+
+    marker = format_event_marker(
+        phase="post_pr_rework_requested",
+        cycle=1,
+        head_sha="abc123",
+        pr_branch="issue-73",
+        action="rebase_pr_branch",
+    )
+    rework_comment = "\n".join(
+        [
+            marker,
+            "",
+            "## Agent Runner Post-PR Rework Requested",
+            "",
+            "- Action: rebase_pr_branch",
+            "- PR Branch: `issue-73`",
+            "- Head SHA: `abc123`",
+        ]
+    )
+
+    fake_client = FakeGitHubClient()
+    fake_client.list_review_candidate_issues = (
+        lambda labels, limit: [issue] if "agent/running" in labels else []
+    )
+    fake_client.comment_issue(73, rework_comment)
+    fake_client._open_prs["issue-73"] = "https://github.com/example/repo/pull/73"
+    fake_client._pr_contexts["issue-73"] = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/73",
+        branch="issue-73",
+        head_sha="abc123",
+        base_sha="base123",
+    )
+
+    rebase_merge_dir = worktree_path / ".git" / "rebase-merge"
+    rebase_merge_dir.mkdir(parents=True, exist_ok=True)
+    head_name_path = rebase_merge_dir / "head-name"
+    head_name_path.write_text("refs/heads/issue-73", encoding="utf-8")
+
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "resolve conflict"}),
+        encoding="utf-8",
+    )
+
+    class _DetachedHeadReworkRunner(FakeProcessRunner):
+        def __init__(self, worktree_path: Path) -> None:
+            super().__init__()
+            self._worktree_path = worktree_path
+            self._branch_calls = 0
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+        ):
+            command_tuple = tuple(command)
+            if command_tuple == ("git", "branch", "--show-current"):
+                self._branch_calls += 1
+                self.calls.append(list(command))
+                if self._branch_calls <= 2:
+                    return CommandResult(command_tuple, 0, "issue-73\n", "")
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == (
+                "git",
+                "rev-parse",
+                "--git-path",
+                "rebase-merge/head-name",
+            ):
+                self.calls.append(list(command))
+                head_name_path = (
+                    self._worktree_path / ".git" / "rebase-merge" / "head-name"
+                )
+                return CommandResult(command_tuple, 0, str(head_name_path) + "\n", "")
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _DetachedHeadReworkRunner(worktree_path)
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        ("git", "rev-parse", "HEAD"): CommandResult(
+            command=("git", "rev-parse", "HEAD"),
+            return_code=0,
+            stdout="abc123\n",
+            stderr="",
+        ),
+        ("git", "fetch", "origin", "main"): CommandResult(
+            command=("git", "fetch", "origin", "main"),
+            return_code=0,
+            stdout="",
+            stderr="",
+        ),
+        ("git", "rebase", "origin/main"): CommandResult(
+            command=("git", "rebase", "origin/main"),
+            return_code=1,
+            stdout="",
+            stderr="CONFLICT",
+        ),
+        ("git", "diff", "--name-only", "--diff-filter=U"): CommandResult(
+            command=("git", "diff", "--name-only", "--diff-filter=U"),
+            return_code=0,
+            stdout="file.py\n",
+            stderr="",
+        ),
+        ("git", "status", "--porcelain"): CommandResult(
+            command=("git", "status", "--porcelain"),
+            return_code=0,
+            stdout=" M file.py\n",
+            stderr="",
+        ),
+        ("git", "add", "-A"): CommandResult(
+            command=("git", "add", "-A"),
+            return_code=0,
+            stdout="",
+            stderr="",
+        ),
+        ("git", "rebase", "--continue"): CommandResult(
+            command=("git", "rebase", "--continue"),
+            return_code=0,
+            stdout="",
+            stderr="",
+        ),
+        (
+            "git",
+            "push",
+            "--force-with-lease",
+            "origin",
+            "issue-73",
+        ): CommandResult(
+            command=(
+                "git",
+                "push",
+                "--force-with-lease",
+                "origin",
+                "issue-73",
+            ),
+            return_code=0,
+            stdout="",
+            stderr="",
+        ),
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+
+    def _noop_run_agent(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        *,
+        capture_output=False,
+        timeout_seconds=None,
+    ):
+        return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.core.use_cases.pr_supervisor.run_agent_with_prompt",
+        _noop_run_agent,
+    )
+
+    config = AppConfig(
+        runner=RunnerConfig(verification_commands=()),
+        worktree=WorktreeConfig(path_command=f"echo {worktree_path}"),
+        pre_push_review=PrePushReviewConfig(enabled=False),
+        post_pr_supervisor=PostPrSupervisorConfig(enabled=False),
+    )
+
+    exit_code = run_once(
+        repo_path=tmp_path,
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "rebase", "--continue") in commands
+    assert (
+        "git",
+        "push",
+        "--force-with-lease",
+        "origin",
+        "issue-73",
+    ) in commands
+    assert not any(c[:2] == ("git", "commit") for c in commands)

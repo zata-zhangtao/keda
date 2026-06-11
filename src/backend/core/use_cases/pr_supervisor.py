@@ -37,6 +37,80 @@ from backend.core.use_cases.run_agent_once import (
 _logger = logging.getLogger(__name__)
 
 
+def _normalize_rebase_target_name(raw: str | None) -> str | None:
+    """Normalize a raw rebase target branch name from Git metadata.
+
+    Returns None for None or empty/whitespace-only strings.
+    Strips leading "refs/heads/" prefix and surrounding whitespace.
+    """
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    prefix = "refs/heads/"
+    if cleaned.startswith(prefix):
+        cleaned = cleaned[len(prefix) :]
+    cleaned = cleaned.strip()
+    return cleaned if cleaned else None
+
+
+def _read_active_rebase_target_branch(
+    worktree_path: Path, process_runner: IProcessRunner
+) -> str | None:
+    """Read the active rebase target branch from Git rebase metadata.
+
+    Tries rebase-merge/head-name first, then rebase-apply/head-name.
+    Returns the normalized branch name, or None if neither exists or is empty.
+    """
+    for rebase_dir in ("rebase-merge", "rebase-apply"):
+        rev_parse_result = process_runner.run(
+            ["git", "rev-parse", "--git-path", f"{rebase_dir}/head-name"],
+            cwd=worktree_path,
+            check=False,
+        )
+        if rev_parse_result.return_code != 0:
+            continue
+        head_name_path = worktree_path / Path(rev_parse_result.stdout.strip())
+        if head_name_path.exists():
+            raw = head_name_path.read_text(encoding="utf-8")
+            return _normalize_rebase_target_name(raw)
+    return None
+
+
+def _ensure_rebase_context_matches_pr_branch(
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+    pr_branch: str,
+) -> None:
+    """Guard that the current Git context is safe to continue a rebase for pr_branch.
+
+    Accepts detached HEAD only when active rebase metadata confirms the target
+    is the expected PR branch.
+    """
+    current_branch = get_current_branch(worktree_path, process_runner)
+    if current_branch == pr_branch:
+        return
+    if current_branch:
+        raise RuntimeError(
+            f"Refusing to continue rebase on unexpected branch: "
+            f"observed branch '{current_branch}', expected '{pr_branch}'"
+        )
+    # Branch is empty: may be in detached HEAD / rebase intermediate state.
+    active_target = _read_active_rebase_target_branch(worktree_path, process_runner)
+    if active_target == pr_branch:
+        return
+    if active_target:
+        raise RuntimeError(
+            f"Refusing to continue rebase: active rebase target "
+            f"'{active_target}' does not match expected PR branch '{pr_branch}'"
+        )
+    raise RuntimeError(
+        f"Refusing to continue rebase: current branch is empty and "
+        f"active rebase target cannot be confirmed (expected '{pr_branch}')"
+    )
+
+
 # 允许的超管动作集合；用集合保证 O(1) 校验并防止拼写错误导致意外行为
 VALID_SUPERVISOR_ACTIONS: set[str] = {
     "approve_for_human_review",
@@ -539,11 +613,7 @@ def execute_rebase(
             f"Rebase aborted: HEAD {current_head} does not match expected {expected_head}"
         )
 
-    current_branch = get_current_branch(worktree_path, process_runner)
-    if current_branch != pr_branch:
-        raise RuntimeError(
-            f"Rebase aborted: on branch {current_branch}, expected {pr_branch}"
-        )
+    _ensure_rebase_context_matches_pr_branch(worktree_path, process_runner, pr_branch)
 
     remote = config.git.remote
     base_branch = config.git.base_branch
@@ -587,12 +657,12 @@ def execute_rebase(
             # 避免无意的文件修改被自动提交
             request_path = worktree_path / ".agent-runner" / "commit-request.json"
             if request_path.is_file():
-                # 在提交前再次确认分支，防止 Agent 中途切换了分支
-                current_branch = get_current_branch(worktree_path, process_runner)
-                if current_branch != pr_branch:
-                    raise RuntimeError(
-                        f"Refusing to commit on unexpected branch: {current_branch}"
-                    )
+                # 在提交前再次确认分支上下文，防止 Agent 中途切换了分支。
+                # 此守卫接受 detached HEAD 状态，但仅当活跃 rebase 元数据
+                # 确认目标分支就是 PR 分支时才放行。
+                _ensure_rebase_context_matches_pr_branch(
+                    worktree_path, process_runner, pr_branch
+                )
                 _ = read_commit_request(worktree_path, issue)
                 remove_commit_request(worktree_path)
                 if not has_changes(worktree_path, process_runner):

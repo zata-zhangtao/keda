@@ -554,6 +554,16 @@ Draft PR 创建后，Issue 先进入 `agent/supervising`，并立即运行至少
 5. 后续 `iar run` 检测到该 pending marker 和 open PR 后，在现有 PR branch 上执行 rework
 6. rework 成功后写 `rebase_repair_complete` marker，再进入后续 supervision/review 流程
 
+#### Rebase Conflict Recovery Branch Guard
+
+在 rebase conflict recovery 过程中，runner 会在继续 rebase 之前先校验当前 branch。如果 `git branch --show-current` 返回 PR branch 名称，说明工作区处于正常 branch 上，恢复流程继续执行。如果返回空（表示处于 detached HEAD 的 rebase 中间态），runner 不会仅凭空 branch 名称就继续，而是进一步读取 Git 的 active rebase metadata（`.git/rebase-merge/head-name` 或 `.git/rebase-apply/head-name`），确认 rebase 目标 branch 与预期的 PR branch 一致后才允许继续。
+
+如果 rebase metadata 缺失、目标 branch 未知，或者解析出的目标与预期 PR branch 不匹配，runner 会拒绝继续并抛出带有诊断信息的错误，且**不会自动 abort rebase**。这样可以把工作区保留在冲突状态，供运维人员手动排查。该检查独立于普通的 commit proxy branch validation，专门用于保护 rebase 中间态。
+
+- 正常 branch：直接校验 branch 名称与预期 PR branch 是否一致。
+- Detached HEAD rebase：读取 `.git/rebase-merge/head-name` 或 `.git/rebase-apply/head-name` 解析目标 branch。
+- 目标未知或不匹配：拒绝继续，保留 rebase 状态，输出诊断错误。
+
 ### 持续观察
 
 ```bash
