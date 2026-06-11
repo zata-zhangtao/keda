@@ -61,6 +61,7 @@ from backend.core.use_cases.agent_runner_publication import (
     _finish_implementation_publication,
     _reuse_existing_local_commit,
 )
+from backend.core.use_cases.agent_runner_rework import build_missing_worktree_comment
 from backend.core.use_cases.agent_runner_supervisor import (
     _run_supervisor_with_repair_loop,
 )
@@ -556,31 +557,6 @@ def _process_ready_issue(
     )
 
 
-def _build_missing_worktree_comment(
-    *,
-    issue: IssueSummary,
-    pr_branch: str,
-    expected_path: str,
-) -> str:
-    """Build an actionable blocked comment when a rework worktree is missing."""
-    return "\n".join(
-        [
-            "## Agent Runner Rework Blocked",
-            "",
-            f"Pending rework for Issue #{issue.number} cannot run because the "
-            f"worktree for branch `{pr_branch}` is missing.",
-            "",
-            f"- Expected worktree path: `{expected_path}`",
-            "- PR branch will not be repaired until the worktree is restored.",
-            "",
-            "To recover:",
-            f"1. Create or restore the worktree for branch `{pr_branch}`.",
-            "2. Ensure the branch HEAD matches the pending rework marker.",
-            "3. Re-run `iar run` to pick up the rework marker.",
-        ]
-    )
-
-
 def _process_running_rework(
     *,
     issue: IssueSummary,
@@ -623,7 +599,7 @@ def _process_running_rework(
             expected_path = message.split(prefix, 1)[1].split(suffix, 1)[0]
         github_client.comment_issue(
             issue.number,
-            _build_missing_worktree_comment(
+            build_missing_worktree_comment(
                 issue=issue,
                 pr_branch=pr_branch,
                 expected_path=expected_path,
