@@ -41,6 +41,7 @@ from backend.core.use_cases.agent_runner_validation import (
     ensure_validation_evidence_ready,
     publish_validation_evidence,
 )
+from backend.core.use_cases.agent_runner_workflow import workflow_state_labels
 from backend.core.use_cases.run_agent_once import (
     ensure_prd_delivery_ready,
     ensure_verification_passed,
@@ -135,27 +136,6 @@ def build_draft_pr_created_comment(
             f"- Head SHA: `{head_sha}`",
         ]
     )
-
-
-def _workflow_state_labels(config: AppConfig) -> list[str]:
-    """获取工作流状态标签列表。
-
-    这些标签代表 Issue 的生命周期状态，发布时会从这些标签中移除。
-    注意：不包含 agent routing 标签（如 assigned）。
-
-    Args:
-        config: 应用配置
-
-    Returns:
-        工作流状态标签列表
-    """
-    return [
-        config.labels.ready,
-        config.labels.running,
-        config.labels.supervising,
-        config.labels.review,
-        config.labels.blocked,
-    ]
 
 
 def _publish_changes_with_recovery_context(
@@ -438,11 +418,15 @@ def _finish_implementation_publication(
         content_generator=content_generator,
     )
 
-    # 切换标签：running → supervising
+    # 切换标签：running → supervising，并清理其他 workflow labels。
     _edit_issue_labels_after_publish(
         issue_number=issue.number,
         add_labels=[config.labels.supervising],
-        remove_labels=[config.labels.running],
+        remove_labels=[
+            label
+            for label in workflow_state_labels(config)
+            if label != config.labels.supervising
+        ],
         worktree_path=worktree_path,
         github_client=github_client,
     )
@@ -502,7 +486,11 @@ def _finish_implementation_publication(
         _edit_issue_labels_after_publish(
             issue_number=issue.number,
             add_labels=[config.labels.review],
-            remove_labels=[config.labels.supervising],
+            remove_labels=[
+                label
+                for label in workflow_state_labels(config)
+                if label != config.labels.review
+            ],
             worktree_path=worktree_path,
             github_client=github_client,
         )
@@ -599,7 +587,7 @@ def _finish_existing_commit_publication(
     _edit_issue_labels_after_publish(
         issue_number=issue.number,
         add_labels=[config.labels.supervising],
-        remove_labels=_workflow_state_labels(config),
+        remove_labels=workflow_state_labels(config),
         worktree_path=worktree_path,
         github_client=github_client,
     )
@@ -654,7 +642,11 @@ def _finish_existing_commit_publication(
         _edit_issue_labels_after_publish(
             issue_number=issue.number,
             add_labels=[config.labels.review],
-            remove_labels=[config.labels.supervising],
+            remove_labels=[
+                label
+                for label in workflow_state_labels(config)
+                if label != config.labels.review
+            ],
             worktree_path=worktree_path,
             github_client=github_client,
         )

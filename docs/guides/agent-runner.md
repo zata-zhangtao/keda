@@ -64,6 +64,16 @@ iar completion show --shell zsh
 
 没有这些标签，`iar` 无法识别哪些 Issue 可以执行、哪些正在执行、哪些需要 review。
 
+### Workflow label 互斥
+
+六个 AI 执行状态标签（`agent/ready`、`agent/running`、`agent/supervising`、`agent/review`、`agent/failed`、`agent/blocked`）是互斥的 durable workflow labels。runner 在任何状态切换时都会清理其他 workflow labels，只保留目标状态。这意味着：
+
+- 不会同时出现 `agent/running` + `agent/review`
+- 不会同时出现 `agent/supervising` + `agent/failed`
+- 历史脏状态（如同时贴有多个 workflow labels）会在下一次被处理时自动收敛到单一状态
+
+工具路由标签（`agent/codex`、`agent/claude`、`agent/kimi`）、任务组标签（`task-group/*`）等非 workflow labels 不会被清理。
+
 ### 14 个标准标签
 
 | 类别 | 标签 | 颜色 | 作用 |
@@ -375,7 +385,8 @@ Draft PR 创建后，Issue 先进入 `agent/supervising`，并立即运行至少
    - `approve_for_human_review` → 进入 `agent/review`
    - `repair_pr_branch` / `resolve_conflict` → 进入 `agent/running` 做现有 PR branch 修复
    - `rebase_pr_branch` → 进入 `agent/running` 做 rebase
-   - `request_human_input` → 进入 `agent/blocked`
+   - `wait_for_checks` → 保持 `agent/supervising`，等待 PR checks 完成
+   - `request_human_input` → 进入 `agent/blocked`，但必须带有可操作 summary
    - `mark_failed` → 进入 `agent/failed`
 
 4. 需要代码修改时，runner 先写 `post_pr_rework_requested` event marker，再切到 `agent/running`
@@ -419,7 +430,9 @@ checks 状态：
 
 - PR 当前不可合并或存在冲突时，approval 会被改写为 `rebase_pr_branch`
 - PR checks 已失败时，approval 会被改写为 `repair_pr_branch`
+- PR checks 仍在进行中（`checks_state=PENDING`）时，approval 会被改写为 `wait_for_checks`，Issue 保持 `agent/supervising` 继续等待 checks 完成，不会消耗 repair 次数
 - open PR 存在但完整 PR context 暂时无法读取时，本轮 supervision 会 defer 并保留待观察状态；发布、rework 后续评审和循环内再次评审都不会使用不完整 context 批准进入 review
+- supervisor 输出无法解析、返回未知 action，或返回空 summary 的 `request_human_input` 时，本轮会进入 `agent/failed`，不会生成无原因的 `agent/blocked`
 
 这样可以避免 `agent/review` label 覆盖仍需 `iar run` 消费的 rework/rebase 状态。
 
@@ -433,9 +446,11 @@ rebase/repair 仍由下一次 `iar run` 在 PR branch worktree 中执行。
 
 1. Issue comments 中存在尚未被 `rebase_repair_complete`、`draft_pr_created`、`implementation_complete` 或 `publish_recovered` 消费的 `phase=post_pr_rework_requested` marker
 2. 该 marker 包含 PR branch
-3. 该 PR branch 仍有 open PR
+3. 该 PR branch 仍有 open PR，且 marker 中的 `head_sha` 与 open PR 当前 head 一致；不一致说明 PR 已被外部更新，旧的 rework 请求不再安全
 
 后续 `post_pr_supervisor` 这类观察类 marker 不会覆盖 pending rework marker；只有明确的完成/发布类 marker 才会消费旧 rework 请求。
+
+如果 pending rework 存在但对应 worktree 路径已不存在（例如被手动删除），runner 会将 Issue 转入 `agent/blocked` 并写评论说明缺失路径与恢复步骤，而不是在错误的目录上执行 repair/rebase。
 
 否则 `iar run` 会跳过该 Issue，避免抢占另一个 runner 正在首次执行的任务。
 

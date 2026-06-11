@@ -45,11 +45,27 @@ def test_parse_supervisor_action_repair() -> None:
     assert result.findings_counts.get("high") == 1
 
 
-def test_parse_supervisor_action_invalid_defaults_to_human_input() -> None:
-    """Invalid action should default to request_human_input."""
+def test_parse_supervisor_action_invalid_marks_failed() -> None:
+    """Invalid action should fail closed instead of requesting vague human input."""
     text = '{"action": "unknown_action"}'
     result = parse_supervisor_action(text)
-    assert result.action == "request_human_input"
+    assert result.action == "mark_failed"
+    assert "unknown or missing action" in result.summary
+
+
+def test_parse_supervisor_action_unparseable_marks_failed() -> None:
+    """Unparseable supervisor output should not become an empty blocked request."""
+    result = parse_supervisor_action("not json")
+    assert result.action == "mark_failed"
+    assert "not parseable JSON" in result.summary
+
+
+def test_parse_supervisor_action_empty_human_input_marks_failed() -> None:
+    """Human-input requests need an actionable reason before blocking an Issue."""
+    text = '{"action": "request_human_input", "summary": ""}'
+    result = parse_supervisor_action(text)
+    assert result.action == "mark_failed"
+    assert "without a summary" in result.summary
 
 
 def test_supervisor_action_gate_blocks_conflicting_pr_approval() -> None:
@@ -143,6 +159,28 @@ def test_supervisor_action_gate_blocks_when_validation_and_other_checks_fail() -
     assert "lint" in gated_result.summary
 
 
+def test_supervisor_action_gate_defers_approval_when_checks_pending() -> None:
+    """Pending checks must not be approved into human review."""
+    action_result = SupervisorActionResult(
+        action="approve_for_human_review",
+        summary="LGTM",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=True,
+        checks_state="PENDING",
+        checks_summary=("ci/build (status=IN_PROGRESS)",),
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "wait_for_checks"
+    assert "pending" in gated_result.summary.lower()
+
+
 def test_build_rework_intent_comment_has_marker() -> None:
     """Rework intent comment should include an iar:event marker."""
     body = build_rework_intent_comment(
@@ -198,6 +236,7 @@ def test_build_supervisor_prompt_includes_context() -> None:
     assert "abc123" in prompt
     assert "remote-sha" in prompt
     assert "+line" in prompt
+    assert "wait_for_checks" in prompt
 
 
 def test_execute_rebase_safety_checks() -> None:
@@ -820,6 +859,7 @@ def test_dirty_worktree_before_supervisor_blocks_approval(tmp_path: Path) -> Non
         base_sha="def456",
     )
     config = AppConfig()
+    fake_client._issue_labels[issue.number] = ("agent/supervising",)
 
     _run_supervisor_with_repair_loop(
         issue=issue,
@@ -894,6 +934,7 @@ def test_dirty_worktree_after_approve_blocks_review(tmp_path: Path) -> None:
         base_sha="def456",
     )
     config = AppConfig()
+    fake_client._issue_labels[issue.number] = ("agent/supervising",)
 
     _run_supervisor_with_repair_loop(
         issue=issue,
@@ -918,3 +959,71 @@ def test_dirty_worktree_after_approve_blocks_review(tmp_path: Path) -> None:
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     assert len(comment_calls) == 2  # supervisor result + dirty guard
     assert any("dirty_read_only_supervisor" in c["body"] for c in comment_calls)
+
+
+def test_supervisor_loop_waits_for_pending_checks_once(tmp_path: Path) -> None:
+    """Pending checks should stay supervising and write one audit comment."""
+    from backend.core.use_cases.agent_runner_supervisor import (
+        _run_supervisor_with_repair_loop,
+    )
+
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="B",
+        labels=("agent/supervising",),
+    )
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+
+    class _ApproveRunner(FakeProcessRunner):
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple == ("git", "status", "--porcelain"):
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple[:1] == ("codex",):
+                return CommandResult(
+                    command_tuple,
+                    0,
+                    '{"action": "approve_for_human_review", "summary": "LGTM"}',
+                    "",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _ApproveRunner()
+    fake_client = FakeGitHubClient()
+    fake_client._issue_labels[issue.number] = issue.labels
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        checks_state="PENDING",
+        checks_summary=("ci/build (status=IN_PROGRESS)",),
+    )
+
+    _run_supervisor_with_repair_loop(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=AppConfig(),
+        github_client=fake_client,
+        process_runner=fake_runner,
+        pr_context=pr_context,
+        supervisor_agent="codex",
+    )
+
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "Action: wait_for_checks" in comment_calls[0]["body"]
+    assert "ci/build" in comment_calls[0]["body"]
+
+    label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
+    assert label_calls == []

@@ -44,6 +44,7 @@ VALID_SUPERVISOR_ACTIONS: set[str] = {
     "resolve_conflict",
     "request_human_input",
     "mark_failed",
+    "wait_for_checks",
 }
 
 
@@ -128,7 +129,7 @@ def build_supervisor_prompt(
             "Output rules:",
             "- Respond with a single JSON object in a markdown code block.",
             "- Required fields: action, summary.",
-            "- action must be one of: approve_for_human_review, repair_pr_branch, rebase_pr_branch, resolve_conflict, request_human_input, mark_failed.",
+            "- action must be one of: approve_for_human_review, repair_pr_branch, rebase_pr_branch, resolve_conflict, wait_for_checks, request_human_input, mark_failed.",
             "- Optional fields: findings_high (int), findings_medium (int), findings_low (int), verification_status (str), head_sha (str).",
             "- Do not modify files; only return the JSON decision.",
         ]
@@ -144,18 +145,37 @@ def parse_supervisor_action(text: str) -> SupervisorActionResult:
     else:
         # 回退：尝试直接提取包含 action 字段的最外层 JSON 对象
         match = re.search(r"\{.*\"action\".*\}", text, re.DOTALL)
-        json_text = match.group(0) if match else "{}"
+        if not match:
+            return SupervisorActionResult(
+                action="mark_failed",
+                summary=(
+                    "Supervisor output was not parseable JSON; refusing to mark "
+                    "the Issue blocked without an explicit human-input reason."
+                ),
+            )
+        json_text = match.group(0)
 
     try:
         payload = json.loads(json_text)
     except json.JSONDecodeError:
-        # 解析失败时降级为空对象，避免整轮崩溃
-        payload = {}
+        return SupervisorActionResult(
+            action="mark_failed",
+            summary=(
+                "Supervisor output was not parseable JSON; refusing to mark the "
+                "Issue blocked without an explicit human-input reason."
+            ),
+        )
 
-    # 任何非法或缺失 action 均回退到 request_human_input，确保不会卡死流程
-    action = str(payload.get("action", "request_human_input"))
+    raw_action = payload.get("action")
+    action = str(raw_action) if raw_action is not None else ""
     if action not in VALID_SUPERVISOR_ACTIONS:
-        action = "request_human_input"
+        return SupervisorActionResult(
+            action="mark_failed",
+            summary=(
+                "Supervisor returned an unknown or missing action; refusing to "
+                "mark the Issue blocked without an explicit human-input reason."
+            ),
+        )
 
     findings = {}
     for level in ("high", "medium", "low"):
@@ -166,9 +186,22 @@ def parse_supervisor_action(text: str) -> SupervisorActionResult:
             except (ValueError, TypeError):
                 findings[level] = 0
 
+    summary = str(payload.get("summary", ""))
+    if action == "request_human_input" and not summary.strip():
+        return SupervisorActionResult(
+            action="mark_failed",
+            summary=(
+                "Supervisor requested human input without a summary; refusing "
+                "to move the Issue to blocked without an actionable reason."
+            ),
+            findings_counts=findings,
+            verification_status=str(payload.get("verification_status", "")),
+            head_sha=str(payload.get("head_sha", "")) or None,
+        )
+
     return SupervisorActionResult(
         action=action,
-        summary=str(payload.get("summary", "")),
+        summary=summary,
         findings_counts=findings,
         verification_status=str(payload.get("verification_status", "")),
         head_sha=str(payload.get("head_sha", "")) or None,
@@ -227,6 +260,25 @@ def guard_supervisor_action_for_pr_state(
         )
         return SupervisorActionResult(
             action="repair_pr_branch",
+            summary=summary,
+            findings_counts=action_result.findings_counts,
+            verification_status=action_result.verification_status,
+            head_sha=action_result.head_sha,
+        )
+
+    if pr_context.checks_state == "PENDING":
+        pending_checks_text = (
+            "; ".join(pr_context.checks_summary)
+            if pr_context.checks_summary
+            else "PR checks are still pending"
+        )
+        summary = (
+            "Approval deferred because PR checks are still pending "
+            f"({pending_checks_text}). Waiting for checks to complete before "
+            f"human review. Supervisor summary: {action_result.summary}"
+        )
+        return SupervisorActionResult(
+            action="wait_for_checks",
             summary=summary,
             findings_counts=action_result.findings_counts,
             verification_status=action_result.verification_status,
