@@ -1233,4 +1233,3 @@ def test_main_ask_execute_confirmation_wrong_input_skips_action(monkeypatch) -> 
 
     assert exit_code == 1
     mock_create.assert_not_called()
-

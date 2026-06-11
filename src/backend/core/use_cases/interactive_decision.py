@@ -104,6 +104,18 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _truncate_prompt(prompt: str, max_chars: int) -> str:
+    """Truncate prompt if it exceeds max_chars, preserving both ends."""
+    if not isinstance(max_chars, int) or len(prompt) <= max_chars:
+        return prompt
+    keep_each = (max_chars - 50) // 2
+    return (
+        prompt[:keep_each]
+        + "\n\n...[context truncated due to length]...\n\n"
+        + prompt[-keep_each:]
+    )
+
+
 def _generate_decision_id() -> str:
     return datetime.now(timezone.utc).strftime("dec-%Y%m%d-%H%M%S-%f")[:-3]
 
@@ -902,6 +914,7 @@ def run_interactive_decision(
 
     # 2. Build prompt and call planner
     planner_prompt = _build_planner_prompt(user_prompt, decision_context)
+    planner_prompt = _truncate_prompt(planner_prompt, config.max_context_chars)
     _logger.info("Running planner agent (%s) for decision...", agent)
     planner_result = planner_runner.generate(
         agent_name=agent,
