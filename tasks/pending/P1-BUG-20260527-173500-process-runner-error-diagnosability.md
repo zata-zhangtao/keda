@@ -1,5 +1,7 @@
 # PRD: Process Runner Error Diagnosability
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/72
+
 ## 1. Introduction & Goals
 
 当前 Agent Runner 在 `process_runner.run()` 执行命令失败时，日志和 GitHub Issue 评论只显示：
