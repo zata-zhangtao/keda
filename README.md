@@ -66,7 +66,7 @@ just reinstall-iar
 
 ### 安装 shell 自动补全
 
-安装补全后，zsh 中输入 `iar is<Tab>` 可补全到 `issue` / `issue-from-prd`：
+安装补全后，zsh 中输入 `iar is<Tab>` 可补全到 `issue`：
 
 ```bash
 # zsh（推荐）
@@ -99,9 +99,6 @@ iar labels sync --repo-id keda
 ```bash
 # 从 PRD 创建 GitHub Issue，标记为 ready 并发布 PRD
 iar issue create tasks/pending/example.md --repo-id keda --agent codex --publish-prd --ready
-
-# 兼容旧命令
-iar issue-from-prd tasks/pending/example.md --repo-id keda --agent codex --publish-prd --ready
 ```
 
 ### 运行 Agent
@@ -118,9 +115,6 @@ iar run --all
 
 # Daemon 模式轮询（默认每 600 秒）
 iar daemon
-
-# 兼容旧命令
-iar run-once --dry-run
 ```
 
 ### 清理已关闭 Issue 的本地分支

@@ -376,7 +376,7 @@ def test_resolve_repository_targets_disabled_repo(tmp_path: Path) -> None:
 
 
 def test_resolve_issue_from_prd_uses_local_cwd_config(tmp_path: Path) -> None:
-    """issue-from-prd no-selector should use the current repository local config."""
+    """issue create no-selector should use the current repository local config."""
     cwd = _init_git_repository(tmp_path, "keda")
     _write_local_iar_config(
         cwd,

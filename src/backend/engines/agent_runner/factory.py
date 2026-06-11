@@ -23,8 +23,6 @@ from backend.core.shared.models.agent_deliberation import (
     DeliberationAgentProfile,
     DeliberationConfig,
     DeliberationEvent,
-    DeliberationResult,
-    DeliberationSession,
 )
 from backend.core.shared.models.agent_runner import (
     AppConfig,
@@ -73,6 +71,9 @@ from backend.infrastructure.process_runner import (
     _format_timestamped_line,
     run_filtered_claude_stream,
     should_filter_claude_stream,
+)
+from backend.engines.agent_runner.deliberation_outputs import (
+    write_deliberation_outputs,
 )
 
 __all__ = [
@@ -753,7 +754,7 @@ def resolve_issue_from_prd_target(
     repo_path_override: str | None = None,
     cwd: Path,
 ) -> RepositoryRunContext:
-    """Resolve the single target repository for ``issue-from-prd``.
+    """Resolve the single target repository for ``iar issue create``.
 
     Defaults to the current Git repository and its repository-local config.
 
@@ -1091,89 +1092,6 @@ def create_event_sink(
             print(summary)
 
     return _sink
-
-
-def write_deliberation_outputs(
-    result: "DeliberationResult",
-    session: "DeliberationSession",
-    output_dir: Path,
-) -> None:
-    """Write transcript.md, result.md, and session.json."""
-    import json
-
-    # transcript.md
-    transcript_path = output_dir / "transcript.md"
-    transcript_lines = [
-        "# Deliberation Transcript",
-        "",
-        "## Session",
-        "",
-        f"- Session ID: `{session.session_id}`",
-        f"- Prompt: {session.prompt}",
-        f"- Agents: {', '.join(p.profile_id for p in session.profiles)}",
-        "",
-    ]
-    for round_key, outputs in result.agent_outputs.items():
-        transcript_lines.append(f"## {round_key}")
-        transcript_lines.append("")
-        for profile_id, output in outputs.items():
-            transcript_lines.append(f"### {profile_id}")
-            transcript_lines.append("")
-            transcript_lines.append(output)
-            transcript_lines.append("")
-    transcript_path.write_text("\n".join(transcript_lines), encoding="utf-8")
-
-    # result.md
-    result_path = output_dir / "result.md"
-    result_lines = [
-        "# Deliberation Result",
-        "",
-        "## Recommendation",
-        "",
-        result.recommendation,
-        "",
-        "## Consensus",
-        "",
-        result.consensus,
-        "",
-        "## Disagreements",
-        "",
-        result.disagreements,
-        "",
-        "## Risks",
-        "",
-        result.risks,
-        "",
-        "## Next Actions",
-        "",
-        result.next_actions,
-        "",
-    ]
-    result_path.write_text("\n".join(result_lines), encoding="utf-8")
-
-    # session.json
-    session_path = output_dir / "session.json"
-    session_data = {
-        "session_id": session.session_id,
-        "prompt": session.prompt,
-        "profiles": [
-            {
-                "profile_id": p.profile_id,
-                "agent": p.agent,
-                "role": p.role,
-            }
-            for p in session.profiles
-        ],
-        "rounds": session.rounds,
-        "synthesizer": session.synthesizer,
-        "output_dir": str(session.output_dir),
-        "started_at": session.started_at,
-        "finished_at": session.finished_at,
-    }
-    session_path.write_text(
-        json.dumps(session_data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
 
 
 def create_github_client(

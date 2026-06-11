@@ -26,7 +26,7 @@ Extend the pending `prd-from-issue` workflow with an optional PRD review step th
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **PRD Review Deliberation 真实验证**：通过 `uv run iar run-once --max-issues 1` 处理一个带有 `agent/rework-prd` 的测试 Issue，确认 Issue comment 中出现结构化 review report。
+- [ ] **PRD Review Deliberation 真实验证**：通过 `uv run iar run --max-issues 1` 处理一个带有 `agent/rework-prd` 的测试 Issue，确认 Issue comment 中出现结构化 review report。
 - [ ] **Review 报告人类确认流程真实验证**：在 review report comment 中确认 verdict 和后续操作指引清晰，人类可以通过重新打 `agent/rework-prd` 触发重写，或直接打 `agent/ready` 跳过。
 - [ ] **为什么单元测试不够**：deliberation 涉及多 agent 并发编排、prompt 构建、report 解析和 Issue comment 写入，这些跨层交互需要真实 entry point 验证端到端行为。
 
@@ -43,7 +43,7 @@ Extend the pending `prd-from-issue` workflow with an optional PRD review step th
 
 ## 2. Requirement Shape
 
-- **Actor**: `iar daemon` 轮询进程 / `iar run-once`
+- **Actor**: `iar daemon` 轮询进程 / `iar run`
 - **Trigger**: 打开带有 `agent/rework-prd` 标签的 Issue，且配置中 `prd_from_issue.review_enabled = true`
 - **Expected Behavior**: 生成 PRD 初稿 → 多 agent review → 写 review report 到 Issue comment → 根据 verdict 更新标签
 - **Scope Boundary**: Review 阶段只读，不修改仓库代码。不替代人类最终审核。不引入新 agent 框架。不影响现有 `iar deliberate` CLI。
@@ -394,7 +394,7 @@ flowchart TD
 
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
 |----------|------------------|------------|---------------|-----------------|---------------------|--------------------------|
-| PRD review deliberation generates report | `uv run iar run-once --max-issues 1` | integration-style unit | Mock GitHub CLI and agent CLI | Fake Issue with `agent/rework-prd`, fake PRD draft | `uv run pytest tests/test_review_prd_with_deliberation.py tests/test_create_prd_from_issue.py -q` | Yes |
+| PRD review deliberation generates report | `uv run iar run --max-issues 1` | integration-style unit | Mock GitHub CLI and agent CLI | Fake Issue with `agent/rework-prd`, fake PRD draft | `uv run pytest tests/test_review_prd_with_deliberation.py tests/test_create_prd_from_issue.py -q` | Yes |
 | Review passes, auto-ready | `create_prd_from_issue(...)` | unit | Fake GitHub client records label calls | Fake review report with `approved` verdict | `uv run pytest tests/test_create_prd_from_issue.py -q` | Yes |
 | Review finds issues, human gate preserved | `create_prd_from_issue(...)` | unit | Fake GitHub client records label calls | Fake review report with `changes_requested` verdict | `uv run pytest tests/test_create_prd_from_issue.py -q` | Yes |
 | Deliberation output written to review workspace | CLI / use case | unit | Fake transcript runner | Fake DeliberationResult | `uv run pytest tests/test_review_prd_with_deliberation.py -q` | Yes |

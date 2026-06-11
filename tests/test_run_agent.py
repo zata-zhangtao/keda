@@ -2245,7 +2245,7 @@ def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
 
 
 def test_run_agent_repositories_once_aggregates_exit_code() -> None:
-    """Multi-repo run-once should return 1 if any repository fails."""
+    """Multi-repo run should return 1 if any repository fails."""
     from backend.core.shared.models.agent_runner import (
         RepositoryRunContext,
     )

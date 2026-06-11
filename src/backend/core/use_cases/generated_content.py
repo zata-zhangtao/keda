@@ -3,7 +3,7 @@
 本模块提供 AI 辅助的内容生成能力，支持两种目标：
 
 1. **Issue 内容生成**（``generate_issue_content``）：根据 PRD 上下文生成
-   Issue 标题和正文，用于 ``issue-from-prd`` 工作流。
+   Issue 标题和正文，用于 ``iar issue create`` 工作流。
 2. **PR 内容生成**（``generate_pr_content``）：根据 Issue 信息、提交日志和
    diff 统计生成 PR 标题和正文，用于 ``publish_changes`` 工作流。
 

@@ -109,10 +109,10 @@ const MOCKED_OVERVIEW: MonitoringOverview = {
               severity: 'warning',
               message:
                 'Worktree has uncommitted changes but Issue is not in running state.',
-              suggested_cli: ['iar run-once --dry-run', 'git status'],
+              suggested_cli: ['iar run --dry-run', 'git status'],
             },
           ],
-          suggested_cli_commands: ['iar run-once --dry-run', 'git status'],
+          suggested_cli_commands: ['iar run --dry-run', 'git status'],
           has_anomaly: true,
           anomaly_types: ['dirty_worktree_mismatch'],
         },
@@ -139,6 +139,6 @@ test.describe('smoke: agent-runner monitor', () => {
 
     await monitor.openIssue(100)
     await monitor.expectAnomalyCard('dirty_worktree_mismatch')
-    await monitor.expectSuggestedCommand('iar run-once --dry-run')
+    await monitor.expectSuggestedCommand('iar run --dry-run')
   })
 })

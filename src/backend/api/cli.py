@@ -301,52 +301,59 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(labels_sync_parser)
     add_all_repositories_option(labels_sync_parser)
 
-    issue_parser = subparsers.add_parser("issue-from-prd")
-    issue_parser.add_argument("prd_path")
-    issue_parser.add_argument(
+    issue_parser = subparsers.add_parser(
+        "issue", help="Create and manage GitHub Issues."
+    )
+    issue_subparsers = issue_parser.add_subparsers(dest="issue_command", required=True)
+    issue_create_parser = issue_subparsers.add_parser(
+        "create", help="Create a GitHub Issue from a PRD file."
+    )
+    issue_create_parser.set_defaults(command="issue create")
+    issue_create_parser.add_argument("prd_path")
+    issue_create_parser.add_argument(
         "--type", choices=("feature", "refactor", "bug"), default="feature"
     )
-    issue_parser.add_argument("--title")
-    issue_parser.add_argument(
+    issue_create_parser.add_argument("--title")
+    issue_create_parser.add_argument(
         "--ready",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Add the ready label so a runner can pick the Issue up.",
     )
-    issue_parser.add_argument(
+    issue_create_parser.add_argument(
         "--agent",
         choices=("auto", "codex", "claude", "kimi", "none"),
         default="auto",
         help="Optional agent routing label to add to the Issue.",
     )
-    issue_parser.add_argument(
+    issue_create_parser.add_argument(
         "--publish-prd",
         action="store_true",
         help="Commit and push only the target PRD before adding the ready label.",
     )
-    issue_parser.add_argument("--force", action="store_true")
-    issue_parser.add_argument(
+    issue_create_parser.add_argument("--force", action="store_true")
+    issue_create_parser.add_argument(
         "--group",
         default="",
         help="Task group name (materialised as task-group/<name> label).",
     )
-    issue_parser.add_argument(
+    issue_create_parser.add_argument(
         "--depends-on",
         action="append",
         type=int,
         default=[],
         help="Upstream Issue number this Issue depends on (repeatable).",
     )
-    issue_parser.add_argument(
+    issue_create_parser.add_argument(
         "--depends-on-group",
         action="append",
         type=str,
         default=[],
         help="Upstream group label this Issue depends on (repeatable).",
     )
-    add_common_options(issue_parser)
+    add_common_options(issue_create_parser)
 
-    run_parser = subparsers.add_parser("run-once")
+    run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument(
         "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
@@ -364,14 +371,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(daemon_parser)
     add_all_repositories_option(daemon_parser)
 
-    review_once_parser = subparsers.add_parser("review-once")
-    review_once_parser.add_argument("--dry-run", action="store_true")
-    review_once_parser.add_argument(
+    review_parser = subparsers.add_parser("review")
+    review_parser.add_argument("--dry-run", action="store_true")
+    review_parser.add_argument(
         "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
     )
-    review_once_parser.add_argument("--max-issues", type=int)
-    add_common_options(review_once_parser)
-    add_all_repositories_option(review_once_parser)
+    review_parser.add_argument("--max-issues", type=int)
+    add_common_options(review_parser)
+    add_all_repositories_option(review_parser)
 
     review_daemon_parser = subparsers.add_parser("review-daemon")
     review_daemon_parser.add_argument("--interval", type=int, default=600)
@@ -382,22 +389,22 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(review_daemon_parser)
     add_all_repositories_option(review_daemon_parser)
 
-    recover_publish_parser = subparsers.add_parser(
-        "recover-publish",
+    recover_parser = subparsers.add_parser(
+        "recover",
         help="Resume a failed publish operation for an Issue.",
     )
-    recover_publish_parser.add_argument(
+    recover_parser.add_argument(
         "--issue",
         type=int,
         required=True,
         help="Issue number to recover publish for.",
     )
-    recover_publish_parser.add_argument(
+    recover_parser.add_argument(
         "--branch",
         default=None,
         help="Explicitly confirm the current branch name.",
     )
-    add_common_options(recover_publish_parser)
+    add_common_options(recover_parser)
 
     blocked_continue_parser = subparsers.add_parser(
         "blocked-continue",
@@ -641,7 +648,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             logger.info("Labels are ready.")
             return 0
 
-        if parsed.command == "issue-from-prd":
+        if parsed.command == "issue create":
             context = resolve_issue_from_prd_target(
                 runner_settings,
                 repo_id=repo_id,
@@ -711,7 +718,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             console.print(f"[green]Created GitHub Issue:[/] {issue_url}")
             return 0
 
-        if parsed.command == "run-once":
+        if parsed.command == "run":
             contexts = _resolve_cli_repository_targets(
                 parsed=parsed,
                 runner_settings=runner_settings,
@@ -754,7 +761,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             )
             return 0
 
-        if parsed.command == "review-once":
+        if parsed.command == "review":
             contexts = _resolve_cli_repository_targets(
                 parsed=parsed,
                 runner_settings=runner_settings,
@@ -807,7 +814,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             )
             return 0
 
-        if parsed.command == "recover-publish":
+        if parsed.command == "recover":
             from backend.core.use_cases.recover_publish import (
                 PublishRecoveryError,
                 PublishRecoveryRequest,
@@ -821,7 +828,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             )
             if len(contexts) != 1:
                 logger.error(
-                    "recover-publish requires exactly one target repository. "
+                    "recover requires exactly one target repository. "
                     "Use --repo or --repo-id to specify."
                 )
                 return 1

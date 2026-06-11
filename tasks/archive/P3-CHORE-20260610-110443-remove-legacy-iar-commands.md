@@ -36,9 +36,9 @@ Remove legacy Typer command registrations after the newer `iar issue create`, `i
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为：
 
-- [ ] **新命令真实验证**：通过 `uv run iar run --dry-run`、`uv run iar issue create --help`、`uv run iar review --help`、`uv run iar recover --help` 验证新入口仍可用。
-- [ ] **旧命令删除真实验证**：通过 `uv run iar run-once --help`、`uv run iar issue-from-prd --help`、`uv run iar review-once --help`、`uv run iar recover-publish --help` 验证旧命令不再作为有效入口出现，并给出可理解的迁移提示或 Typer 错误。
-- [ ] **仓库引用清理验证**：通过 `rg -n "issue-from-prd|run-once|review-once|recover-publish" README.md docs src tests tasks/pending` 验证仅保留必要的历史归档引用或明确迁移说明。
+- [x] **新命令真实验证**：通过 `uv run iar run --dry-run`、`uv run iar issue create --help`、`uv run iar review --help`、`uv run iar recover --help` 验证新入口仍可用。
+- [x] **旧命令删除真实验证**：通过 `uv run iar run-once --help`、`uv run iar issue-from-prd --help`、`uv run iar review-once --help`、`uv run iar recover-publish --help` 验证旧命令不再作为有效入口出现，并给出可理解的迁移提示或 Typer 错误。
+- [x] **仓库引用清理验证**：通过 `rg -n "issue-from-prd|run-once|review-once|recover-publish" README.md docs src tests tasks/pending` 验证仅保留必要的历史归档引用或明确迁移说明。
 - [ ] **为什么单元测试不够**：删除 CLI 命令会影响 console script 入口、help 输出、文档命令和用户脚本；必须通过真实 `uv run iar ...` 入口证明生产路径行为。
 
 ### Delivery Dependencies
@@ -350,34 +350,34 @@ No external validation required; repository evidence and CLI entry validation ar
 
 ### Architecture Acceptance
 
-- [ ] Legacy command registrations are removed from `src/backend/api/cli_typer.py`.
-- [ ] `src/backend/api/cli.py` no longer exposes old commands through parser-only paths, unless explicitly justified for tests.
-- [ ] Core use case names and behavior remain unchanged.
-- [ ] No new API/core/infrastructure dependency violation is introduced.
+- [x] Legacy command registrations are removed from `src/backend/api/cli_typer.py`.
+- [x] `src/backend/api/cli.py` no longer exposes old commands through parser-only paths, unless explicitly justified for tests.
+- [x] Core use case names and behavior remain unchanged.
+- [x] No new API/core/infrastructure dependency violation is introduced.
 
 ### Behavior Acceptance
 
-- [ ] `iar issue create --help` exits 0.
-- [ ] `iar run --help` exits 0.
-- [ ] `iar review --help` exits 0.
-- [ ] `iar recover --help` exits 0.
-- [ ] `iar issue-from-prd --help` is no longer valid or prints a non-zero migration error.
-- [ ] `iar run-once --help` is no longer valid or prints a non-zero migration error.
-- [ ] `iar review-once --help` is no longer valid or prints a non-zero migration error.
-- [ ] `iar recover-publish --help` is no longer valid or prints a non-zero migration error.
+- [x] `iar issue create --help` exits 0.
+- [x] `iar run --help` exits 0.
+- [x] `iar review --help` exits 0.
+- [x] `iar recover --help` exits 0.
+- [x] `iar issue-from-prd --help` is no longer valid or prints a non-zero migration error.
+- [x] `iar run-once --help` is no longer valid or prints a non-zero migration error.
+- [x] `iar review-once --help` is no longer valid or prints a non-zero migration error.
+- [x] `iar recover-publish --help` is no longer valid or prints a non-zero migration error.
 
 ### Documentation Acceptance
 
-- [ ] `README.md` uses only new command examples outside a migration mapping.
-- [ ] `docs/guides/agent-runner.md` uses only new command examples outside a migration mapping.
-- [ ] Pending PRDs no longer instruct future executors to use removed commands.
+- [x] `README.md` uses only new command examples outside a migration mapping.
+- [x] `docs/guides/agent-runner.md` uses only new command examples outside a migration mapping.
+- [x] Pending PRDs no longer instruct future executors to use removed commands.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_agent_runner_cli.py -q` passes.
-- [ ] `uv run mkdocs build --strict` passes.
-- [ ] `just test` passes.
-- [ ] Repository search confirms old command strings appear only in approved migration/history contexts.
+- [x] `uv run pytest tests/test_agent_runner_cli.py -q` passes.
+- [x] `uv run mkdocs build --strict` passes.
+- [x] `just test` passes.
+- [x] Repository search confirms old command strings appear only in approved migration/history contexts.
 
 ## 8. Functional Requirements
 

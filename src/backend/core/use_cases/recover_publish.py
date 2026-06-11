@@ -253,7 +253,7 @@ def _build_recovery_failure_comment(
             "To retry publishing without re-running the agent:",
             "",
             "```bash",
-            f"uv run iar recover-publish --issue {issue_number}",
+            f"uv run iar recover --issue {issue_number}",
             "```",
         ]
     )

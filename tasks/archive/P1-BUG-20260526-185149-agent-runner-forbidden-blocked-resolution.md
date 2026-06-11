@@ -2,19 +2,19 @@
 
 ## 1. Introduction & Goals
 
-**Problem**: 当 `iar run-once` 执行时，Agent 的变更被 `forbidden_path_patterns` 拦截（如修改了 `.env.example`），Runner 直接归类为 `UNRECOVERABLE` 并将 Issue 标记为 `agent/failed`。此时 Agent 已经在 worktree 中留下修改和 `.agent-runner/commit-request.json`，但由于 forbidden 校验发生在 `git add` / `git commit` 之前，runner 尚未生成受管 commit，也不提供"人工处理 forbidden 文件后让 Agent 继续完成剩余任务"的路径。
+**Problem**: 当 `iar run` 执行时，Agent 的变更被 `forbidden_path_patterns` 拦截（如修改了 `.env.example`），Runner 直接归类为 `UNRECOVERABLE` 并将 Issue 标记为 `agent/failed`。此时 Agent 已经在 worktree 中留下修改和 `.agent-runner/commit-request.json`，但由于 forbidden 校验发生在 `git add` / `git commit` 之前，runner 尚未生成受管 commit，也不提供"人工处理 forbidden 文件后让 Agent 继续完成剩余任务"的路径。
 
-**Goal**: 当 forbidden path 拦截发生时，Issue 进入 `agent/blocked`；人工确认 forbidden 文件并将 worktree 整理到可继续状态后，运行 `iar blocked-continue --issue <number>` CLI。该 CLI 负责校验 worktree 状态、写入 `blocked_resolution_requested` marker，并尝试通过 label CAS 将 Issue 从 `agent/blocked` 切到 `agent/running`。随后 Agent 在现有 worktree 上继续完成剩余任务，不需要从头重跑。`iar run-once` 也会继续扫描 `agent/blocked` Issue，对已通过其他方式写入 marker 的 Issue 执行同样的竞争认领。
+**Goal**: 当 forbidden path 拦截发生时，Issue 进入 `agent/blocked`；人工确认 forbidden 文件并将 worktree 整理到可继续状态后，运行 `iar blocked-continue --issue <number>` CLI。该 CLI 负责校验 worktree 状态、写入 `blocked_resolution_requested` marker，并尝试通过 label CAS 将 Issue 从 `agent/blocked` 切到 `agent/running`。随后 Agent 在现有 worktree 上继续完成剩余任务，不需要从头重跑。`iar run` 也会继续扫描 `agent/blocked` Issue，对已通过其他方式写入 marker 的 Issue 执行同样的竞争认领。
 
 ### Proposed Solution Summary
 
-Extend the existing Agent Runner failure classification and GitHub Issue workflow state path so commit-stage forbidden path failures become a recoverable `agent/blocked` state. The operator resolves forbidden files locally and then runs `iar blocked-continue --issue <number>`; the CLI validates the worktree, writes the `blocked_resolution_requested` marker, and attempts a CAS claim to move the Issue back to `agent/running`. The runner also continues to consume manually-written markers through the existing `run-once` orchestration path, and reuses the shared workflow transition / marker-history helpers planned by the CI rework recovery PRD. The change adds a new CLI subcommand, updates Issue labels, event markers, and continuation prompts while intentionally avoiding a new `agent/forbidden` label, database-backed queue, or parallel recovery command.
+Extend the existing Agent Runner failure classification and GitHub Issue workflow state path so commit-stage forbidden path failures become a recoverable `agent/blocked` state. The operator resolves forbidden files locally and then runs `iar blocked-continue --issue <number>`; the CLI validates the worktree, writes the `blocked_resolution_requested` marker, and attempts a CAS claim to move the Issue back to `agent/running`. The runner also continues to consume manually-written markers through the existing `run` orchestration path, and reuses the shared workflow transition / marker-history helpers planned by the CI rework recovery PRD. The change adds a new CLI subcommand, updates Issue labels, event markers, and continuation prompts while intentionally avoiding a new `agent/forbidden` label, database-backed queue, or parallel recovery command.
 
 ### Realistic Validation
 
-- [ ] **Forbidden 拦截后进入 blocked**: 运行 iar run-once 处理一个会触发 forbidden 拦截的 Issue，验证 Issue 进入 `agent/blocked` 而非 `agent/failed`，失败 comment 包含 blocked 状态说明
+- [ ] **Forbidden 拦截后进入 blocked**: 运行 iar run 处理一个会触发 forbidden 拦截的 Issue，验证 Issue 进入 `agent/blocked` 而非 `agent/failed`，失败 comment 包含 blocked 状态说明
 - [ ] **人工处理后继续**: 人工处理 forbidden 文件、确保 worktree 满足继续条件后，运行 `iar blocked-continue --issue <number>`，验证 CLI 成功将 Issue 从 `agent/blocked` 切到 `agent/running` 并继续执行
-- [ ] **CLI 与 run-once 竞争安全**: 两个 `iar blocked-continue` / `iar run-once` 实例同时运行，验证只有一个成功认领同一个 blocked Issue，其余给出明确跳过信息
+- [ ] **CLI 与 run 竞争安全**: 两个 `iar blocked-continue` / `iar run` 实例同时运行，验证只有一个成功认领同一个 blocked Issue，其余给出明确跳过信息
 - [ ] **继续 prompt 导向正确**: 验证 Agent 收到的是"继续完成剩余任务"的 prompt，而非从头开始或修复模式
 - [ ] **完成后的工作流正确**: 验证 PRD closeout、publish、label 流转等行为符合预期
 
@@ -163,7 +163,7 @@ CAS 失败 → 输出明确提示："Issue #N already claimed by another runner"
 #### 5.1.3 竞争认领继续流程（run-once 兜底路径）
 
 ```
-多个 iar run-once 实例同时轮询
+多个 iar run 实例同时轮询
     ↓
 Polling 时查询 agent/ready + agent/running + agent/blocked
     ↓
@@ -317,9 +317,9 @@ flowchart TD
         D2b --> D2c[CLI 执行 label CAS: blocked -> running]
     end
 
-    subgraph RunOnceFallback["run-once 兜底路径"]
-        D2c -->|CAS 被抢占| E0[后续 run-once 检测到 marker]
-        E0 --> E1[多个 iar run-once 实例轮询 agent/blocked]
+    subgraph RunFallback["run 兜底路径"]
+        D2c -->|CAS 被抢占| E0[后续 run 检测到 marker]
+        E0 --> E1[多个 iar run 实例轮询 agent/blocked]
         E1 --> E2{是否有 blocked_resolution_requested marker?}
         E2 -->|有| E3[竞争执行 label CAS: blocked -> running]
         E2 -->|无| E4[跳过该 Issue]
@@ -344,10 +344,10 @@ flowchart TD
 
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
 |----------|-----------------|------------|---------------|-----------------|---------------------|----------------------|
-| forbidden 拦截后 Issue 进入 blocked 而非 failed | `uv run iar run-once` + 检查 Issue label | sandbox/manual | Mock GitHub API，模拟 Agent 修改 forbidden 文件 | 测试 Issue + worktree | 见下方验证流程 | Yes |
+| forbidden 拦截后 Issue 进入 blocked 而非 failed | `uv run iar run` + 检查 Issue label | sandbox/manual | Mock GitHub API，模拟 Agent 修改 forbidden 文件 | 测试 Issue + worktree | 见下方验证流程 | Yes |
 | CLI 成功继续 blocked Issue | `iar blocked-continue --issue N` | sandbox/manual | Mock GitHub API | 测试 Issue + worktree | 见下方验证流程 | Yes |
 | CLI 校验脏 worktree 失败 | `iar blocked-continue --issue N` | sandbox | Mock GitHub API | 测试 Issue + 脏 worktree | 见下方验证流程 | Yes |
-| 竞争认领：只有一个 runner 继续 | 两个 `iar blocked-continue` / `iar run-once` 实例同时运行 | manual | 不 mock，真实 GitHub | 测试 Issue + 两个 runner | 见下方验证流程 | Yes |
+| 竞争认领：只有一个 runner 继续 | 两个 `iar blocked-continue` / `iar run` 实例同时运行 | manual | 不 mock，真实 GitHub | 测试 Issue + 两个 runner | 见下方验证流程 | Yes |
 | 继续 prompt 正确：提到 forbidden 文件和剩余任务 | 检查 Agent 收到的 prompt 内容 | unit | Mock Agent | 无 | 检查 `_process_blocked_resolution` 中的 prompt 构建逻辑 | Yes |
 | PRD closeout 仍正常工作 | 有人工 PRD 的 Issue | sandbox | Mock GitHub API | 测试 PRD Issue | 验证 recovery prompt 包含 closeout 提醒 | Yes |
 | `just test` 全部通过 | `just test` | unit/integration | 标准 mock | 无 | `cd /Users/zata/code/keda && just test` | Yes |
@@ -360,7 +360,7 @@ flowchart TD
    gh issue create --title "test forbidden" --body "..."
    gh issue edit <n> --add-label agent/ready
    # 人工在 Issue body 里要求修改 .env.example
-   # 运行 iar run-once
+   # 运行 iar run
    # 验证 Issue 变成 agent/blocked
    gh issue view <n> --json labels --jq '.labels[].name'
    ```

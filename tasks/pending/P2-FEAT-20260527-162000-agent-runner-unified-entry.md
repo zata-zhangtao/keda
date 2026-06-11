@@ -9,7 +9,7 @@
 
 ### Problem Statement
 
-当前 `iar` 已经具备 `iar issue create`、`iar run`、`iar review`、`iar daemon`、`iar review-daemon`、`iar recover`、`iar deliberate` 等能力；旧命令 `issue-from-prd`、`run-once`、`review-once`、`recover-publish` 仍由兼容层保留，但不是新文档的推荐入口。
+当前 `iar` 已经具备 `iar issue create`、`iar run`、`iar review`、`iar daemon`、`iar review-daemon`、`iar recover`、`iar deliberate` 等能力。
 
 这些能力仍要求 operator 理解精确子命令、仓库选择器、Issue label 状态机、PRD 与 Issue 的关系，以及何时应该创建 Issue、标记 ready、执行 runner 或先做只读分析。旧版同主题 PRD 曾选择暂缓自然语言入口，原因是担心 LLM 误路由、写操作不可控、默认值策略不清晰以及 CLI chat 形态不稳。
 
@@ -418,7 +418,7 @@ No database, migration, ORM, or relational ER changes are required. The only per
 Implementation should start from the listed files, but must verify hidden references before editing:
 
 ```bash
-rg -n "ask|deliberate|issue create|issue-from-prd|run-once|run\\(|review-once|review\\(|recover-publish|AgentRunnerSettings|GeneratedContentConfig|IContentGenerator|IGitHubClient" src tests docs README.md config.toml
+rg -n "ask|deliberate|issue create|run\\(|review\\(|recover|AgentRunnerSettings|GeneratedContentConfig|IContentGenerator|IGitHubClient" src tests docs README.md config.toml
 ```
 
 Confirm current Typer command registration and legacy compatibility shape:

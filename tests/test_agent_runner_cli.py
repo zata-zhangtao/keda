@@ -64,11 +64,12 @@ def test_cli_parser_init() -> None:
     assert parsed.base_branch == "develop"
 
 
-def test_cli_parser_issue_from_prd_defaults() -> None:
-    """issue-from-prd should have sensible defaults."""
+def test_cli_parser_issue_create_defaults() -> None:
+    """issue create should have sensible defaults."""
     parser = build_parser()
-    parsed = parser.parse_args(["issue-from-prd", "tasks/example.md"])
-    assert parsed.command == "issue-from-prd"
+    parsed = parser.parse_args(["issue", "create", "tasks/example.md"])
+    assert parsed.command == "issue create"
+    assert parsed.issue_command == "create"
     assert parsed.prd_path == "tasks/example.md"
     assert parsed.type == "feature"
     assert parsed.ready is False
@@ -77,23 +78,25 @@ def test_cli_parser_issue_from_prd_defaults() -> None:
     assert parsed.force is False
 
 
-def test_cli_parser_issue_from_prd_publish_prd() -> None:
-    """issue-from-prd should expose explicit PRD publishing."""
+def test_cli_parser_issue_create_publish_prd() -> None:
+    """issue create should expose explicit PRD publishing."""
     parser = build_parser()
     parsed = parser.parse_args(
-        ["issue-from-prd", "tasks/example.md", "--publish-prd", "--no-ready"]
+        ["issue", "create", "tasks/example.md", "--publish-prd", "--no-ready"]
     )
-    assert parsed.command == "issue-from-prd"
+    assert parsed.command == "issue create"
+    assert parsed.issue_command == "create"
     assert parsed.publish_prd is True
     assert parsed.ready is False
 
 
-def test_cli_parser_issue_from_prd_dependency_options() -> None:
-    """issue-from-prd should accept dependency gate options."""
+def test_cli_parser_issue_create_dependency_options() -> None:
+    """issue create should accept dependency gate options."""
     parser = build_parser()
     parsed = parser.parse_args(
         [
-            "issue-from-prd",
+            "issue",
+            "create",
             "tasks/example.md",
             "--group",
             "downstream",
@@ -110,13 +113,13 @@ def test_cli_parser_issue_from_prd_dependency_options() -> None:
     assert parsed.depends_on_group == ["upstream-a"]
 
 
-def test_cli_parser_run_once() -> None:
-    """run-once should accept dry-run and agent flags."""
+def test_cli_parser_run() -> None:
+    """run should accept dry-run and agent flags."""
     parser = build_parser()
     parsed = parser.parse_args(
-        ["run-once", "--dry-run", "--agent", "claude", "--max-issues", "5"]
+        ["run", "--dry-run", "--agent", "claude", "--max-issues", "5"]
     )
-    assert parsed.command == "run-once"
+    assert parsed.command == "run"
     assert parsed.dry_run is True
     assert parsed.agent == "claude"
     assert parsed.max_issues == 5
@@ -145,25 +148,25 @@ def test_cli_parser_daemon() -> None:
 def test_cli_parser_repo_id() -> None:
     """--repo-id should be accepted on subcommands."""
     parser = build_parser()
-    parsed = parser.parse_args(["run-once", "--repo-id", "keda"])
+    parsed = parser.parse_args(["run", "--repo-id", "keda"])
     assert parsed.repo_id == "keda"
 
 
 def test_cli_parser_all_repositories() -> None:
     """--all should be accepted by multi-target commands."""
     parser = build_parser()
-    parsed = parser.parse_args(["run-once", "--all"])
+    parsed = parser.parse_args(["run", "--all"])
     assert parsed.all_repositories is True
 
 
 def test_cli_parser_repo_and_repo_id_individually_parseable() -> None:
     """--repo and --repo-id should each be parseable individually."""
     parser = build_parser()
-    parsed_repo = parser.parse_args(["run-once", "--repo", "/tmp/repo"])
+    parsed_repo = parser.parse_args(["run", "--repo", "/tmp/repo"])
     assert parsed_repo.repo == "/tmp/repo"
     assert parsed_repo.repo_id is None
 
-    parsed_id = parser.parse_args(["run-once", "--repo-id", "keda"])
+    parsed_id = parser.parse_args(["run", "--repo-id", "keda"])
     assert parsed_id.repo_id == "keda"
     assert parsed_id.repo is None
 
@@ -225,14 +228,13 @@ def test_main_completion_protocol_matches_issue_prefix(capsys, monkeypatch) -> N
 
     assert exit_code == 0
     assert "issue" in captured.out.splitlines()
-    assert "issue-from-prd" in captured.out.splitlines()
 
 
 def test_main_rejects_repo_and_repo_id_together() -> None:
     """main should exit 1 when both --repo and --repo-id are given."""
     from backend.api.cli import main
 
-    exit_code = main(["run-once", "--repo", "/tmp/repo", "--repo-id", "keda"])
+    exit_code = main(["run", "--repo", "/tmp/repo", "--repo-id", "keda"])
     assert exit_code == 1
 
 
@@ -244,7 +246,7 @@ def test_main_rejects_unknown_repo_id() -> None:
         "backend.api.cli.resolve_repository_targets",
         side_effect=ValueError("not found"),
     ):
-        exit_code = main(["run-once", "--repo-id", "nonexistent"])
+        exit_code = main(["run", "--repo-id", "nonexistent"])
         assert exit_code == 1
 
 
@@ -263,14 +265,14 @@ def test_main_passes_all_repositories_selector() -> None:
     ) as mock_resolve, patch(
         "backend.api.cli.run_agent_repositories_once", return_value=0
     ), patch("backend.api.cli.create_github_client"):
-        exit_code = main(["run-once", "--all", "--dry-run"])
+        exit_code = main(["run", "--all", "--dry-run"])
 
     assert exit_code == 0
     assert mock_resolve.call_args.kwargs["all_repositories"] is True
 
 
-def test_main_run_alias_passes_all_repositories_selector() -> None:
-    """Modern run alias should dispatch to run-once with the same selectors."""
+def test_main_run_passes_all_repositories_selector() -> None:
+    """run command should dispatch to run_agent_repositories_once with same selectors."""
     from backend.api.cli import main
 
     mock_context = MagicMock()
@@ -335,8 +337,8 @@ def test_main_labels_sync_iterates_multiple_repos() -> None:
         assert mock_sync.call_count == 2
 
 
-def test_main_issue_from_prd_defaults_to_cwd() -> None:
-    """issue-from-prd without --repo or --repo-id should resolve to cwd."""
+def test_main_issue_create_defaults_to_cwd() -> None:
+    """issue create without --repo or --repo-id should resolve to cwd."""
     from backend.api.cli import main
 
     mock_context = MagicMock()
@@ -351,12 +353,12 @@ def test_main_issue_from_prd_defaults_to_cwd() -> None:
         "backend.api.cli.create_issue_from_prd",
         return_value="https://github.com/example/issues/1",
     ), patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False):
-        exit_code = main(["issue-from-prd", "tasks/example.md"])
+        exit_code = main(["issue", "create", "tasks/example.md"])
         assert exit_code == 0
 
 
-def test_main_issue_create_alias_matches_issue_from_prd() -> None:
-    """Modern issue create alias should use the existing PRD issue workflow."""
+def test_main_issue_create_uses_prd_issue_workflow() -> None:
+    """issue create should use the existing PRD issue workflow."""
     from backend.api.cli import main
 
     mock_context = MagicMock()
@@ -434,7 +436,7 @@ def test_main_issue_create_failure_prints_command_output(capsys) -> None:
     assert "trailing whitespace" in combined_output
 
 
-def test_main_issue_from_prd_ready_without_publish_defers_label() -> None:
+def test_main_issue_create_ready_without_publish_defers_label() -> None:
     """--ready without --publish-prd should not ready the Issue until PRD is pushed.
 
     时序说明：
@@ -466,7 +468,7 @@ def test_main_issue_from_prd_ready_without_publish_defers_label() -> None:
     ) as mock_create, patch(
         "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
     ) as mock_prompt:
-        exit_code = main(["issue-from-prd", "tasks/example.md", "--ready"])
+        exit_code = main(["issue", "create", "tasks/example.md", "--ready"])
         assert exit_code == 0
         # create_issue_from_prd should be called with queue_ready=False
         assert mock_create.call_args.kwargs["request"].queue_ready is False
@@ -474,7 +476,7 @@ def test_main_issue_from_prd_ready_without_publish_defers_label() -> None:
         assert mock_prompt.call_args.kwargs["queue_ready"] is True
 
 
-def test_main_issue_from_prd_ready_with_publish_keeps_label() -> None:
+def test_main_issue_create_ready_with_publish_keeps_label() -> None:
     """--ready with --publish-prd should let create_issue_from_prd handle ready gating.
 
     时序说明：
@@ -507,7 +509,7 @@ def test_main_issue_from_prd_ready_with_publish_keeps_label() -> None:
         "backend.api.cli._prompt_and_publish_prd_if_needed"
     ) as mock_prompt:
         exit_code = main(
-            ["issue-from-prd", "tasks/example.md", "--publish-prd", "--ready"]
+            ["issue", "create", "tasks/example.md", "--publish-prd", "--ready"]
         )
         assert exit_code == 0
         assert mock_create.call_args.kwargs["request"].queue_ready is True
@@ -636,8 +638,8 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     )
 
 
-def test_main_review_alias_dispatches_review_once() -> None:
-    """Modern review alias should dispatch to the review-once workflow."""
+def test_main_review_dispatches_review_workflow() -> None:
+    """review should dispatch to the review workflow."""
     from backend.api.cli import main
 
     mock_context = MagicMock()
@@ -659,33 +661,31 @@ def test_main_review_alias_dispatches_review_once() -> None:
     assert mock_review.call_args.kwargs["agent"] == "claude"
 
 
-def test_cli_parser_recover_publish_required_args() -> None:
-    """recover-publish should require --issue."""
+def test_cli_parser_recover_required_args() -> None:
+    """recover should require --issue."""
     parser = build_parser()
-    parsed = parser.parse_args(["recover-publish", "--issue", "5"])
-    assert parsed.command == "recover-publish"
+    parsed = parser.parse_args(["recover", "--issue", "5"])
+    assert parsed.command == "recover"
     assert parsed.issue == 5
     assert parsed.branch is None
 
 
-def test_cli_parser_recover_publish_with_branch() -> None:
-    """recover-publish should accept optional --branch."""
+def test_cli_parser_recover_with_branch() -> None:
+    """recover should accept optional --branch."""
     parser = build_parser()
-    parsed = parser.parse_args(
-        ["recover-publish", "--issue", "5", "--branch", "feature-xyz"]
-    )
-    assert parsed.command == "recover-publish"
+    parsed = parser.parse_args(["recover", "--issue", "5", "--branch", "feature-xyz"])
+    assert parsed.command == "recover"
     assert parsed.issue == 5
     assert parsed.branch == "feature-xyz"
 
 
-def test_cli_parser_recover_publish_missing_issue() -> None:
-    """recover-publish should fail without --issue."""
+def test_cli_parser_recover_missing_issue() -> None:
+    """recover should fail without --issue."""
     import pytest as _pytest
 
     parser = build_parser()
     with _pytest.raises(SystemExit):
-        parser.parse_args(["recover-publish"])
+        parser.parse_args(["recover"])
 
 
 def test_cli_parser_blocked_continue_required_args() -> None:

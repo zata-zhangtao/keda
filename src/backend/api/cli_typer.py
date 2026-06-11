@@ -292,7 +292,7 @@ def labels_sync_command(
     )
 
 
-def _run_issue_from_prd_command(
+def _run_issue_create_command(
     ctx: typer.Context,
     *,
     prd_path: str,
@@ -312,7 +312,7 @@ def _run_issue_from_prd_command(
     """Run the shared PRD-to-Issue command."""
     return _run_typer_repository_command(
         ctx,
-        "issue-from-prd",
+        "issue create",
         repo=repo,
         repo_id=repo_id,
         config=config,
@@ -326,73 +326,6 @@ def _run_issue_from_prd_command(
         group=group,
         depends_on=depends_on,
         depends_on_group=depends_on_group,
-    )
-
-
-@app.command("issue-from-prd")
-def issue_from_prd_command(
-    ctx: typer.Context,
-    prd_path: Annotated[str, typer.Argument(help="PRD Markdown path.")],
-    issue_type: Annotated[
-        IssueTypeChoice,
-        typer.Option("--type", help="Issue type label."),
-    ] = IssueTypeChoice.feature,
-    title: Annotated[
-        str | None, typer.Option("--title", help="Override generated issue title.")
-    ] = None,
-    ready: Annotated[
-        bool,
-        typer.Option(
-            "--ready/--no-ready",
-            help="Add the ready label so a runner can pick the Issue up.",
-        ),
-    ] = False,
-    agent: Annotated[
-        IssueAgentChoice,
-        typer.Option("--agent", help="Optional agent routing label."),
-    ] = IssueAgentChoice.auto,
-    publish_prd: Annotated[
-        bool,
-        typer.Option(
-            "--publish-prd",
-            help="Commit and push only the target PRD before adding ready.",
-        ),
-    ] = False,
-    force: Annotated[bool, typer.Option("--force", help="Bypass PRD checks.")] = False,
-    group: Annotated[
-        str,
-        typer.Option(
-            "--group", help="Task group name (materialised as task-group/<name> label)."
-        ),
-    ] = "",
-    depends_on: Annotated[
-        list[int] | None,
-        typer.Option("--depends-on", help="Upstream Issue number (repeatable)."),
-    ] = None,
-    depends_on_group: Annotated[
-        list[str] | None,
-        typer.Option("--depends-on-group", help="Upstream group label (repeatable)."),
-    ] = None,
-    repo: RepoOption = None,
-    repo_id: RepoIdOption = None,
-    config: ConfigOption = None,
-) -> int:
-    """Create a GitHub Issue from a PRD file."""
-    return _run_issue_from_prd_command(
-        ctx,
-        prd_path=prd_path,
-        issue_type=issue_type,
-        title=title,
-        ready=ready,
-        agent=agent,
-        publish_prd=publish_prd,
-        force=force,
-        group=group,
-        depends_on=tuple(depends_on or ()),
-        depends_on_group=tuple(depends_on_group or ()),
-        repo=repo,
-        repo_id=repo_id,
-        config=config,
     )
 
 
@@ -438,8 +371,8 @@ def issue_create_command(
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
 ) -> int:
-    """Modern alias for issue-from-prd."""
-    return _run_issue_from_prd_command(
+    """Create a GitHub Issue from a PRD file."""
+    return _run_issue_create_command(
         ctx,
         prd_path=prd_path,
         issue_type=issue_type,
@@ -457,7 +390,7 @@ def issue_create_command(
     )
 
 
-def _run_runner_once_command(
+def _run_runner_command(
     ctx: typer.Context,
     *,
     command: str,
@@ -469,7 +402,7 @@ def _run_runner_once_command(
     config: str | None,
     all_repositories: bool,
 ) -> int:
-    """Run run-once or review-once through the shared dispatch path."""
+    """Run `run` or `review` through the shared dispatch path."""
     return _run_typer_repository_command(
         ctx,
         command,
@@ -483,8 +416,8 @@ def _run_runner_once_command(
     )
 
 
-@app.command("run-once")
-def run_once_command(
+@app.command("run")
+def run_command(
     ctx: typer.Context,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Preview only.")] = False,
     agent: RunAgentOption = RunAgentChoice.auto,
@@ -495,34 +428,9 @@ def run_once_command(
     all_repositories: AllRepositoriesOption = False,
 ) -> int:
     """Run one agent-runner polling cycle."""
-    return _run_runner_once_command(
+    return _run_runner_command(
         ctx,
-        command="run-once",
-        dry_run=dry_run,
-        agent=agent,
-        max_issues=max_issues,
-        repo=repo,
-        repo_id=repo_id,
-        config=config,
-        all_repositories=all_repositories,
-    )
-
-
-@app.command("run")
-def run_alias_command(
-    ctx: typer.Context,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Preview only.")] = False,
-    agent: RunAgentOption = RunAgentChoice.auto,
-    max_issues: MaxIssuesOption = None,
-    repo: RepoOption = None,
-    repo_id: RepoIdOption = None,
-    config: ConfigOption = None,
-    all_repositories: AllRepositoriesOption = False,
-) -> int:
-    """Alias for run-once."""
-    return _run_runner_once_command(
-        ctx,
-        command="run-once",
+        command="run",
         dry_run=dry_run,
         agent=agent,
         max_issues=max_issues,
@@ -586,8 +494,8 @@ def daemon_command(
     )
 
 
-@app.command("review-once")
-def review_once_command(
+@app.command("review")
+def review_command(
     ctx: typer.Context,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Preview only.")] = False,
     agent: RunAgentOption = RunAgentChoice.auto,
@@ -598,34 +506,9 @@ def review_once_command(
     all_repositories: AllRepositoriesOption = False,
 ) -> int:
     """Run one supervisor review polling cycle."""
-    return _run_runner_once_command(
+    return _run_runner_command(
         ctx,
-        command="review-once",
-        dry_run=dry_run,
-        agent=agent,
-        max_issues=max_issues,
-        repo=repo,
-        repo_id=repo_id,
-        config=config,
-        all_repositories=all_repositories,
-    )
-
-
-@app.command("review")
-def review_alias_command(
-    ctx: typer.Context,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Preview only.")] = False,
-    agent: RunAgentOption = RunAgentChoice.auto,
-    max_issues: MaxIssuesOption = None,
-    repo: RepoOption = None,
-    repo_id: RepoIdOption = None,
-    config: ConfigOption = None,
-    all_repositories: AllRepositoriesOption = False,
-) -> int:
-    """Alias for review-once."""
-    return _run_runner_once_command(
-        ctx,
-        command="review-once",
+        command="review",
         dry_run=dry_run,
         agent=agent,
         max_issues=max_issues,
@@ -663,8 +546,8 @@ def review_daemon_command(
     )
 
 
-@app.command("recover-publish")
-def recover_publish_command(
+@app.command("recover")
+def recover_command(
     ctx: typer.Context,
     issue: Annotated[int, typer.Option("--issue", help="Issue number to recover.")],
     branch: Annotated[
@@ -678,7 +561,7 @@ def recover_publish_command(
     """Resume a failed publish operation for an Issue."""
     return _run_typer_repository_command(
         ctx,
-        "recover-publish",
+        "recover",
         repo=repo,
         repo_id=repo_id,
         config=config,
@@ -708,29 +591,7 @@ def blocked_continue_command(
     )
 
 
-@app.command("recover")
-def recover_alias_command(
-    ctx: typer.Context,
-    issue: Annotated[int, typer.Option("--issue", help="Issue number to recover.")],
-    branch: Annotated[
-        str | None,
-        typer.Option("--branch", help="Explicitly confirm the current branch name."),
-    ] = None,
-    repo: RepoOption = None,
-    repo_id: RepoIdOption = None,
-    config: ConfigOption = None,
-) -> int:
-    """Alias for recover-publish."""
-    return recover_publish_command(
-        ctx,
-        issue=issue,
-        branch=branch,
-        repo=repo,
-        repo_id=repo_id,
-        config=config,
-    )
-
-
+@app.command("deliberate")
 @app.command("deliberate")
 def deliberate_command(
     ctx: typer.Context,

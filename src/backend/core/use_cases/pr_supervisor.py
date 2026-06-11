@@ -304,7 +304,7 @@ def build_rework_intent_comment(
             f"- Action: {action}",
             f"- PR Branch: `{pr_branch}`",
             f"- Head SHA: `{head_sha}`",
-            "- A runner will pick this up on the next `run-once` pass.",
+            "- A runner will pick this up on the next `iar run` pass.",
         ]
     )
 
@@ -708,7 +708,7 @@ def run_post_pr_supervisor_cycle(
         pr_comments_count=len(pr_comments),
     )
     # 评论写入 Issue 而非 PR，确保事件时间线与原始需求单保持一致，
-    # 方便后续 run-once 调度器通过 Issue 评论追踪整体进度
+    # 方便后续 run 调度器通过 Issue 评论追踪整体进度
     github_client.comment_issue(issue.number, comment_body)
 
     return action_result

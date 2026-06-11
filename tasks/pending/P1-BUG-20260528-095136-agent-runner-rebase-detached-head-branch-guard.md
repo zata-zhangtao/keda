@@ -29,7 +29,7 @@ Refine the existing `pr_supervisor.execute_rebase(...)` conflict recovery branch
 
 - [ ] **rebase detached HEAD 真实验证**：通过包含真实 Git 仓库和冲突 rebase 的测试入口，验证 `git branch --show-current` 为空但 active rebase 目标为 PR 分支时，runner 允许 `git rebase --continue`。
 - [ ] **错误分支拒绝真实验证**：通过同一入口制造 active rebase 目标分支与 PR 分支不一致，验证 runner 拒绝 staging、verification、`rebase --continue` 和 push。
-- [ ] **CLI rework 消费验证**：通过 `uv run iar run-once --repo <fixture-repo> --max-issues 1` 等真实 CLI 路径或其 subprocess fixture，验证 pending `resolve_conflict` / `rebase_pr_branch` 请求不会因 detached HEAD 被误判失败。
+- [ ] **CLI rework 消费验证**：通过 `uv run iar run --repo <fixture-repo> --max-issues 1` 等真实 CLI 路径或其 subprocess fixture，验证 pending `resolve_conflict` / `rebase_pr_branch` 请求不会因 detached HEAD 被误判失败。
 - [ ] **为什么单元测试不够**：该 bug 依赖真实 Git rebase 元数据、worktree detached 状态、commit-request 协议和 runner supervisor 路由组合；只 mock `git branch --show-current` 无法证明真实 rebase 中间状态可恢复。
 
 ### Delivery Dependencies
@@ -44,7 +44,7 @@ Refine the existing `pr_supervisor.execute_rebase(...)` conflict recovery branch
 
 ## 2. Requirement Shape
 
-**Actor**：运行 `iar run-once`、`iar review-once` 或 `iar review-daemon` 的本地 Agent Runner operator。
+**Actor**：运行 `iar run`、`iar review` 或 `iar review-daemon` 的本地 Agent Runner operator。
 
 **Trigger**：
 
@@ -84,14 +84,14 @@ Refine the existing `pr_supervisor.execute_rebase(...)` conflict recovery branch
 | `src/backend/api/cli.py` | `iar` CLI 入口装配 | 真实入口验证应覆盖 CLI，但业务判断不放入 API 层 |
 | `docs/guides/agent-runner.md` | Agent Runner 操作文档 | 需要记录 rebase conflict 恢复和错误诊断语义 |
 | `tests/test_pr_supervisor.py` | supervisor/rebase 行为测试 | 应新增 detached HEAD active rebase 和错误目标分支覆盖 |
-| `tests/test_run_agent.py` / `tests/test_agent_runner_cli.py` | run-once orchestration 和 CLI 行为测试 | 需要覆盖 pending rework 经真实入口触发 rebase conflict path |
+| `tests/test_run_agent.py` / `tests/test_agent_runner_cli.py` | run orchestration 和 CLI 行为测试 | 需要覆盖 pending rework 经真实入口触发 rebase conflict path |
 
 ### Existing Path
 
 当前最接近的代码路径是：
 
 ```text
-review-once / run-once
+review / run
   -> supervisor action: rebase_pr_branch or resolve_conflict
   -> execute_rebase(...)
   -> git fetch <remote> <base_branch>
@@ -156,7 +156,7 @@ review-once / run-once
 4. 优先使用 Git 自身可定位的 rebase metadata 路径，例如通过 `git rev-parse --git-path rebase-merge/head-name` 和 `git rev-parse --git-path rebase-apply/head-name` 定位，再读取 `refs/heads/<branch>` 形式的目标分支名。
 5. guard 拒绝时只抛出诊断错误，不自动 abort rebase；attempt exhaustion path 仍可在已确认预期 rebase 后执行现有 `git rebase --abort`。
 6. 错误消息包含 observed branch、observed rebase target、expected branch 和 worktree 状态提示，避免再次出现空冒号无法诊断。
-7. 补充 fake runner 单元测试、真实 Git rebase 集成测试、CLI/run-once rework 测试和文档。
+7. 补充 fake runner 单元测试、真实 Git rebase 集成测试、CLI/run rework 测试和文档。
 
 ### Why This Is The Best Fit
 
@@ -321,7 +321,7 @@ flowchart TD
 | Active rebase target mismatch is rejected before staging or continuing | `execute_rebase(...)` through fake runner and real Git fixture | unit/integration | GitHub fake; process runner fake for command sequencing where useful | Rebase metadata target differs from `pr_branch` | `uv run pytest tests/test_pr_supervisor.py -k "rebase_target" -v` | Yes |
 | Safety rejection preserves unknown rebase state | `execute_rebase(...)` through fake runner command sequencing | unit | Git may be fake; process runner records commands | Unknown or mismatched active rebase target with commit-request present | `uv run pytest tests/test_pr_supervisor.py -k "rebase_guard_does_not_abort" -v` | Yes |
 | Rebase conflict path does not create an extra commit | `execute_rebase(...)` through fake runner command sequencing | unit | Git may be fake; process runner records commands | commit-request present after conflict resolution | `uv run pytest tests/test_pr_supervisor.py -k "rebase_conflict_no_git_commit" -v` | Yes |
-| Pending post-PR rework can consume `resolve_conflict` / `rebase_pr_branch` without detached HEAD false failure | `iar run-once` CLI path or subprocess CLI fixture | smoke/integration | GitHub CLI and agent binary may be faked at PATH boundary; Git repository should be real | Fixture Issue with PR context, event marker, local worktree and conflicting rebase | `uv run pytest tests/test_agent_runner_cli.py -k "rebase_conflict_detached_head" -v` | Yes |
+| Pending post-PR rework can consume `resolve_conflict` / `rebase_pr_branch` without detached HEAD false failure | `iar run` CLI path or subprocess CLI fixture | smoke/integration | GitHub CLI and agent binary may be faked at PATH boundary; Git repository should be real | Fixture Issue with PR context, event marker, local worktree and conflicting rebase | `uv run pytest tests/test_agent_runner_cli.py -k "rebase_conflict_detached_head" -v` | Yes |
 | Documentation describes operator-visible error and recovery behavior | Docs build | documentation | None | Local docs tree | `uv run mkdocs build --strict` | Yes |
 | Full repository regression | `just test` | regression | Existing test environment | Existing repo config | `just test` | Yes |
 
@@ -381,7 +381,7 @@ No external validation required; repository evidence and Git behavior exercised 
 - [ ] `uv run pytest tests/test_pr_supervisor.py -k "rebase_detached_head" -v` passes with coverage for real Git rebase conflict state.
 - [ ] `uv run pytest tests/test_pr_supervisor.py -k "rebase_target" -v` passes with coverage for mismatch rejection.
 - [ ] `uv run pytest tests/test_pr_supervisor.py -k "rebase_guard_does_not_abort or rebase_conflict_no_git_commit" -v` passes.
-- [ ] `uv run pytest tests/test_agent_runner_cli.py -k "rebase_conflict_detached_head" -v` or an equivalent real `iar run-once` subprocess fixture passes.
+- [ ] `uv run pytest tests/test_agent_runner_cli.py -k "rebase_conflict_detached_head" -v` or an equivalent real `iar run` subprocess fixture passes.
 - [ ] `uv run mkdocs build --strict` passes.
 - [ ] `just test` passes.
 

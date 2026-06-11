@@ -27,7 +27,7 @@ Extend the existing `create_or_reuse_worktree()` preparation path with a core-la
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 helper 中通过。
 
-- [ ] **Run-once worktree preparation 真实验证**：通过 `uv run pytest tests/test_run_agent.py -k "worktree_reconcile" -v` 中调用 `run_once()` 的真实用例入口，使用真实 Git 仓库/裸远程和 mocked GitHub/agent 边界，验证 ready issue 在 agent 执行前完成远程分支对齐。
+- [ ] **Run worktree preparation 真实验证**：通过 `uv run pytest tests/test_run_agent.py -k "worktree_reconcile" -v` 中调用 `run_once()` 的真实用例入口，使用真实 Git 仓库/裸远程和 mocked GitHub/agent 边界，验证 ready issue 在 agent 执行前完成远程分支对齐。
 - [ ] **复用 worktree 真实验证**：通过真实 Git 临时仓库创建已存在 worktree，再推进远程同名分支，运行包含 `create_or_reuse_worktree()` 的 runner 路径，验证 clean local-behind 分支 fast-forward 到远程 HEAD。
 - [ ] **保护本地状态真实验证**：通过真实 Git 临时仓库制造 dirty worktree、local-ahead、diverged 三类状态，验证 runner 不执行 destructive reset，且 dirty/diverged 给出明确失败。
 - [ ] **为什么单元测试不够**：单元测试可以验证命令序列，但不能证明 Git refspec、remote-tracking ref、fast-forward 判定和真实 worktree 状态在实际 Git 仓库中正确工作。
