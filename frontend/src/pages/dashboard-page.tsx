@@ -82,6 +82,30 @@ export function DashboardPage() {
     };
   }, []);
 
+  // 后台静默轮询：每 30 秒刷新一次数据，不触发 loading 状态。
+  useEffect(() => {
+    if (state.kind !== "ready") {
+      return;
+    }
+    const interval = setInterval(() => {
+      fetchMonitoringOverview()
+        .then((overview) => {
+          setState((prev) =>
+            prev.kind === "ready" ? { kind: "ready", overview } : prev,
+          );
+        })
+        .catch(() => {
+          // 静默失败，避免覆盖现有数据。
+        });
+      fetchCompletionStats()
+        .then((stats) => {
+          setCompletionStats(stats);
+        })
+        .catch(() => {});
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [state.kind]);
+
   useEffect(() => {
     if (selectedIssueNumber === null) {
       setSelectedIssue(null);
@@ -390,10 +414,40 @@ function SummaryStrip({
 }
 
 function LoadingSkeleton() {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const remaining = Math.max(0, 15 - elapsed);
+  const isStuck = elapsed > 30;
+
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-      <Skeleton className="h-64" />
-      <Skeleton className="h-64" />
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <span>正在扫描仓库状态，请稍候…</span>
+          <span className="font-mono">
+            {remaining > 0
+              ? `预计还需 ${remaining} 秒`
+              : "即将完成，请稍候…"}
+          </span>
+        </div>
+        <Skeleton className="h-64" />
+      </div>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <span>加载 Issue 详情与事件时间线…</span>
+          {isStuck ? (
+            <span className="text-amber-600 dark:text-amber-400">
+              请求异常，建议检查后端日志
+            </span>
+          ) : null}
+        </div>
+        <Skeleton className="h-64" />
+      </div>
     </div>
   );
 }

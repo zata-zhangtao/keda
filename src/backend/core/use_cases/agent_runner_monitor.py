@@ -18,6 +18,7 @@ import logging
 import re
 import shlex
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -564,15 +565,17 @@ def build_issue_snapshot(
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
     repo_path: Path,
+    comments: list[str] | None = None,
 ) -> IssueMonitoringSnapshot:
     """Build the monitoring snapshot for a single Issue.
 
     Reads only — never writes — to GitHub or the local worktree.
     """
-    comments = github_client.list_issue_comments(issue.number)
+    if comments is None:
+        comments = github_client.list_issue_comments(issue.number)
     timeline = tuple(parse_event_timeline(comments))
     latest_event = parse_latest_event_marker(comments)
-    pr_context = _lookup_pr_context(issue, github_client)
+    pr_context = _lookup_pr_context(issue, github_client, comments)
     worktree = _read_worktree_status(
         worktree_path_command=config.worktree.path_command,
         issue_number=issue.number,
@@ -623,9 +626,10 @@ def build_issue_snapshot(
 def _lookup_pr_context(
     issue: IssueSummary,
     github_client: IGitHubClient,
+    comments: list[str] | None = None,
 ) -> PullRequestContext | None:
     """Find an open PR context for the issue, if any."""
-    pr_branch = _extract_pr_branch_from_issue(issue, github_client)
+    pr_branch = _extract_pr_branch_from_issue(issue, github_client, comments)
     if pr_branch is None:
         return None
     pr_context = github_client.get_pull_request_context(pr_branch)
@@ -647,9 +651,11 @@ def _lookup_pr_context(
 def _extract_pr_branch_from_issue(
     issue: IssueSummary,
     github_client: IGitHubClient,
+    comments: list[str] | None = None,
 ) -> str | None:
     """Resolve the PR branch associated with the issue, if any."""
-    comments = github_client.list_issue_comments(issue.number)
+    if comments is None:
+        comments = github_client.list_issue_comments(issue.number)
     for comment_body in reversed(comments):
         marker = parse_latest_event_marker([comment_body])
         if marker is not None and marker.pr_branch:
@@ -800,21 +806,28 @@ def build_repository_overview(
     """Build a per-repository monitoring overview."""
     queue_issues = _collect_queue_issues(config=config, github_client=github_client)
     issue_snapshots: list[IssueMonitoringSnapshot] = []
-    for issue in queue_issues:
-        try:
-            snapshot = build_issue_snapshot(
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_issue = {
+            executor.submit(
+                build_issue_snapshot,
                 issue=issue,
                 config=config,
                 github_client=github_client,
                 process_runner=process_runner,
                 repo_path=repo_path,
-            )
-        except Exception as exc:  # noqa: BLE001 - one bad Issue must not blank the page.
-            _logger.warning(
-                "Failed to build snapshot for Issue #%d: %s", issue.number, exc
-            )
-            continue
-        issue_snapshots.append(snapshot)
+            ): issue
+            for issue in queue_issues
+        }
+        for future in as_completed(future_to_issue):
+            issue = future_to_issue[future]
+            try:
+                snapshot = future.result()
+            except Exception as exc:  # noqa: BLE001 - one bad Issue must not blank the page.
+                _logger.warning(
+                    "Failed to build snapshot for Issue #%d: %s", issue.number, exc
+                )
+                continue
+            issue_snapshots.append(snapshot)
 
     queue_counts = _compute_queue_counts(queue_issues, config)
     anomaly_count = sum(1 for snap in issue_snapshots if snap.has_anomaly)

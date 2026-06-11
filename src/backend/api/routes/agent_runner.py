@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -81,6 +83,24 @@ def _get_monitoring_dependencies() -> (
     return create_github_client, create_process_runner()
 
 
+_OVERVIEW_CACHE: dict[str, Any] = {}
+_OVERVIEW_CACHE_TTL_SECONDS = 30
+
+
+def _warm_overview_cache(delay: int = 5) -> None:
+    """Pre-fill the overview cache in the background after server start."""
+
+    def _run() -> None:
+        time.sleep(delay)
+        try:
+            _get_cached_overview_response()
+            _logger.info("Overview cache warmed successfully.")
+        except Exception as exc:
+            _logger.warning("Overview cache warm-up failed: %s", exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def _build_overview_response() -> dict:
     """Build the ``/overview`` monitoring response payload."""
     settings = load_fresh_agent_runner_settings()
@@ -104,6 +124,19 @@ def _build_overview_response() -> dict:
         _serialize_monitoring(failure) for failure in resolution_failures
     ]
     return overview_payload
+
+
+def _get_cached_overview_response() -> dict:
+    """Return a cached overview when available to keep the dashboard snappy."""
+    now = time.time()
+    cached_payload = _OVERVIEW_CACHE.get("payload")
+    cached_at = _OVERVIEW_CACHE.get("timestamp", 0)
+    if cached_payload is not None and (now - cached_at) < _OVERVIEW_CACHE_TTL_SECONDS:
+        return cached_payload
+    payload = _build_overview_response()
+    _OVERVIEW_CACHE["payload"] = payload
+    _OVERVIEW_CACHE["timestamp"] = now
+    return payload
 
 
 def _build_issue_detail_response(issue_number: int) -> dict:
@@ -176,7 +209,7 @@ def get_agent_runner_overview() -> dict:
     health, queue counts, Issue summaries, latest event markers and anomaly
     counts. Does not expose any write/modify API.
     """
-    return _build_overview_response()
+    return _get_cached_overview_response()
 
 
 @router.get("/agent-runner/issues/{issue_number}")
@@ -187,3 +220,7 @@ def get_agent_runner_issue_detail(issue_number: int) -> dict:
             status_code=400, detail="issue_number must be a positive integer."
         )
     return _build_issue_detail_response(issue_number)
+
+
+# Pre-fill cache on module import so the first dashboard hit is snappy.
+_warm_overview_cache()
