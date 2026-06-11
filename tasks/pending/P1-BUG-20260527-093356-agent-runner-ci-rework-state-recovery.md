@@ -1,5 +1,7 @@
 # PRD: Agent Runner CI Rework State Recovery
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/69
+
 ## 1. Introduction & Goals
 
 `iar review` / `iar run` 当前在 post-PR 阶段对 CI 失败、rework marker 和 workflow labels 的处理不够严格。真实 fsense Issue #1 暴露了以下组合故障：
@@ -53,7 +55,22 @@ Strengthen the existing post-PR Agent Runner workflow by fixing the GitHub CLI P
 - `docs/guides/agent-runner.md` 已记录 checks 聚合和 approval gate 行为。
 - 已用真实 `gh` 对 keda PR #32 / branch `issue-28` 验证 adapter 可返回 `mergeable=False`，不再因 unsupported JSON field 丢失 PR context。
 
-仍未完成：workflow label transition helper、marker history helper、pending rework consumption 修复、CLI smoke fixture，以及完整 label 互斥收敛。因此本 PRD 继续保留在 `tasks/pending/`。
+2026-06-12 进度更新：
+
+- 已新增 `src/backend/core/use_cases/agent_runner_workflow.py`，集中提供 `workflow_state_labels`、`build_transition_labels`、`transition_issue_workflow_state`、`find_latest_unconsumed_marker` 和 `claim_blocked_issue`。
+- `find_latest_unconsumed_marker` 已设计为 phase-agnostic，并被 `blocked_resolution_requested` 恢复路径复用。
+- `agent_runner_orchestrate.py` 的 running rework 检测已从“只认最新 marker”改为扫描 marker history；`_process_running_rework(...)` 修复成功后写 `rebase_repair_complete` marker 并返回 supervising。
+- `tests/test_agent_runner_workflow.py` 已覆盖 helper 的 label 保留/互斥行为。
+
+仍未完成：
+- `review_once.py` 和 `agent_runner_supervisor.py` 中所有状态切换仍使用手写 `edit_issue_labels`，未全面复用 `transition_issue_workflow_state`，历史 dirty label（如同时存在 `agent/running` + `agent/review`）无法保证清理。
+- `agent_runner_publication.py` 仍有私有 `_workflow_state_labels`（且漏掉 `agent/failed`），未复用公共 helper。
+- `checks_state == "PENDING"` 时尚未阻断 `approve_for_human_review`。
+- `run` 未在修复前校验 pending rework marker 的 `head_sha` 与 open PR head 一致。
+- pending rework 时缺失 worktree 路径未进入 `agent/blocked` 并写可操作恢复 comment。
+- CLI smoke fixture（fake `gh` 的 `iar review` / `iar run` 端到端）尚未补充。
+
+因此本 PRD 继续保留在 `tasks/pending/`。
 
 ## 2. Requirement Shape
 
@@ -90,16 +107,16 @@ Strengthen the existing post-PR Agent Runner workflow by fixing the GitHub CLI P
 | Path | Current Role | Observed Gap |
 |---|---|---|
 | `src/backend/api/cli.py` | `iar` CLI 参数解析与 use case 调用 | 真实入口应保持不承载业务状态机逻辑 |
-| `src/backend/core/use_cases/review_once.py` | post-PR polling 单次处理 | 状态切换只局部 remove label；rework request 后可能留下 `agent/review` |
-| `src/backend/core/use_cases/agent_runner_orchestrate.py` | `run` ready/running/rework 编排 | running rework 只认最新 event marker；workflow label helper 是私有函数 |
-| `src/backend/core/use_cases/pr_supervisor.py` | post-PR supervisor prompt、action parse、repair/rebase 执行 | supervisor approval 没有 deterministic CI failure gate |
-| `src/backend/core/use_cases/agent_runner_events.py` | `iar:event` marker parse/format | 当前只提供 latest marker 解析，缺少 pending rework 语义 |
-| `src/backend/core/shared/models/agent_runner.py` | Core dataclasses | `PullRequestContext` 只有粗粒度 `checks_state`，缺少 failed check detail |
-| `src/backend/infrastructure/github_client.py` | GitHub CLI adapter | 查询了当前 `gh` 不支持的 `statusCheckRollupState` |
-| `docs/guides/agent-runner.md` | Agent Runner 操作文档 | 需要记录 CI gate、互斥 labels、rework marker 规则 |
-| `tests/test_review_once.py` | review unit coverage | 需要覆盖 failed checks approval downgrade 和 label exclusivity |
-| `tests/test_pr_supervisor.py` | supervisor prompt/action tests | 需要覆盖 checks aggregation 和 approval gate |
-| `tests/test_run_agent.py` | run/rework orchestration tests | 需要覆盖 pending rework marker 不被 stale approval 覆盖 |
+| `src/backend/core/use_cases/review_once.py` | post-PR polling 单次处理 | 状态切换仍使用手写 `edit_issue_labels`；未全面复用 `transition_issue_workflow_state`，dirty label 清理不彻底 |
+| `src/backend/core/use_cases/agent_runner_orchestrate.py` | `run` ready/running/rework 编排 | running rework 已使用 marker-history helper；但 publication 路径仍有私有 `_workflow_state_labels`（且漏掉 `agent/failed`），未复用公共 helper |
+| `src/backend/core/use_cases/pr_supervisor.py` | post-PR supervisor prompt、action parse、repair/rebase 执行 | 已加入 deterministic CI failure / mergeability gate，但 pending checks 尚未阻断 approval |
+| `src/backend/core/use_cases/agent_runner_events.py` | `iar:event` marker parse/format | 已补充 pending rework 语义（`parse_latest_pending_rework_marker`），并新增 phase-agnostic `find_latest_unconsumed_marker` helper |
+| `src/backend/core/shared/models/agent_runner.py` | Core dataclasses | `PullRequestContext` 已新增 `checks_summary`，但缺少结构化 check detail model |
+| `src/backend/infrastructure/github_client.py` | GitHub CLI adapter | 已改用 `statusCheckRollup` 并聚合 checks state；仍需补充更多 CheckRun/StatusContext fixture 覆盖 |
+| `docs/guides/agent-runner.md` | Agent Runner 操作文档 | 已记录 checks 聚合和 approval gate；仍需补充 pending checks 行为、label 互斥声明、missing-worktree 恢复说明 |
+| `tests/test_review_once.py` | review unit coverage | 已覆盖 failed-check approval downgrade 和 PR context deferral；仍需覆盖 label 互斥和 dirty-label 恢复 |
+| `tests/test_pr_supervisor.py` | supervisor prompt/action tests | 已覆盖 checks aggregation 和 approval gate；仍需覆盖 pending-check gate |
+| `tests/test_run_agent.py` | run/rework orchestration tests | 仍需覆盖 pending rework marker 不被 stale approval 覆盖、以及 missing worktree 进入 blocked 路径 |
 
 **Existing Path**:
 
@@ -450,14 +467,15 @@ No external validation required; repository evidence and local `gh --json` behav
 
 - [x] `src/backend/api/cli.py` remains a thin CLI adapter and does not gain workflow decision branches.
 - [x] GitHub CLI JSON field handling remains in `src/backend/infrastructure/github_client.py`.
-- [ ] CI gate, pending rework semantics, and label transition decisions live in `src/backend/core/use_cases/`.
-- [ ] Workflow transition and marker-history helpers are phase-agnostic and not named around CI or rework only.
+- [x] CI gate and label transition helper live in `src/backend/core/use_cases/`.
+- [ ] Label transition decisions are not yet fully consolidated: `review_once.py`, `agent_runner_supervisor.py`, and `agent_runner_publication.py` still contain handwritten label transitions.
+- [x] Workflow transition and marker-history helpers are phase-agnostic and not named around CI or rework only.
 - [x] No new database, queue, HTTP service, webhook receiver, or persistent local state source is introduced.
 
 ### Dependency Acceptance
 
 - [x] `src/backend/core/` does not import `src/backend/infrastructure/`, `src/backend/engines/`, or `src/backend/api/`.
-- [ ] New shared workflow helper imports only core models/interfaces.
+- [x] New shared workflow helper imports only core models/interfaces.
 - [x] Existing `IGitHubClient` contract remains the boundary between core and GitHub CLI implementation.
 
 ### Behavior Acceptance
@@ -466,18 +484,18 @@ No external validation required; repository evidence and local `gh --json` behav
 - [x] Empty `statusCheckRollup` yields `checks_state is None` and does not block approval for repos without CI.
 - [x] `review` receiving supervisor `approve_for_human_review` while `checks_state == "FAILURE"` does not transition to `agent/review`.
 - [x] `review` writes or preserves a rework/blocking comment that names failed checks when approval is blocked by CI failure.
-- [ ] `repair_pr_branch`, `rebase_pr_branch`, and `resolve_conflict` transitions leave only `agent/running` among durable workflow labels.
-- [ ] `approve_for_human_review` transitions leave only `agent/review` among durable workflow labels.
-- [ ] exception paths in `review` and `run` leave only `agent/failed` or `agent/blocked`, not mixed workflow labels.
-- [ ] `run` detects a pending `post_pr_rework_requested` marker even if a later same-head supervisor approval exists on a dirty-label Issue.
-- [ ] successful `_process_running_rework(...)` writes a completion marker, not another `post_pr_rework_requested` marker.
+- [ ] `repair_pr_branch`, `rebase_pr_branch`, and `resolve_conflict` transitions leave only `agent/running` among durable workflow labels (not yet: `review_once.py` and `agent_runner_supervisor.py` still use partial remove lists).
+- [ ] `approve_for_human_review` transitions leave only `agent/review` among durable workflow labels (not yet: partial remove lists in review/supervisor paths).
+- [ ] exception paths in `review` and `run` leave only `agent/failed` or `agent/blocked`, not mixed workflow labels (not yet: `review_once` exception path still removes all `agent/*` labels and may drop routing labels).
+- [x] `run` detects a pending `post_pr_rework_requested` marker even if a later same-head supervisor approval exists on a dirty-label Issue.
+- [x] successful `_process_running_rework(...)` writes a completion marker, not another `post_pr_rework_requested` marker.
 - [ ] missing rework worktree path produces an actionable blocked/failed comment and does not leave `agent/running` plus another workflow label.
-- [ ] a unit-level helper test proves non-workflow labels are preserved while workflow labels are replaced, so future blocked-resolution CAS can reuse the same computation.
+- [x] a unit-level helper test proves non-workflow labels are preserved while workflow labels are replaced, so future blocked-resolution CAS can reuse the same computation.
 
 ### Documentation Acceptance
 
 - [x] `docs/guides/agent-runner.md` documents checks aggregation and failed-check/conflict approval gates.
-- [ ] `docs/guides/agent-runner.md` documents pending checks behavior.
+- [ ] `docs/guides/agent-runner.md` documents pending checks behavior (currently pending checks are not explicitly blocked from approval).
 - [ ] `docs/guides/agent-runner.md` documents that durable workflow labels are mutually exclusive.
 - [ ] `docs/guides/agent-runner.md` documents how `post_pr_rework_requested` is consumed and how operators recover a blocked missing-worktree case.
 
