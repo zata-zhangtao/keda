@@ -30,6 +30,9 @@ from backend.core.use_cases.pr_supervisor import (
     run_post_pr_supervisor_cycle,
 )
 from backend.core.use_cases.agent_runner_git import has_changes
+from backend.core.use_cases.agent_runner_workflow import (
+    transition_issue_workflow_state,
+)
 from backend.core.use_cases.run_agent_once import (
     get_head_sha,
 )
@@ -89,10 +92,8 @@ def _run_supervisor_with_repair_loop(
                     cycle=cycle,
                 ),
             )
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.blocked],
-                remove=[config.labels.supervising],
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.blocked
             )
             return
 
@@ -123,32 +124,30 @@ def _run_supervisor_with_repair_loop(
                         cycle=cycle,
                     ),
                 )
-                github_client.edit_issue_labels(
-                    issue.number,
-                    add=[config.labels.blocked],
-                    remove=[config.labels.supervising],
+                transition_issue_workflow_state(
+                    github_client, issue.number, config, config.labels.blocked
                 )
                 return
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.review],
-                remove=[config.labels.supervising],
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.review
             )
             return
 
+        if action_result.action == "wait_for_checks":
+            # run_post_pr_supervisor_cycle already wrote the audit comment.
+            # Keep the Issue in supervising and wait for a later checks-state
+            # change without consuming a repair attempt.
+            return
+
         if action_result.action in ("request_human_input",):
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.blocked],
-                remove=[config.labels.supervising],
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.blocked
             )
             return
 
         if action_result.action == "mark_failed":
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.failed],
-                remove=[config.labels.supervising],
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.failed
             )
             return
 
@@ -168,10 +167,8 @@ def _run_supervisor_with_repair_loop(
                         cycle=cycle,
                     ),
                 )
-                github_client.edit_issue_labels(
-                    issue.number,
-                    add=[config.labels.blocked],
-                    remove=[config.labels.supervising],
+                transition_issue_workflow_state(
+                    github_client, issue.number, config, config.labels.blocked
                 )
                 return
 
@@ -183,10 +180,8 @@ def _run_supervisor_with_repair_loop(
                     head_sha=current_pr_context.head_sha,
                 ),
             )
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.running],
-                remove=[config.labels.supervising],
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.running
             )
             verification_results = execute_repair(
                 issue=issue,
@@ -208,10 +203,8 @@ def _run_supervisor_with_repair_loop(
                     ),
                 ),
             )
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.supervising],
-                remove=[config.labels.running],
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.supervising
             )
             # 更新完整 PR 上下文后再继续循环，避免未知 mergeability 被批准。
             refreshed_pr_context = github_client.get_pull_request_context(
@@ -243,10 +236,8 @@ def _run_supervisor_with_repair_loop(
                         cycle=cycle,
                     ),
                 )
-                github_client.edit_issue_labels(
-                    issue.number,
-                    add=[config.labels.blocked],
-                    remove=[config.labels.supervising],
+                transition_issue_workflow_state(
+                    github_client, issue.number, config, config.labels.blocked
                 )
                 return
 
@@ -258,10 +249,8 @@ def _run_supervisor_with_repair_loop(
                     head_sha=current_pr_context.head_sha,
                 ),
             )
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.running],
-                remove=[config.labels.supervising],
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.running
             )
             verification_results = execute_rebase(
                 issue=issue,
@@ -283,10 +272,8 @@ def _run_supervisor_with_repair_loop(
                     ),
                 ),
             )
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.supervising],
-                remove=[config.labels.running],
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.supervising
             )
             refreshed_pr_context = github_client.get_pull_request_context(
                 current_pr_context.branch
@@ -303,16 +290,12 @@ def _run_supervisor_with_repair_loop(
             continue
 
         # 未知动作：标记为 blocked
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.blocked],
-            remove=[config.labels.supervising],
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.blocked
         )
         return
 
     # 循环耗尽仍未批准：标记为 blocked
-    github_client.edit_issue_labels(
-        issue.number,
-        add=[config.labels.blocked],
-        remove=[config.labels.supervising],
+    transition_issue_workflow_state(
+        github_client, issue.number, config, config.labels.blocked
     )

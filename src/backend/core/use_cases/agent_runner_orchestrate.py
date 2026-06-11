@@ -54,13 +54,14 @@ from backend.core.use_cases.agent_runner_git import has_changes
 from backend.core.use_cases.agent_runner_workflow import (
     claim_blocked_issue,
     find_latest_unconsumed_marker,
-    workflow_state_labels,
+    transition_issue_workflow_state,
 )
 from backend.core.use_cases.agent_runner_publication import (
     _finish_existing_commit_publication,
     _finish_implementation_publication,
     _reuse_existing_local_commit,
 )
+from backend.core.use_cases.agent_runner_rework import build_missing_worktree_comment
 from backend.core.use_cases.agent_runner_supervisor import (
     _run_supervisor_with_repair_loop,
 )
@@ -119,6 +120,7 @@ def _guard_running_issue_is_rework(
     1. 有 post_pr_rework_requested 事件标记
     2. 标记中包含有效的 PR 分支名
     3. 该分支在 GitHub 上存在对应的 open PR
+    4. 标记的 head_sha 与 open PR 当前 head 一致（避免修错 head）
 
     Args:
         issue: Issue 对象
@@ -134,8 +136,17 @@ def _guard_running_issue_is_rework(
     pr_branch = marker.pr_branch
     if pr_branch is None:
         return False, None
-    pr_url = github_client.find_open_pr_by_head(pr_branch)
-    if pr_url is None:
+    pr_context = github_client.get_pull_request_context(pr_branch)
+    if pr_context is None:
+        return False, None
+    if marker.head_sha and marker.head_sha != pr_context.head_sha:
+        _logger.warning(
+            "Issue #%d rework marker head %s does not match open PR head %s; "
+            "ignoring stale marker.",
+            issue.number,
+            marker.head_sha,
+            pr_context.head_sha,
+        )
         return False, None
     return True, marker
 
@@ -193,10 +204,8 @@ def _mark_issue_failed(
         exc: 捕获的异常对象
     """
     try:
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.failed],
-            remove=workflow_state_labels(config),
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.failed
         )
     except Exception as label_exc:  # noqa: BLE001 - preserve original failure.
         _logger.error(
@@ -258,10 +267,8 @@ def _mark_issue_blocked(
     )
 
     try:
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.blocked],
-            remove=workflow_state_labels(config),
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.blocked
         )
     except Exception as label_exc:  # noqa: BLE001 - preserve original failure.
         _logger.error(
@@ -491,8 +498,8 @@ def _process_ready_issue(
     selected_agent = choose_agent(issue, config, agent)
 
     # 步骤 1: 声明 Issue
-    github_client.edit_issue_labels(
-        issue.number, add=[config.labels.running], remove=[config.labels.ready]
+    transition_issue_workflow_state(
+        github_client, issue.number, config, config.labels.running
     )
     github_client.comment_issue(
         issue.number,
@@ -578,10 +585,31 @@ def _process_running_rework(
     if pr_branch is None:
         raise RuntimeError("Rework marker missing pr_branch")
 
-    # 定位 worktree 并确认分支
-    worktree_path = _find_worktree_path_for_issue(
-        repo_path, issue, config, process_runner
-    )
+    # 定位 worktree；缺失时进入 blocked 并给出可操作的恢复说明。
+    try:
+        worktree_path = _find_worktree_path_for_issue(
+            repo_path, issue, config, process_runner
+        )
+    except FileNotFoundError as exc:
+        message = str(exc)
+        prefix = "(path_command output): "
+        suffix = ". path_command return_code="
+        expected_path = message
+        if prefix in message and suffix in message:
+            expected_path = message.split(prefix, 1)[1].split(suffix, 1)[0]
+        github_client.comment_issue(
+            issue.number,
+            build_missing_worktree_comment(
+                issue=issue,
+                pr_branch=pr_branch,
+                expected_path=expected_path,
+            ),
+        )
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.blocked
+        )
+        return
+
     current_branch = get_current_branch(worktree_path, process_runner)
     if current_branch != pr_branch:
         raise RuntimeError(
@@ -657,10 +685,8 @@ def _process_running_rework(
             )
 
     # 标记为 supervising 并获取 PR 上下文
-    github_client.edit_issue_labels(
-        issue.number,
-        add=[config.labels.supervising],
-        remove=[config.labels.running],
+    transition_issue_workflow_state(
+        github_client, issue.number, config, config.labels.supervising
     )
 
     # 修复后再次运行监督循环
@@ -684,10 +710,8 @@ def _process_running_rework(
             supervisor_agent=supervisor_agent,
         )
     else:
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.review],
-            remove=[config.labels.running],
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.review
         )
 
 

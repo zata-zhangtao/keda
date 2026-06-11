@@ -13,6 +13,7 @@ from backend.core.shared.models.agent_runner import (
     PullRequestContext,
 )
 from backend.core.use_cases.agent_runner_events import format_event_marker
+from backend.core.use_cases.agent_runner_workflow import workflow_state_labels
 from backend.core.use_cases.pr_supervisor import build_supervisor_result_comment
 from backend.core.use_cases.review_once import (
     _process_review_candidate,
@@ -73,6 +74,7 @@ def test_review_once_detects_checks_state_change_and_triggers_supervisor() -> No
     )
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
         _marker_comment(
             checks_state="PENDING", issue_comments_count=1, pr_comments_count=0
@@ -122,6 +124,7 @@ def test_review_once_detects_new_issue_comments_and_triggers_supervisor() -> Non
     )
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
         _marker_comment(issue_comments_count=1, pr_comments_count=0),
         "new comment",
@@ -165,6 +168,7 @@ def test_review_once_detects_new_pr_comments_and_triggers_supervisor() -> None:
     )
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
         _marker_comment(issue_comments_count=1, pr_comments_count=1)
     ]
@@ -208,6 +212,7 @@ def test_review_once_detects_mergeable_change_and_triggers_supervisor() -> None:
     )
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
         _marker_comment(mergeable=True, issue_comments_count=1, pr_comments_count=0)
     ]
@@ -250,6 +255,7 @@ def test_review_once_blocks_conflicting_pr_approval() -> None:
     )
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
         _marker_comment(mergeable=True, issue_comments_count=1, pr_comments_count=0)
     ]
@@ -405,6 +411,7 @@ def test_review_once_skips_when_no_context_change() -> None:
     )
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
         _marker_comment(issue_comments_count=1, pr_comments_count=1)
     ]
@@ -450,6 +457,7 @@ def test_review_once_skips_after_supervisor_writes_its_own_comment() -> None:
     )
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
         "\n".join(
             [
@@ -513,6 +521,7 @@ def test_review_once_moves_review_label_to_supervising_on_change() -> None:
     )
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
         _marker_comment(issue_comments_count=1, pr_comments_count=0)
     ]
@@ -560,6 +569,7 @@ def test_review_once_recovers_branch_from_draft_pr_comment(tmp_path: Path) -> No
     )
     fake_client = FakeGitHubClient()
     fake_client.list_review_candidate_issues = lambda labels, limit: [issue]
+    fake_client._issue_labels[issue.number] = issue.labels
     fake_client._issue_comments[issue.number] = [
         "\n".join(
             [
@@ -617,3 +627,154 @@ def test_review_once_recovers_branch_from_draft_pr_comment(tmp_path: Path) -> No
     assert not any(
         call["method"] == "find_open_pr_by_head" for call in fake_client.calls
     )
+
+
+def test_review_once_cleans_dirty_workflow_labels() -> None:
+    """Transition helper must leave exactly one durable workflow label."""
+    config = AppConfig()
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="B",
+        labels=(
+            config.labels.review,
+            config.labels.running,
+            config.labels.failed,
+            config.labels.agent_labels["codex"],
+        ),
+    )
+    client = FakeGitHubClient()
+    client._issue_labels[issue.number] = issue.labels
+    client._remote_base_sha = "def456"
+    client._issue_comments[1] = [
+        _marker_comment(issue_comments_count=1, pr_comments_count=0)
+    ]
+    client._pr_contexts["issue-1"] = _make_pr_context(checks_state="SUCCESS")
+    client._pr_comments[1] = ["new pr comment"]
+
+    with (
+        patch(
+            "backend.core.use_cases.review_once.create_or_reuse_worktree",
+            return_value=Path("."),
+        ),
+        patch(
+            "backend.core.use_cases.review_once.choose_agent",
+            return_value="codex",
+        ),
+        patch(
+            "backend.core.use_cases.review_once.run_post_pr_supervisor_cycle",
+            return_value=_supervisor_approve(),
+        ),
+    ):
+        _process_review_candidate(
+            issue=issue,
+            repo_path=Path("."),
+            config=config,
+            agent="auto",
+            github_client=client,
+            process_runner=FakeProcessRunner(),
+        )
+
+    final_labels = set(client._issue_labels[issue.number])
+    workflow_labels = set(workflow_state_labels(config))
+    assert final_labels.intersection(workflow_labels) == {config.labels.review}
+    assert config.labels.agent_labels["codex"] in final_labels
+
+
+def test_review_once_waits_for_pending_checks() -> None:
+    """Pending checks must keep the Issue in supervising, not move to review."""
+    config = AppConfig()
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="B",
+        labels=(config.labels.supervising,),
+    )
+    client = FakeGitHubClient()
+    client._issue_labels[issue.number] = issue.labels
+    client._remote_base_sha = "def456"
+    client._issue_comments[1] = [
+        _marker_comment(
+            checks_state="PENDING", issue_comments_count=1, pr_comments_count=0
+        )
+    ]
+    client._pr_contexts["issue-1"] = _make_pr_context(checks_state="PENDING")
+    client._pr_comments[1] = ["new pr comment"]
+
+    with (
+        patch(
+            "backend.core.use_cases.review_once.create_or_reuse_worktree",
+            return_value=Path("."),
+        ),
+        patch(
+            "backend.core.use_cases.review_once.choose_agent",
+            return_value="codex",
+        ),
+        patch(
+            "backend.core.use_cases.review_once.run_post_pr_supervisor_cycle",
+            return_value=_supervisor_approve(),
+        ),
+    ):
+        outcome = _process_review_candidate(
+            issue=issue,
+            repo_path=Path("."),
+            config=config,
+            agent="auto",
+            github_client=client,
+            process_runner=FakeProcessRunner(),
+        )
+
+    assert outcome == "waiting_for_checks"
+    final_labels = set(client._issue_labels[issue.number])
+    workflow_labels = set(workflow_state_labels(config))
+    assert final_labels.intersection(workflow_labels) == {config.labels.supervising}
+
+
+def test_review_once_skips_running_issue_with_pending_rework() -> None:
+    """Review must not overwrite a pending rework marker on a running Issue."""
+    config = AppConfig()
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="B",
+        labels=(config.labels.running, config.labels.review),
+    )
+    client = FakeGitHubClient()
+    client._issue_labels[issue.number] = issue.labels
+    client._remote_base_sha = "def456"
+    client._issue_comments[1] = [
+        "\n".join(
+            [
+                format_event_marker(
+                    phase="post_pr_rework_requested",
+                    cycle=1,
+                    head_sha="abc123",
+                    pr_branch="issue-1",
+                    action="repair_pr_branch",
+                ),
+                "",
+                "## Agent Runner Post-PR Rework Requested",
+            ]
+        )
+    ]
+    client._pr_contexts["issue-1"] = _make_pr_context()
+
+    with patch(
+        "backend.core.use_cases.review_once.run_post_pr_supervisor_cycle",
+        return_value=_supervisor_approve(),
+    ) as mock_cycle:
+        outcome = _process_review_candidate(
+            issue=issue,
+            repo_path=Path("."),
+            config=config,
+            agent="auto",
+            github_client=client,
+            process_runner=FakeProcessRunner(),
+        )
+
+    assert outcome == "skipped_pending_rework"
+    assert mock_cycle.called is False
+    assert not any(call["method"] == "edit_issue_labels" for call in client.calls)

@@ -20,6 +20,10 @@ from backend.core.use_cases.pr_supervisor import (
     guard_supervisor_action_for_pr_state,
     run_post_pr_supervisor_cycle,
 )
+from backend.core.use_cases.agent_runner_workflow import (
+    find_latest_unconsumed_marker,
+    transition_issue_workflow_state,
+)
 from backend.core.use_cases.agent_runner_git import has_changes
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
@@ -96,6 +100,28 @@ def _process_review_candidate(
 ) -> str:
     """Run supervisor cycle for a single review candidate."""
     comments = github_client.list_issue_comments(issue.number)
+
+    # Guard: if Issue is effectively in agent/running with a pending rework
+    # marker, do not run review; let run consume the marker to avoid overwriting
+    # the pending repair/rebase request with a stale approval.
+    if config.labels.running in issue.labels:
+        pending_rework = find_latest_unconsumed_marker(
+            comments,
+            phase="post_pr_rework_requested",
+            completion_phases={
+                "implementation_complete",
+                "draft_pr_created",
+                "publish_recovered",
+                "rebase_repair_complete",
+            },
+        )
+        if pending_rework is not None:
+            _logger.info(
+                "Issue #%d has pending rework marker; skipping review to let run process it.",
+                issue.number,
+            )
+            return "skipped_pending_rework"
+
     last_marker = parse_latest_event_marker(comments)
 
     # Find the linked PR context
@@ -147,12 +173,11 @@ def _process_review_candidate(
         )
         return "skipped_context_unchanged"
 
-    # Move to supervising if currently in review
+    # Move to supervising if currently in review, using shared transition helper
+    # so other durable workflow labels (including stale running/failed) are cleaned.
     if config.labels.review in issue.labels:
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.supervising],
-            remove=[config.labels.review],
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.supervising
         )
 
     worktree_path = create_or_reuse_worktree(repo_path, issue, config, process_runner)
@@ -166,10 +191,8 @@ def _process_review_candidate(
             "Worktree has uncommitted changes before supervisor cycle. "
             "Moving to blocked.",
         )
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.blocked],
-            remove=[config.labels.supervising],
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.blocked
         )
         return "blocked_dirty_worktree_before_supervisor"
 
@@ -194,32 +217,34 @@ def _process_review_candidate(
                 "Read-only supervisor left uncommitted changes. "
                 "Moving to blocked.",
             )
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.blocked],
-                remove=[config.labels.supervising],
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.blocked
             )
             return "blocked_dirty_read_only_supervisor"
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.review],
-            remove=[config.labels.supervising],
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.review
         )
         return "approved_for_human_review"
 
-    if action_result.action in ("request_human_input",):
-        github_client.edit_issue_labels(
+    if action_result.action == "wait_for_checks":
+        # PR checks are still pending; keep supervising and wait for a later
+        # state change without consuming a repair attempt.
+        _logger.info(
+            "Issue #%d checks still pending; staying in %s.",
             issue.number,
-            add=[config.labels.blocked],
-            remove=[config.labels.supervising],
+            config.labels.supervising,
+        )
+        return "waiting_for_checks"
+
+    if action_result.action in ("request_human_input",):
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.blocked
         )
         return "blocked_human_input"
 
     if action_result.action == "mark_failed":
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.failed],
-            remove=[config.labels.supervising],
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.failed
         )
         return "marked_failed"
 
@@ -237,18 +262,14 @@ def _process_review_candidate(
                 head_sha=head_sha,
             ),
         )
-        github_client.edit_issue_labels(
-            issue.number,
-            add=[config.labels.running],
-            remove=[config.labels.supervising],
+        transition_issue_workflow_state(
+            github_client, issue.number, config, config.labels.running
         )
         return f"queued_{action_result.action}"
 
     # Unknown action: block
-    github_client.edit_issue_labels(
-        issue.number,
-        add=[config.labels.blocked],
-        remove=[config.labels.supervising],
+    transition_issue_workflow_state(
+        github_client, issue.number, config, config.labels.blocked
     )
     return "blocked_unknown_action"
 
@@ -314,18 +335,8 @@ def review_once(
             )
         except Exception as exc:  # noqa: BLE001 - report queue failures and continue.
             exit_code = 1
-            current_labels = [
-                label for label in issue.labels if label.startswith("agent/")
-            ]
-            remove_labels = [
-                label
-                for label in current_labels
-                if label not in (config.labels.failed,)
-            ]
-            github_client.edit_issue_labels(
-                issue.number,
-                add=[config.labels.failed],
-                remove=remove_labels,
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.failed
             )
             github_client.comment_issue(
                 issue.number,

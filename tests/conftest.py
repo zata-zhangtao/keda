@@ -43,6 +43,7 @@ class FakeGitHubClient(IGitHubClient):
         self._remote_base_sha: str = "remote-base-sha"
         self._issue_states: dict[int, str] = {}
         self._issue_title: str | None = None
+        self._issue_labels: dict[int, tuple[str, ...]] = {}
 
     def sync_labels(self, labels: LabelConfig) -> None:
         self.calls.append({"method": "sync_labels", "labels": labels})
@@ -64,6 +65,10 @@ class FakeGitHubClient(IGitHubClient):
                 "remove": list(remove),
             }
         )
+        current = set(self._issue_labels.get(issue_number, ()))
+        current.update(add)
+        current.difference_update(remove)
+        self._issue_labels[issue_number] = tuple(current)
 
     def comment_issue(self, issue_number: int, body: str) -> None:
         self.calls.append(
@@ -162,7 +167,7 @@ class FakeGitHubClient(IGitHubClient):
             title=title,
             url=f"https://github.com/example/repo/issues/{issue_number}",
             body="",
-            labels=(),
+            labels=self._issue_labels.get(issue_number, ()),
             state=self._issue_states.get(issue_number, "OPEN"),
         )
 

@@ -100,6 +100,12 @@ def test_running_rework_guard_finds_rework_marker_hidden_by_later_marker() -> No
     config = AppConfig()
     issue = _make_issue()
     github_client._open_prs["issue-1"] = "https://github.com/example/repo/pull/1"
+    github_client._pr_contexts["issue-1"] = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="base-sha",
+    )
     github_client._issue_comments[issue.number] = [
         format_event_marker(
             phase="post_pr_rework_requested",
@@ -133,6 +139,12 @@ def test_running_rework_guard_ignores_completed_rework_marker() -> None:
     config = AppConfig()
     issue = _make_issue()
     github_client._open_prs["issue-1"] = "https://github.com/example/repo/pull/1"
+    github_client._pr_contexts["issue-1"] = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="def456",
+        base_sha="base-sha",
+    )
     github_client._issue_comments[issue.number] = [
         format_event_marker(
             phase="post_pr_rework_requested",
