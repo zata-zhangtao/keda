@@ -1,5 +1,7 @@
 # PRD: Remove Legacy iAR CLI Commands After Typer Alias Stabilization
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/63
+
 ## 1. Introduction & Goals
 
 `iar` 已迁移到 Typer/Rich 命令树，并新增推荐入口：
