@@ -398,6 +398,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_options(recover_publish_parser)
 
+    blocked_continue_parser = subparsers.add_parser(
+        "blocked-continue",
+        help="Resume a blocked Issue after resolving forbidden paths.",
+    )
+    blocked_continue_parser.add_argument(
+        "--issue",
+        type=int,
+        required=True,
+        help="Issue number to continue.",
+    )
+    blocked_continue_parser.add_argument(
+        "--agent",
+        choices=("auto", "codex", "claude", "kimi"),
+        default="auto",
+        help="Agent runner to use.",
+    )
+    add_common_options(blocked_continue_parser)
+
     deliberate_parser = subparsers.add_parser(
         "deliberate", help="Run a multi-agent deliberation session."
     )
@@ -809,6 +827,48 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     exc.failure_category,
                     exc,
                 )
+                return 1
+
+        if parsed.command == "blocked-continue":
+            from backend.core.use_cases.blocked_continue import (
+                BlockedContinueError,
+                blocked_continue_issue,
+            )
+
+            contexts = resolve_repository_targets(
+                runner_settings,
+                repo_id=repo_id,
+                repo_path_override=repo_override,
+            )
+            if len(contexts) != 1:
+                logger.error(
+                    "blocked-continue requires exactly one target repository. "
+                    "Use --repo or --repo-id to specify."
+                )
+                return 1
+            context = contexts[0]
+            github_client = create_github_client(context.repo_path, process_runner)
+            try:
+                claimed = blocked_continue_issue(
+                    issue_number=parsed.issue,
+                    repo_path=context.repo_path,
+                    config=context.config,
+                    agent=parsed.agent,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                )
+                if claimed:
+                    console.print(
+                        f"[green]Issue #{parsed.issue} resumed successfully.[/]"
+                    )
+                    return 0
+                console.print(
+                    f"[yellow]Issue #{parsed.issue} was claimed by another runner.[/]"
+                )
+                return 0
+            except BlockedContinueError as exc:
+                logger.error("blocked-continue failed: %s", exc)
+                error_console.print(f"[red]blocked-continue failed:[/] {exc}")
                 return 1
 
         if parsed.command == "deliberate":

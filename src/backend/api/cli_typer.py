@@ -687,6 +687,27 @@ def recover_publish_command(
     )
 
 
+@app.command("blocked-continue")
+def blocked_continue_command(
+    ctx: typer.Context,
+    issue: Annotated[int, typer.Option("--issue", help="Issue number to continue.")],
+    agent: RunAgentOption = RunAgentChoice.auto,
+    repo: RepoOption = None,
+    repo_id: RepoIdOption = None,
+    config: ConfigOption = None,
+) -> int:
+    """Resume a blocked Issue after resolving forbidden paths."""
+    return _run_typer_repository_command(
+        ctx,
+        "blocked-continue",
+        repo=repo,
+        repo_id=repo_id,
+        config=config,
+        issue=issue,
+        agent=_enum_value(agent),
+    )
+
+
 @app.command("recover")
 def recover_alias_command(
     ctx: typer.Context,

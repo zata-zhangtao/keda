@@ -20,6 +20,7 @@ _EVENT_MARKER_PATTERN = re.compile(
     r"(?:\s+mergeable=(?P<mergeable>true|false))?"
     r"(?:\s+issue_comments_count=(?P<issue_comments_count>\d+))?"
     r"(?:\s+pr_comments_count=(?P<pr_comments_count>\d+))?"
+    r"(?:\s+blocked_paths=(?P<blocked_paths>[^\s>]+))?"
     r"\s*-->"
 )
 
@@ -46,6 +47,12 @@ def _parse_event_marker(comment_body: str) -> ReviewEventMarker | None:
         mergeable = False
     issue_comments_count_raw = match.group("issue_comments_count")
     pr_comments_count_raw = match.group("pr_comments_count")
+    blocked_paths_raw = match.group("blocked_paths")
+    blocked_paths: tuple[str, ...] = ()
+    if blocked_paths_raw is not None:
+        blocked_paths = tuple(
+            path.strip() for path in blocked_paths_raw.split(",") if path.strip()
+        )
     return ReviewEventMarker(
         version=int(match.group("version")),
         phase=match.group("phase"),
@@ -62,6 +69,7 @@ def _parse_event_marker(comment_body: str) -> ReviewEventMarker | None:
         pr_comments_count=int(pr_comments_count_raw)
         if pr_comments_count_raw is not None
         else None,
+        blocked_paths=blocked_paths,
     )
 
 
@@ -126,6 +134,7 @@ def format_event_marker(
     mergeable: bool | None = None,
     issue_comments_count: int | None = None,
     pr_comments_count: int | None = None,
+    blocked_paths: tuple[str, ...] = (),
 ) -> str:
     """Format a hidden iar:event marker for Issue comments."""
     parts = [
@@ -149,4 +158,6 @@ def format_event_marker(
         parts.append(f"issue_comments_count={issue_comments_count}")
     if pr_comments_count is not None:
         parts.append(f"pr_comments_count={pr_comments_count}")
+    if blocked_paths:
+        parts.append(f"blocked_paths={','.join(blocked_paths)}")
     return f"<!-- iar:event {' '.join(parts)} -->"

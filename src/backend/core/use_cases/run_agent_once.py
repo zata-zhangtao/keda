@@ -45,6 +45,7 @@ from backend.core.use_cases.agent_runner_commit import (
 )
 from backend.core.use_cases.agent_runner_failure import (
     AgentRunnerAttemptError,
+    ForbiddenBlockedError,
     MaxRetriesExceededError,
     PublishFailureError,
     UnrecoverableError,
@@ -104,6 +105,7 @@ __all__ = [
     "EmptyCommitRequestError",
     "UnrecoverableError",
     "VerificationFailedError",
+    "build_blocked_continuation_prompt",
     "build_prompt",
     "build_recovery_prompt",
     "choose_agent",
@@ -292,6 +294,41 @@ _AGENT_COMMAND_BUILDERS: dict[str, Callable[[str, Path], list[str]]] = {
 }
 
 
+def build_blocked_continuation_prompt(
+    issue: IssueSummary,
+    worktree_path: Path,
+    blocked_paths: tuple[str, ...],
+) -> str:
+    """Build a continuation prompt for a blocked Issue that has been resolved.
+
+    Args:
+        issue: Issue being processed.
+        worktree_path: Path to the agent worktree.
+        blocked_paths: The forbidden paths that were previously blocked.
+
+    Returns:
+        A prompt instructing the agent to continue the remaining work.
+    """
+    lines = [
+        f"Continue working on Issue #{issue.number}: {issue.title}",
+        f"Issue URL: {issue.url}",
+        f"Worktree: {worktree_path}",
+        "",
+        "The following files were previously blocked by forbidden-path rules and have now been resolved by a human operator.",
+        "Please continue to complete the remaining tasks without modifying these files again unless explicitly required:",
+        "",
+    ]
+    for path in blocked_paths:
+        lines.append(f"- {path}")
+    lines.extend(
+        [
+            "",
+            "Proceed with the remaining implementation, verification, and commit as normal.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def run_agent(
     agent_name: str,
     issue: IssueSummary,
@@ -446,6 +483,7 @@ def run_agent_until_committed(
     process_runner: IProcessRunner,
     before_sha: str,
     expected_branch: str,
+    prompt_override: str | None = None,
 ) -> AgentCommitResult:
     """Run the agent, recover failed verification, and return final checks.
 
@@ -494,7 +532,14 @@ def run_agent_until_committed(
         # Phase 1: 运行 agent 或 recovery prompt
         try:
             if attempt_index == 0:
-                run_agent(selected_agent, issue, worktree_path, config, process_runner)
+                if prompt_override is not None:
+                    run_agent_with_prompt(
+                        selected_agent, prompt_override, worktree_path, process_runner
+                    )
+                else:
+                    run_agent(
+                        selected_agent, issue, worktree_path, config, process_runner
+                    )
             else:
                 recovery_prompt = build_recovery_prompt(
                     issue,
@@ -525,6 +570,8 @@ def run_agent_until_committed(
             )
             if failure_type == FailureType.UNRECOVERABLE:
                 raise UnrecoverableError(str(exc), attempt_results) from exc
+            if failure_type == FailureType.FORBIDDEN_BLOCKED:
+                raise ForbiddenBlockedError(str(exc), attempt_results) from exc
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_agent_execution_failure(exc)
@@ -723,6 +770,8 @@ def run_agent_until_committed(
                     )
                     if failure_type == FailureType.UNRECOVERABLE:
                         raise UnrecoverableError(str(exc), attempt_results) from exc
+                    if failure_type == FailureType.FORBIDDEN_BLOCKED:
+                        raise ForbiddenBlockedError(str(exc), attempt_results) from exc
                     if attempt_index >= max_recovery_attempts:
                         raise MaxRetriesExceededError(attempt_results) from exc
                     raise

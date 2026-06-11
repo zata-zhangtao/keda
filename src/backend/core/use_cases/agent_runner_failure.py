@@ -20,6 +20,7 @@ from backend.core.use_cases.agent_runner_feedback import (
 
 __all__ = [
     "AgentRunnerAttemptError",
+    "ForbiddenBlockedError",
     "MaxRetriesExceededError",
     "PublishFailureError",
     "UnrecoverableError",
@@ -27,6 +28,7 @@ __all__ = [
     "detect_usage_limit_root_cause",
     "format_agent_execution_failure",
     "format_attempt_history",
+    "format_blocked_failure_comment",
     "format_failure_comment",
     "format_publish_failure_comment",
     "format_recovery_failure_summary",
@@ -58,6 +60,17 @@ class MaxRetriesExceededError(AgentRunnerAttemptError):
 
 class UnrecoverableError(AgentRunnerAttemptError):
     """Raised when an unrecoverable failure is encountered."""
+
+    def __init__(
+        self,
+        message: str,
+        attempt_results: list[AttemptResult],
+    ) -> None:
+        super().__init__(message, attempt_results)
+
+
+class ForbiddenBlockedError(AgentRunnerAttemptError):
+    """Raised when forbidden paths block the agent and require human intervention."""
 
     def __init__(
         self,
@@ -136,7 +149,7 @@ def classify_failure(
         if isinstance(exc, RuntimeError):
             exc_message = str(exc)
             if "Refusing to publish forbidden paths" in exc_message:
-                return FailureType.UNRECOVERABLE
+                return FailureType.FORBIDDEN_BLOCKED
             if "Refusing to commit on unexpected branch" in exc_message:
                 return FailureType.UNRECOVERABLE
             if is_recoverable_commit_request_error(exc):
@@ -355,6 +368,63 @@ def format_publish_failure_comment(
         ]
     )
 
+    return "\n".join(lines)
+
+
+def format_blocked_failure_comment(
+    exc: BaseException,
+    attempt_results: list[AttemptResult] | None = None,
+    *,
+    issue_number: int | None = None,
+) -> str:
+    """Build a blocked failure comment for forbidden path interception.
+
+    Args:
+        exc: The exception that caused the blockage.
+        attempt_results: Optional attempt history rendered as a table.
+        issue_number: When provided, recovery guidance is appended.
+    """
+    exc_message = str(exc)
+    blocked_paths: list[str] = []
+    if "Refusing to publish forbidden paths:" in exc_message:
+        paths_part = exc_message.split("Refusing to publish forbidden paths:", 1)[1]
+        blocked_paths = [p.strip() for p in paths_part.split(",") if p.strip()]
+
+    lines = [
+        "## Agent Runner Blocked",
+        "",
+        "The agent was blocked because it attempted to modify forbidden paths.",
+        "",
+        "- Block type: `blocked_forbidden`",
+    ]
+
+    if blocked_paths:
+        lines.append("- Blocked paths:")
+        for path in blocked_paths:
+            lines.append(f"  - `{path}`")
+
+    lines.extend(
+        [
+            "",
+            "### How to Resume",
+            "",
+            "1. Review the blocked files above.",
+            "2. Resolve each file appropriately (commit, revert, or modify).",
+            "3. Ensure the worktree is clean (`git status` shows no pending changes).",
+            "4. Run the following command to continue:",
+            "",
+            "```bash",
+            f"uv run iar blocked-continue --issue {issue_number}",
+            "```",
+            "",
+        ]
+    )
+
+    if attempt_results:
+        lines.append(format_attempt_history(attempt_results))
+        lines.append("")
+
+    lines.extend(["```text", exc_message, "```", ""])
     return "\n".join(lines)
 
 

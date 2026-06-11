@@ -34,6 +34,7 @@ class FailureType(Enum):
     VERIFICATION_FAILED = "verification_failed"
     AGENT_ERROR = "agent_error"
     UNRECOVERABLE = "unrecoverable"
+    FORBIDDEN_BLOCKED = "forbidden_blocked"
 
 
 @dataclass(frozen=True)
@@ -210,6 +211,7 @@ class ReviewEventMarker:
     mergeable: bool | None = None
     issue_comments_count: int | None = None
     pr_comments_count: int | None = None
+    blocked_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

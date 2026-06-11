@@ -547,7 +547,76 @@ agent/failed ── recover-publish ──→ agent/supervising ── superviso
 
 # recover-publish 恢复路径（supervisor disabled）
 agent/failed ── recover-publish ──→ agent/review
+
+# forbidden path blocked 恢复路径
+agent/running ── forbidden path 拦截 ──→ agent/blocked ── blocked-continue ──→ agent/running ── 继续执行 ──→ agent/supervising
 ```
+
+## Forbidden Path 阻塞恢复
+
+当 Agent 在 commit 阶段触发了 `forbidden_path_patterns`（如修改了 `.env.example`），runner 会将 Issue 标记为 `agent/blocked` 而不是 `agent/failed`，因为人工确认后可以继续完成剩余任务。
+
+### 触发条件
+
+- Agent 的变更中包含匹配 `forbidden_path_patterns` 的文件
+- `validate_safe_changes()` 在 `commit_requested_changes()` 阶段拦截
+- Issue 进入 `agent/blocked`，评论中包含被拦截的文件列表和恢复命令
+
+### 恢复步骤
+
+1. **查看 blocked 评论**
+
+   在 Issue 评论中找到 `## Agent Runner Blocked`，确认被拦截的文件列表。
+
+2. **在 worktree 中处理 forbidden 文件**
+
+   进入对应 worktree，根据业务需求选择提交、修改或撤销这些文件：
+
+   ```bash
+   cd $(iar worktree path --branch issue-<number>)
+   git status
+   # 处理 forbidden 文件后确保 worktree 干净
+   git add -A && git commit -m "resolve forbidden paths"
+   ```
+
+3. **运行 blocked-continue 继续执行**
+
+   ```bash
+   uv run iar blocked-continue --issue <number>
+   ```
+
+   CLI 会依次执行：
+   - 校验 worktree 存在且分支正确
+   - 校验 worktree 干净（无未提交变更）
+   - 校验 pending diff 不再包含 forbidden paths
+   - 写入 `blocked_resolution_requested` marker comment
+   - 通过 label CAS（compare-and-swap）竞争认领：将 `agent/blocked` 切换为 `agent/running`
+   - 认领成功后发送 continuation prompt，让 Agent 继续完成剩余任务
+
+### 竞争安全
+
+多个 runner 同时处理同一个 blocked Issue 时，只有第一个成功执行 label CAS 的 runner 会继续。其他 runner 会收到明确提示并跳过。即使 `iar blocked-continue` 只写了 marker 但 CAS 被其他进程抢占，后续 `iar run-once` 轮询时也会检测到该 marker 并完成认领。
+
+### 与 run-once 兜底路径的关系
+
+`iar run-once` 在消耗完 `agent/ready` 和 `agent/running` 配额后，也会扫描 `agent/blocked` Issue。对带有 `blocked_resolution_requested` marker 的 Issue，它会执行同样的 CAS 竞争认领。这意味着：
+
+- 你可以只写 marker（通过脚本或评论），不运行 `blocked-continue`，由 daemon 自动认领
+- 也可以运行 `blocked-continue` 立即触发 continuation
+
+### 状态流转补充
+
+```text
+agent/running ── commit 时 forbidden path 拦截 ──→ agent/blocked
+agent/blocked ── 人工处理 + blocked-continue ──→ agent/running ── 继续执行 ──→ agent/supervising
+```
+
+### 注意事项
+
+- `blocked-continue` 只处理 commit 阶段的 forbidden 拦截，不处理 publish 阶段的拦截
+- 继续执行后如果 Agent 再次触发 forbidden 拦截，会重新回到 `agent/blocked`
+- worktree 不干净时 `blocked-continue` 会失败，必须先提交或 stash 所有变更
+- 被拦截的文件路径会写入 `blocked_resolution_requested` marker，供 continuation prompt 引用
 
 ## 发布失败恢复
 

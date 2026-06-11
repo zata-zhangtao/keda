@@ -2572,8 +2572,8 @@ def test_classify_failure_agent_error() -> None:
     assert failure_type == FailureType.AGENT_ERROR
 
 
-def test_classify_failure_unrecoverable_forbidden_paths() -> None:
-    """classify_failure should return UNRECOVERABLE for forbidden path violations."""
+def test_classify_failure_forbidden_blocked_paths() -> None:
+    """classify_failure should return FORBIDDEN_BLOCKED for forbidden path violations."""
     agent_result = CommandResult(("codex",), 0, "", "")
     exc = RuntimeError("Refusing to publish forbidden paths: .env")
     failure_type = classify_failure(
@@ -2584,7 +2584,7 @@ def test_classify_failure_unrecoverable_forbidden_paths() -> None:
         verification_results=[],
         exc=exc,
     )
-    assert failure_type == FailureType.UNRECOVERABLE
+    assert failure_type == FailureType.FORBIDDEN_BLOCKED
 
 
 def test_classify_failure_success() -> None:

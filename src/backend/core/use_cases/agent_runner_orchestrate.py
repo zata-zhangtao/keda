@@ -18,6 +18,7 @@ Issue 有三条处理路径：
 from __future__ import annotations
 
 import logging
+import os
 import socket
 from pathlib import Path
 
@@ -41,6 +42,11 @@ from backend.core.use_cases.agent_runner_events import (
     parse_latest_pending_rework_marker,
 )
 from backend.core.use_cases.agent_runner_git import has_changes
+from backend.core.use_cases.agent_runner_workflow import (
+    claim_blocked_issue,
+    find_latest_unconsumed_marker,
+    workflow_state_labels,
+)
 from backend.core.use_cases.agent_runner_publication import (
     _finish_existing_commit_publication,
     _finish_implementation_publication,
@@ -177,16 +183,11 @@ def _mark_issue_failed(
         github_client: GitHub 客户端
         exc: 捕获的异常对象
     """
-    # 延迟导入避免循环依赖
-    from backend.core.use_cases.agent_runner_publication import (
-        _workflow_state_labels,
-    )
-
     try:
         github_client.edit_issue_labels(
             issue.number,
             add=[config.labels.failed],
-            remove=_workflow_state_labels(config),
+            remove=workflow_state_labels(config),
         )
     except Exception as label_exc:  # noqa: BLE001 - preserve original failure.
         _logger.error(
@@ -222,6 +223,57 @@ def _mark_issue_failed(
     except Exception as comment_exc:  # noqa: BLE001 - preserve original failure.
         _logger.error(
             "Failed to comment on Issue #%d failure: %s",
+            issue.number,
+            comment_exc,
+        )
+
+
+def _mark_issue_blocked(
+    *,
+    issue: IssueSummary,
+    config: AppConfig,
+    github_client: IGitHubClient,
+    exc: Exception,
+) -> None:
+    """将 Issue 标记为 blocked 状态（forbidden path 拦截）。
+
+    Args:
+        issue: Issue 对象
+        config: 应用配置
+        github_client: GitHub 客户端
+        exc: 捕获的异常对象
+    """
+    from backend.core.use_cases.agent_runner_failure import (
+        ForbiddenBlockedError,
+        format_blocked_failure_comment,
+    )
+
+    try:
+        github_client.edit_issue_labels(
+            issue.number,
+            add=[config.labels.blocked],
+            remove=workflow_state_labels(config),
+        )
+    except Exception as label_exc:  # noqa: BLE001 - preserve original failure.
+        _logger.error(
+            "Failed to mark Issue #%d as %s: %s",
+            issue.number,
+            config.labels.blocked,
+            label_exc,
+        )
+
+    attempt_results = getattr(exc, "attempt_results", None)
+    if isinstance(exc, ForbiddenBlockedError) and attempt_results is not None:
+        comment_body = format_blocked_failure_comment(
+            exc, attempt_results, issue_number=issue.number
+        )
+    else:
+        comment_body = format_blocked_failure_comment(exc, issue_number=issue.number)
+    try:
+        github_client.comment_issue(issue.number, comment_body)
+    except Exception as comment_exc:  # noqa: BLE001 - preserve original failure.
+        _logger.error(
+            "Failed to comment on Issue #%d blocked: %s",
             issue.number,
             comment_exc,
         )
@@ -271,6 +323,201 @@ def _has_existing_local_commit_ready_for_publish(
             exc,
         )
         return False
+
+
+_BLOCKED_RESOLUTION_COMPLETION_PHASES = {
+    "implementation_complete",
+    "draft_pr_created",
+    "publish_recovered",
+    "rebase_repair_complete",
+    "blocked_resolution_complete",
+}
+
+
+class BlockedWorktreeClaimedError(RuntimeError):
+    """Raised when another runner is already processing the blocked worktree."""
+
+    pass
+
+
+def _acquire_blocked_claim_lock(lock_path: Path, issue_number: int) -> None:
+    """Acquire an atomic filesystem lock for blocked issue processing.
+
+    Uses ``O_CREAT | O_EXCL`` for atomic creation. If the lock already exists,
+    checks whether the owning process is still alive; if dead, steals the lock.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(f"{os.getpid()}\n")
+        return
+    except FileExistsError:
+        pass
+
+    # Lock exists — check if owner is still alive
+    try:
+        raw_text = lock_path.read_text(encoding="utf-8").strip()
+        owner_pid = int(raw_text.splitlines()[0])
+    except (OSError, ValueError, IndexError):
+        owner_pid = None
+
+    if owner_pid is not None:
+        try:
+            os.kill(owner_pid, 0)
+            _logger.info(
+                "Blocked Issue #%d worktree already claimed by alive process %d.",
+                issue_number,
+                owner_pid,
+            )
+            raise BlockedWorktreeClaimedError(
+                f"Blocked Issue #{issue_number} worktree is already being processed."
+            )
+        except OSError:
+            # Process is dead — steal the lock
+            _logger.warning(
+                "Stealing stale blocked claim lock for Issue #%d from dead PID %d.",
+                issue_number,
+                owner_pid,
+            )
+
+    # Remove stale lock and retry once
+    try:
+        lock_path.unlink()
+    except OSError:
+        pass
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(f"{os.getpid()}\n")
+    except FileExistsError:
+        raise BlockedWorktreeClaimedError(
+            f"Blocked Issue #{issue_number} worktree claim race lost after lock steal attempt."
+        )
+
+
+def _release_blocked_claim_lock(lock_path: Path) -> None:
+    """Release the blocked claim lock if it belongs to the current process."""
+    try:
+        raw_text = lock_path.read_text(encoding="utf-8").strip()
+        owner_pid = int(raw_text.splitlines()[0])
+        if owner_pid == os.getpid():
+            lock_path.unlink()
+    except (OSError, ValueError, IndexError):
+        pass
+
+
+def _guard_blocked_issue_has_resolution(
+    issue: IssueSummary,
+    github_client: IGitHubClient,
+) -> ReviewEventMarker | None:
+    """检测 blocked Issue 是否包含未消费的 blocked_resolution_requested marker。
+
+    Args:
+        issue: Issue 对象
+        github_client: GitHub 客户端
+
+    Returns:
+        未消费的 blocked_resolution marker，或 None
+    """
+    comments = github_client.list_issue_comments(issue.number)
+    return find_latest_unconsumed_marker(
+        comments,
+        phase="blocked_resolution_requested",
+        completion_phases=_BLOCKED_RESOLUTION_COMPLETION_PHASES,
+    )
+
+
+def _process_blocked_resolution(
+    *,
+    issue: IssueSummary,
+    repo_path: Path,
+    config: AppConfig,
+    agent: str,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    content_generator: IContentGenerator | None = None,
+    marker: ReviewEventMarker,
+) -> None:
+    """处理带 blocked_resolution marker 的 blocked Issue。
+
+    在现有 worktree 上发送 continuation prompt，让 Agent 继续完成剩余任务。
+
+    Args:
+        issue: Issue 对象
+        repo_path: 仓库根目录
+        config: 应用配置
+        agent: Agent 覆盖
+        github_client: GitHub 客户端
+        process_runner: 进程运行器
+        content_generator: 可选的 AI 内容生成器
+        marker: blocked_resolution_requested 事件标记
+    """
+    from backend.core.use_cases.agent_runner_publish import validate_safe_changes
+    from backend.core.use_cases.run_agent_once import (
+        build_blocked_continuation_prompt,
+        run_agent_until_committed,
+    )
+
+    selected_agent = choose_agent(issue, config, agent)
+
+    # 定位 worktree 并确认分支
+    worktree_path = _find_worktree_path_for_issue(
+        repo_path, issue, config, process_runner
+    )
+    current_branch = get_current_branch(worktree_path, process_runner)
+    expected_branch = f"issue-{issue.number}"
+    if current_branch != expected_branch:
+        raise RuntimeError(
+            f"Blocked resolution aborted: on branch {current_branch}, "
+            f"expected {expected_branch}"
+        )
+
+    # worktree 必须是 clean 的
+    if has_changes(worktree_path, process_runner):
+        raise RuntimeError(
+            "Blocked resolution aborted: worktree has uncommitted changes. "
+            "Please commit or stash them before continuing."
+        )
+
+    # 再次检查无 forbidden paths
+    validate_safe_changes(worktree_path, config, process_runner)
+
+    # 原子锁：防止多个 runner 同时处理同一个 blocked Issue 的 worktree
+    lock_path = worktree_path / ".agent-runner" / "blocked-claim.lock"
+    _acquire_blocked_claim_lock(lock_path, issue.number)
+    try:
+        # 构建并发送 continuation prompt
+        continuation_prompt = build_blocked_continuation_prompt(
+            issue, worktree_path, marker.blocked_paths
+        )
+        before_sha = get_head_sha(worktree_path, process_runner)
+
+        commit_result = run_agent_until_committed(
+            selected_agent=selected_agent,
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            process_runner=process_runner,
+            before_sha=before_sha,
+            expected_branch=current_branch,
+            prompt_override=continuation_prompt,
+        )
+
+        # 完成发布流程
+        _finish_implementation_publication(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            selected_agent=selected_agent,
+            github_client=github_client,
+            process_runner=process_runner,
+            expected_branch=current_branch,
+            commit_result=commit_result,
+            content_generator=content_generator,
+        )
+    finally:
+        _release_blocked_claim_lock(lock_path)
 
 
 def _process_ready_issue(
@@ -685,9 +932,26 @@ def run_once(
                     config.labels.running,
                 )
 
+    # 发现 blocked Issue（使用剩余配额）
+    remaining = max_issues - len(issues_to_process)
+    if remaining > 0:
+        blocked_candidates = github_client.list_review_candidate_issues(
+            [config.labels.blocked], remaining
+        )
+        for issue in blocked_candidates:
+            marker = _guard_blocked_issue_has_resolution(issue, github_client)
+            if marker is not None:
+                issues_to_process.append((issue, "blocked_resolution"))
+            else:
+                _logger.info(
+                    "Skipping Issue #%d with label %s: no blocked_resolution_requested marker.",
+                    issue.number,
+                    config.labels.blocked,
+                )
+
     if not issues_to_process:
         _logger.info(
-            "No open Issues found with label %s or eligible running rework.",
+            "No open Issues found with label %s, eligible running rework, or blocked resolution.",
             config.labels.ready,
         )
         return 0
@@ -704,7 +968,17 @@ def run_once(
                 selected_agent,
                 issue.title,
             )
+            if issue_kind == "blocked_resolution":
+                marker = _guard_blocked_issue_has_resolution(issue, github_client)
+                if marker is None:
+                    _logger.info(
+                        "DRY RUN: Issue #%d blocked_resolution marker not found, skipping.",
+                        issue.number,
+                    )
+                    continue
             continue
+        from backend.core.use_cases.agent_runner_failure import ForbiddenBlockedError
+
         try:
             if issue_kind == "ready":
                 _process_ready_issue(
@@ -729,6 +1003,27 @@ def run_once(
                     process_runner=process_runner,
                     marker=marker,
                 )
+            elif issue_kind == "blocked_resolution":
+                marker = _guard_blocked_issue_has_resolution(issue, github_client)
+                if marker is None:
+                    continue
+                claimed = claim_blocked_issue(github_client, issue.number, config)
+                if not claimed:
+                    _logger.info(
+                        "Issue #%d already claimed by another runner, skipping.",
+                        issue.number,
+                    )
+                    continue
+                _process_blocked_resolution(
+                    issue=issue,
+                    repo_path=repo_path,
+                    config=config,
+                    agent=agent,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                    content_generator=content_generator,
+                    marker=marker,
+                )
             else:
                 _process_running_publish_recovery(
                     issue=issue,
@@ -740,6 +1035,21 @@ def run_once(
                     content_generator=content_generator,
                 )
             _logger.info("Completed Issue #%d: %s", issue.number, issue.title)
+        except ForbiddenBlockedError as exc:
+            exit_code = 1
+            _mark_issue_blocked(
+                issue=issue,
+                config=config,
+                github_client=github_client,
+                exc=exc,
+            )
+            _logger.error("Blocked Issue #%d: %s", issue.number, exc)
+        except BlockedWorktreeClaimedError as exc:
+            _logger.info(
+                "Issue #%d worktree already claimed by another runner, skipping: %s",
+                issue.number,
+                exc,
+            )
         except Exception as exc:  # noqa: BLE001 - report queue failures and continue.
             exit_code = 1
             _mark_issue_failed(

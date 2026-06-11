@@ -686,3 +686,105 @@ def test_cli_parser_recover_publish_missing_issue() -> None:
     parser = build_parser()
     with _pytest.raises(SystemExit):
         parser.parse_args(["recover-publish"])
+
+
+def test_cli_parser_blocked_continue_required_args() -> None:
+    """blocked-continue should require --issue."""
+    parser = build_parser()
+    parsed = parser.parse_args(["blocked-continue", "--issue", "7"])
+    assert parsed.command == "blocked-continue"
+    assert parsed.issue == 7
+    assert parsed.agent == "auto"
+
+
+def test_cli_parser_blocked_continue_with_agent() -> None:
+    """blocked-continue should accept --agent override."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["blocked-continue", "--issue", "7", "--agent", "claude"]
+    )
+    assert parsed.command == "blocked-continue"
+    assert parsed.issue == 7
+    assert parsed.agent == "claude"
+
+
+def test_cli_parser_blocked_continue_missing_issue() -> None:
+    """blocked-continue should fail without --issue."""
+    import pytest as _pytest
+
+    parser = build_parser()
+    with _pytest.raises(SystemExit):
+        parser.parse_args(["blocked-continue"])
+
+
+def test_main_blocked_continue_success(capsys) -> None:
+    """blocked-continue should print success when claimed."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.config = MagicMock()
+    mock_context.config.labels.blocked = "agent/blocked"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.core.use_cases.blocked_continue.blocked_continue_issue",
+        return_value=True,
+    ) as mock_blocked:
+        exit_code = main(["blocked-continue", "--issue", "42"])
+
+    assert exit_code == 0
+    mock_blocked.assert_called_once()
+    assert mock_blocked.call_args.kwargs["issue_number"] == 42
+    captured = capsys.readouterr()
+    assert "Issue #42 resumed successfully" in captured.out
+
+
+def test_main_blocked_continue_already_claimed(capsys) -> None:
+    """blocked-continue should print skip message when another runner claimed it."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.config = MagicMock()
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.core.use_cases.blocked_continue.blocked_continue_issue",
+        return_value=False,
+    ) as mock_blocked:
+        exit_code = main(["blocked-continue", "--issue", "42"])
+
+    assert exit_code == 0
+    mock_blocked.assert_called_once()
+    captured = capsys.readouterr()
+    assert "Issue #42 was claimed by another runner" in captured.out
+
+
+def test_main_blocked_continue_failure_prints_error(capsys) -> None:
+    """blocked-continue should print a concise error on BlockedContinueError."""
+    from backend.api.cli import main
+    from backend.core.use_cases.blocked_continue import BlockedContinueError
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.config = MagicMock()
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.core.use_cases.blocked_continue.blocked_continue_issue",
+        side_effect=BlockedContinueError("Worktree has uncommitted changes."),
+    ):
+        exit_code = main(["blocked-continue", "--issue", "42"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    combined = f"{captured.out}\n{captured.err}"
+    assert "blocked-continue failed" in combined
+    assert "Worktree has uncommitted changes" in combined
