@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from backend.infrastructure.process_runner import (
     ClaudeStreamRenderer,
+    CommandFailedError,
+    SubprocessRunner,
     _TimestampedStreamFormatter,
     _format_timestamped_line,
     should_filter_claude_stream,
@@ -633,3 +639,90 @@ def test_capture_output_true_not_polluted(tmp_path: Path) -> None:
     # stdout should be raw, not timestamped
     assert result.stdout == "raw output\n"
     assert "[HH:MM:SS]" not in result.stdout
+
+
+def test_command_failed_error_includes_stderr(tmp_path: Path) -> None:
+    """stderr must appear in the string representation of the raised exception."""
+    runner = SubprocessRunner()
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        runner.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stderr.write('failure detail'); sys.exit(1)",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+        )
+
+    assert isinstance(exc_info.value, subprocess.CalledProcessError)
+    message = str(exc_info.value)
+    assert "failure detail" in message
+    assert "--- stderr/stdout ---" in message
+
+
+def test_command_failed_error_falls_back_to_stdout(tmp_path: Path) -> None:
+    """stdout must be used when stderr is empty."""
+    runner = SubprocessRunner()
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        runner.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.write('stdout failure'); sys.exit(1)",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+        )
+
+    message = str(exc_info.value)
+    assert "stdout failure" in message
+    assert "--- stderr/stdout ---" in message
+
+
+def test_command_failed_error_truncates_long_output(tmp_path: Path) -> None:
+    """Output longer than 4 KB must be truncated and annotated."""
+    runner = SubprocessRunner()
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        runner.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stderr.write('x' * 5000); sys.exit(1)",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+        )
+
+    message = str(exc_info.value)
+    assert "... (truncated)" in message
+    assert len(message) < 5500
+
+
+def test_command_failed_error_no_output(tmp_path: Path) -> None:
+    """The exception message must keep command and return code when no output exists."""
+    runner = SubprocessRunner()
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        runner.run(
+            [sys.executable, "-c", "import sys; sys.exit(2)"],
+            cwd=tmp_path,
+            capture_output=True,
+        )
+
+    message = str(exc_info.value)
+    assert "--- stderr/stdout ---" not in message
+    assert "2" in message
+
+
+def test_command_failed_error_preserves_attributes() -> None:
+    """CommandFailedError must expose the standard CalledProcessError attributes."""
+    exc = CommandFailedError(1, ["cmd"], output="out", stderr="err")
+
+    assert exc.returncode == 1
+    assert exc.cmd == ["cmd"]
+    assert exc.output == "out"
+    assert exc.stderr == "err"
