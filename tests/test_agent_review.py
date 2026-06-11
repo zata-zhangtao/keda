@@ -333,6 +333,35 @@ def test_parse_reviewer_decision_from_json() -> None:
     assert result.findings_low == 3
 
 
+def test_parse_reviewer_decision_with_string_array_findings() -> None:
+    """Findings as string arrays must not break verdict parsing."""
+    result = parse_reviewer_decision(
+        "```json\n"
+        "{\n"
+        '"verdict": "approved",\n'
+        '"summary": "ok",\n'
+        '"findings_medium": [\n'
+        '"first finding",\n'
+        '"last finding without trailing comma"\n'
+        "]\n"
+        "}\n"
+        "```"
+    )
+
+    assert result.verdict == "approved"
+    assert result.parseable is True
+
+
+def test_parse_reviewer_decision_falls_back_to_quoted_text_verdict() -> None:
+    """Corrupted JSON with a quoted verdict should still be rescued."""
+    result = parse_reviewer_decision(
+        '```json{"verdict": "approved","findings_medium": ["only",]}```'
+    )
+
+    assert result.verdict == "approved"
+    assert result.parseable is True
+
+
 def test_run_pre_push_review_skips_when_disabled() -> None:
     """If pre-push review is disabled, return immediately."""
     issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())

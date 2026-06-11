@@ -208,10 +208,14 @@ def _normalize_review_verdict(raw_verdict: object) -> str:
 
 
 def _parse_text_verdict(text: str) -> str | None:
+    # 引号可选：兼容纯文本（verdict: approved）与残缺 JSON（"verdict": "approved"）。
     normalized_text = text.strip().lower()
-    if re.search(r"verdict\s*[:=-]\s*approved\b", normalized_text):
+    if re.search(r"[\"']?verdict[\"']?\s*[:=-]\s*[\"']?approved\b", normalized_text):
         return "approved"
-    if re.search(r"verdict\s*[:=-]\s*changes?[_ -]requested\b", normalized_text):
+    if re.search(
+        r"[\"']?verdict[\"']?\s*[:=-]\s*[\"']?changes?[_ -]requested\b",
+        normalized_text,
+    ):
         return "changes_requested"
     return None
 

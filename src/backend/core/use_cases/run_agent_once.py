@@ -339,6 +339,11 @@ def extract_agent_response_text(result: CommandResult) -> str:
     Claude 使用 `--output-format stream-json` 时，每行输出是一个 JSON 事件，
     包含 stream_event（文本增量）、assistant（完整消息）或 result（最终结果）。
     本函数按优先级提取有效文本，非 stream-json 命令则直接返回原始 stdout。
+
+    注意：process runner 对 stream-json 命令会先把事件流渲染成纯文本再返回，
+    此时 stdout 已不是原始事件流；若仍逐行重解析，恰好构成合法 JSON 标量的行
+    （如数组末尾不带逗号的字符串元素）会被静默丢弃，破坏其中的 JSON 内容。
+    因此只有确实识别到 stream-json 事件时才走事件提取，否则原样返回。
     """
     if not result.stdout:
         return ""
@@ -349,24 +354,29 @@ def extract_agent_response_text(result: CommandResult) -> str:
     stream_text_parts: list[str] = []
     assistant_text_parts: list[str] = []
     result_parts: list[str] = []
+    saw_stream_json_event = False
     for output_line in result.stdout.splitlines():
         try:
             event_payload = json.loads(output_line)
         except json.JSONDecodeError:
-            stream_text_parts.append(output_line)
             continue
         if not isinstance(event_payload, dict):
             continue
         event_type = event_payload.get("type")
         if event_type == "stream_event":
+            saw_stream_json_event = True
             _append_claude_stream_event_text(event_payload, stream_text_parts)
         elif event_type == "assistant":
+            saw_stream_json_event = True
             _append_claude_assistant_text(event_payload, assistant_text_parts)
         elif event_type == "result":
+            saw_stream_json_event = True
             result_text = str(event_payload.get("result") or "").strip()
             if result_text:
                 result_parts.append(result_text)
 
+    if not saw_stream_json_event:
+        return result.stdout
     if stream_text_parts:
         return "".join(stream_text_parts)
     if assistant_text_parts:

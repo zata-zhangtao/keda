@@ -187,6 +187,35 @@ def test_extract_agent_response_text_from_claude_stream_json() -> None:
     )
 
 
+def test_extract_agent_response_text_keeps_rendered_stream_output() -> None:
+    """Already-rendered stream output must be returned verbatim.
+
+    Process runner 会把 Claude stream-json 渲染成纯文本后返回；若再按事件流
+    逐行重解析，数组末尾不带逗号的字符串元素恰好是合法 JSON 标量，会被静默
+    丢弃并破坏 reviewer verdict JSON（回归自 Issue #53 pre-push review 失败）。
+    """
+    rendered_stdout = (
+        "```json\n"
+        "{\n"
+        '"verdict": "approved",\n'
+        '"summary": "ok",\n'
+        '"findings_medium": [\n'
+        '"first finding with trailing comma",\n'
+        '"last finding is a valid standalone JSON string"\n'
+        "]\n"
+        "}\n"
+        "```\n"
+    )
+    result = CommandResult(
+        command=("claude", "--output-format", "stream-json", "-p", "Review."),
+        return_code=0,
+        stdout=rendered_stdout,
+        stderr="",
+    )
+
+    assert extract_agent_response_text(result) == rendered_stdout
+
+
 def test_run_once_dry_run() -> None:
     """Dry-run should list ready work without mutating labels."""
     fake_client = FakeGitHubClient()
