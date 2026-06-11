@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { formatLocalDateTime } from "@/lib/utils";
 import {
   addRegistryRepository,
   fetchAuditLog,
@@ -200,7 +201,7 @@ export function RepositoriesPage() {
                   className="flex flex-wrap items-center gap-2 border-b border-slate-100 py-1.5 dark:border-slate-800"
                 >
                   <span className="font-mono text-[11px] text-slate-400">
-                    {audit.occurred_at}
+                    {formatLocalDateTime(audit.occurred_at)}
                   </span>
                   <Badge
                     variant={audit.result === "accepted" ? "ready" : "warning"}

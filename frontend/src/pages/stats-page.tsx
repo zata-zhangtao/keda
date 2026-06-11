@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatLocalDateTime } from "@/lib/utils";
 import {
   fetchCompletionStats,
   fetchRecentRuns,
@@ -235,7 +236,7 @@ export function StatsPage() {
                       className="border-b border-slate-100 dark:border-slate-800"
                     >
                       <td className="py-2 pr-3 font-mono text-[11px] text-slate-500">
-                        {run.started_at}
+                        {formatLocalDateTime(run.started_at)}
                       </td>
                       <td className="py-2 pr-3">{run.repo_id}</td>
                       <td className="py-2 pr-3 font-mono text-xs">

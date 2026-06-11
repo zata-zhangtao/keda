@@ -14,6 +14,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { formatLocalDateTime } from "@/lib/utils";
 import {
   fetchProcessLog,
   fetchProcesses,
@@ -218,7 +219,7 @@ export function ProcessesPage() {
                         {record.exit_code ?? "—"}
                       </td>
                       <td className="py-2 pr-3 font-mono text-[11px] text-slate-500">
-                        {record.started_at}
+                        {formatLocalDateTime(record.started_at)}
                       </td>
                       <td className="py-2 pr-3">
                         <div className="flex gap-1">

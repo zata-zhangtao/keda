@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { IssueDetail } from "@/components/agent-runner/issue-detail";
 import { RepositoryOverview } from "@/components/agent-runner/repository-overview";
+import { formatLocalDateTime } from "@/lib/utils";
 import {
   fetchIssueDetail,
   fetchMonitoringOverview,
@@ -382,7 +383,7 @@ function SummaryStrip({
         异常 {anomalyCount}
       </Badge>
       <span className="ml-auto font-mono text-[11px] text-slate-400">
-        scanned_at {scannedAt || "—"}
+        scanned_at {formatLocalDateTime(scannedAt)}
       </span>
     </div>
   );
