@@ -1,5 +1,10 @@
 import * as React from "react";
-import { IconDashboard, IconSettings } from "@tabler/icons-react";
+import {
+  IconChartBar,
+  IconDashboard,
+  IconFolders,
+  IconTerminal2,
+} from "@tabler/icons-react";
 import { IconInnerShadowTop } from "@tabler/icons-react";
 
 import { NavMain } from "@/components/nav-main";
@@ -15,9 +20,10 @@ import {
 } from "@/components/ui/sidebar";
 
 const navItems = [
-  { title: "Agent Runner Monitor", url: "/dashboard", icon: IconDashboard },
-  // TODO: 添加更多导航项
-  { title: "设置", url: "/settings", icon: IconSettings },
+  { title: "总览", url: "/dashboard", icon: IconDashboard },
+  { title: "进程", url: "/processes", icon: IconTerminal2 },
+  { title: "统计", url: "/stats", icon: IconChartBar },
+  { title: "项目", url: "/repositories", icon: IconFolders },
 ];
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
@@ -29,7 +35,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenuButton asChild className="data-[slot=sidebar-menu-button]:p-1.5!">
               <a href="/">
                 <IconInnerShadowTop className="size-5!" />
-                <span className="text-base font-semibold">My App</span>
+                <span className="text-base font-semibold">Agent Runner 管理终端</span>
               </a>
             </SidebarMenuButton>
           </SidebarMenuItem>

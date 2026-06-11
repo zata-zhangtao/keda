@@ -1329,7 +1329,11 @@ Agent Runner 同时暴露只读状态端点：
 
 ## Agent Runner Monitoring Dashboard
 
-Dashboard 路由 `/dashboard`（即 `frontend/src/pages/dashboard-page.tsx`）展示 Agent Runner 的**只读**监控面板。运维者打开 Web 就能看到当前队列、PR 状态、事件时间线和异常。**所有恢复操作仍由 `iar` CLI 完成，面板不替代 CLI，只让状态"打开即见"。**
+Dashboard 路由 `/dashboard`（即 `frontend/src/pages/dashboard-page.tsx`）展示 Agent Runner 的监控视图。运维者打开 Web 就能看到当前队列、PR 状态、事件时间线和异常。监控 API 本身保持只读；写操作（重试 failed、继续 blocked、启停 runner 进程等）由独立的管理终端 API 承载，见下文「Agent Runner 统一管理终端（Operations Console）」一节。
+
+> 历史注记：监控面板最初按"只读、无数据库、无进程管理"交付
+> （`tasks/archive/20260524-162356-prd-agent-runner-operations-console.md`）。
+> 这三条约束已被统一管理终端 PRD 显式取代。
 
 ### 端点
 
@@ -1363,15 +1367,113 @@ Overview 还会按 severity 汇总 `anomaly_count` 和 `anomaly_summary`（`warn
 
 ### 显式非目标
 
-监控面板故意**不**做的事：
+监控 API（`/overview`、`/issues/{n}`）本身保持只读：
 
-- 不暴露任何修改 label、comment、PR、worktree 的 API。
-- 不执行任意 shell 命令、不能从 UI 改 label 或触发 agent。
-- 不替代 `iar run-once` / `iar review-once` / `iar labels sync` 等恢复命令。
-- 不新增数据库、后台任务队列或 WebSocket；GitHub label/comment/PR 和本地 worktree 仍是事实来源。
+- 不暴露任何修改 label、comment、PR、worktree 的能力。
 - 不实现自动 rebase 冲突解决；冲突的 Issue 会带 `agent/blocked` 状态出现在监控面板，由人类决定下一步。
 
-如果以后想加入"在 UI 点按钮触发命令"，先单独再开一个 PRD——本面板的契约是只读。
+写操作统一收敛在管理终端 API（白名单动作 + 审计），见下一节。
+
+## Agent Runner 统一管理终端（Operations Console）
+
+管理终端把多项目的 Agent Runner 运维收敛到一个 Web 界面，四个页面：
+
+| 页面 | 路由 | 能力 |
+|---|---|---|
+| 总览 | `/dashboard` | 队列监控（原有）+ 每仓库完成度摘要 + failed/blocked Issue 的重试/继续按钮 |
+| 进程 | `/processes` | 启停每个仓库的 runner 进程，实时查看进程日志（offset 轮询） |
+| 统计 | `/stats` | 实时完成度（GitHub 口径）+ 历史趋势与最近运行记录（本地 SQLite 口径） |
+| 项目 | `/repositories` | 仓库 registry 列表 / 添加 / 启停（写回 `config.toml`）+ 审计日志 |
+
+### 信任边界与白名单动作
+
+管理终端按**本机单用户部署**信任边界运行：`/api/auth/*` 返回固定的
+本地 operator 会话，不做真实认证。所有写操作只能映射到硬编码白名单
+动作，后端从枚举构建命令参数，**永不接受 UI 传入的原始命令字符串**：
+
+| 动作 | 语义 |
+|---|---|
+| `start_daemon` / `start_review_daemon` | 为某仓库启动常驻 runner 进程（同仓库同类型只允许一个） |
+| `run_once` / `review_once` | 启动一次性托管子进程 |
+| `stop_process` | SIGTERM 停止托管进程，超时升级 SIGKILL |
+| `retry_failed` | 把 failed Issue 的 label 翻转回 ready（与手工操作等价） |
+| `blocked_continue` | 启动一次性 `iar blocked-continue` 托管子进程 |
+| `registry_add` / `registry_set_enabled` | registry 写回（路径必须存在且为 git 仓库） |
+
+故意不支持：任意 shell 命令、任意 label 编辑、PR merge、worktree 删除。
+这些要么风险不可枚举（任意 shell），要么会绕过 workflow 状态机
+（任意 label），要么属于必须人工签收的决策（merge）。
+
+所有写操作（含被拒绝的）都会写入审计日志，可在「项目」页或
+`GET /api/v1/agent-runner/console/audit` 查看。
+
+### 进程托管与多项目并发
+
+管理终端按 `(repo_id, kind)` 托管 runner 子进程。**每个仓库一个
+daemon 进程**即获得多项目并发——不同仓库的 Issue 同时执行，互不阻塞
+（CLI 的 `iar daemon --all` 仍是单进程串行轮询，行为不变）。
+
+- 子进程以 `start_new_session` 脱离后端进程组：后端重启不影响执行中
+  的 runner；重启后从 pidfile registry（`~/.iar/processes.json`）复活
+  记录并重新探活。
+- 子进程默认以 `uv run iar <command> --repo-id <id>` 启动、cwd 为
+  keda 项目根——全局安装的 `iar` 读不到项目本地 `config.toml`，
+  必须经 `uv run`。命令前缀可用 `[agent_runner.console] runner_command`
+  覆盖。
+- 进程 stdout/stderr 写入 `logs/agent-runner/processes/<repo_id>/`，
+  面板通过 offset 轮询续读，无 WebSocket/SSE。
+
+### 运行历史与完成度统计
+
+- **实时口径（GitHub）**：`GET /api/v1/agent-runner/console/stats/overview`
+  以 `state=all` 查询全部 workflow label 的 Issue 并去重。closed 且不含
+  failed/blocked label 计为 `completed`；单 label 查询命中 200 上限时
+  响应标记 `truncated: true`。
+- **历史口径（本地 SQLite）**：`run_once` 编排在每个 Issue 处理收尾时
+  写入一条运行记录（outcome：completed / failed / blocked），CLI 直跑
+  与面板托管共用 `~/.iar/console.db`（`history_db_path` 可配）。
+  `GET .../console/stats/history` 返回按天聚合趋势。
+
+SQLite 只是旁路记录，**不参与 workflow 状态机决策**——GitHub
+labels/comments/PR 与本地 worktree 仍是唯一事实来源；落库失败只产生
+日志警告，不会阻断 runner。
+
+### 项目接入
+
+`config.toml` 的 `[agent_runner.repositories.*]` 仍是项目接入的唯一
+事实来源。「项目」页通过 tomlkit 做 round-trip 写回（保留注释与
+格式），添加前校验 repo_id 格式（`^[a-z0-9][a-z0-9-]*$`）、路径存在
+且为 git 仓库。某个已注册路径失效时，监控与统计会跳过该仓库并在
+总览页给出醒目警示，不会拖死整个面板。
+
+### Console API 一览
+
+```text
+GET    /api/v1/agent-runner/console/processes
+POST   /api/v1/agent-runner/console/processes                  {repo_id, kind}
+POST   /api/v1/agent-runner/console/processes/{id}/stop
+GET    /api/v1/agent-runner/console/processes/{id}/logs?offset=0
+POST   /api/v1/agent-runner/console/repositories/{repo}/actions             {action}
+POST   /api/v1/agent-runner/console/repositories/{repo}/issues/{n}/actions  {action}
+GET    /api/v1/agent-runner/console/stats/overview
+GET    /api/v1/agent-runner/console/stats/history?repo_id=&days=30
+GET    /api/v1/agent-runner/console/runs?repo_id=&limit=100
+GET    /api/v1/agent-runner/console/audit?limit=100
+GET    /api/v1/agent-runner/repositories
+POST   /api/v1/agent-runner/repositories                       {repo_id, path, display_name}
+PATCH  /api/v1/agent-runner/repositories/{repo_id}             {enabled}
+```
+
+### 配置
+
+```toml
+[agent_runner.console]
+history_db_path = "~/.iar/console.db"            # 运行历史与审计 SQLite
+process_registry_path = "~/.iar/processes.json"  # 托管进程 pidfile
+process_log_dir = "logs/agent-runner/processes"  # 进程日志目录（相对 keda 根）
+runner_command = ["uv", "run", "iar"]            # 托管进程启动命令前缀
+stop_timeout_seconds = 30                        # SIGTERM → SIGKILL 等待秒数
+```
 
 ## deliberate 多 Agent 合议
 

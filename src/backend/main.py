@@ -7,12 +7,15 @@ The CLI entry point lives in ``backend.api.cli:main`` and is registered via
 
 from __future__ import annotations
 
+import os
+
 
 def main() -> None:
     """Run the backend entrypoint placeholder."""
     import uvicorn
 
-    uvicorn.run("backend.api.app:app", host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("backend.api.app:app", host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":

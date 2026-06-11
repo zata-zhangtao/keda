@@ -363,6 +363,30 @@ behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concre
 # remote = "zata"
 # base_branch = "main"
 
+# 2026-06-11: 该路径已不存在（项目可能已改名/移动），暂时停用。
+# 路径恢复后改回 enabled = true，或在管理终端「项目」页重新启用。
 [agent_runner.repositories.transmaster]
 path = "/Users/zata/code/TransMaster"
+enabled = false
+
+# =============================================================================
+# Agent Runner Console（统一管理终端）
+# =============================================================================
+# 管理终端的运行历史 / 审计落库与托管进程设置。
+
+[agent_runner.repositories.keda-main]
+path = "/Users/zata/code/keda"
 enabled = true
+display_name = "Keda Main"
+[agent_runner.console]
+# 运行历史与审计日志的 SQLite 文件路径（CLI 直跑与面板托管共用）。
+history_db_path = "~/.iar/console.db"
+# 面板托管 runner 进程的注册表（JSON pidfile，后端重启后据此复活探活）。
+process_registry_path = "~/.iar/processes.json"
+# 托管进程的 stdout/stderr 日志目录（相对 keda 项目根）。
+process_log_dir = "logs/agent-runner/processes"
+# 托管进程的启动命令前缀。默认走 `uv run iar` 并以 keda 项目根为 cwd，
+# 因为全局安装的 iar 读不到项目本地 config.toml。
+runner_command = ["uv", "run", "iar"]
+# 停止进程时 SIGTERM 后等待多少秒升级为 SIGKILL。
+stop_timeout_seconds = 30

@@ -11,6 +11,7 @@ from backend.core.shared.interfaces.agent_runner import (
     IGitHubClient,
     IProcessRunner,
 )
+from backend.core.shared.interfaces.runner_console import IRunHistoryStore
 from backend.core.shared.models.agent_runner import RepositoryRunContext
 from backend.core.use_cases.agent_runner_orchestrate import run_once
 
@@ -26,6 +27,8 @@ def run_agent_repositories_once(
     process_runner: IProcessRunner,
     github_client_factory: Callable[[Path], IGitHubClient],
     content_generator: IContentGenerator | None = None,
+    run_history_store: IRunHistoryStore | None = None,
+    run_trigger: str = "cli_run",
 ) -> int:
     """Run one polling pass across all target repositories.
 
@@ -37,6 +40,8 @@ def run_agent_repositories_once(
         process_runner: Runner for executing subprocess commands.
         github_client_factory: Factory that creates an IGitHubClient for a repo path.
         content_generator: Optional content generator for AI-generated PR content.
+        run_history_store: Optional side-channel run history store.
+        run_trigger: Trigger source recorded with each run record.
 
     Returns:
         Exit code (0 on success, 1 if any repository failed).
@@ -59,6 +64,9 @@ def run_agent_repositories_once(
                 github_client=github_client,
                 process_runner=process_runner,
                 content_generator=content_generator,
+                run_history_store=run_history_store,
+                run_trigger=run_trigger,
+                repo_id=context.repo_id,
             )
             if repo_exit_code != 0:
                 aggregated_exit_code = 1

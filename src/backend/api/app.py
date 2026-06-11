@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from backend.api.routes import agent_runner
+from backend.api.routes import agent_runner, agent_runner_console, local_auth
 
 app = FastAPI(title="keda backend")
 app.include_router(agent_runner.router, prefix="/api/v1")
+app.include_router(agent_runner_console.router, prefix="/api/v1")
+app.include_router(local_auth.router, prefix="/api")

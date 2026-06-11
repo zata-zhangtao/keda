@@ -24,8 +24,8 @@ from backend.engines.agent_runner.factory import (
     create_github_client,
     create_process_runner,
     get_agent_runner_status_data,
-    get_agent_runner_settings,
-    resolve_repository_targets,
+    load_fresh_agent_runner_settings,
+    resolve_repository_targets_with_diagnostics,
 )
 
 _logger = logging.getLogger(__name__)
@@ -83,11 +83,10 @@ def _get_monitoring_dependencies() -> (
 
 def _build_overview_response() -> dict:
     """Build the ``/overview`` monitoring response payload."""
-    settings = get_agent_runner_settings()
-    repository_contexts = resolve_repository_targets(settings, all_repositories=True)
-    if not repository_contexts:
-        # Fall back to the current repository when nothing is configured.
-        repository_contexts = resolve_repository_targets(settings)
+    settings = load_fresh_agent_runner_settings()
+    repository_contexts, resolution_failures = (
+        resolve_repository_targets_with_diagnostics(settings)
+    )
     github_client_factory, process_runner = _get_monitoring_dependencies()
     try:
         result: MonitoringResult = build_overview(
@@ -100,15 +99,19 @@ def _build_overview_response() -> dict:
         raise HTTPException(
             status_code=500, detail=f"Failed to build monitoring overview: {exc}"
         ) from exc
-    return _serialize_monitoring(result)
+    overview_payload = _serialize_monitoring(result)
+    overview_payload["unreachable_repositories"] = [
+        _serialize_monitoring(failure) for failure in resolution_failures
+    ]
+    return overview_payload
 
 
 def _build_issue_detail_response(issue_number: int) -> dict:
     """Build the ``/issues/{issue_number}`` monitoring response payload."""
-    settings = get_agent_runner_settings()
-    repository_contexts = resolve_repository_targets(settings, all_repositories=True)
-    if not repository_contexts:
-        repository_contexts = resolve_repository_targets(settings)
+    settings = load_fresh_agent_runner_settings()
+    repository_contexts, _resolution_failures = (
+        resolve_repository_targets_with_diagnostics(settings)
+    )
     github_client_factory, process_runner = _get_monitoring_dependencies()
 
     snapshot: IssueMonitoringSnapshot | None = None

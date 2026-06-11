@@ -25,10 +25,10 @@ export default defineConfig(({ mode }) => {
     server: {
       port: resolvedFrontendPort,
       proxy: {
+        // 后端路由注册在 /api 前缀下（如 /api/v1/agent-runner/*），必须原样透传。
         "/api": {
           target: backendBaseUrl,
           changeOrigin: true,
-          rewrite: (requestPath) => requestPath.replace(/^\/api/, ""),
         },
       },
     },

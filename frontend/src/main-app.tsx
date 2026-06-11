@@ -14,6 +14,18 @@ const DashboardPage = lazy(async () => ({
   default: (await import("@/pages/dashboard-page")).DashboardPage,
 }));
 
+const ProcessesPage = lazy(async () => ({
+  default: (await import("@/pages/processes-page")).ProcessesPage,
+}));
+
+const StatsPage = lazy(async () => ({
+  default: (await import("@/pages/stats-page")).StatsPage,
+}));
+
+const RepositoriesPage = lazy(async () => ({
+  default: (await import("@/pages/repositories-page")).RepositoriesPage,
+}));
+
 function PageLoadingFallback() {
   return (
     <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">
@@ -32,7 +44,9 @@ function AppShell() {
           <Routes>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<DashboardPage />} />
-            {/* TODO: 在此添加更多受保护的路由 */}
+            <Route path="processes" element={<ProcessesPage />} />
+            <Route path="stats" element={<StatsPage />} />
+            <Route path="repositories" element={<RepositoriesPage />} />
           </Routes>
         </Suspense>
       </SidebarInset>

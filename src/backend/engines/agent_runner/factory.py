@@ -42,7 +42,13 @@ from backend.core.shared.models.agent_runner import (
     ValidationConfig,
     WorktreeConfig,
 )
+from backend.core.shared.interfaces.runner_console import (
+    IRepositoryRegistryEditor,
+    IRunHistoryStore,
+    IRunnerProcessSupervisor,
+)
 from backend.engines.agent_runner.repository_local import detect_git_repository_root
+from backend.infrastructure.config.registry_editor import TomlRegistryEditor
 from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGeneratedContentTargetSettings,
@@ -53,8 +59,14 @@ from backend.infrastructure.config.settings import (
     IAR_REPOSITORY_CONFIG_FILENAME,
     config,
     load_agent_runner_local_settings,
+    resolve_config_toml_path,
+    resolve_project_root_path,
+)
+from backend.infrastructure.console.process_supervisor import (
+    PidfileProcessSupervisor,
 )
 from backend.infrastructure.github_client import GitHubCliClient
+from backend.infrastructure.persistence.console_store import SqliteConsoleStore
 from backend.infrastructure.logging.logger import logger
 from backend.infrastructure.process_runner import (
     SubprocessRunner,
@@ -206,6 +218,16 @@ def build_app_config() -> AppConfig:
 def get_agent_runner_settings() -> AgentRunnerSettings:
     """Return the global ``AgentRunnerSettings`` instance."""
     return config.agent_runner
+
+
+def load_fresh_agent_runner_settings() -> AgentRunnerSettings:
+    """重新从 config.toml 与环境变量加载 ``AgentRunnerSettings``。
+
+    管理终端写回 registry 后，进程级单例 ``config`` 不会自动刷新；
+    需要即时反映 registry 变化的读路径（监控 overview、console）应使用
+    本函数而非 :func:`get_agent_runner_settings`。
+    """
+    return AgentRunnerSettings()
 
 
 def get_agent_runner_status_data() -> dict:
@@ -526,6 +548,80 @@ def resolve_repository_targets(
     ]
 
 
+@dataclasses.dataclass(frozen=True)
+class RepositoryResolutionFailure:
+    """A registry entry that could not be resolved into a run context."""
+
+    repo_id: str
+    display_name: str
+    configured_path: str
+    error: str
+
+
+def resolve_repository_targets_with_diagnostics(
+    settings: AgentRunnerSettings,
+    *,
+    fallback_path: str = ".",
+) -> tuple[list[RepositoryRunContext], list[RepositoryResolutionFailure]]:
+    """Resolve all enabled repositories, isolating per-repository failures.
+
+    Unlike :func:`resolve_repository_targets`, a registry entry whose path no
+    longer exists (or whose local config is invalid) does not abort the whole
+    resolution. This keeps read-only surfaces such as the monitoring console
+    available when a single configured repository drifts.
+
+    Args:
+        settings: Agent runner settings.
+        fallback_path: Path used when no repositories are configured.
+
+    Returns:
+        Tuple of (resolved contexts, per-repository resolution failures).
+    """
+    global_config = build_app_config_from_settings(settings)
+    enabled_repos = {
+        rid: rcfg for rid, rcfg in settings.repositories.items() if rcfg.enabled
+    }
+    if not enabled_repos:
+        return (
+            resolve_repository_targets(settings, fallback_path=fallback_path),
+            [],
+        )
+
+    contexts: list[RepositoryRunContext] = []
+    failures: list[RepositoryResolutionFailure] = []
+    for rid, repo_settings in enabled_repos.items():
+        try:
+            repo_root_path = detect_git_repository_root(Path(repo_settings.path))
+            repository_settings = [repo_settings]
+            local_settings = _load_enabled_repository_local_settings(repo_root_path)
+            if local_settings is not None:
+                repository_settings.append(local_settings)
+            contexts.append(
+                _build_merged_repository_context(
+                    global_config,
+                    tuple(repository_settings),
+                    fallback_repo_id=rid,
+                    prefer_settings_id=False,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate broken registry entries.
+            logger.warning(
+                "Skipping unresolvable repository '%s' (%s): %s",
+                rid,
+                repo_settings.path,
+                exc,
+            )
+            failures.append(
+                RepositoryResolutionFailure(
+                    repo_id=rid,
+                    display_name=repo_settings.display_name or rid,
+                    configured_path=str(repo_settings.path),
+                    error=str(exc),
+                )
+            )
+    return contexts, failures
+
+
 def _repository_settings_for_path(
     repo_root_path: Path,
 ) -> AgentRunnerRepositorySettings:
@@ -681,6 +777,34 @@ def resolve_issue_from_prd_target(
         fallback_path=str(cwd),
     )
     return contexts[0]
+
+
+def create_console_store() -> IRunHistoryStore:
+    """创建管理终端的运行历史 / 审计 SQLite 存储。"""
+    console_settings = get_agent_runner_settings().console
+    return SqliteConsoleStore(console_settings.history_db_path)
+
+
+def create_process_supervisor() -> IRunnerProcessSupervisor:
+    """创建托管 runner 进程的监管器（pidfile + 日志目录已解析）。"""
+    console_settings = get_agent_runner_settings().console
+    log_dir = Path(console_settings.process_log_dir).expanduser()
+    if not log_dir.is_absolute():
+        log_dir = resolve_project_root_path() / log_dir
+    return PidfileProcessSupervisor(
+        registry_path=console_settings.process_registry_path,
+        log_dir=log_dir,
+    )
+
+
+def create_registry_editor() -> IRepositoryRegistryEditor:
+    """创建仓库 registry（config.toml）的受限写回编辑器。"""
+    return TomlRegistryEditor(resolve_config_toml_path())
+
+
+def resolve_console_spawn_cwd() -> Path:
+    """托管进程的工作目录：keda 项目根（保证子进程读到正确配置）。"""
+    return resolve_project_root_path()
 
 
 def create_process_runner() -> SubprocessRunner:

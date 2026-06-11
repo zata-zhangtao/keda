@@ -20,12 +20,17 @@ from __future__ import annotations
 import logging
 import os
 import socket
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
     IContentGenerator,
     IGitHubClient,
     IProcessRunner,
+)
+from backend.core.shared.interfaces.runner_console import (
+    IRunHistoryStore,
+    RunRecord,
 )
 from backend.core.shared.models.agent_runner import (
     AppConfig,
@@ -810,6 +815,45 @@ def _process_running_publish_recovery(
     )
 
 
+def _append_run_record(
+    *,
+    run_history_store: IRunHistoryStore | None,
+    repo_id: str,
+    repo_path: Path,
+    issue: IssueSummary,
+    trigger: str,
+    agent: str,
+    outcome: str,
+    error_summary: str | None,
+    started_at: "datetime",
+) -> None:
+    """旁路写入一条运行记录；任何失败都不阻断 runner。"""
+    if run_history_store is None:
+        return
+    finished_at = datetime.now(timezone.utc)
+    try:
+        run_history_store.append_run(
+            RunRecord(
+                repo_id=repo_id,
+                repo_path=str(repo_path),
+                issue_number=issue.number,
+                trigger=trigger,
+                agent=agent,
+                outcome=outcome,
+                error_summary=error_summary,
+                started_at=started_at.isoformat(timespec="seconds"),
+                finished_at=finished_at.isoformat(timespec="seconds"),
+                duration_seconds=(finished_at - started_at).total_seconds(),
+            )
+        )
+    except Exception as record_exc:  # noqa: BLE001 - side channel only.
+        _logger.warning(
+            "Failed to record run history for Issue #%d: %s",
+            issue.number,
+            record_exc,
+        )
+
+
 def run_once(
     *,
     repo_path: Path,
@@ -820,6 +864,9 @@ def run_once(
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
+    run_history_store: IRunHistoryStore | None = None,
+    run_trigger: str = "cli_run",
+    repo_id: str | None = None,
 ) -> int:
     """执行一次轮询处理。
 
@@ -842,11 +889,16 @@ def run_once(
         github_client: GitHub 客户端
         process_runner: 进程运行器
         content_generator: 可选的 AI 内容生成器
+        run_history_store: 可选的运行历史旁路存储；为 ``None`` 时零行为变化
+        run_trigger: 写入运行记录的触发来源（如 cli_run / console_daemon）
+        repo_id: 写入运行记录的仓库 ID；缺省取 ``repo_path.name``
 
     Returns:
         退出码（0 成功，1 有 Issue 处理失败）
     """
     from backend.core.use_cases.run_agent_once import run_preflight_checks
+
+    effective_repo_id = repo_id or repo_path.name
 
     # 前置检查
     if not dry_run:
@@ -979,6 +1031,7 @@ def run_once(
             continue
         from backend.core.use_cases.agent_runner_failure import ForbiddenBlockedError
 
+        run_started_at = datetime.now(timezone.utc)
         try:
             if issue_kind == "ready":
                 _process_ready_issue(
@@ -1035,6 +1088,17 @@ def run_once(
                     content_generator=content_generator,
                 )
             _logger.info("Completed Issue #%d: %s", issue.number, issue.title)
+            _append_run_record(
+                run_history_store=run_history_store,
+                repo_id=effective_repo_id,
+                repo_path=repo_path,
+                issue=issue,
+                trigger=run_trigger,
+                agent=selected_agent,
+                outcome="completed",
+                error_summary=None,
+                started_at=run_started_at,
+            )
         except ForbiddenBlockedError as exc:
             exit_code = 1
             _mark_issue_blocked(
@@ -1044,6 +1108,17 @@ def run_once(
                 exc=exc,
             )
             _logger.error("Blocked Issue #%d: %s", issue.number, exc)
+            _append_run_record(
+                run_history_store=run_history_store,
+                repo_id=effective_repo_id,
+                repo_path=repo_path,
+                issue=issue,
+                trigger=run_trigger,
+                agent=selected_agent,
+                outcome="blocked",
+                error_summary=str(exc),
+                started_at=run_started_at,
+            )
         except BlockedWorktreeClaimedError as exc:
             _logger.info(
                 "Issue #%d worktree already claimed by another runner, skipping: %s",
@@ -1059,4 +1134,15 @@ def run_once(
                 exc=exc,
             )
             _logger.error("Failed Issue #%d: %s", issue.number, exc)
+            _append_run_record(
+                run_history_store=run_history_store,
+                repo_id=effective_repo_id,
+                repo_path=repo_path,
+                issue=issue,
+                trigger=run_trigger,
+                agent=selected_agent,
+                outcome="failed",
+                error_summary=str(exc),
+                started_at=run_started_at,
+            )
     return exit_code

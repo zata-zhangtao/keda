@@ -42,6 +42,7 @@ from backend.core.shared.models.agent_deliberation import DeliberationSession
 from backend.core.shared.models.agent_runner import LabelConfig
 from backend.engines.agent_runner.factory import (
     build_deliberation_config_from_settings,
+    create_console_store,
     create_content_generator,
     create_event_sink,
     create_github_client,
@@ -493,6 +494,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_run_trigger(command_kind: str) -> str:
+    """解析运行记录的 trigger 来源。
+
+    管理终端托管的子进程带有 ``IAR_CONSOLE=1`` 环境标记，记为
+    ``console_*``；否则记为 ``cli_*``。
+
+    Args:
+        command_kind: ``"run"`` 或 ``"daemon"``。
+    """
+    prefix = "console" if os.environ.get("IAR_CONSOLE") == "1" else "cli"
+    return f"{prefix}_{command_kind}"
+
+
+def _create_run_history_store_or_none():
+    """创建运行历史存储；初始化失败时降级为 None（不阻断 CLI）。"""
+    try:
+        return create_console_store()
+    except Exception as exc:  # noqa: BLE001 - history is a side channel.
+        logger.warning("Run history store unavailable: %s", exc)
+        return None
+
+
 def _run_parsed_command(parsed: argparse.Namespace) -> int:
     """Run a command after CLI arguments have been parsed."""
     if parsed.config:
@@ -706,6 +729,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 process_runner=process_runner,
                 github_client_factory=github_client_factory,
                 content_generator=content_generator,
+                run_history_store=_create_run_history_store_or_none(),
+                run_trigger=_resolve_run_trigger("run"),
             )
 
         if parsed.command == "daemon":
@@ -724,6 +749,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                 process_runner=process_runner,
                 github_client_factory=github_client_factory,
+                run_history_store=_create_run_history_store_or_none(),
+                run_trigger=_resolve_run_trigger("daemon"),
             )
             return 0
 

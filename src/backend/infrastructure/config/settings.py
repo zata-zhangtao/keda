@@ -41,6 +41,16 @@ def _find_config_toml() -> Path | None:
     return None
 
 
+def resolve_config_toml_path() -> Path:
+    """解析当前生效的 config.toml 路径（找不到时回退到源码根目录）。"""
+    return _find_config_toml() or (_PROJECT_ROOT_PATH / "config.toml")
+
+
+def resolve_project_root_path() -> Path:
+    """返回 keda 项目源码根目录（托管进程的默认 cwd）。"""
+    return _PROJECT_ROOT_PATH
+
+
 def _load_toml_section_data(section_name: str) -> dict[str, Any]:
     """从 config.toml 加载指定 section 的配置。
 
@@ -353,6 +363,16 @@ class AgentRunnerValidationSettings(BaseModel):
     parse_evidence_format_with_agent: bool = True
 
 
+class AgentRunnerConsoleSettings(BaseModel):
+    """统一管理终端（运行历史落库与托管进程）配置。"""
+
+    history_db_path: str = "~/.iar/console.db"
+    process_registry_path: str = "~/.iar/processes.json"
+    process_log_dir: str = "logs/agent-runner/processes"
+    runner_command: list[str] = Field(default_factory=lambda: ["uv", "run", "iar"])
+    stop_timeout_seconds: int = 30
+
+
 class AgentRunnerPromptSettings(BaseModel):
     """Agent prompt template settings supporting TOML string-list syntax."""
 
@@ -588,6 +608,9 @@ class AgentRunnerSettings(BaseSettings):
     safety: AgentRunnerSafetySettings = Field(default_factory=AgentRunnerSafetySettings)
     validation: AgentRunnerValidationSettings = Field(
         default_factory=AgentRunnerValidationSettings
+    )
+    console: AgentRunnerConsoleSettings = Field(
+        default_factory=AgentRunnerConsoleSettings
     )
     prompts: AgentRunnerPromptSettings = Field(
         default_factory=AgentRunnerPromptSettings
