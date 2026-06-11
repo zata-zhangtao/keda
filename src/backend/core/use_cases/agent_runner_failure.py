@@ -363,7 +363,7 @@ def format_publish_failure_comment(
             "To resume publishing without re-running the agent:",
             "",
             "```bash",
-            f"uv run iar recover-publish --issue {issue_number}",
+            f"uv run iar recover --issue {issue_number}",
             "```",
         ]
     )

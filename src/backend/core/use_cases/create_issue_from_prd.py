@@ -1,6 +1,6 @@
 """根据本地 PRD Markdown 文件创建 GitHub Issue。
 
-本模块实现 ``issue-from-prd`` 工作流：
+本模块实现 ``iar issue create`` 工作流：
 
 1. 读取本地 PRD Markdown 文件。
 2. 提取元数据（标题、验收清单、引言）。

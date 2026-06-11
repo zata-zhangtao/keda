@@ -396,18 +396,18 @@ def _derive_suggested_cli(
         "agent/blocked",
         "agent/failed",
     }:
-        _add("iar review-once --dry-run")
+        _add("iar review --dry-run")
     if pr_dirty:
-        _add("iar review-once")
-        _add("iar run-once --max-issues 1")
+        _add("iar review")
+        _add("iar run --max-issues 1")
     if worktree_dirty and primary_label != "agent/running":
-        _add("iar run-once --dry-run")
+        _add("iar run --dry-run")
     if primary_label == "agent/failed":
-        _add("iar run-once --dry-run")
+        _add("iar run --dry-run")
     if primary_label == "agent/blocked":
-        _add("iar review-once")
+        _add("iar review")
     if primary_label == "agent/ready":
-        _add("iar run-once --dry-run")
+        _add("iar run --dry-run")
     return tuple(suggested)
 
 
@@ -471,7 +471,7 @@ def detect_anomalies(context: AnomalyDetectionContext) -> tuple[Anomaly, ...]:
                 type="label_pr_mismatch",
                 severity="warning",
                 message=("PR exists but Issue label does not reflect post-PR state."),
-                suggested_cli=("iar labels sync", "iar review-once --dry-run"),
+                suggested_cli=("iar labels sync", "iar review --dry-run"),
             )
         )
 
@@ -481,7 +481,7 @@ def detect_anomalies(context: AnomalyDetectionContext) -> tuple[Anomaly, ...]:
                 type="pr_dirty_in_review",
                 severity="error",
                 message=("PR is dirty/conflicted while Issue is in review state."),
-                suggested_cli=("iar review-once", "iar run-once --max-issues 1"),
+                suggested_cli=("iar review", "iar run --max-issues 1"),
             )
         )
 
@@ -494,7 +494,7 @@ def detect_anomalies(context: AnomalyDetectionContext) -> tuple[Anomaly, ...]:
                     "Worktree has uncommitted changes but Issue is not in "
                     "running state."
                 ),
-                suggested_cli=("iar run-once --dry-run", "git status"),
+                suggested_cli=("iar run --dry-run", "git status"),
             )
         )
 

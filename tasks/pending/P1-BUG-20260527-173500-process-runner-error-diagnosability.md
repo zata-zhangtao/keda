@@ -20,7 +20,7 @@ Enhance the existing infrastructure-layer `SubprocessRunner.run()` failure path 
 
 ### Realistic Validation
 
-- [ ] **Git commit pre-commit 失败真实验证**：通过 `uv run iar run-once` 触发一个已知会因 pre-commit hook 失败的 Issue，验证 runner 日志和 GitHub 评论中包含 pre-commit 的具体失败行（如 `Check just test flag.....................................................Failed`）。
+- [ ] **Git commit pre-commit 失败真实验证**：通过 `uv run iar run` 触发一个已知会因 pre-commit hook 失败的 Issue，验证 runner 日志和 GitHub 评论中包含 pre-commit 的具体失败行（如 `Check just test flag.....................................................Failed`）。
 - [ ] **Git push 被拒绝真实验证**：通过本地 fixture 模拟 remote rejection，验证 `git push` 失败时日志包含 remote 返回的拒绝原因。
 - [ ] **现有测试不回归**：`uv run pytest tests/test_process_runner.py -q` 通过，且不破坏已有 `CalledProcessError` 捕获逻辑。
 
@@ -36,7 +36,7 @@ Enhance the existing infrastructure-layer `SubprocessRunner.run()` failure path 
 
 ## 2. Requirement Shape
 
-**Actor**：运行 `iar run-once`、`iar review-once` 或 `iar review-daemon` 的本地 operator，以及查看 GitHub Issue 评论的开发者。
+**Actor**：运行 `iar run`、`iar review` 或 `iar review-daemon` 的本地 operator，以及查看 GitHub Issue 评论的开发者。
 
 **Trigger**：`process_runner.run()` 执行任意命令且 `check=True`（默认）时返回非零 exit code。
 
@@ -214,7 +214,7 @@ flowchart TD
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
 |---|---|---|---|---|---|---|
 | 失败消息包含 stderr | `tests/test_process_runner.py` | unit | 无 | 无 | `uv run pytest tests/test_process_runner.py -q` | Yes |
-| pre-commit 失败消息进入日志 | `uv run iar run-once` | real entry | 真实 pre-commit hook | 一个已知 pre-commit 会失败的 worktree | 观察 runner 日志是否包含 pre-commit 失败详情 | Yes |
+| pre-commit 失败消息进入日志 | `uv run iar run` | real entry | 真实 pre-commit hook | 一个已知 pre-commit 会失败的 worktree | 观察 runner 日志是否包含 pre-commit 失败详情 | Yes |
 | 现有异常捕获不回归 | `tests/` | unit/integration | 无 | 无 | `uv run pytest tests/ -q` | Yes |
 
 ### Low-Fidelity Prototype
@@ -266,7 +266,7 @@ No external validation required; repository evidence and local command fixtures 
 
 - [ ] `uv run pytest tests/test_process_runner.py -q` 通过。
 - [ ] `uv run pytest tests/ -q` 通过。
-- [ ] 若条件允许，通过 `iar run-once` 触发一次真实命令失败，验证日志包含 stderr 内容。
+- [ ] 若条件允许，通过 `iar run` 触发一次真实命令失败，验证日志包含 stderr 内容。
 
 ## 8. Functional Requirements
 

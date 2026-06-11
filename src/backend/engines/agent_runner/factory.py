@@ -753,7 +753,7 @@ def resolve_issue_from_prd_target(
     repo_path_override: str | None = None,
     cwd: Path,
 ) -> RepositoryRunContext:
-    """Resolve the single target repository for ``issue-from-prd``.
+    """Resolve the single target repository for ``iar issue create``.
 
     Defaults to the current Git repository and its repository-local config.
 

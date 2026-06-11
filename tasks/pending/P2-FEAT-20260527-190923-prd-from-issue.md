@@ -6,10 +6,10 @@
 
 ### 问题说明
 
-当前 `iar` 工具链支持 `issue-from-prd`（PRD → Issue），但不支持反向流程：用户在 GitHub 上直接创建 Issue 后，keda 无法自动根据 Issue 内容生成 PRD；当已有 PRD 的 Issue 收到新 comment（需求补充、修正或讨论）后，也无法自动重写 PRD。
+当前 `iar` 工具链支持 `issue create`（PRD → Issue），但不支持反向流程：用户在 GitHub 上直接创建 Issue 后，keda 无法自动根据 Issue 内容生成 PRD；当已有 PRD 的 Issue 收到新 comment（需求补充、修正或讨论）后，也无法自动重写 PRD。
 
 这导致两个低效场景：
-1. **新 Issue 无 PRD**：用户在 GitHub 页面快速创建 Issue 描述需求后，需要手动复制到本地、按 PRD 格式编写、再运行 `iar issue-from-prd` 创建关联 Issue。
+1. **新 Issue 无 PRD**：用户在 GitHub 页面快速创建 Issue 描述需求后，需要手动复制到本地、按 PRD 格式编写、再运行 `iar issue create` 创建关联 Issue。
 2. **需求迭代不同步**：Issue 评论中达成了新共识或修正了需求，但 PRD 文件仍是旧版本，Agent 执行时依据的是过时的 PRD。
 
 ### 目标
@@ -23,7 +23,7 @@
 
 ### Proposed Solution Summary
 
-Add a core `create_prd_from_issue` workflow that runs before normal ready-Issue execution and consumes explicit GitHub Issue content, comments, labels, and an optional existing `PRD path:` anchor. The daemon or `run-once` path detects `agent/rework-prd`, calls the existing generated-content abstraction to create or rewrite a PRD under `tasks/pending/`, updates the Issue body and labels, and reports failure through the existing Issue comment/label workflow. This plugs into current Agent Runner polling and configuration surfaces while intentionally avoiding a new AI abstraction, a new daemon, direct code execution, or a parallel PRD/Issue lifecycle.
+Add a core `create_prd_from_issue` workflow that runs before normal ready-Issue execution and consumes explicit GitHub Issue content, comments, labels, and an optional existing `PRD path:` anchor. The daemon or `run` path detects `agent/rework-prd`, calls the existing generated-content abstraction to create or rewrite a PRD under `tasks/pending/`, updates the Issue body and labels, and reports failure through the existing Issue comment/label workflow. This plugs into current Agent Runner polling and configuration surfaces while intentionally avoiding a new AI abstraction, a new daemon, direct code execution, or a parallel PRD/Issue lifecycle.
 
 ### 可衡量目标
 
@@ -35,7 +35,7 @@ Add a core `create_prd_from_issue` workflow that runs before normal ready-Issue 
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 helper 中通过。
 
-- [ ] **新 Issue 生成 PRD 真实验证**：通过 `uv run iar run --max-issues 1` 或 `uv run iar run-once --max-issues 1` 处理带 `agent/rework-prd` 的测试 Issue，验证本地生成 PRD、Issue body 写入 `PRD path:`、label 切换为 `source/prd`/可选 `agent/ready`。
+- [ ] **新 Issue 生成 PRD 真实验证**：通过 `uv run iar run --max-issues 1` 处理带 `agent/rework-prd` 的测试 Issue，验证本地生成 PRD、Issue body 写入 `PRD path:`、label 切换为 `source/prd`/可选 `agent/ready`。
 - [ ] **已有 PRD 重写真实验证**：通过同一入口处理已有 `PRD path:` 的 Issue，验证原路径文件被重写且新 comment 需求进入 PRD。
 - [ ] **失败回退真实验证**：通过只读 `tasks/pending/` 或 fake write failure 验证 Issue 进入 `agent/failed` 并写入可操作错误评论。
 - [ ] **为什么单元测试不够**：该功能连接 CLI/daemon polling、GitHub Issue labels/body/comments、AI content generation、文件写入和 label 回写；必须通过真实入口证明组合路径收敛。
@@ -77,7 +77,7 @@ Add a core `create_prd_from_issue` workflow that runs before normal ready-Issue 
 | `src/backend/infrastructure/github_client.py` | `gh` CLI 封装；`list_ready_issues`、`list_issue_comments`、`edit_issue_labels` 等 |
 | `src/backend/core/shared/models/agent_runner.py` | `LabelConfig`、`GeneratedContentConfig`、`GeneratedContentTargetConfig` |
 | `src/backend/infrastructure/config/settings.py` | pydantic-settings 配置；`AgentRunnerLabelSettings`、`AgentRunnerGeneratedContentSettings` |
-| `src/backend/api/cli.py` | CLI 入口；`daemon`、`run-once` 子命令 |
+| `src/backend/api/cli.py` | CLI 入口；`daemon`、`run` 子命令 |
 
 ### 需遵循的现有架构模式
 
@@ -105,7 +105,7 @@ run_agent_daemon (api/cli.py 间接调用)
 - 不能添加新的外部依赖；复用现有 `gh` CLI 和 AI agent 调用机制。
 - PRD 生成失败时，必须在 Issue 上 comment 错误详情，并将 label 切到 `agent/failed`。
 - 重写 PRD 时，必须保留原文件路径（不创建新文件）。
-- 生成完成后，Issue body 必须包含 `PRD path: <path>` 锚点（与 `issue-from-prd` 正向流程一致）。
+- 生成完成后，Issue body 必须包含 `PRD path: <path>` 锚点（与 `iar issue create` 正向流程一致）。
 
 ### Existing PRD Relationship
 
@@ -247,7 +247,7 @@ This section is a living implementation guide based on current repository analys
 Run repository searches before editing because issue/PRD path handling is spread across runner publication and generated-content code:
 
 ```bash
-rg -n "PRD path|extract_prd_path|issue-from-prd|create_issue_from_prd|Acceptance Checklist" src tests docs tasks/pending
+rg -n "PRD path|extract_prd_path|create_issue_from_prd|Acceptance Checklist" src tests docs tasks/pending
 rg -n "GeneratedContentConfig|GeneratedContentTargetConfig|IContentGenerator|agent/rework-prd|source/prd" src tests docs
 rg -n "list_ready_issues|list_issue_comments|edit_issue_labels|edit_issue_body|run_agent_daemon|run_once" src/backend tests
 ```
@@ -258,7 +258,7 @@ The files listed here are starting points, not an exhaustive guarantee. If gener
 
 ```mermaid
 flowchart TD
-    A["daemon or run-once polling"] --> B["Find open Issue with agent/rework-prd"]
+    A["daemon or run polling"] --> B["Find open Issue with agent/rework-prd"]
     B --> C["Load Issue body and comments"]
     C --> D{"Existing PRD path?"}
     D -->|"No"| E["Generate new pending PRD path"]
@@ -793,7 +793,7 @@ Prompt Section: Existing PRD (to be rewritten)
 
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
 |---|---|---|---|---|---|---|
-| New Issue creates PRD | `uv run iar run --max-issues 1` or `uv run iar run-once --max-issues 1` | smoke/sandbox | Fake `gh` and fake content generator allowed; file write real | Test Issue fixture with `agent/rework-prd`, writable `tasks/pending/` | Run entry point and assert PRD file exists, Issue body contains `PRD path:`, labels move to `source/prd` and optional `agent/ready` | Yes |
+| New Issue creates PRD | `uv run iar run --max-issues 1` | smoke/sandbox | Fake `gh` and fake content generator allowed; file write real | Test Issue fixture with `agent/rework-prd`, writable `tasks/pending/` | Run entry point and assert PRD file exists, Issue body contains `PRD path:`, labels move to `source/prd` and optional `agent/ready` | Yes |
 | Existing PRD rewrite | same runner entry point | smoke/sandbox | Fake `gh`; file write real | Issue fixture with existing `PRD path:` and new comments | Run entry point and assert same file path is overwritten with comment-derived requirement updates | Yes |
 | Failure rollback | same runner entry point | smoke/sandbox | Fake write failure or read-only temp `tasks/pending/` | Test Issue with `agent/rework-prd` | Run entry point and assert Issue receives actionable failure comment and `agent/failed` label | Yes |
 | Live GitHub optional validation | `gh issue create` + runner entry point | manual/sandbox | None | Disposable GitHub Issue, authenticated `gh`, cleanup plan | Create test Issue, add `agent/rework-prd`, run one pass, inspect `gh issue view <n> --json labels,comments,body` | No unless credentials are explicitly available |
@@ -858,7 +858,7 @@ No external validation required; repository evidence and optional sandbox GitHub
   - `_generate_slug` 边界情况（特殊字符、超长标题）
   - `_update_issue_body_with_prd_path` 插入和更新逻辑
   - `process_prd_rework_issues` 失败时的 label 和 comment 回退
-- [ ] `uv run iar run --max-issues 1` 或 `uv run iar run-once --max-issues 1` 通过 fake `gh` / fake content generator fixture 证明新建、重写和失败回退真实入口路径。
+- [ ] `uv run iar run --max-issues 1` 通过 fake `gh` / fake content generator fixture 证明新建、重写和失败回退真实入口路径。
 - [ ] `just test` 全量通过。
 
 ### Documentation Acceptance

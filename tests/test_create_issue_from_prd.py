@@ -54,7 +54,7 @@ def _init_remote_repo(local_repo_path: Path, remote_repo_path: Path) -> None:
 def _request(
     repo_path: Path, prd_path: Path, **request_overrides: Any
 ) -> IssueFromPrdRequest:
-    """Build an Issue-from-PRD request for tests."""
+    """Build a PRD-to-Issue request for tests."""
     request_values = {"issue_type": "feature", **request_overrides}
     return IssueFromPrdRequest(
         repo_path=repo_path,
