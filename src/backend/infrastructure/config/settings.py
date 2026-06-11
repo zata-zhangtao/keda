@@ -349,6 +349,8 @@ class AgentRunnerValidationSettings(BaseModel):
     enabled: bool = True
     evidence_dir: str = ".iar/evidence"
     branch_prefix: str = "iar-evidence/"
+    evidence_format_check: bool = True
+    parse_evidence_format_with_agent: bool = True
 
 
 class AgentRunnerPromptSettings(BaseModel):

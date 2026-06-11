@@ -175,6 +175,8 @@ def build_app_config_from_settings(
             enabled=validation_settings.enabled,
             evidence_dir=validation_settings.evidence_dir,
             branch_prefix=validation_settings.branch_prefix,
+            evidence_format_check=validation_settings.evidence_format_check,
+            parse_evidence_format_with_agent=validation_settings.parse_evidence_format_with_agent,
         ),
         prompts=PromptConfig(
             default_phase=prompt_settings.default_phase,

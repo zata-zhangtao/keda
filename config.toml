@@ -166,6 +166,14 @@ forbidden_path_patterns = [
 enabled = true
 evidence_dir = ".iar/evidence"
 branch_prefix = "iar-evidence/"
+# 逐项格式对账：第 n 条清单必须有 rv-<n>-* 证据，且条目点名的格式
+# （截图/pdf/txt/word/excel/csv/录屏）必须有对应后缀文件。
+# 设为 false 退化为仅要求证据目录非空；单个 PRD 可在 Realistic
+# Validation 小节写 "Evidence Format Waiver: <理由>" 按任务关闭。
+evidence_format_check = true
+# 使用 agent 解析 checklist item 的格式要求（claude/codex/kimi），
+# 物化为 iar:evidence-format marker。agent 不可用时回退到正则匹配。
+parse_evidence_format_with_agent = true
 
 [agent_runner.pre_push_review]
 enabled = true

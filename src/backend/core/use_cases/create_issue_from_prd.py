@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ from backend.core.use_cases.agent_runner_dependencies import (
 )
 from backend.core.use_cases.agent_runner_validation import (
     build_issue_validation_section,
+    extract_evidence_format_waiver_reason,
     extract_realistic_validation_items,
     extract_validation_waiver_reason,
 )
@@ -116,6 +118,7 @@ class IssueFromPrdRequest:
     group: str = ""
     depends_on: tuple[int, ...] = ()
     depends_on_group: tuple[str, ...] = ()
+    parse_evidence_format_with_agent: bool = True
 
 
 @dataclass(frozen=True)
@@ -847,6 +850,103 @@ def _format_repo_relative_path(repo_root: Path, candidate_path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
+_EVIDENCE_FORMAT_PROMPT_TEMPLATE = """\
+判断以下 checklist item 是否明确要求执行者产出特定格式的证据文件。
+只考虑 item 本身对"证据格式"的要求，忽略对参考文件、目录、外部资源的描述。
+
+Item: "{item_text}"
+
+输出 JSON: {{"kind": "screenshot"}} 或 {{"kind": "none"}}
+可选 kind: screenshot, pdf, txt, word, excel, csv, video, none
+"""
+
+_KNOWN_EVIDENCE_KINDS: frozenset[str] = frozenset(
+    {"screenshot", "pdf", "txt", "word", "excel", "csv", "video", "none"}
+)
+
+
+def resolve_agent_name(agent_name: str, default: str = "claude") -> str:
+    """Return a concrete agent name, falling back to *default* for unknown values.
+
+    CLI and config accept ``"auto"`` / ``"none"`` as aliases; this helper
+    normalises them to a real agent that ``IContentGenerator`` can execute.
+    """
+    return agent_name if agent_name in ("claude", "codex", "kimi") else default
+
+
+def _parse_evidence_format_with_agent(
+    checklist_items: list[str],
+    generator: IContentGenerator | None,
+    cwd: Path,
+    agent_name: str,
+) -> dict[int, str]:
+    """Use an agent to parse the required evidence format for each item.
+
+    Returns a mapping ``{item_number: kind}``.  If the agent is unavailable
+    or returns invalid JSON, returns an empty dict so the caller can fall
+    back to regex matching.
+    """
+    if generator is None or not checklist_items:
+        return {}
+
+    resolved_agent = resolve_agent_name(agent_name)
+    parsed_formats: dict[int, str] = {}
+
+    for item_number, item_text in enumerate(checklist_items, start=1):
+        prompt = _EVIDENCE_FORMAT_PROMPT_TEMPLATE.format(item_text=item_text)
+        try:
+            result = generator.generate(
+                agent_name=resolved_agent,
+                prompt=prompt,
+                cwd=cwd,
+                timeout=30,
+            )
+        except Exception:
+            _logger.warning("Agent call failed for item %d, skipping", item_number)
+            continue
+
+        if result.return_code != 0:
+            _logger.warning(
+                "Agent exited with code %d for item %d: %s",
+                result.return_code,
+                item_number,
+                result.stderr,
+            )
+            continue
+
+        output_text = result.stdout.strip()
+        if output_text.startswith("```"):
+            lines = output_text.splitlines()
+            if len(lines) >= 2:
+                output_text = "\n".join(lines[1:-1]).strip()
+
+        try:
+            data = json.loads(output_text)
+            if isinstance(data, dict):
+                kind = str(data.get("kind", "")).strip().lower()
+                if kind in _KNOWN_EVIDENCE_KINDS and kind != "none":
+                    parsed_formats[item_number] = kind
+        except json.JSONDecodeError:
+            _logger.warning(
+                "Agent output is not valid JSON for item %d: %s",
+                item_number,
+                output_text[:200],
+            )
+
+    return parsed_formats
+
+
+def _build_evidence_format_markers(parsed_formats: dict[int, str]) -> str:
+    """Build hidden ``iar:evidence-format`` markers from parsed formats."""
+    if not parsed_formats:
+        return ""
+    lines = [
+        f"<!-- iar:evidence-format item={num} kind={kind} -->"
+        for num, kind in sorted(parsed_formats.items())
+    ]
+    return "\n".join(lines)
+
+
 def create_issue_from_prd(
     *,
     request: IssueFromPrdRequest,
@@ -1029,10 +1129,22 @@ def create_issue_from_prd(
     validation_checklist_items = extract_realistic_validation_items(prd_text)
     validation_waiver_reason = extract_validation_waiver_reason(prd_text)
     if validation_checklist_items or validation_waiver_reason is not None:
+        format_markers = ""
+        if request.parse_evidence_format_with_agent and content_generator is not None:
+            parsed_formats = _parse_evidence_format_with_agent(
+                checklist_items=validation_checklist_items,
+                generator=content_generator,
+                cwd=request.repo_path,
+                agent_name=request.issue_agent,
+            )
+            format_markers = _build_evidence_format_markers(parsed_formats)
         validation_section = build_issue_validation_section(
             checklist_items=validation_checklist_items,
             waiver_reason=validation_waiver_reason,
+            format_waiver_reason=extract_evidence_format_waiver_reason(prd_text),
         )
+        if format_markers:
+            validation_section = f"{format_markers}\n\n{validation_section}"
         body = f"{body.rstrip()}\n\n{validation_section}\n"
 
     # ------------------------------------------------------------------

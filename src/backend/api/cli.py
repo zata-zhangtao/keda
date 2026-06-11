@@ -658,6 +658,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     depends_on_group=tuple(
                         getattr(parsed, "depends_on_group", []) or []
                     ),
+                    parse_evidence_format_with_agent=context.config.validation.parse_evidence_format_with_agent,
                 ),
                 github_client=github_client,
                 process_runner=process_runner,

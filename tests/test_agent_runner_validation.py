@@ -23,12 +23,18 @@ from backend.core.use_cases.agent_runner_validation import (
     build_validation_checklist_block,
     build_validation_prompt_line,
     cleanup_closed_issue_evidence_branches,
+    collect_evidence_coverage_problems,
     ensure_evidence_dir_excluded,
     ensure_no_evidence_paths_in_changes,
     ensure_validation_evidence_ready,
     evidence_branch_name,
+    evidence_format_check_required,
+    demanded_evidence_kinds,
+    extract_evidence_format_markers,
+    extract_evidence_format_waiver_reason,
     extract_realistic_validation_items,
     extract_validation_waiver_reason,
+    format_evidence_format_waiver_marker,
     format_validation_waiver_marker,
     has_validation_waiver_marker,
     list_evidence_files,
@@ -198,15 +204,232 @@ def test_ensure_validation_evidence_ready_raises_without_evidence(
 def test_ensure_validation_evidence_ready_passes_with_evidence(
     tmp_path: Path,
 ) -> None:
-    """Evidence files satisfy the gate; waived issues skip it entirely."""
+    """Per-item evidence satisfies the gate; waived issues skip it entirely."""
     config = AppConfig()
     evidence_dir = tmp_path / ".iar" / "evidence"
     evidence_dir.mkdir(parents=True)
     (evidence_dir / "rv-1.png").write_bytes(b"png")
+    (evidence_dir / "rv-2-serve.txt").write_text("$ demo serve", encoding="utf-8")
     ensure_validation_evidence_ready(_issue(), tmp_path, config)
 
     ensure_validation_evidence_ready(
         _issue(body="no checklist"), tmp_path / "missing", config
+    )
+
+
+def test_ensure_validation_evidence_ready_rejects_uncovered_item(
+    tmp_path: Path,
+) -> None:
+    """Every checklist item must have its own rv-<n>-* evidence file."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "rv-1-run.txt").write_text("$ demo run", encoding="utf-8")
+
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_evidence_ready(_issue(), tmp_path, AppConfig())
+    assert "item 2" in str(exc_info.value)
+    assert "rv-2" in str(exc_info.value)
+
+
+def test_ensure_validation_evidence_ready_rejects_missing_screenshot(
+    tmp_path: Path,
+) -> None:
+    """Items demanding screenshots (截图) must carry image evidence."""
+    issue_body = "\n".join(
+        [
+            "## Realistic Validation",
+            "",
+            "- [ ] **登录页真实验证**：浏览器操作登录页（截图留证）。",
+            "- [ ] **CLI 真实验证**：通过 `demo run` 验证输出。",
+        ]
+    )
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "rv-1-login.txt").write_text("fake log", encoding="utf-8")
+    (evidence_dir / "rv-2-cli.txt").write_text("$ demo run", encoding="utf-8")
+
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_evidence_ready(_issue(body=issue_body), tmp_path, AppConfig())
+    assert "screenshot" in str(exc_info.value)
+    assert "rv-1" in str(exc_info.value)
+
+    (evidence_dir / "rv-1-login.png").write_bytes(b"png")
+    ensure_validation_evidence_ready(_issue(body=issue_body), tmp_path, AppConfig())
+
+
+def test_ensure_validation_evidence_ready_matches_named_formats(
+    tmp_path: Path,
+) -> None:
+    """Items naming pdf/word/txt formats demand matching file suffixes."""
+    issue_body = "\n".join(
+        [
+            "## Realistic Validation",
+            "",
+            "- [ ] **导出真实验证**：导出 PDF 报告并核对内容。",
+            "- [ ] **Word 导出真实验证**：生成 Word 文档并人工检查排版。",
+            "- [ ] **CLI 真实验证**：终端输出保存为 .txt。",
+        ]
+    )
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "rv-1-report.txt").write_text("not a pdf", encoding="utf-8")
+    (evidence_dir / "rv-2-doc.txt").write_text("not a docx", encoding="utf-8")
+    (evidence_dir / "rv-3-cli.txt").write_text("$ demo export", encoding="utf-8")
+
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_evidence_ready(_issue(body=issue_body), tmp_path, AppConfig())
+    error_text = str(exc_info.value)
+    assert "PDF" in error_text
+    assert "Word" in error_text
+    assert "rv-3" not in error_text
+
+    (evidence_dir / "rv-1-report.pdf").write_bytes(b"%PDF")
+    (evidence_dir / "rv-2-doc.docx").write_bytes(b"PK")
+    ensure_validation_evidence_ready(_issue(body=issue_body), tmp_path, AppConfig())
+
+
+def test_format_check_disabled_by_config_keeps_non_empty_gate(
+    tmp_path: Path,
+) -> None:
+    """Config off: per-item matching skipped, empty dir still rejected."""
+    relaxed_config = AppConfig(validation=ValidationConfig(evidence_format_check=False))
+    with pytest.raises(ValidationEvidenceError):
+        ensure_validation_evidence_ready(_issue(), tmp_path, relaxed_config)
+
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "anything.txt").write_text("output", encoding="utf-8")
+    ensure_validation_evidence_ready(_issue(), tmp_path, relaxed_config)
+
+
+def test_format_check_disabled_by_issue_marker(tmp_path: Path) -> None:
+    """An iar:evidence-format-waived marker skips per-item matching."""
+    config = AppConfig()
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "rv-1-run.txt").write_text("$ demo run", encoding="utf-8")
+
+    with pytest.raises(ValidationEvidenceError):
+        ensure_validation_evidence_ready(_issue(), tmp_path, config)
+
+    waived_body = _ISSUE_BODY_WITH_VALIDATION + format_evidence_format_waiver_marker(
+        "局部豁免理由"
+    )
+    ensure_validation_evidence_ready(_issue(body=waived_body), tmp_path, config)
+
+
+def test_extract_evidence_format_waiver_reason() -> None:
+    """The format waiver line parses only inside the validation section."""
+    prd_text = "\n".join(
+        [
+            "### Realistic Validation",
+            "",
+            "Evidence Format Waiver: 证据为外部系统回执，格式不固定。",
+            "",
+            "- [ ] **行为 A 真实验证**：通过 `demo run` 验证输出。",
+        ]
+    )
+    waiver_reason = extract_evidence_format_waiver_reason(prd_text)
+    assert waiver_reason is not None
+    assert "外部系统" in waiver_reason
+    assert extract_evidence_format_waiver_reason(_PRD_WITH_VALIDATION) is None
+
+
+def test_build_issue_validation_section_with_format_waiver() -> None:
+    """The format waiver materializes alongside the checklist, not instead."""
+    section = build_issue_validation_section(
+        checklist_items=["- [ ] item"],
+        waiver_reason=None,
+        format_waiver_reason="格式不固定",
+    )
+    assert "iar:evidence-format-waived" in section
+    assert "- [ ] item" in section
+    config = AppConfig()
+    assert validation_required(section, config)
+    assert not evidence_format_check_required(section, config)
+
+
+def test_collect_evidence_coverage_problems_matches_items() -> None:
+    """Coverage problems name the item number and demanded evidence kind."""
+    checklist_items = [
+        "- [ ] 帧流登录真实验证：浏览器操作（截图留证）。",
+        "- [ ] WebSocket 端点真实验证：pytest 真实入口。",
+    ]
+    problems = collect_evidence_coverage_problems(
+        checklist_items, [Path("rv-1-frame.txt")]
+    )
+    assert len(problems) == 2
+    assert "screenshot" in problems[0]
+    assert "item 2" in problems[1]
+
+    assert (
+        collect_evidence_coverage_problems(
+            checklist_items, [Path("rv-1-frame.png"), Path("rv-2-ws.txt")]
+        )
+        == []
+    )
+
+
+def test_extract_evidence_format_markers() -> None:
+    """Markers are parsed into a {item_number: kind} mapping."""
+    body = (
+        "<!-- iar:evidence-format item=1 kind=screenshot -->\n"
+        "<!-- iar:evidence-format item=2 kind=txt -->\n"
+        "<!-- iar:evidence-format item=3 kind=none -->"
+    )
+    markers = extract_evidence_format_markers(body)
+    assert markers == {1: "screenshot", 2: "txt"}
+
+
+def test_extract_evidence_format_markers_ignores_unknown_kinds() -> None:
+    """Unknown or 'none' kinds are skipped so future extensions are safe."""
+    body = (
+        "<!-- iar:evidence-format item=1 kind=screenshot -->\n"
+        "<!-- iar:evidence-format item=2 kind=unknown -->"
+    )
+    markers = extract_evidence_format_markers(body)
+    assert markers == {1: "screenshot"}
+
+
+def test_demanded_evidence_kinds_prefers_marker() -> None:
+    """When a marker exists for the item, it overrides regex matching."""
+    item_text = "浏览器操作登录页（截图留证）。"
+    body = "<!-- iar:evidence-format item=1 kind=txt -->"
+    kinds = demanded_evidence_kinds(item_text, issue_body=body, item_number=1)
+    assert len(kinds) == 1
+    assert kinds[0].label == "plain-text capture (.txt/.log)"
+
+
+def test_demanded_evidence_kinds_fallback_to_regex() -> None:
+    """Without a marker, the function falls back to regex keyword matching."""
+    item_text = "浏览器操作登录页（截图留证）。"
+    kinds = demanded_evidence_kinds(item_text)
+    assert len(kinds) == 1
+    assert "screenshot" in kinds[0].label.lower()
+
+
+def test_collect_evidence_coverage_problems_with_markers() -> None:
+    """Coverage problems respect markers when issue_body is provided."""
+    checklist_items = [
+        "- [ ] item 1",
+        "- [ ] item 2",
+    ]
+    body = "<!-- iar:evidence-format item=1 kind=screenshot -->"
+    problems = collect_evidence_coverage_problems(
+        checklist_items, [Path("rv-1-run.txt")], issue_body=body
+    )
+    assert len(problems) == 2
+    assert "screenshot" in problems[0]
+    assert "item 2" in problems[1]
+
+    # Correct format satisfies the marker
+    assert (
+        collect_evidence_coverage_problems(
+            checklist_items,
+            [Path("rv-1-run.png"), Path("rv-2-cli.txt")],
+            issue_body=body,
+        )
+        == []
     )
 
 

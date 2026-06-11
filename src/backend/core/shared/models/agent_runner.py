@@ -154,11 +154,19 @@ class ValidationConfig:
     code diff. ``branch_prefix`` names the orphan branches that carry
     evidence to reviewers (``<branch_prefix>issue-<N>``); these branches are
     never merged and are deleted once the Issue closes.
+
+    ``evidence_format_check`` toggles the per-item evidence matching rules
+    (every item needs its own ``rv-<n>-*`` file in the format the item
+    names); switching it off keeps only the non-empty evidence requirement.
+    Individual PRDs can opt out via an ``Evidence Format Waiver: <reason>``
+    line in their Realistic Validation section.
     """
 
     enabled: bool = True
     evidence_dir: str = ".iar/evidence"
     branch_prefix: str = "iar-evidence/"
+    evidence_format_check: bool = True
+    parse_evidence_format_with_agent: bool = True
 
 
 @dataclass(frozen=True)

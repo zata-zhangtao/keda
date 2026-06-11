@@ -44,12 +44,23 @@ from backend.core.use_cases.agent_runner_git import list_changed_paths
 _logger = logging.getLogger(__name__)
 
 _VALIDATION_SECTION_TITLE = "realistic validation"
+_VALIDATION_SECTION_HEADER_RE = re.compile(
+    r"^(?:\d+\.\s+)?" + re.escape(_VALIDATION_SECTION_TITLE),
+    re.IGNORECASE,
+)
 _WAIVER_LINE_PATTERN = re.compile(
     r"^[-*\s]*Validation Waiver[:：]\s*(?P<reason>.+)$",
     re.IGNORECASE,
 )
 _WAIVER_MARKER_PATTERN = re.compile(
     r"<!--\s*iar:validation-waived(?:\s+reason=\"(?P<reason>[^\"]*)\")?\s*-->"
+)
+_FORMAT_WAIVER_LINE_PATTERN = re.compile(
+    r"^[-*\s]*Evidence Format Waiver[:：]\s*(?P<reason>.+)$",
+    re.IGNORECASE,
+)
+_FORMAT_WAIVER_MARKER_PATTERN = re.compile(
+    r"<!--\s*iar:evidence-format-waived(?:\s+reason=\"(?P<reason>[^\"]*)\")?\s*-->"
 )
 _CHECKLIST_START_PATTERN = re.compile(
     r"<!--\s*iar:realistic-validation\s+version=(?P<version>\d+)\s+total=(?P<total>\d+)\s*-->"
@@ -72,6 +83,16 @@ _PR_URL_PATTERN = re.compile(
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _INLINE_TEXT_SUFFIXES = {".txt", ".log", ".md", ".out"}
 _MAX_INLINE_EVIDENCE_CHARS = 3000
+
+_EVIDENCE_ITEM_FILE_PATTERN = re.compile(r"^rv-(?P<item>\d+)[-.]", re.IGNORECASE)
+_MAX_ITEM_SUMMARY_CHARS = 120
+_EVIDENCE_FORMAT_MARKER_PATTERN = re.compile(
+    r"<!--\s*iar:evidence-format\s+item=(?P<item>\d+)\s+kind=(?P<kind>[a-z]+)\s*-->",
+    re.IGNORECASE,
+)
+_KNOWN_EVIDENCE_KINDS: frozenset[str] = frozenset(
+    {"screenshot", "pdf", "txt", "word", "excel", "csv", "video", "none"}
+)
 
 
 class ValidationEvidenceError(RuntimeError):
@@ -130,7 +151,7 @@ def _iterate_validation_section_lines(markdown_text: str) -> list[str]:
                     break
                 section_lines.append(line)
                 continue
-            if heading_text.startswith(_VALIDATION_SECTION_TITLE):
+            if _VALIDATION_SECTION_HEADER_RE.match(heading_text):
                 section_heading_level = heading_level
             continue
         if section_heading_level:
@@ -184,15 +205,57 @@ def has_validation_waiver_marker(text: str) -> bool:
     return _WAIVER_MARKER_PATTERN.search(text) is not None
 
 
+def extract_evidence_format_waiver_reason(markdown_text: str) -> str | None:
+    """Extract an ``Evidence Format Waiver: <reason>`` declaration.
+
+    与 :func:`extract_validation_waiver_reason` 同型：只接受 Realistic
+    Validation 小节内的显式声明行。该豁免只关闭逐项格式对账，证据本身
+    仍然必须存在。
+
+    Returns:
+        豁免理由文本；无显式声明时返回 ``None``。
+    """
+    for section_line in _iterate_validation_section_lines(markdown_text):
+        format_waiver_match = _FORMAT_WAIVER_LINE_PATTERN.match(section_line.strip())
+        if format_waiver_match:
+            return format_waiver_match.group("reason").strip()
+    return None
+
+
+def format_evidence_format_waiver_marker(reason: str) -> str:
+    """Format the hidden evidence-format waiver marker for an Issue body."""
+    sanitized_reason = reason.replace('"', "'").replace("\n", " ").strip()
+    return f'<!-- iar:evidence-format-waived reason="{sanitized_reason}" -->'
+
+
+def has_evidence_format_waiver_marker(text: str) -> bool:
+    """Return True when the text carries an iar:evidence-format-waived marker."""
+    return _FORMAT_WAIVER_MARKER_PATTERN.search(text) is not None
+
+
+def evidence_format_check_required(issue_body: str, config: AppConfig) -> bool:
+    """Return True when per-item evidence format matching should run.
+
+    配置 ``validation.evidence_format_check = false`` 全局关闭；Issue body
+    带 ``iar:evidence-format-waived`` marker（来自 PRD 的 Evidence Format
+    Waiver 声明）按任务关闭。
+    """
+    if not config.validation.evidence_format_check:
+        return False
+    return not has_evidence_format_waiver_marker(issue_body)
+
+
 def build_issue_validation_section(
     *,
     checklist_items: list[str],
     waiver_reason: str | None,
+    format_waiver_reason: str | None = None,
 ) -> str:
     """Build the deterministic ``## Realistic Validation`` Issue body block.
 
     与 AI 生成正文无关的确定性物化：waiver 优先（出现 marker、无清单），
-    否则输出未勾选清单与证据要求说明。
+    否则输出未勾选清单与证据要求说明；PRD 声明了 Evidence Format Waiver
+    时附带格式豁免 marker（证据仍必须存在，仅跳过逐项格式对账）。
     """
     if waiver_reason is not None:
         return "\n".join(
@@ -204,10 +267,19 @@ def build_issue_validation_section(
                 f"Validation waived by operator: {waiver_reason}",
             ]
         )
+    format_waiver_lines: list[str] = []
+    if format_waiver_reason is not None:
+        format_waiver_lines = [
+            format_evidence_format_waiver_marker(format_waiver_reason),
+            "",
+            f"Evidence format matching waived by operator: {format_waiver_reason}",
+            "",
+        ]
     return "\n".join(
         [
             "## Realistic Validation",
             "",
+            *format_waiver_lines,
             "The executing agent MUST run each item through the real entry "
             "point and save evidence (screenshots or captured output) to "
             "`.iar/evidence/` in the worktree. The runner refuses to publish "
@@ -235,15 +307,29 @@ def build_validation_prompt_line(issue: IssueSummary, config: AppConfig) -> str:
     """
     if not validation_required(issue.body, config):
         return ""
+    if evidence_format_check_required(issue.body, config):
+        enforcement_text = (
+            "The runner checks evidence against the checklist before "
+            "publishing: every item must have its own `rv-<n>-*` file, and "
+            "when an item names an evidence format (截图/screenshot, pdf, "
+            "txt, word, excel, csv, 录屏/video), a file with a matching "
+            "suffix is required. "
+        )
+    else:
+        enforcement_text = (
+            "The runner refuses to publish when the evidence directory is " "empty. "
+        )
     return (
         "Realistic Validation is MANDATORY for this Issue: actually execute "
         "every item of the Realistic Validation checklist through the real "
         "entry points (not only unit tests), and save one evidence file per "
         f"item into `{config.validation.evidence_dir}/` inside the worktree, "
         "named `rv-<item-number>-<slug>.<ext>` (PNG screenshots for UI "
-        "behavior; captured terminal output as .txt for CLI behavior). The "
-        "runner refuses to publish without evidence. Never put evidence "
-        "files under version control and never capture secrets in them."
+        "behavior; captured terminal output as .txt for CLI behavior). "
+        f"{enforcement_text}"
+        "Do not substitute the real entry point an item describes with "
+        "fakes, mocks, or TestClient. Never put evidence files under "
+        "version control and never capture secrets in them."
     )
 
 
@@ -323,15 +409,187 @@ def ensure_evidence_dir_excluded(
     exclude_path.write_text(appended_text, encoding="utf-8")
 
 
+@dataclass(frozen=True)
+class EvidenceKindRule:
+    """A demanded evidence format: trigger keywords and accepted suffixes."""
+
+    label: str
+    requirement_pattern: re.Pattern[str]
+    accepted_suffixes: frozenset[str]
+
+
+_EVIDENCE_KIND_RULES: tuple[EvidenceKindRule, ...] = (
+    EvidenceKindRule(
+        label="screenshot/image",
+        requirement_pattern=re.compile(
+            r"截图|screen\s*shot|screenshot|\bpng\b|\bjpe?g\b", re.IGNORECASE
+        ),
+        accepted_suffixes=frozenset(_IMAGE_SUFFIXES),
+    ),
+    EvidenceKindRule(
+        label="PDF",
+        requirement_pattern=re.compile(r"\bpdf\b", re.IGNORECASE),
+        accepted_suffixes=frozenset({".pdf"}),
+    ),
+    EvidenceKindRule(
+        label="plain-text capture (.txt/.log)",
+        requirement_pattern=re.compile(r"\btxt\b|\blog\b|日志", re.IGNORECASE),
+        accepted_suffixes=frozenset({".txt", ".log"}),
+    ),
+    EvidenceKindRule(
+        label="Word document",
+        requirement_pattern=re.compile(
+            r"\bdocx\b|\bword\s*文档|\bword\s+document", re.IGNORECASE
+        ),
+        accepted_suffixes=frozenset({".doc", ".docx"}),
+    ),
+    EvidenceKindRule(
+        label="Excel spreadsheet",
+        requirement_pattern=re.compile(r"\bxlsx?\b|\bexcel\b", re.IGNORECASE),
+        accepted_suffixes=frozenset({".xls", ".xlsx"}),
+    ),
+    EvidenceKindRule(
+        label="CSV",
+        requirement_pattern=re.compile(r"\bcsv\b", re.IGNORECASE),
+        accepted_suffixes=frozenset({".csv"}),
+    ),
+    EvidenceKindRule(
+        label="video/screen recording",
+        requirement_pattern=re.compile(
+            r"录屏|视频|\bvideo\b|\bmp4\b|\bscreen\s*recording", re.IGNORECASE
+        ),
+        accepted_suffixes=frozenset({".mp4", ".mov", ".webm", ".gif"}),
+    ),
+)
+
+
+def extract_evidence_format_markers(issue_body: str) -> dict[int, str]:
+    """Parse ``iar:evidence-format`` markers from an Issue body.
+
+    Returns a mapping ``{item_number: kind}`` for each marker found.
+    Unknown kinds are ignored so that future extensions do not break
+    current validation.
+    """
+    markers: dict[int, str] = {}
+    for match in _EVIDENCE_FORMAT_MARKER_PATTERN.finditer(issue_body):
+        item_number = int(match.group("item"))
+        kind = match.group("kind").lower()
+        if kind in _KNOWN_EVIDENCE_KINDS and kind != "none":
+            markers[item_number] = kind
+    return markers
+
+
+def _kind_to_evidence_rules(kind: str) -> list[EvidenceKindRule]:
+    """Map a marker kind string to the corresponding EvidenceKindRule(s)."""
+    for rule in _EVIDENCE_KIND_RULES:
+        if kind in rule.label.lower():
+            return [rule]
+    # Fallback: try direct label match for txt / pdf / csv / video
+    kind_lower = kind.lower()
+    for rule in _EVIDENCE_KIND_RULES:
+        if kind_lower in rule.label.lower():
+            return [rule]
+    return []
+
+
+def demanded_evidence_kinds(
+    item_text: str,
+    *,
+    issue_body: str | None = None,
+    item_number: int | None = None,
+) -> list[EvidenceKindRule]:
+    """Return the evidence formats a checklist item explicitly names.
+
+    优先读取 Issue body 中的 ``iar:evidence-format`` marker；无 marker 时
+    回退到正则关键词匹配 item 文本。
+    """
+    if issue_body is not None and item_number is not None:
+        markers = extract_evidence_format_markers(issue_body)
+        if item_number in markers:
+            return _kind_to_evidence_rules(markers[item_number])
+    return [
+        kind_rule
+        for kind_rule in _EVIDENCE_KIND_RULES
+        if kind_rule.requirement_pattern.search(item_text)
+    ]
+
+
+def _summarize_checklist_item(item_text: str) -> str:
+    """Strip the checkbox prefix and truncate the item for error messages."""
+    item_summary = re.sub(r"^[-*]\s*\[[ xX]\]\s*", "", item_text.strip())
+    if len(item_summary) > _MAX_ITEM_SUMMARY_CHARS:
+        item_summary = item_summary[:_MAX_ITEM_SUMMARY_CHARS] + "…"
+    return item_summary
+
+
+def collect_evidence_coverage_problems(
+    checklist_items: list[str],
+    evidence_files: list[Path],
+    issue_body: str | None = None,
+) -> list[str]:
+    """逐项对账：清单条目要求什么证据，就必须存在对应形态的文件。
+
+    规则（确定性、不读文件内容）：
+
+    1. 第 ``n`` 个清单条目必须至少有一个 ``rv-<n>-*``（或 ``rv-<n>.*``）
+       证据文件。
+    2. 条目点名的每种格式（见 :func:`demanded_evidence_kinds`：截图、
+       pdf、txt、word、excel、csv、录屏……）都必须有对应后缀的文件。
+
+    Returns:
+        人类可读的问题描述列表；全部满足时为空列表。
+    """
+    files_by_item_number: dict[int, list[Path]] = {}
+    for evidence_file in evidence_files:
+        file_match = _EVIDENCE_ITEM_FILE_PATTERN.match(evidence_file.name)
+        if file_match:
+            files_by_item_number.setdefault(int(file_match.group("item")), []).append(
+                evidence_file
+            )
+
+    coverage_problems: list[str] = []
+    for item_number, item_text in enumerate(checklist_items, start=1):
+        item_evidence_files = files_by_item_number.get(item_number, [])
+        item_summary = _summarize_checklist_item(item_text)
+        if not item_evidence_files:
+            coverage_problems.append(
+                f"Checklist item {item_number} has no evidence file named "
+                f"`rv-{item_number}-<slug>.<ext>`: {item_summary}"
+            )
+            continue
+        for demanded_kind in demanded_evidence_kinds(
+            item_text, issue_body=issue_body, item_number=item_number
+        ):
+            if any(
+                item_file.suffix.lower() in demanded_kind.accepted_suffixes
+                for item_file in item_evidence_files
+            ):
+                continue
+            accepted_suffixes_text = "/".join(sorted(demanded_kind.accepted_suffixes))
+            coverage_problems.append(
+                f"Checklist item {item_number} explicitly demands "
+                f"{demanded_kind.label} evidence, but its `rv-{item_number}-*` "
+                f"files contain no such file ({accepted_suffixes_text}): "
+                f"{item_summary}"
+            )
+    return coverage_problems
+
+
 def ensure_validation_evidence_ready(
     issue: IssueSummary,
     worktree_path: Path,
     config: AppConfig,
 ) -> None:
-    """Require non-empty evidence when the Issue demands validation.
+    """Require per-item evidence when the Issue demands validation.
+
+    除了证据目录非空，还逐项核对清单：每个条目都要有 ``rv-<n>-*`` 文件，
+    条目点名的格式（截图、pdf、txt、word……）必须有对应后缀的证据。
+    逐项对账可全局关（``validation.evidence_format_check = false``）或
+    按任务关（Issue body 带 ``iar:evidence-format-waived`` marker），
+    关闭后退化为仅要求证据目录非空。
 
     Raises:
-        ValidationEvidenceError: 要求验证但证据目录缺失或为空。
+        ValidationEvidenceError: 要求验证但证据缺失或与清单不匹配。
     """
     if not validation_required(issue.body, config):
         return
@@ -344,6 +602,26 @@ def ensure_validation_evidence_ready(
             "real entry points and save evidence files (PNG screenshots for "
             "UI behavior, captured terminal output as .txt for CLI behavior) "
             "named like `rv-1-<slug>.png` into that directory."
+        )
+    if not evidence_format_check_required(issue.body, config):
+        return
+    coverage_problems = collect_evidence_coverage_problems(
+        extract_realistic_validation_items(issue.body),
+        evidence_files,
+        issue_body=issue.body,
+    )
+    if coverage_problems:
+        problems_text = "\n".join(
+            f"- {coverage_problem}" for coverage_problem in coverage_problems
+        )
+        raise ValidationEvidenceError(
+            "Realistic Validation evidence does not match the checklist:\n"
+            f"{problems_text}\n"
+            "Each checklist item needs its own evidence file numbered "
+            "`rv-<item-number>-<slug>.<ext>`, in the file format the item "
+            "names (screenshot → image, pdf → .pdf, txt → .txt, and so on). "
+            "Execute every item through the real entry point it describes — "
+            "fakes, mocks, or TestClient substitutes do not satisfy the item."
         )
 
 
