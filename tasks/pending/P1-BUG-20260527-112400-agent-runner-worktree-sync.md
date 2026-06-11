@@ -1,5 +1,7 @@
 # PRD: Agent Runner Worktree 远程分支安全对齐
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/71
+
 ## 1. Introduction & Goals
 
 ### 问题说明
