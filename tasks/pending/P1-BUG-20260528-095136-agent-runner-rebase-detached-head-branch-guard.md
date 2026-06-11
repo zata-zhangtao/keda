@@ -1,5 +1,7 @@
 # PRD: Agent Runner Rebase Detached HEAD Branch Guard
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/73
+
 ## 1. Introduction & Goals
 
 Issue #28 的 post-PR supervisor 在处理 `resolve_conflict` / `rebase_pr_branch` 时暴露了一个 rebase 冲突恢复边界问题：
@@ -78,7 +80,9 @@ Refine the existing `pr_supervisor.execute_rebase(...)` conflict recovery branch
 | Path | Current Responsibility | Relevance |
 |---|---|---|
 | `src/backend/core/use_cases/pr_supervisor.py` | post-PR supervisor action、repair/rebase 执行、冲突恢复循环 | bug 发生在 `execute_rebase(...)` 的 conflict recovery commit-request 分支 |
-| `src/backend/core/use_cases/run_agent_once.py` | Git helper、commit proxy、verification、safe path validation | 提供 `get_current_branch(...)`、`run_verification(...)`、`validate_safe_changes(...)` 等复用能力 |
+| `src/backend/core/use_cases/agent_runner_git.py` | Git helper、verification | 提供 `get_current_branch(...)`、`get_head_sha(...)`、`run_verification(...)`、`has_changes(...)` 等复用能力 |
+| `src/backend/core/use_cases/agent_runner_commit.py` | commit proxy | 提供 `commit_requested_changes(...)`、`read_commit_request(...)`、`remove_commit_request(...)` |
+| `src/backend/core/use_cases/run_agent_once.py` | run orchestration | 通过 `__all__` 聚合导出上述 helper，入口仍由此处调度 |
 | `src/backend/core/shared/interfaces/agent_runner.py` | `IProcessRunner`、`IGitHubClient` 等端口 | Git 命令继续通过 process runner，不直接绑定 subprocess |
 | `src/backend/core/shared/models/agent_runner.py` | `AppConfig`、`IssueSummary`、`CommandResult` 等模型 | 不需要新增持久模型 |
 | `src/backend/api/cli.py` | `iar` CLI 入口装配 | 真实入口验证应覆盖 CLI，但业务判断不放入 API 层 |
@@ -112,9 +116,9 @@ review / run
 ### Reuse Candidates
 
 - 继续复用 `IProcessRunner` 执行所有 Git 命令。
-- 继续复用 `validate_safe_changes(...)`、`run_verification(...)`、`ensure_verification_passed(...)` 和 `has_changes(...)`。
-- 可在 `pr_supervisor.py` 增加 file-private helper，例如 `_ensure_rebase_target_matches_pr_branch(...)`，仅服务 `execute_rebase(...)`。
-- 如多个 use case 后续也需要 active rebase 识别，再考虑移动到 `run_agent_once.py` 的 Git helper 区；本 PRD 默认不提前抽象。
+- 继续复用 `agent_runner_commit.commit_requested_changes(...)`、`agent_runner_publish.validate_safe_changes(...)`、`agent_runner_git.run_verification(...)`、`agent_runner_feedback.ensure_verification_passed(...)` 和 `agent_runner_git.has_changes(...)`。
+- 可在 `pr_supervisor.py` 增加 file-private helper，例如 `_ensure_rebase_target_matches_pr_branch(...)`，仅服务 `execute_rebase(...)`；读取 Git rebase metadata 时优先通过 `agent_runner_git.py` 中的现有 helper 或直接调用 `process_runner.run(["git", "rev-parse", "--git-path", ...])`。
+- 如多个 use case 后续也需要 active rebase 识别，再考虑移动到 `agent_runner_git.py`；本 PRD 默认不提前抽象。
 
 ### Architecture Constraints
 
@@ -288,7 +292,7 @@ rg -n "resolve_conflict|rebase_pr_branch|post_pr_rework_requested" src tests doc
 ### Executor Drift Guard
 
 - 如果 `execute_rebase(...)` 已被拆分或移动，先用 `rg -n "def execute_rebase|git rebase --continue|resolve_conflict" src/backend` 找到唯一执行路径，不要新增第二套 executor。
-- 如果 `get_current_branch(...)` 已改名或泛化，确认普通 commit proxy `commit_requested_changes(...)` 的安全语义仍未放宽。
+- 如果 `get_current_branch(...)` 已改名或泛化（当前位于 `agent_runner_git.py`），确认普通 commit proxy `commit_requested_changes(...)`（当前位于 `agent_runner_commit.py`）的安全语义仍未放宽。
 - 如果 workflow label helper 或 marker history helper 已落地，复用其入口触发 rework，但不要把 active rebase 状态持久化进 marker。
 - 如果 `tests/test_agent_runner_cli.py` 已有 subprocess CLI fixture，优先复用；没有时可在 `tests/test_run_agent.py` 使用现有 fake GitHub/agent 边界，但必须保留至少一个真实 CLI 或 runner entry validation。
 - 如果实现者倾向直接读取 `.git/rebase-merge/head-name`，先改为 `git rev-parse --git-path rebase-merge/head-name`，因为当前 runner 大量使用 Git worktree，`.git` 可能是指向 common git dir 的文件。
