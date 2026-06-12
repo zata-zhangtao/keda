@@ -29,10 +29,10 @@ Refine the existing `pr_supervisor.execute_rebase(...)` conflict recovery branch
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **rebase detached HEAD 真实验证**：通过包含真实 Git 仓库和冲突 rebase 的测试入口，验证 `git branch --show-current` 为空但 active rebase 目标为 PR 分支时，runner 允许 `git rebase --continue`。
-- [ ] **错误分支拒绝真实验证**：通过同一入口制造 active rebase 目标分支与 PR 分支不一致，验证 runner 拒绝 staging、verification、`rebase --continue` 和 push。
-- [ ] **CLI rework 消费验证**：通过 `uv run iar run --repo <fixture-repo> --max-issues 1` 等真实 CLI 路径或其 subprocess fixture，验证 pending `resolve_conflict` / `rebase_pr_branch` 请求不会因 detached HEAD 被误判失败。
-- [ ] **为什么单元测试不够**：该 bug 依赖真实 Git rebase 元数据、worktree detached 状态、commit-request 协议和 runner supervisor 路由组合；只 mock `git branch --show-current` 无法证明真实 rebase 中间状态可恢复。
+- [x] **rebase detached HEAD 真实验证**：通过包含真实 Git 仓库和冲突 rebase 的测试入口，验证 `git branch --show-current` 为空但 active rebase 目标为 PR 分支时，runner 允许 `git rebase --continue`。
+- [x] **错误分支拒绝真实验证**：通过同一入口制造 active rebase 目标分支与 PR 分支不一致，验证 runner 拒绝 staging、verification、`rebase --continue` 和 push。
+- [x] **CLI rework 消费验证**：通过 `uv run iar run --repo <fixture-repo> --max-issues 1` 等真实 CLI 路径或其 subprocess fixture，验证 pending `resolve_conflict` / `rebase_pr_branch` 请求不会因 detached HEAD 被误判失败。
+- [x] **为什么单元测试不够**：该 bug 依赖真实 Git rebase 元数据、worktree detached 状态、commit-request 协议和 runner supervisor 路由组合；只 mock `git branch --show-current` 无法证明真实 rebase 中间状态可恢复。
 
 ### Delivery Dependencies
 
@@ -361,33 +361,33 @@ No external validation required; repository evidence and Git behavior exercised 
 
 ### Architecture Acceptance
 
-- [ ] The fix is implemented in `src/backend/core/use_cases/pr_supervisor.py` or an existing core Git helper; no infrastructure import is added to core.
-- [ ] `src/backend/api/cli.py` remains an entry adapter and does not contain rebase branch guard logic.
-- [ ] No new service, database table, queue, persistent checkpoint, or parallel rebase executor is introduced.
+- [x] The fix is implemented in `src/backend/core/use_cases/pr_supervisor.py` or an existing core Git helper; no infrastructure import is added to core.
+- [x] `src/backend/api/cli.py` remains an entry adapter and does not contain rebase branch guard logic.
+- [x] No new service, database table, queue, persistent checkpoint, or parallel rebase executor is introduced.
 
 ### Behavior Acceptance
 
-- [ ] `execute_rebase(...)` allows conflict recovery when `git branch --show-current` is empty and active rebase target resolves to the expected `pr_branch`.
-- [ ] `execute_rebase(...)` rejects conflict recovery when the active rebase target is missing, unreadable, or different from `pr_branch`.
-- [ ] Rejection happens before `git add -A`, verification, `git rebase --continue`, and `git push --force-with-lease`.
-- [ ] Safety guard rejection does not run `git rebase --abort`; abort remains limited to the exhausted conflict-resolution path after the expected PR branch rebase was established.
-- [ ] The conflict recovery commit-request path does not run `git commit`; it only authorizes staging, verification, and `git rebase --continue`.
-- [ ] `commit_requested_changes(...)` still rejects detached HEAD or any branch that does not equal `expected_branch`.
-- [ ] Error messages no longer end with an empty `unexpected branch:` diagnostic without explaining rebase target status.
+- [x] `execute_rebase(...)` allows conflict recovery when `git branch --show-current` is empty and active rebase target resolves to the expected `pr_branch`.
+- [x] `execute_rebase(...)` rejects conflict recovery when the active rebase target is missing, unreadable, or different from `pr_branch`.
+- [x] Rejection happens before `git add -A`, verification, `git rebase --continue`, and `git push --force-with-lease`.
+- [x] Safety guard rejection does not run `git rebase --abort`; abort remains limited to the exhausted conflict-resolution path after the expected PR branch rebase was established.
+- [x] The conflict recovery commit-request path does not run `git commit`; it only authorizes staging, verification, and `git rebase --continue`.
+- [x] `commit_requested_changes(...)` still rejects detached HEAD or any branch that does not equal `expected_branch`.
+- [x] Error messages no longer end with an empty `unexpected branch:` diagnostic without explaining rebase target status.
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` explains how rebase conflict recovery validates the PR branch during detached HEAD active rebase.
-- [ ] Documentation distinguishes this safety check from worktree remote sync and publish recovery.
+- [x] `docs/guides/agent-runner.md` explains how rebase conflict recovery validates the PR branch during detached HEAD active rebase.
+- [x] Documentation distinguishes this safety check from worktree remote sync and publish recovery.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_pr_supervisor.py -k "rebase_detached_head" -v` passes with coverage for real Git rebase conflict state.
-- [ ] `uv run pytest tests/test_pr_supervisor.py -k "rebase_target" -v` passes with coverage for mismatch rejection.
-- [ ] `uv run pytest tests/test_pr_supervisor.py -k "rebase_guard_does_not_abort or rebase_conflict_no_git_commit" -v` passes.
-- [ ] `uv run pytest tests/test_agent_runner_cli.py -k "rebase_conflict_detached_head" -v` or an equivalent real `iar run` subprocess fixture passes.
-- [ ] `uv run mkdocs build --strict` passes.
-- [ ] `just test` passes.
+- [x] `uv run pytest tests/test_pr_supervisor.py -k "rebase_detached_head" -v` passes with coverage for real Git rebase conflict state.
+- [x] `uv run pytest tests/test_pr_supervisor.py -k "rebase_target" -v` passes with coverage for mismatch rejection.
+- [x] `uv run pytest tests/test_pr_supervisor.py -k "rebase_guard_does_not_abort or rebase_conflict_no_git_commit" -v` passes.
+- [x] `uv run pytest tests/test_agent_runner_cli.py -k "rebase_conflict_detached_head" -v` or an equivalent real `iar run` subprocess fixture passes.
+- [x] `uv run mkdocs build --strict` passes.
+- [x] `just test` passes.
 
 ## 8. Functional Requirements
 

@@ -12,11 +12,14 @@ from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
     IssueSummary,
+    PostPrSupervisorConfig,
     PullRequestContext,
+    RunnerConfig,
     SupervisorActionResult,
 )
 from backend.core.use_cases.agent_runner_events import parse_latest_event_marker
 from backend.core.use_cases.pr_supervisor import (
+    _ensure_rebase_context_matches_pr_branch,
     build_conflict_resolution_prompt,
     build_rework_intent_comment,
     build_supervisor_prompt,
@@ -1447,3 +1450,857 @@ def test_supervisor_loop_waits_for_pending_checks_once(tmp_path: Path) -> None:
 
     label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
     assert label_calls == []
+
+
+def test_execute_rebase_allows_detached_head_when_active_rebase_target_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detached HEAD during rebase is allowed when metadata confirms target branch."""
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "resolve conflict"}),
+        encoding="utf-8",
+    )
+
+    rebase_merge_dir = worktree_path / ".git" / "rebase-merge"
+    rebase_merge_dir.mkdir(parents=True, exist_ok=True)
+    head_name_path = rebase_merge_dir / "head-name"
+    head_name_path.write_text("refs/heads/issue-1", encoding="utf-8")
+
+    class _DetachedHeadRunner(FakeProcessRunner):
+        def __init__(self, worktree_path: Path, responses: dict) -> None:
+            super().__init__(responses=responses)
+            self._worktree_path = worktree_path
+            self._branch_show_current_calls = 0
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            input_text=None,
+        ):
+            command_tuple = tuple(command)
+            if command_tuple == ("git", "branch", "--show-current"):
+                self._branch_show_current_calls += 1
+                self.calls.append(list(command))
+                self.input_texts.append(input_text)
+                if self._branch_show_current_calls == 1:
+                    return CommandResult(command_tuple, 0, "issue-1\n", "")
+                return CommandResult(command_tuple, 0, "", "")
+
+            if command_tuple == (
+                "git",
+                "rev-parse",
+                "--git-path",
+                "rebase-merge/head-name",
+            ):
+                self.calls.append(list(command))
+                self.input_texts.append(input_text)
+                head_name_path = (
+                    self._worktree_path / ".git" / "rebase-merge" / "head-name"
+                )
+                return CommandResult(command_tuple, 0, str(head_name_path) + "\n", "")
+
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+                input_text=input_text,
+            )
+
+    fake_runner = _DetachedHeadRunner(
+        worktree_path=worktree_path,
+        responses={
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "HEAD"),
+                return_code=0,
+                stdout="abc123\n",
+                stderr="",
+            ),
+            ("git", "fetch", "origin", "main"): CommandResult(
+                command=("git", "fetch", "origin", "main"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "origin/main"): CommandResult(
+                command=("git", "rebase", "origin/main"),
+                return_code=1,
+                stdout="",
+                stderr="CONFLICT (content): Merge conflict in file.py\n",
+            ),
+            ("git", "diff", "--name-only", "--diff-filter=U"): CommandResult(
+                command=("git", "diff", "--name-only", "--diff-filter=U"),
+                return_code=0,
+                stdout="file.py\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M file.py\n",
+                stderr="",
+            ),
+            ("git", "add", "-A"): CommandResult(
+                command=("git", "add", "-A"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "--continue"): CommandResult(
+                command=("git", "rebase", "--continue"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "push", "--force-with-lease", "origin", "issue-1"): CommandResult(
+                command=("git", "push", "--force-with-lease", "origin", "issue-1"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        },
+    )
+
+    def _noop_run_agent(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        *,
+        capture_output=False,
+        timeout_seconds=None,
+    ):
+        return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.core.use_cases.pr_supervisor.run_agent_with_prompt",
+        _noop_run_agent,
+    )
+
+    config = AppConfig(
+        post_pr_supervisor=PostPrSupervisorConfig(max_repair_attempts=1),
+        runner=RunnerConfig(verification_commands=()),
+    )
+    execute_rebase(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=fake_runner,
+        pr_branch="issue-1",
+        expected_head="abc123",
+        supervisor_agent="codex",
+    )
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "push", "--force-with-lease", "origin", "issue-1") in commands
+    assert ("git", "commit", "-m", "resolve conflict") not in commands
+    assert ("git", "rebase", "--abort") not in commands
+
+
+def test_execute_rebase_rejects_mismatched_active_rebase_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detached HEAD with mismatched rebase metadata must raise immediately."""
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "resolve conflict"}),
+        encoding="utf-8",
+    )
+
+    rebase_merge_dir = worktree_path / ".git" / "rebase-merge"
+    rebase_merge_dir.mkdir(parents=True, exist_ok=True)
+    head_name_path = rebase_merge_dir / "head-name"
+    head_name_path.write_text("refs/heads/issue-99", encoding="utf-8")
+
+    class _MismatchedRunner(FakeProcessRunner):
+        def __init__(self, worktree_path: Path, responses: dict) -> None:
+            super().__init__(responses=responses)
+            self._worktree_path = worktree_path
+            self._branch_show_current_calls = 0
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            input_text=None,
+        ):
+            command_tuple = tuple(command)
+            if command_tuple == ("git", "branch", "--show-current"):
+                self._branch_show_current_calls += 1
+                self.calls.append(list(command))
+                self.input_texts.append(input_text)
+                if self._branch_show_current_calls == 1:
+                    return CommandResult(command_tuple, 0, "issue-1\n", "")
+                return CommandResult(command_tuple, 0, "", "")
+
+            if command_tuple == (
+                "git",
+                "rev-parse",
+                "--git-path",
+                "rebase-merge/head-name",
+            ):
+                self.calls.append(list(command))
+                self.input_texts.append(input_text)
+                head_name_path = (
+                    self._worktree_path / ".git" / "rebase-merge" / "head-name"
+                )
+                return CommandResult(command_tuple, 0, str(head_name_path) + "\n", "")
+
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+                input_text=input_text,
+            )
+
+    fake_runner = _MismatchedRunner(
+        worktree_path=worktree_path,
+        responses={
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "HEAD"),
+                return_code=0,
+                stdout="abc123\n",
+                stderr="",
+            ),
+            ("git", "fetch", "origin", "main"): CommandResult(
+                command=("git", "fetch", "origin", "main"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "origin/main"): CommandResult(
+                command=("git", "rebase", "origin/main"),
+                return_code=1,
+                stdout="",
+                stderr="CONFLICT (content): Merge conflict in file.py\n",
+            ),
+            ("git", "diff", "--name-only", "--diff-filter=U"): CommandResult(
+                command=("git", "diff", "--name-only", "--diff-filter=U"),
+                return_code=0,
+                stdout="file.py\n",
+                stderr="",
+            ),
+        },
+    )
+
+    def _noop_run_agent(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        *,
+        capture_output=False,
+        timeout_seconds=None,
+    ):
+        return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.core.use_cases.pr_supervisor.run_agent_with_prompt",
+        _noop_run_agent,
+    )
+
+    config = AppConfig(
+        post_pr_supervisor=PostPrSupervisorConfig(max_repair_attempts=1),
+        runner=RunnerConfig(verification_commands=()),
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="active rebase target 'issue-99' does not match expected PR branch 'issue-1'",
+    ):
+        execute_rebase(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            process_runner=fake_runner,
+            pr_branch="issue-1",
+            expected_head="abc123",
+            supervisor_agent="codex",
+        )
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "add", "-A") not in commands
+    assert ("git", "rebase", "--continue") not in commands
+    assert ("git", "push", "--force-with-lease", "origin", "issue-1") not in commands
+    assert ("git", "rebase", "--abort") not in commands
+
+
+def test_execute_rebase_rejects_unknown_active_rebase_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detached HEAD with no rebase metadata must raise immediately."""
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "resolve conflict"}),
+        encoding="utf-8",
+    )
+
+    class _UnknownTargetRunner(FakeProcessRunner):
+        def __init__(self, worktree_path: Path, responses: dict) -> None:
+            super().__init__(responses=responses)
+            self._worktree_path = worktree_path
+            self._branch_show_current_calls = 0
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            input_text=None,
+        ):
+            command_tuple = tuple(command)
+            if command_tuple == ("git", "branch", "--show-current"):
+                self._branch_show_current_calls += 1
+                self.calls.append(list(command))
+                self.input_texts.append(input_text)
+                if self._branch_show_current_calls == 1:
+                    return CommandResult(command_tuple, 0, "issue-1\n", "")
+                return CommandResult(command_tuple, 0, "", "")
+
+            if command_tuple == (
+                "git",
+                "rev-parse",
+                "--git-path",
+                "rebase-merge/head-name",
+            ):
+                self.calls.append(list(command))
+                self.input_texts.append(input_text)
+                nonexistent_path = (
+                    self._worktree_path / ".git" / "rebase-merge" / "head-name"
+                )
+                return CommandResult(command_tuple, 0, str(nonexistent_path) + "\n", "")
+
+            if command_tuple == (
+                "git",
+                "rev-parse",
+                "--git-path",
+                "rebase-apply/head-name",
+            ):
+                self.calls.append(list(command))
+                self.input_texts.append(input_text)
+                nonexistent_path = (
+                    self._worktree_path / ".git" / "rebase-apply" / "head-name"
+                )
+                return CommandResult(command_tuple, 0, str(nonexistent_path) + "\n", "")
+
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+                input_text=input_text,
+            )
+
+    fake_runner = _UnknownTargetRunner(
+        worktree_path=worktree_path,
+        responses={
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "HEAD"),
+                return_code=0,
+                stdout="abc123\n",
+                stderr="",
+            ),
+            ("git", "fetch", "origin", "main"): CommandResult(
+                command=("git", "fetch", "origin", "main"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "origin/main"): CommandResult(
+                command=("git", "rebase", "origin/main"),
+                return_code=1,
+                stdout="",
+                stderr="CONFLICT (content): Merge conflict in file.py\n",
+            ),
+            ("git", "diff", "--name-only", "--diff-filter=U"): CommandResult(
+                command=("git", "diff", "--name-only", "--diff-filter=U"),
+                return_code=0,
+                stdout="file.py\n",
+                stderr="",
+            ),
+        },
+    )
+
+    def _noop_run_agent(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        *,
+        capture_output=False,
+        timeout_seconds=None,
+    ):
+        return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.core.use_cases.pr_supervisor.run_agent_with_prompt",
+        _noop_run_agent,
+    )
+
+    config = AppConfig(
+        post_pr_supervisor=PostPrSupervisorConfig(max_repair_attempts=1),
+        runner=RunnerConfig(verification_commands=()),
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="current branch is empty and active rebase target cannot be confirmed",
+    ):
+        execute_rebase(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            process_runner=fake_runner,
+            pr_branch="issue-1",
+            expected_head="abc123",
+            supervisor_agent="codex",
+        )
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "add", "-A") not in commands
+    assert ("git", "rebase", "--continue") not in commands
+    assert ("git", "push", "--force-with-lease", "origin", "issue-1") not in commands
+    assert ("git", "rebase", "--abort") not in commands
+
+
+def test_execute_rebase_conflict_path_does_not_run_git_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rebase conflict resolution must use --continue, never git commit."""
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+    request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "resolve conflict"}),
+        encoding="utf-8",
+    )
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "HEAD"),
+                return_code=0,
+                stdout="abc123\n",
+                stderr="",
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-1\n",
+                stderr="",
+            ),
+            ("git", "fetch", "origin", "main"): CommandResult(
+                command=("git", "fetch", "origin", "main"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "origin/main"): CommandResult(
+                command=("git", "rebase", "origin/main"),
+                return_code=1,
+                stdout="",
+                stderr="CONFLICT",
+            ),
+            ("git", "diff", "--name-only", "--diff-filter=U"): CommandResult(
+                command=("git", "diff", "--name-only", "--diff-filter=U"),
+                return_code=0,
+                stdout="file.py\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M file.py\n",
+                stderr="",
+            ),
+            ("git", "add", "-A"): CommandResult(
+                command=("git", "add", "-A"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "--continue"): CommandResult(
+                command=("git", "rebase", "--continue"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "push", "--force-with-lease", "origin", "issue-1"): CommandResult(
+                command=("git", "push", "--force-with-lease", "origin", "issue-1"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+
+    def _noop_run_agent(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        *,
+        capture_output=False,
+        timeout_seconds=None,
+    ):
+        return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.core.use_cases.pr_supervisor.run_agent_with_prompt",
+        _noop_run_agent,
+    )
+
+    config = AppConfig(
+        post_pr_supervisor=PostPrSupervisorConfig(max_repair_attempts=1),
+        runner=RunnerConfig(verification_commands=()),
+    )
+    execute_rebase(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=fake_runner,
+        pr_branch="issue-1",
+        expected_head="abc123",
+        supervisor_agent="codex",
+    )
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "push", "--force-with-lease", "origin", "issue-1") in commands
+    assert not any(c[:2] == ("git", "commit") for c in commands)
+
+
+def test_execute_rebase_real_git_conflict_allows_detached_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real git rebase conflict with detached HEAD resolves successfully."""
+    import json
+    import subprocess
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    # CI environments may not have an editor configured; rebase --continue
+    # should reuse the original commit message without prompting.
+    subprocess.run(
+        ["git", "config", "core.editor", "true"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+
+    shared_file = repo_path / "shared.txt"
+    shared_file.write_text("base content", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "shared.txt"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "checkout", "-b", "issue-73"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    shared_file.write_text("pr content", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "shared.txt"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "pr commit"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "checkout", "main"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    shared_file.write_text("main updated content", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "shared.txt"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "main update"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "checkout", "issue-73"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    rebase_result = subprocess.run(
+        ["git", "rebase", "main"],
+        cwd=repo_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rebase_result.returncode != 0, "Expected rebase to conflict"
+
+    shared_file.write_text("resolved content", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "shared.txt"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+
+    branch_result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert branch_result.stdout.strip() == "", "Expected detached HEAD during rebase"
+
+    request_path = repo_path / ".agent-runner" / "commit-request.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request_path.write_text(
+        json.dumps({"commit_message": "resolve conflict"}),
+        encoding="utf-8",
+    )
+
+    head_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    expected_head = head_result.stdout.strip()
+
+    def _noop_run_agent(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        *,
+        capture_output=False,
+        timeout_seconds=None,
+    ):
+        return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "backend.core.use_cases.pr_supervisor.run_agent_with_prompt",
+        _noop_run_agent,
+    )
+
+    class _NoOpFetchRebasePushRunner:
+        def __init__(self, delegate: SubprocessRunner) -> None:
+            self._delegate = delegate
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            input_text=None,
+        ):
+            cmd = list(command)
+            if (
+                len(cmd) >= 4
+                and cmd[0] == "git"
+                and cmd[1] == "fetch"
+                and cmd[2] == "origin"
+                and cmd[3] == "main"
+            ):
+                return CommandResult(tuple(cmd), 0, "", "")
+            # The real rebase state is already set up manually above.
+            # execute_rebase must not run a second 'git rebase origin/main'
+            # while a rebase is in progress, because Git aborts the active
+            # rebase on some versions/platforms when the upstream is invalid.
+            # Return a synthetic conflict so the conflict recovery loop runs.
+            if (
+                len(cmd) >= 3
+                and cmd[0] == "git"
+                and cmd[1] == "rebase"
+                and cmd[2] == "origin/main"
+            ):
+                return CommandResult(
+                    tuple(cmd),
+                    1,
+                    "CONFLICT (content): Merge conflict in shared.txt",
+                    "",
+                )
+            if (
+                len(cmd) >= 5
+                and cmd[0] == "git"
+                and cmd[1] == "push"
+                and cmd[2] == "--force-with-lease"
+                and cmd[3] == "origin"
+                and cmd[4] == "issue-73"
+            ):
+                return CommandResult(tuple(cmd), 0, "", "")
+            return self._delegate.run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+                input_text=input_text,
+            )
+
+    process_runner = _NoOpFetchRebasePushRunner(SubprocessRunner())
+
+    config = AppConfig(
+        post_pr_supervisor=PostPrSupervisorConfig(max_repair_attempts=1),
+        runner=RunnerConfig(verification_commands=("true",)),
+    )
+
+    issue = IssueSummary(number=73, title="T", url="U", body="B", labels=())
+    execute_rebase(
+        issue=issue,
+        worktree_path=repo_path,
+        config=config,
+        process_runner=process_runner,
+        pr_branch="issue-73",
+        expected_head=expected_head,
+        supervisor_agent="codex",
+    )
+
+    assert shared_file.read_text(encoding="utf-8") == "resolved content"
+
+    branch_after = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert branch_after.stdout.strip() == "issue-73"
+
+    log_result = subprocess.run(
+        ["git", "log", "--oneline", "issue-73"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "main update" in log_result.stdout
+    assert "pr commit" in log_result.stdout
+
+
+def test_ensure_rebase_context_rejects_mismatched_target(tmp_path: Path) -> None:
+    """_ensure_rebase_context_matches_pr_branch should raise for wrong target."""
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+    rebase_merge_dir = worktree_path / ".git" / "rebase-merge"
+    rebase_merge_dir.mkdir(parents=True, exist_ok=True)
+    head_name_path = rebase_merge_dir / "head-name"
+    head_name_path.write_text("refs/heads/issue-99", encoding="utf-8")
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            (
+                "git",
+                "rev-parse",
+                "--git-path",
+                "rebase-merge/head-name",
+            ): CommandResult(
+                command=("git", "rev-parse", "--git-path", "rebase-merge/head-name"),
+                return_code=0,
+                stdout=str(head_name_path) + "\n",
+                stderr="",
+            ),
+        }
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="active rebase target 'issue-99' does not match expected PR branch 'issue-1'",
+    ):
+        _ensure_rebase_context_matches_pr_branch(
+            worktree_path=worktree_path,
+            process_runner=fake_runner,
+            pr_branch="issue-1",
+        )

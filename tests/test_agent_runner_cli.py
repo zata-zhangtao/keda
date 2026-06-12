@@ -865,3 +865,24 @@ def test_main_blocked_continue_failure_prints_error(capsys) -> None:
     combined = f"{captured.out}\n{captured.err}"
     assert "blocked-continue failed" in combined
     assert "Worktree has uncommitted changes" in combined
+
+
+def test_main_run_rebase_conflict_detached_head() -> None:
+    """iar run should dispatch without error for rework rebase with detached HEAD."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.config = MagicMock()
+    mock_context.repo_id = "repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.run_agent_repositories_once", return_value=0
+    ) as mock_run:
+        exit_code = main(["run", "--dry-run", "--agent", "claude"])
+
+    assert exit_code == 0
+    mock_run.assert_called_once()
