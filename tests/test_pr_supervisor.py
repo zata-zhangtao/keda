@@ -2039,6 +2039,14 @@ def test_execute_rebase_real_git_conflict_allows_detached_head(
         check=True,
         capture_output=True,
     )
+    # CI environments may not have an editor configured; rebase --continue
+    # should reuse the original commit message without prompting.
+    subprocess.run(
+        ["git", "config", "core.editor", "true"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
 
     shared_file = repo_path / "shared.txt"
     shared_file.write_text("base content", encoding="utf-8")
