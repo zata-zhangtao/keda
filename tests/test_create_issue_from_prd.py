@@ -142,6 +142,61 @@ def test_create_issue_from_prd_force_overwrite(tmp_path: Path) -> None:
     assert "https://github.com/example/repo/issues/42" in prd_text
 
 
+def test_create_issue_from_prd_replaces_placeholder_issue_link(
+    tmp_path: Path,
+) -> None:
+    """Placeholder Issue lines should not count as an existing link."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "prd.md"
+    prd.write_text(
+        "# PRD: Test\n\n- GitHub Issue: (待创建/关联)\n\n## 1. Introduction\n",
+        encoding="utf-8",
+    )
+
+    create_issue_from_prd(
+        request=_request(repo, Path("prd.md")),
+        github_client=fake_client,
+    )
+
+    prd_text = prd.read_text(encoding="utf-8")
+    assert "(待创建/关联)" not in prd_text
+    assert "- GitHub Issue: https://github.com/example/repo/issues/42" in prd_text
+    assert prd_text.count("- GitHub Issue:") == 1
+
+
+@pytest.mark.parametrize(
+    "issue_line",
+    [
+        "- GitHub Issue: https://github.com/example/repo/issues/7",
+        "- GitHub Issue: https://github.com/example/repo/issues/7 （含尾注说明）",
+    ],
+)
+def test_create_issue_from_prd_rejects_existing_issue_link(
+    tmp_path: Path, issue_line: str
+) -> None:
+    """A real Issue URL should block creation without --force."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "prd.md"
+    prd.write_text(f"# PRD: Test\n\n{issue_line}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="already has a GitHub Issue link"):
+        create_issue_from_prd(
+            request=_request(repo, Path("prd.md")),
+            github_client=fake_client,
+        )
+
+    create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
+    assert not create_calls
+
+
 def test_create_issue_from_prd_materializes_prd_ref_issue_link(
     tmp_path: Path,
 ) -> None:

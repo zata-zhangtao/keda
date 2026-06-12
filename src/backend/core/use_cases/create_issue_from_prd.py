@@ -63,9 +63,13 @@ _logger = logging.getLogger(__name__)
 # 正则表达式：PRD 元数据解析
 # ---------------------------------------------------------------------------
 
-# 匹配 "- GitHub Issue: <url>" 这一行，用于判断 PRD 是否已关联 Issue，
-# 以及在创建新 Issue 后更新/替换该行。
-ISSUE_LINE_RE = re.compile(r"^- GitHub Issue:\s*\S+\s*$")
+# 定位 "- GitHub Issue:" 元数据行（不校验值），用于创建 Issue 后替换该行。
+# 值可能是真实 Issue URL，也可能是 "(待创建)"、"(to be created)" 等占位符。
+ISSUE_LINE_RE = re.compile(r"^- GitHub Issue:")
+
+# 仅匹配值为 URL 的链接行，用于判断 PRD 是否已关联真实 Issue；
+# 占位符不视为已关联，创建 Issue 时会被真实链接替换。
+ISSUE_LINK_LINE_RE = re.compile(r"^- GitHub Issue:\s*https?://")
 
 # 从 GitHub Issue URL（如 ``https://github.com/org/repo/issues/42``）
 # 中提取数字 Issue 编号。
@@ -371,9 +375,9 @@ def write_issue_link(
 
     链接以 ``- GitHub Issue: <url>`` 的形式插入。
 
-    * 如果 PRD 已包含这样的行且 ``force=False``，则保留原有行不变
-      （调用方预期已对此做了防护）。
-    * 如果 ``force=True``，则替换已有行。
+    * 如果 ``force=True``，则就地替换已有的 ``- GitHub Issue:`` 行。
+    * 如果 ``force=False``，已有行只可能是占位符（真实链接已被调用方的
+      防重复检查拦截），该行会被移除，真实链接插入到 H1 标题之后。
     * 如果不存在这样的行，则在 H1 标题行之后立即插入。
     * 最后的兜底（未找到 H1）时，将链接插入文件最顶部。
 
@@ -392,7 +396,7 @@ def write_issue_link(
             if force:
                 updated_lines.append(link_line)
                 link_written = True
-            # 跳过旧行（force=False 时由调用方提前拦截此路径）。
+            # 跳过旧行（占位符，或 force=True 时已被替换的旧链接）。
             continue
         updated_lines.append(line)
         # 如果尚未替换已有链接，则在第一个 H1 标题后插入链接。
@@ -700,7 +704,8 @@ def _materialize_prd_dependencies(
 def _extract_prd_issue_number(prd_text: str) -> int | None:
     """Extract the first GitHub Issue number linked from a PRD."""
     for line in prd_text.splitlines():
-        if not ISSUE_LINE_RE.match(line):
+        if not ISSUE_LINK_LINE_RE.match(line):
+            # 占位符（如 "(待创建)"）视为尚未关联 Issue。
             continue
         issue_number_match = ISSUE_NUMBER_RE.search(line)
         if issue_number_match is None:
@@ -1009,7 +1014,7 @@ def create_issue_from_prd(
     # ------------------------------------------------------------------
     prd_text = absolute_prd_path.read_text(encoding="utf-8")
     if not request.force and any(
-        ISSUE_LINE_RE.match(line) for line in prd_text.splitlines()
+        ISSUE_LINK_LINE_RE.match(line) for line in prd_text.splitlines()
     ):
         raise ValueError(
             "PRD already has a GitHub Issue link. Use --force to replace it."
