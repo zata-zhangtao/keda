@@ -448,3 +448,38 @@ def test_custom_remote_via_env(tmp_path: Path) -> None:
         text=True,
     )
     assert wt_sha.stdout.strip() == remote_sha
+
+
+def test_env_copy_skips_iar_worktrees_and_node_modules(tmp_path: Path) -> None:
+    """.env files under .iar-worktrees/ and node_modules/ must not leak into new worktrees."""
+    local_path = tmp_path / "local"
+    local_repo = _git_init(local_path)
+    _commit(local_repo, "initial")
+
+    (local_path / ".env").write_text("ROOT_ENV=1\n", encoding="utf-8")
+
+    iar_issue_worktree_path = local_path / ".iar-worktrees" / "issue-7"
+    iar_issue_worktree_path.mkdir(parents=True)
+    (iar_issue_worktree_path / ".env").write_text("IAR_ENV=1\n", encoding="utf-8")
+
+    node_modules_package_path = local_path / "frontend" / "node_modules" / "some-pkg"
+    node_modules_package_path.mkdir(parents=True)
+    (node_modules_package_path / ".env.example").write_text(
+        "PKG_ENV=1\n", encoding="utf-8"
+    )
+
+    result = _run_create_script(
+        local_repo, "feature-env", extra_env={"KODA_WORKTREE_BASE_BRANCH": "main"}
+    )
+
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+    worktree_path = tmp_path / "local-worktrees" / "feature-env"
+    assert worktree_path.exists()
+
+    copied_root_env_path = worktree_path / ".env"
+    assert copied_root_env_path.is_file()
+    assert copied_root_env_path.read_text(encoding="utf-8") == "ROOT_ENV=1\n"
+
+    assert not (worktree_path / ".iar-worktrees").exists()
+    assert not (worktree_path / "frontend" / "node_modules").exists()
