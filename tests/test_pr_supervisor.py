@@ -159,6 +159,103 @@ def test_supervisor_action_gate_blocks_when_validation_and_other_checks_fail() -
     assert "lint" in gated_result.summary
 
 
+def test_supervisor_action_gate_rewrites_human_input_for_sign_off_only() -> None:
+    """A conservative human-input request must become approval when only the
+    Realistic Validation sign-off gate is failing (real case: Issue #72 / PR #76)."""
+    action_result = SupervisorActionResult(
+        action="request_human_input",
+        summary="Checks are failing; needs a human to look.",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/76",
+        branch="issue-72",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=True,
+        checks_state="FAILURE",
+        checks_summary=(
+            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
+        ),
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "approve_for_human_review"
+    assert "sign-off gate guard" in gated_result.summary
+    assert "Checks are failing; needs a human to look." in gated_result.summary
+
+
+def test_supervisor_action_gate_keeps_human_input_with_other_failed_checks() -> None:
+    """Human-input requests must survive when a real check fails alongside the gate."""
+    action_result = SupervisorActionResult(
+        action="request_human_input",
+        summary="Lint is broken and the fix is unclear.",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=True,
+        checks_state="FAILURE",
+        checks_summary=(
+            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
+            "lint (conclusion=FAILURE)",
+        ),
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "request_human_input"
+    assert gated_result.summary == "Lint is broken and the fix is unclear."
+
+
+def test_supervisor_action_gate_keeps_human_input_when_not_mergeable() -> None:
+    """A conflicting PR must not be auto-approved even if only the gate fails."""
+    action_result = SupervisorActionResult(
+        action="request_human_input",
+        summary="PR has conflicts that need a decision.",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=False,
+        checks_state="FAILURE",
+        checks_summary=(
+            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
+        ),
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "request_human_input"
+    assert gated_result.summary == "PR has conflicts that need a decision."
+
+
+def test_supervisor_action_gate_keeps_human_input_when_checks_pass() -> None:
+    """When checks pass, a human-input request is about something else; keep it."""
+    action_result = SupervisorActionResult(
+        action="request_human_input",
+        summary="Requirement ambiguity needs a product decision.",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=True,
+        checks_state="SUCCESS",
+        checks_summary=(),
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "request_human_input"
+    assert gated_result.summary == "Requirement ambiguity needs a product decision."
+
+
 def test_supervisor_action_gate_defers_approval_when_checks_pending() -> None:
     """Pending checks must not be approved into human review."""
     action_result = SupervisorActionResult(
@@ -237,6 +334,39 @@ def test_build_supervisor_prompt_includes_context() -> None:
     assert "remote-sha" in prompt
     assert "+line" in prompt
     assert "wait_for_checks" in prompt
+
+
+def test_build_supervisor_prompt_explains_sign_off_gate() -> None:
+    """Prompt must tell the model the sign-off check is an expected manual gate."""
+    issue = IssueSummary(
+        number=72,
+        title="Test",
+        url="https://github.com/example/repo/issues/72",
+        body="Do something.",
+        labels=(),
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/76",
+        branch="issue-72",
+        head_sha="abc123",
+        base_sha="def456",
+        checks_state="FAILURE",
+        checks_summary=(
+            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
+        ),
+    )
+    prompt = build_supervisor_prompt(
+        issue=issue,
+        pr_context=pr_context,
+        config=AppConfig(),
+        process_runner=FakeProcessRunner(),
+        worktree_path=Path("."),
+        issue_comments=[],
+        pr_comments=[],
+        base_sha_remote="remote-sha",
+    )
+    assert "intentional manual gate" in prompt
+    assert "approve_for_human_review instead of request_human_input" in prompt
 
 
 def test_execute_rebase_safety_checks() -> None:

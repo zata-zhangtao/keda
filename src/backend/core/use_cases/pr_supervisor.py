@@ -47,6 +47,27 @@ VALID_SUPERVISOR_ACTIONS: set[str] = {
     "wait_for_checks",
 }
 
+# 人工签核门 check 的名称：该 check 在人工 Reviewer 勾选签核项之前必然失败，
+# 属于设计预期，不应被超管或守卫层当作真实的 CI 失败处理
+REALISTIC_VALIDATION_SIGN_OFF_CHECK = "Realistic Validation sign-off"
+
+
+def is_sign_off_gate_only_failure(pr_context: PullRequestContext) -> bool:
+    """Return True when every reported failing check is the manual sign-off gate.
+
+    Args:
+        pr_context: PR context containing the checks summary.
+
+    Returns:
+        True only when the checks summary is non-empty and every entry is the
+        Realistic Validation sign-off gate, so the failure can be positively
+        identified as the expected manual gate.
+    """
+    return bool(pr_context.checks_summary) and all(
+        REALISTIC_VALIDATION_SIGN_OFF_CHECK in check
+        for check in pr_context.checks_summary
+    )
+
 
 def build_supervisor_prompt(
     issue: IssueSummary,
@@ -129,6 +150,11 @@ def build_supervisor_prompt(
             "Output rules:",
             "- Respond with a single JSON object in a markdown code block.",
             "- Required fields: action, summary.",
+            f"- The `{REALISTIC_VALIDATION_SIGN_OFF_CHECK}` check is an "
+            "intentional manual gate: it is expected to fail until a human "
+            "reviewer ticks the sign-off checkboxes. If it is the only failing "
+            "check, treat checks as healthy and return "
+            "approve_for_human_review instead of request_human_input.",
             "- action must be one of: approve_for_human_review, repair_pr_branch, rebase_pr_branch, resolve_conflict, wait_for_checks, request_human_input, mark_failed.",
             "- Optional fields: findings_high (int), findings_medium (int), findings_low (int), verification_status (str), head_sha (str).",
             "- Do not modify files; only return the JSON decision.",
@@ -218,6 +244,29 @@ def guard_supervisor_action_for_pr_state(
     批准代码，而 GitHub 的 mergeable/checks_state 是更接近事实的
     确定性信号，因此必须独立校验。
     """
+    # 模型可能因为看到 Checks state: FAILURE 而保守地请求人工介入，但当唯一
+    # 失败项是人工签核门且 PR 可合并时，语义正确的结局是转人工评审而非阻塞
+    if (
+        action_result.action == "request_human_input"
+        and pr_context.mergeable is not False
+        and pr_context.checks_state == "FAILURE"
+        and is_sign_off_gate_only_failure(pr_context)
+    ):
+        summary = (
+            "Action rewritten by sign-off gate guard: the only failing check "
+            f"is the {REALISTIC_VALIDATION_SIGN_OFF_CHECK} manual gate, which "
+            "is expected to fail until a human reviewer ticks the checkboxes. "
+            "Approving for human review instead of requesting human input. "
+            f"Supervisor summary: {action_result.summary}"
+        )
+        return SupervisorActionResult(
+            action="approve_for_human_review",
+            summary=summary,
+            findings_counts=action_result.findings_counts,
+            verification_status=action_result.verification_status,
+            head_sha=action_result.head_sha,
+        )
+
     if action_result.action != "approve_for_human_review":
         return action_result
 
@@ -242,10 +291,7 @@ def guard_supervisor_action_for_pr_state(
         # it is expected to fail until a human reviewer ticks the checkboxes.
         # Do not block approval for human review solely because of this gate,
         # but only when we can positively identify it as the unique failure.
-        if pr_context.checks_summary and all(
-            "Realistic Validation sign-off" in check
-            for check in pr_context.checks_summary
-        ):
+        if is_sign_off_gate_only_failure(pr_context):
             return action_result
 
         failed_checks_text = (
