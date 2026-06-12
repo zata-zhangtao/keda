@@ -29,10 +29,10 @@ Extend the existing `create_or_reuse_worktree()` preparation path with a core-la
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 helper 中通过。
 
-- [ ] **Run worktree preparation 真实验证**：通过 `uv run pytest tests/test_run_agent.py -k "worktree_reconcile" -v` 中调用 `run_once()` 的真实用例入口，使用真实 Git 仓库/裸远程和 mocked GitHub/agent 边界，验证 ready issue 在 agent 执行前完成远程分支对齐。
-- [ ] **复用 worktree 真实验证**：通过真实 Git 临时仓库创建已存在 worktree，再推进远程同名分支，运行包含 `create_or_reuse_worktree()` 的 runner 路径，验证 clean local-behind 分支 fast-forward 到远程 HEAD。
-- [ ] **保护本地状态真实验证**：通过真实 Git 临时仓库制造 dirty worktree、local-ahead、diverged 三类状态，验证 runner 不执行 destructive reset，且 dirty/diverged 给出明确失败。
-- [ ] **为什么单元测试不够**：单元测试可以验证命令序列，但不能证明 Git refspec、remote-tracking ref、fast-forward 判定和真实 worktree 状态在实际 Git 仓库中正确工作。
+- [x] **Run worktree preparation 真实验证**：通过 `uv run pytest tests/test_run_agent.py -k "worktree_reconcile" -v` 中调用 `run_once()` 的真实用例入口，使用真实 Git 仓库/裸远程和 mocked GitHub/agent 边界，验证 ready issue 在 agent 执行前完成远程分支对齐。
+- [x] **复用 worktree 真实验证**：通过真实 Git 临时仓库创建已存在 worktree，再推进远程同名分支，运行包含 `create_or_reuse_worktree()` 的 runner 路径，验证 clean local-behind 分支 fast-forward 到远程 HEAD。
+- [x] **保护本地状态真实验证**：通过真实 Git 临时仓库制造 dirty worktree、local-ahead、diverged 三类状态，验证 runner 不执行 destructive reset，且 dirty/diverged 给出明确失败。
+- [x] **为什么单元测试不够**：单元测试可以验证命令序列，但不能证明 Git refspec、remote-tracking ref、fast-forward 判定和真实 worktree 状态在实际 Git 仓库中正确工作。
 
 ### Delivery Dependencies
 
@@ -296,48 +296,48 @@ def _reconcile_worktree_with_remote_branch(
 
 ## 6. Definition Of Done
 
-- [ ] `create_or_reuse_worktree()` 在返回 `worktree_path` 前调用 reconcile helper。
-- [ ] Reconcile 使用 `config.git.remote` 和真实当前分支名。
-- [ ] Clean local-behind worktree 会 fast-forward 到已 fetch 的远程分支。
-- [ ] Dirty local-behind 和 diverged worktree 会以可行动错误失败，而不是 reset。
-- [ ] Local-ahead worktree 保持不变，继续支持现有发布恢复行为。
-- [ ] 更新 `docs/guides/agent-runner.md` 中相关说明。
-- [ ] Reconcile 相关 targeted tests 通过。
-- [ ] `just test` 通过。
-- [ ] 架构检查通过，且没有新增跨层 import。
+- [x] `create_or_reuse_worktree()` 在返回 `worktree_path` 前调用 reconcile helper。
+- [x] Reconcile 使用 `config.git.remote` 和真实当前分支名。
+- [x] Clean local-behind worktree 会 fast-forward 到已 fetch 的远程分支。
+- [x] Dirty local-behind 和 diverged worktree 会以可行动错误失败，而不是 reset。
+- [x] Local-ahead worktree 保持不变，继续支持现有发布恢复行为。
+- [x] 更新 `docs/guides/agent-runner.md` 中相关说明。
+- [x] Reconcile 相关 targeted tests 通过。
+- [x] `just test` 通过。
+- [x] 架构检查通过，且没有新增跨层 import。
 
 ## 7. Acceptance Checklist
 
 ### Architecture Acceptance
 
-- [ ] 新增逻辑保留在 `src/backend/core/use_cases/run_agent_once.py`。
-- [ ] 不新增 service class、module、infrastructure adapter 或外部依赖。
-- [ ] `core` 层 import 方向保持合法。
-- [ ] Worktree shell script 继续只负责创建和 base branch 起点准备。
+- [x] 新增逻辑保留在 `src/backend/core/use_cases/run_agent_once.py`。
+- [x] 不新增 service class、module、infrastructure adapter 或外部依赖。
+- [x] `core` 层 import 方向保持合法。
+- [x] Worktree shell script 继续只负责创建和 base branch 起点准备。
 
 ### Behavior Acceptance
 
-- [ ] 远程分支名称基于当前 worktree 分支；默认 `issue-{n}` 行为仍然有效。
-- [ ] Remote 名称来自 `config.git.remote`；测试覆盖非 `origin` remote。
-- [ ] 远程分支不存在时 no-op。
-- [ ] Clean local branch behind remote 时 fast-forward 到 remote HEAD。
-- [ ] Local branch ahead of remote 时保留本地分支。
-- [ ] Dirty worktree 永不被 reset 或覆盖。
-- [ ] Diverged branch 给出明确错误，要求人工 reconcile。
-- [ ] 已确认需要检查远程分支后，network/fetch failure 不会静默放行过期状态。
+- [x] 远程分支名称基于当前 worktree 分支；默认 `issue-{n}` 行为仍然有效。
+- [x] Remote 名称来自 `config.git.remote`；测试覆盖非 `origin` remote。
+- [x] 远程分支不存在时 no-op。
+- [x] Clean local branch behind remote 时 fast-forward 到 remote HEAD。
+- [x] Local branch ahead of remote 时保留本地分支。
+- [x] Dirty worktree 永不被 reset 或覆盖。
+- [x] Diverged branch 给出明确错误，要求人工 reconcile。
+- [x] 已确认需要检查远程分支后，network/fetch failure 不会静默放行过期状态。
 
 ### Validation Acceptance
 
-- [ ] 单元测试覆盖命令序列和错误信息。
-- [ ] 真实 Git 集成测试覆盖 remote-ahead、local-ahead、dirty、missing-remote-branch、diverged 状态。
-- [ ] `run_once()` 级测试证明 reconcile 发生在 agent invocation 之前。
-- [ ] `uv run pytest tests/test_run_agent.py -k "worktree_reconcile" -v` 通过。
-- [ ] 完成 PRD 前 `just test` 通过。
+- [x] 单元测试覆盖命令序列和错误信息。
+- [x] 真实 Git 集成测试覆盖 remote-ahead、local-ahead、dirty、missing-remote-branch、diverged 状态。
+- [x] `run_once()` 级测试证明 reconcile 发生在 agent invocation 之前。
+- [x] `uv run pytest tests/test_run_agent.py -k "worktree_reconcile" -v` 通过。
+- [x] 完成 PRD 前 `just test` 通过。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 不再声称复用 worktree 永远不会自动 reconcile。
-- [ ] 文档明确说明安全行为：只 fast-forward、保留 local-ahead、dirty/diverged 时失败。
+- [x] `docs/guides/agent-runner.md` 不再声称复用 worktree 永远不会自动 reconcile。
+- [x] 文档明确说明安全行为：只 fast-forward、保留 local-ahead、dirty/diverged 时失败。
 
 ## 8. Functional Requirements
 

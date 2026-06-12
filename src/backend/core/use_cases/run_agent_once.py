@@ -275,7 +275,112 @@ def create_or_reuse_worktree(
             worktree_path,
             ", ".join(str(env_path) for env_path in copied_env_paths),
         )
+    _reconcile_worktree_with_remote_branch(worktree_path, config, process_runner)
     return worktree_path
+
+
+def _remote_branch_exists(
+    worktree_path: Path,
+    remote: str,
+    branch: str,
+    process_runner: IProcessRunner,
+) -> bool:
+    """Check whether a branch exists on the configured remote."""
+    result = process_runner.run(
+        ["git", "ls-remote", "--heads", remote, branch],
+        cwd=worktree_path,
+        check=False,
+    )
+    return result.return_code == 0 and bool(result.stdout.strip())
+
+
+def _fetch_remote_branch(
+    worktree_path: Path,
+    remote: str,
+    branch: str,
+    process_runner: IProcessRunner,
+) -> None:
+    """Fetch a single remote branch into its remote-tracking ref."""
+    process_runner.run(
+        ["git", "fetch", remote, f"+{branch}:refs/remotes/{remote}/{branch}"],
+        cwd=worktree_path,
+    )
+
+
+def _is_ancestor(
+    worktree_path: Path,
+    ancestor_sha: str,
+    descendant_ref: str,
+    process_runner: IProcessRunner,
+) -> bool:
+    """Return whether ancestor_sha is an ancestor of descendant_ref."""
+    result = process_runner.run(
+        ["git", "merge-base", "--is-ancestor", ancestor_sha, descendant_ref],
+        cwd=worktree_path,
+        check=False,
+    )
+    return result.return_code == 0
+
+
+def _rev_parse(
+    worktree_path: Path,
+    ref: str,
+    process_runner: IProcessRunner,
+) -> str:
+    """Return the full SHA for a ref."""
+    result = process_runner.run(["git", "rev-parse", ref], cwd=worktree_path)
+    return result.stdout.strip()
+
+
+def _reconcile_worktree_with_remote_branch(
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> None:
+    """Safely reconcile the current worktree branch with its remote branch.
+
+    - Remote branch missing: no-op.
+    - Already in sync: no-op.
+    - Local behind remote with clean worktree: fast-forward.
+    - Local behind remote with dirty worktree: fail without reset.
+    - Local ahead of remote: preserve local commits.
+    - Diverged: fail and request manual reconciliation.
+    """
+    branch = get_current_branch(worktree_path, process_runner)
+    remote = config.git.remote
+    remote_ref = f"{remote}/{branch}"
+
+    if not _remote_branch_exists(worktree_path, remote, branch, process_runner):
+        return
+
+    _fetch_remote_branch(worktree_path, remote, branch, process_runner)
+
+    local_sha = get_head_sha(worktree_path, process_runner)
+    remote_sha = _rev_parse(worktree_path, remote_ref, process_runner)
+    if local_sha == remote_sha:
+        return
+
+    local_is_ancestor = _is_ancestor(
+        worktree_path, local_sha, remote_ref, process_runner
+    )
+    remote_is_ancestor = _is_ancestor(worktree_path, remote_sha, "HEAD", process_runner)
+
+    if local_is_ancestor:
+        if has_changes(worktree_path, process_runner):
+            raise RuntimeError(
+                f"Worktree branch {branch} is behind {remote_ref}, "
+                "but the worktree has uncommitted changes."
+            )
+        process_runner.run(["git", "merge", "--ff-only", remote_ref], cwd=worktree_path)
+        return
+
+    if remote_is_ancestor:
+        return
+
+    raise RuntimeError(
+        f"Worktree branch {branch} has diverged from {remote_ref}; "
+        "manual reconciliation is required."
+    )
 
 
 def _build_claude_command(prompt: str, worktree_path: Path) -> list[str]:  # noqa: ARG001

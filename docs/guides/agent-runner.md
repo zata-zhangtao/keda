@@ -1029,7 +1029,7 @@ Ready 发布要求当前分支等于 `[agent_runner.git].base_branch`，因为 r
 
 如果 PRD 发布阶段的 Git 命令失败，例如 `git commit` 被 pre-commit hook 拦截，`iar issue create` 会在终端和日志中展示失败命令、退出码以及捕获到的 stdout/stderr，便于直接看到 hook 或 Git 返回的原始错误。
 
-Runner 新建 issue worktree 时，默认会同步 base branch 的远程 tracking ref 作为起点，使新分支基于最新远程提交，而非可能过期的本地 base branch。复用已存在的 worktree 时不会自动 rebase 或 reset；如需更新基线，请手动处理或删除旧 worktree 后重建。
+Runner 新建 issue worktree 时，默认会同步 base branch 的远程 tracking ref 作为起点，使新分支基于最新远程提交，而非可能过期的本地 base branch。复用已存在的 worktree 时，runner 会在 agent 执行前自动将当前 worktree 分支与配置的远程同名分支做安全对齐：仅当 worktree 干净且本地分支是远程分支的祖先时执行 fast-forward；本地已有未发布 commit 时保留本地状态；worktree 脏或分支已分叉时显式失败，要求人工处理，而不是自动 rebase、merge 或 reset。
 
 #### 4. 查看结果
 
