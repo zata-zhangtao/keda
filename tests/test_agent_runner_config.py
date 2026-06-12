@@ -85,6 +85,13 @@ def test_build_app_config_from_settings_structure() -> None:
     assert app_config.runner.max_issues >= 1
 
 
+def test_agent_runner_daemon_settings_defaults() -> None:
+    """Daemon polling intervals should default to 120 seconds."""
+    settings = AgentRunnerSettings()
+    assert settings.daemon.review_interval_seconds == 120
+    assert settings.daemon.run_interval_seconds == 120
+
+
 def test_merge_repository_config_overrides_git() -> None:
     """Repository-level git settings should override global defaults."""
     global_config = AppConfig(git=GitConfig(base_branch="main", remote="origin"))

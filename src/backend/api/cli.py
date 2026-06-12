@@ -363,7 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_all_repositories_option(run_parser)
 
     daemon_parser = subparsers.add_parser("daemon")
-    daemon_parser.add_argument("--interval", type=int, default=600)
+    daemon_parser.add_argument("--interval", type=int, default=None)
     daemon_parser.add_argument(
         "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
     )
@@ -381,7 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_all_repositories_option(review_parser)
 
     review_daemon_parser = subparsers.add_parser("review-daemon")
-    review_daemon_parser.add_argument("--interval", type=int, default=600)
+    review_daemon_parser.add_argument("--interval", type=int, default=None)
     review_daemon_parser.add_argument(
         "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
     )
@@ -749,9 +749,14 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             )
             if contexts:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
+            interval = (
+                parsed.interval
+                if parsed.interval is not None
+                else runner_settings.daemon.run_interval_seconds
+            )
             run_agent_daemon(
                 contexts=contexts,
-                interval=parsed.interval,
+                interval=interval,
                 agent=parsed.agent,
                 max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                 process_runner=process_runner,
@@ -804,9 +809,14 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             )
             if contexts:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
+            interval = (
+                parsed.interval
+                if parsed.interval is not None
+                else runner_settings.daemon.review_interval_seconds
+            )
             run_review_daemon(
                 contexts=contexts,
-                interval=parsed.interval,
+                interval=interval,
                 agent=parsed.agent,
                 max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                 process_runner=process_runner,

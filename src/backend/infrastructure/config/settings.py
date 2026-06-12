@@ -373,6 +373,13 @@ class AgentRunnerConsoleSettings(BaseModel):
     stop_timeout_seconds: int = 30
 
 
+class AgentRunnerDaemonSettings(BaseModel):
+    """Long-running daemon polling configuration."""
+
+    review_interval_seconds: int = 120
+    run_interval_seconds: int = 120
+
+
 class AgentRunnerPromptSettings(BaseModel):
     """Agent prompt template settings supporting TOML string-list syntax."""
 
@@ -404,6 +411,9 @@ class AgentRunnerPostPrSupervisorSettings(BaseModel):
     enabled: bool = True
     supervisor_agent: str = "auto"
     max_repair_attempts: int = 2
+    max_agent_crash_retries: int = 5
+    crash_retry_initial_backoff_seconds: int = 30
+    crash_retry_max_backoff_seconds: int = 600
 
 
 class AgentRunnerDeliberationProfileSettings(BaseModel):
@@ -612,6 +622,7 @@ class AgentRunnerSettings(BaseSettings):
     console: AgentRunnerConsoleSettings = Field(
         default_factory=AgentRunnerConsoleSettings
     )
+    daemon: AgentRunnerDaemonSettings = Field(default_factory=AgentRunnerDaemonSettings)
     prompts: AgentRunnerPromptSettings = Field(
         default_factory=AgentRunnerPromptSettings
     )
@@ -762,6 +773,8 @@ _ensure_no_proxy_for_local_services()
 __all__ = [
     "AgentRunnerLocalSettings",
     "AgentRunnerRepositoryMetadataSettings",
+    "AgentRunnerConsoleSettings",
+    "AgentRunnerDaemonSettings",
     "AgentRunnerGeneratedContentSettings",
     "AgentRunnerGeneratedContentTargetSettings",
     "AgentRunnerGitSettings",

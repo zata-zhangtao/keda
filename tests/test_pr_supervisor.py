@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ from backend.core.use_cases.pr_supervisor import (
     build_conflict_resolution_prompt,
     build_rework_intent_comment,
     build_supervisor_prompt,
+    contains_supervisor_decision,
     execute_rebase,
     execute_repair,
     guard_supervisor_action_for_pr_state,
@@ -66,6 +69,25 @@ def test_parse_supervisor_action_empty_human_input_marks_failed() -> None:
     result = parse_supervisor_action(text)
     assert result.action == "mark_failed"
     assert "without a summary" in result.summary
+
+
+def test_contains_supervisor_decision_detects_json_block() -> None:
+    """A markdown JSON block with an action field counts as a decision."""
+    text = '```json\n{"action": "approve_for_human_review", "summary": "ok"}\n```'
+    assert contains_supervisor_decision(text) is True
+
+
+def test_contains_supervisor_decision_detects_bare_json() -> None:
+    """A bare JSON object with an action field counts as a decision."""
+    text = 'Some preamble {"action": "mark_failed", "summary": "bad"} trailing'
+    assert contains_supervisor_decision(text) is True
+
+
+def test_contains_supervisor_decision_rejects_crash_output() -> None:
+    """Infrastructure crash output without JSON must not count as a decision."""
+    assert contains_supervisor_decision("API Error: 400 Invalid request Error") is False
+    assert contains_supervisor_decision("") is False
+    assert contains_supervisor_decision('{"action": broken json') is False
 
 
 def test_supervisor_action_gate_blocks_conflicting_pr_approval() -> None:
@@ -717,6 +739,208 @@ def test_run_post_pr_supervisor_cycle_parses_action() -> None:
     assert result.action == "approve_for_human_review"
     assert result.summary == "LGTM"
     assert fake_runner.agent_capture_output == [True]
+
+
+class _CrashingAgentRunner(FakeProcessRunner):
+    """Fake runner whose agent invocations crash a configurable number of times."""
+
+    def __init__(
+        self,
+        *,
+        crash_count: int,
+        crash_stdout: str = "API Error: 400 Invalid request Error",
+        success_stdout: str = (
+            '{"action": "approve_for_human_review", "summary": "LGTM"}'
+        ),
+    ) -> None:
+        super().__init__()
+        self.crash_count = crash_count
+        self.crash_stdout = crash_stdout
+        self.success_stdout = success_stdout
+        self.agent_attempts = 0
+
+    def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        if tuple(command)[:1] == ("codex",):
+            self.calls.append(list(command))
+            self.agent_attempts += 1
+            if self.agent_attempts <= self.crash_count:
+                raise subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=list(command),
+                    output=self.crash_stdout,
+                    stderr="",
+                )
+            return CommandResult(
+                command=tuple(command),
+                return_code=0,
+                stdout=self.success_stdout if capture_output else "",
+                stderr="",
+            )
+        return super().run(
+            command,
+            cwd=cwd,
+            check=check,
+            timeout=timeout,
+            capture_output=capture_output,
+        )
+
+
+def _make_supervised_pr_context() -> PullRequestContext:
+    return PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+    )
+
+
+def _patch_supervisor_sleep(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Replace the supervisor backoff sleep and record requested delays."""
+    sleep_delays: list[int] = []
+    monkeypatch.setattr(
+        "backend.core.use_cases.pr_supervisor.time.sleep",
+        lambda seconds: sleep_delays.append(seconds),
+    )
+    return sleep_delays
+
+
+def test_run_post_pr_supervisor_cycle_retries_after_agent_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An agent crash without a JSON decision should retry within the cycle."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    fake_runner = _CrashingAgentRunner(crash_count=1)
+    sleep_delays = _patch_supervisor_sleep(monkeypatch)
+
+    result = run_post_pr_supervisor_cycle(
+        issue=issue,
+        worktree_path=Path("."),
+        config=AppConfig(),
+        github_client=fake_client,
+        process_runner=fake_runner,
+        pr_context=_make_supervised_pr_context(),
+        supervisor_agent="codex",
+        cycle=1,
+    )
+
+    assert result.action == "approve_for_human_review"
+    assert result.summary == "LGTM"
+    assert fake_runner.agent_attempts == 2
+    assert sleep_delays == [30]
+
+
+def test_run_post_pr_supervisor_cycle_marks_failed_after_crash_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exhausted crash retries should mark failed with an infrastructure reason."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    fake_runner = _CrashingAgentRunner(crash_count=10)
+    sleep_delays = _patch_supervisor_sleep(monkeypatch)
+
+    result = run_post_pr_supervisor_cycle(
+        issue=issue,
+        worktree_path=Path("."),
+        config=AppConfig(),
+        github_client=fake_client,
+        process_runner=fake_runner,
+        pr_context=_make_supervised_pr_context(),
+        supervisor_agent="codex",
+        cycle=1,
+    )
+
+    assert result.action == "mark_failed"
+    assert "infrastructure failure" in result.summary
+    # 默认 max_agent_crash_retries=5：首次执行 + 5 次重试 = 6 次尝试
+    assert fake_runner.agent_attempts == 6
+    # 指数退避从 30s 翻倍；最后一次尝试失败后不再等待
+    assert sleep_delays == [30, 60, 120, 240, 480]
+
+
+def test_run_post_pr_supervisor_cycle_crash_backoff_caps_at_max(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backoff delays must double from the initial value and cap at the maximum."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    fake_runner = _CrashingAgentRunner(crash_count=10)
+    sleep_delays = _patch_supervisor_sleep(monkeypatch)
+    config = AppConfig()
+    config = replace(
+        config,
+        post_pr_supervisor=replace(
+            config.post_pr_supervisor,
+            max_agent_crash_retries=7,
+        ),
+    )
+
+    result = run_post_pr_supervisor_cycle(
+        issue=issue,
+        worktree_path=Path("."),
+        config=config,
+        github_client=fake_client,
+        process_runner=fake_runner,
+        pr_context=_make_supervised_pr_context(),
+        supervisor_agent="codex",
+        cycle=1,
+    )
+
+    assert result.action == "mark_failed"
+    assert fake_runner.agent_attempts == 8
+    # 30 * 2**6 = 1920 超出上限，被封顶为 600
+    assert sleep_delays == [30, 60, 120, 240, 480, 600, 600]
+
+
+def test_run_post_pr_supervisor_cycle_uses_decision_from_crashed_agent() -> None:
+    """A non-zero exit that still printed a JSON decision must use it, no retry."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    fake_runner = _CrashingAgentRunner(
+        crash_count=10,
+        crash_stdout=(
+            '```json\n{"action": "wait_for_checks", "summary": "checks pending"}\n```'
+        ),
+    )
+
+    result = run_post_pr_supervisor_cycle(
+        issue=issue,
+        worktree_path=Path("."),
+        config=AppConfig(),
+        github_client=fake_client,
+        process_runner=fake_runner,
+        pr_context=_make_supervised_pr_context(),
+        supervisor_agent="codex",
+        cycle=1,
+    )
+
+    assert result.action == "wait_for_checks"
+    assert fake_runner.agent_attempts == 1
+
+
+def test_run_post_pr_supervisor_cycle_clean_exit_garbage_fails_without_retry() -> None:
+    """A clean agent exit with unparseable output keeps fail-closed, no retry."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    fake_runner = _CrashingAgentRunner(
+        crash_count=0,
+        success_stdout="I could not decide, sorry.",
+    )
+
+    result = run_post_pr_supervisor_cycle(
+        issue=issue,
+        worktree_path=Path("."),
+        config=AppConfig(),
+        github_client=fake_client,
+        process_runner=fake_runner,
+        pr_context=_make_supervised_pr_context(),
+        supervisor_agent="codex",
+        cycle=1,
+    )
+
+    assert result.action == "mark_failed"
+    assert "not parseable JSON" in result.summary
+    assert fake_runner.agent_attempts == 1
 
 
 def test_build_conflict_resolution_prompt_includes_context() -> None:

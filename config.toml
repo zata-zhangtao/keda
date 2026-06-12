@@ -186,6 +186,9 @@ timeout_seconds = 900
 enabled = true
 supervisor_agent = "auto"
 max_repair_attempts = 2
+max_agent_crash_retries = 5
+crash_retry_initial_backoff_seconds = 30
+crash_retry_max_backoff_seconds = 600
 
 # =============================================================================
 # Agent Runner Prompt Templates
@@ -390,3 +393,14 @@ process_log_dir = "logs/agent-runner/processes"
 runner_command = ["uv", "run", "iar"]
 # 停止进程时 SIGTERM 后等待多少秒升级为 SIGKILL。
 stop_timeout_seconds = 30
+
+# =============================================================================
+# Agent Runner Daemon（常驻轮询）
+# =============================================================================
+# daemon / review-daemon 的默认轮询间隔（秒）。
+# CLI 可通过 --interval 覆盖；环境变量 AGENT_RUNNER_REVIEW_INTERVAL_SECONDS
+# 与 AGENT_RUNNER_RUN_INTERVAL_SECONDS 也可以覆盖。
+
+[agent_runner.daemon]
+review_interval_seconds = 120
+run_interval_seconds = 120

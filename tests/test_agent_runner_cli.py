@@ -145,6 +145,20 @@ def test_cli_parser_daemon() -> None:
     assert parsed.max_issues == 2
 
 
+def test_cli_parser_daemon_default_interval_is_none() -> None:
+    """daemon --interval should default to None so config supplies the value."""
+    parser = build_parser()
+    parsed = parser.parse_args(["daemon"])
+    assert parsed.interval is None
+
+
+def test_cli_parser_review_daemon_default_interval_is_none() -> None:
+    """review-daemon --interval should default to None so config supplies the value."""
+    parser = build_parser()
+    parsed = parser.parse_args(["review-daemon"])
+    assert parsed.interval is None
+
+
 def test_cli_parser_repo_id() -> None:
     """--repo-id should be accepted on subcommands."""
     parser = build_parser()

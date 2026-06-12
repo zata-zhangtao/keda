@@ -306,6 +306,12 @@ enabled = true
 supervisor_agent = "auto"
 # supervisor 要求修复时的最大修复 / rebase 次数
 max_repair_attempts = 2
+# supervisor agent 进程崩溃（API / 网络等基础设施错误）时同一 cycle 内的最大重试次数
+max_agent_crash_retries = 5
+# 崩溃重试的初始退避秒数，之后每次重试翻倍
+crash_retry_initial_backoff_seconds = 30
+# 崩溃重试单次退避等待的最大秒数
+crash_retry_max_backoff_seconds = 600
 
 # GitHub Issue / PR 内容生成（面向人类阅读，不影响实现 Agent）
 [agent_runner.generated_content]
@@ -554,8 +560,8 @@ Draft PR 创建后，Issue 先进入 `agent/supervising`，并立即运行至少
 # 单次检查所有 supervising/review Issues
 uv run iar review
 
-# 常驻 review daemon（默认每 600 秒轮询）
-uv run iar review-daemon --interval 600
+# 常驻 review daemon（默认每 120 秒轮询，可在 config.toml [agent_runner.daemon] 调整）
+uv run iar review-daemon
 ```
 
 `iar review` / `iar review-daemon` 会：
@@ -588,6 +594,7 @@ checks 状态：
 - PR checks 仍在进行中（`checks_state=PENDING`）时，approval 会被改写为 `wait_for_checks`，Issue 保持 `agent/supervising` 继续等待 checks 完成，不会消耗 repair 次数
 - open PR 存在但完整 PR context 暂时无法读取时，本轮 supervision 会 defer 并保留待观察状态；发布、rework 后续评审和循环内再次评审都不会使用不完整 context 批准进入 review
 - supervisor 输出无法解析、返回未知 action，或返回空 summary 的 `request_human_input` 时，本轮会进入 `agent/failed`，不会生成无原因的 `agent/blocked`
+- supervisor agent 进程非零退出且 stdout 中识别不到任何 JSON 决策（如 claude CLI 遇到 API / 网络错误崩溃）时，视为基础设施级失败，会在同一 cycle 内重试至多 `max_agent_crash_retries` 次；重试之间指数退避（从 `crash_retry_initial_backoff_seconds` 起每次翻倍，单次等待封顶 `crash_retry_max_backoff_seconds`，默认 30s 起、上限 10 分钟），以扛住分钟级的 API 提供方中断。重试仍失败才进入 `agent/failed`，summary 会标明是 agent infrastructure failure。非零退出但 stdout 中仍能识别出 JSON 决策时直接使用该决策，不消耗重试次数
 
 这样可以避免 `agent/review` label 覆盖仍需 `iar run` 消费的 rework/rebase 状态。
 
@@ -633,14 +640,14 @@ iar run
 # 显式处理所有 enabled registry entries
 iar run --all
 
-# Daemon 模式（默认每 600 秒轮询一次，当前仓库）
+# Daemon 模式（默认每 120 秒轮询一次，当前仓库）
 iar daemon
 
 # 单次 review 检查
 iar review
 
 # Review daemon 模式
-iar review-daemon --interval 600
+iar review-daemon
 
 # 恢复发布失败（仅用于已完成审查后的 push/PR 收尾失败）
 iar recover --issue 5
@@ -1064,7 +1071,7 @@ uv run --project ~/keda iar run --agent codex
 ```bash
 cd /path/to/target-repo
 
-# 每 600 秒（10 分钟）轮询一次（当前仓库）
+# 每 120 秒轮询一次（当前仓库）
 uv run --project ~/keda iar daemon --agent auto
 ```
 
@@ -1085,8 +1092,8 @@ cd /path/to/target-repo && uv run --project ~/keda iar daemon
 ```bash
 cd /path/to/target-repo
 
-# 每 600 秒检查一次 supervising/review Issues
-uv run --project ~/keda iar review-daemon --interval 600
+# 每 120 秒检查一次 supervising/review Issues
+uv run --project ~/keda iar review-daemon
 ```
 
 ### 同一台电脑运行
@@ -1216,6 +1223,14 @@ timeout_seconds = 900
 enabled = true
 supervisor_agent = "auto"
 max_repair_attempts = 2
+max_agent_crash_retries = 5
+crash_retry_initial_backoff_seconds = 30
+crash_retry_max_backoff_seconds = 600
+
+[agent_runner.daemon]
+# daemon / review-daemon 的默认轮询间隔（秒），CLI --interval 可覆盖
+review_interval_seconds = 120
+run_interval_seconds = 120
 ```
 
 配置优先级：目标仓库 `.iar.toml` 覆盖项 > 环境变量 > `config.toml` 全局默认值 > 代码默认值。目标仓库覆盖项只影响对应 repository context，不会改变 keda 全局设置。

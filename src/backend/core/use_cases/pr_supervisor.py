@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
@@ -160,6 +161,38 @@ def build_supervisor_prompt(
             "- Do not modify files; only return the JSON decision.",
         ]
     )
+
+
+def contains_supervisor_decision(text: str) -> bool:
+    """Return True when the text contains a decodable JSON decision object.
+
+    用于区分两类性质不同的失败：agent 正常运行但输出无效（保持 fail-closed，
+    直接 mark_failed）与 agent 基础设施级崩溃（API / 网络错误导致非零退出且
+    stdout 残缺，stdout 中找不到任何 JSON 决策），后者值得在同一 cycle 内重试。
+
+    Args:
+        text: Agent response text extracted from captured stdout.
+
+    Returns:
+        True only when a JSON object containing an ``action`` field can be
+        decoded from the text, regardless of whether the action is valid.
+    """
+    # 提取逻辑与 parse_supervisor_action 保持一致，确保"可识别决策"的判定
+    # 不会与实际解析行为产生分歧
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        json_text = match.group(1)
+    else:
+        match = re.search(r"\{.*\"action\".*\}", text, re.DOTALL)
+        if not match:
+            return False
+        json_text = match.group(0)
+
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(payload, dict) and "action" in payload
 
 
 def parse_supervisor_action(text: str) -> SupervisorActionResult:
@@ -760,31 +793,92 @@ def run_post_pr_supervisor_cycle(
         base_sha_remote=base_sha_remote,
     )
 
-    try:
-        result = run_agent_with_prompt(
-            supervisor_agent,
-            supervisor_prompt,
-            worktree_path,
-            process_runner,
-            capture_output=True,
+    # agent 非零退出且 stdout 中识别不到任何 JSON 决策时，视为基础设施级
+    # 崩溃（API / 网络错误），在同一 cycle 内做有限重试；agent 正常退出但
+    # 输出不可解析仍保持 fail-closed 直接 mark_failed，不重试。
+    # 重试之间做指数退避（初始秒数每次翻倍并按上限封顶），以便扛住
+    # 分钟级的 API 提供方中断，而不仅是秒级抖动
+    max_crash_retries = max(0, config.post_pr_supervisor.max_agent_crash_retries)
+    max_attempts = max_crash_retries + 1
+    initial_backoff_seconds = max(
+        0, config.post_pr_supervisor.crash_retry_initial_backoff_seconds
+    )
+    max_backoff_seconds = max(
+        0, config.post_pr_supervisor.crash_retry_max_backoff_seconds
+    )
+    response_text = ""
+    crash_exit_code: int | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = run_agent_with_prompt(
+                supervisor_agent,
+                supervisor_prompt,
+                worktree_path,
+                process_runner,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            result = CommandResult(
+                command=tuple(exc.cmd),
+                return_code=exc.returncode,
+                stdout=exc.output or "",
+                stderr=exc.stderr or "",
+            )
+            response_text = extract_agent_response_text(result)
+            # Claude stream-json may return non-zero exit code while still
+            # producing valid output in stdout; only treat the failure as an
+            # infrastructure crash when no JSON decision can be recognized.
+            if contains_supervisor_decision(response_text):
+                _logger.warning(
+                    "Supervisor agent exited with code %d for Issue #%d; "
+                    "using the JSON decision found in captured stdout.",
+                    exc.returncode,
+                    issue.number,
+                )
+                crash_exit_code = None
+                break
+            crash_exit_code = exc.returncode
+            _logger.warning(
+                "Supervisor agent exited with code %d for Issue #%d with no "
+                "JSON decision in stdout (attempt %d/%d); treating it as an "
+                "agent infrastructure crash.",
+                exc.returncode,
+                issue.number,
+                attempt,
+                max_attempts,
+            )
+            if attempt < max_attempts:
+                backoff_seconds = min(
+                    max_backoff_seconds,
+                    initial_backoff_seconds * (2 ** (attempt - 1)),
+                )
+                if backoff_seconds > 0:
+                    _logger.info(
+                        "Waiting %d seconds before supervisor retry %d/%d "
+                        "for Issue #%d.",
+                        backoff_seconds,
+                        attempt + 1,
+                        max_attempts,
+                        issue.number,
+                    )
+                    time.sleep(backoff_seconds)
+            continue
+        response_text = extract_agent_response_text(result)
+        crash_exit_code = None
+        break
+
+    if crash_exit_code is not None:
+        raw_action_result = SupervisorActionResult(
+            action="mark_failed",
+            summary=(
+                "Supervisor agent infrastructure failure: the agent process "
+                f"exited with code {crash_exit_code} and produced no JSON "
+                f"decision after {max_attempts} attempt(s); this is likely an "
+                "API or network error rather than a review decision."
+            ),
         )
-    except subprocess.CalledProcessError as exc:
-        # Claude stream-json may return non-zero exit code while still
-        # producing valid output in stdout; attempt to parse captured output
-        # before giving up.
-        _logger.warning(
-            "Supervisor agent exited with code %d for Issue #%d; "
-            "attempting to parse captured stdout anyway.",
-            exc.returncode,
-            issue.number,
-        )
-        result = CommandResult(
-            command=tuple(exc.cmd),
-            return_code=exc.returncode,
-            stdout=exc.output or "",
-            stderr=exc.stderr or "",
-        )
-    raw_action_result = parse_supervisor_action(extract_agent_response_text(result))
+    else:
+        raw_action_result = parse_supervisor_action(response_text)
     # 先经过守卫层校正，再对外暴露最终决策，确保不违背客观 PR 状态
     action_result = guard_supervisor_action_for_pr_state(
         raw_action_result,

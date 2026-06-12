@@ -187,6 +187,9 @@ class PostPrSupervisorConfig:
     enabled: bool = True
     supervisor_agent: str = "auto"
     max_repair_attempts: int = 2
+    max_agent_crash_retries: int = 5
+    crash_retry_initial_backoff_seconds: int = 30
+    crash_retry_max_backoff_seconds: int = 600
 
 
 @dataclass(frozen=True)

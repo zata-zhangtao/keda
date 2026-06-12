@@ -206,6 +206,13 @@ def build_app_config_from_settings(
             enabled=post_supervisor.enabled,
             supervisor_agent=post_supervisor.supervisor_agent,
             max_repair_attempts=post_supervisor.max_repair_attempts,
+            max_agent_crash_retries=post_supervisor.max_agent_crash_retries,
+            crash_retry_initial_backoff_seconds=(
+                post_supervisor.crash_retry_initial_backoff_seconds
+            ),
+            crash_retry_max_backoff_seconds=(
+                post_supervisor.crash_retry_max_backoff_seconds
+            ),
         ),
         generated_content=generated_content,
     )
