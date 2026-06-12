@@ -15,6 +15,7 @@ from typing import Any, Callable, Sequence
 from backend.infrastructure.logging.logger import logger
 
 _MAX_BUFFER_SIZE = 4096
+_MAX_ERROR_DETAIL_LEN = 4096
 _COMMAND_HEARTBEAT_SECONDS = 60
 
 
@@ -68,6 +69,24 @@ class CommandResult:
     return_code: int
     stdout: str
     stderr: str
+
+
+class CommandFailedError(subprocess.CalledProcessError):
+    """CalledProcessError with captured stderr/stdout included in the message."""
+
+    def __str__(self) -> str:
+        base = super().__str__()
+        detail = self.stderr or self.output or ""
+        if not detail:
+            return base
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", errors="replace")
+        detail = detail.strip()
+        if not detail:
+            return base
+        if len(detail) > _MAX_ERROR_DETAIL_LEN:
+            detail = detail[:_MAX_ERROR_DETAIL_LEN] + "\n... (truncated)"
+        return f"{base}\n\n--- stderr/stdout ---\n{detail}"
 
 
 class SubprocessRunner:
@@ -182,7 +201,7 @@ class SubprocessRunner:
             stderr=stderr,
         )
         if check and completed.returncode != 0:
-            raise subprocess.CalledProcessError(
+            raise CommandFailedError(
                 completed.returncode,
                 list(command),
                 output=stdout,

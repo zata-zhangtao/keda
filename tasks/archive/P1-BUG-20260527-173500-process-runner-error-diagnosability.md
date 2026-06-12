@@ -22,9 +22,9 @@ Enhance the existing infrastructure-layer `SubprocessRunner.run()` failure path 
 
 ### Realistic Validation
 
-- [ ] **Git commit pre-commit 失败真实验证**：通过 `uv run iar run` 触发一个已知会因 pre-commit hook 失败的 Issue，验证 runner 日志和 GitHub 评论中包含 pre-commit 的具体失败行（如 `Check just test flag.....................................................Failed`）。
-- [ ] **Git push 被拒绝真实验证**：通过本地 fixture 模拟 remote rejection，验证 `git push` 失败时日志包含 remote 返回的拒绝原因。
-- [ ] **现有测试不回归**：`uv run pytest tests/test_process_runner.py -q` 通过，且不破坏已有 `CalledProcessError` 捕获逻辑。
+- [x] **Git commit pre-commit 失败真实验证**：通过 `uv run iar run` 触发一个已知会因 pre-commit hook 失败的 Issue，验证 runner 日志和 GitHub 评论中包含 pre-commit 的具体失败行（如 `Check just test flag.....................................................Failed`）。
+- [x] **Git push 被拒绝真实验证**：通过本地 fixture 模拟 remote rejection，验证 `git push` 失败时日志包含 remote 返回的拒绝原因。
+- [x] **现有测试不回归**：`uv run pytest tests/test_process_runner.py -q` 通过，且不破坏已有 `CalledProcessError` 捕获逻辑。
 
 ### Delivery Dependencies
 
@@ -248,27 +248,27 @@ No external validation required; repository evidence and local command fixtures 
 
 ### Architecture Acceptance
 
-- [ ] 自定义异常类定义在 `infrastructure/` 层，不破坏四层依赖方向。
-- [ ] 不改变 `process_runner.run()` 的正常路径行为。
-- [ ] 不新增第三方依赖。
+- [x] 自定义异常类定义在 `infrastructure/` 层，不破坏四层依赖方向。
+- [x] 不改变 `process_runner.run()` 的正常路径行为。
+- [x] 不新增第三方依赖。
 
 ### Behavior Acceptance
 
-- [ ] `SubprocessRunner.run(["false"])` 抛出的异常消息包含 stderr（若 `false` 有 stderr）或明确的失败描述。
-- [ ] 命令返回非零且 stderr 非空时，`str(exc)` 包含 stderr 原文。
-- [ ] stderr 为空但 stdout 非空时，`str(exc)` 包含 stdout 原文。
-- [ ] stderr/stdout 总和超过 4KB 时，异常消息截断并标注 `... (truncated)`。
-- [ ] 现有 `except subprocess.CalledProcessError` 仍能捕获新异常。
+- [x] `SubprocessRunner.run(["false"])` 抛出的异常消息包含 stderr（若 `false` 有 stderr）或明确的失败描述。
+- [x] 命令返回非零且 stderr 非空时，`str(exc)` 包含 stderr 原文。
+- [x] stderr 为空但 stdout 非空时，`str(exc)` 包含 stdout 原文。
+- [x] stderr/stdout 总和超过 4KB 时，异常消息截断并标注 `... (truncated)`。
+- [x] 现有 `except subprocess.CalledProcessError` 仍能捕获新异常。
 
 ### Documentation Acceptance
 
-- [ ] `docs/` 无需变更；本改动属于内部可观测性增强，不暴露新 API。
+- [x] `docs/` 无需变更；本改动属于内部可观测性增强，不暴露新 API。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_process_runner.py -q` 通过。
-- [ ] `uv run pytest tests/ -q` 通过。
-- [ ] 若条件允许，通过 `iar run` 触发一次真实命令失败，验证日志包含 stderr 内容。
+- [x] `uv run pytest tests/test_process_runner.py -q` 通过。
+- [x] `uv run pytest tests/ -q` 通过。
+- [x] 通过 `iar run` 及本地 Git fixture 触发真实命令失败，验证日志包含 stderr 内容。
 
 ## 8. Functional Requirements
 
