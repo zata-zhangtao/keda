@@ -1,4 +1,10 @@
-"""Typer command tree for the issue-agent-runner CLI."""
+"""Typer command tree for the issue-agent-runner CLI.
+
+NOTE: This Typer frontend delegates actual execution to ``backend.api.cli``
+(``_run_parsed_command``). When adding or changing CLI options, defaults, or
+argument structure, keep ``cli.py`` in sync so tests, help text, and the real
+entry point behave the same way.
+"""
 
 from __future__ import annotations
 
@@ -95,6 +101,10 @@ RunAgentOption = Annotated[
 MaxIssuesOption = Annotated[
     int | None,
     typer.Option("--max-issues", help="Maximum number of issues to process."),
+]
+DaemonIntervalOption = Annotated[
+    int | None,
+    typer.Option("--interval", help="Polling interval."),
 ]
 CompletionShellOption = Annotated[
     CompletionShellChoice,
@@ -445,7 +455,7 @@ def _run_daemon_command(
     ctx: typer.Context,
     *,
     command: str,
-    interval: int,
+    interval: int | None,
     agent: RunAgentChoice,
     max_issues: int | None,
     repo: str | None,
@@ -470,9 +480,7 @@ def _run_daemon_command(
 @app.command("daemon")
 def daemon_command(
     ctx: typer.Context,
-    interval: Annotated[
-        int, typer.Option("--interval", help="Polling interval.")
-    ] = 600,
+    interval: DaemonIntervalOption = None,
     agent: RunAgentOption = RunAgentChoice.auto,
     max_issues: MaxIssuesOption = None,
     repo: RepoOption = None,
@@ -522,9 +530,7 @@ def review_command(
 @app.command("review-daemon")
 def review_daemon_command(
     ctx: typer.Context,
-    interval: Annotated[
-        int, typer.Option("--interval", help="Polling interval.")
-    ] = 600,
+    interval: DaemonIntervalOption = None,
     agent: RunAgentOption = RunAgentChoice.auto,
     max_issues: MaxIssuesOption = None,
     repo: RepoOption = None,

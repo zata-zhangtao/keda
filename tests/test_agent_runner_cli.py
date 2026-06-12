@@ -159,6 +159,69 @@ def test_cli_parser_review_daemon_default_interval_is_none() -> None:
     assert parsed.interval is None
 
 
+def test_main_daemon_default_interval_uses_config(monkeypatch) -> None:
+    """Typer daemon without --interval should use the configured 120s default."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon:
+        exit_code = main(["daemon", "--all"])
+
+    assert exit_code == 0
+    assert mock_daemon.call_args.kwargs["interval"] == 120
+
+
+def test_main_review_daemon_default_interval_uses_config(monkeypatch) -> None:
+    """Typer review-daemon without --interval should use the configured 120s default."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.run_review_daemon") as mock_daemon:
+        exit_code = main(["review-daemon", "--all"])
+
+    assert exit_code == 0
+    assert mock_daemon.call_args.kwargs["interval"] == 120
+
+
+def test_main_daemon_interval_override(monkeypatch) -> None:
+    """Typer daemon --interval should override the config default."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon:
+        exit_code = main(["daemon", "--all", "--interval", "300"])
+
+    assert exit_code == 0
+    assert mock_daemon.call_args.kwargs["interval"] == 300
+
+
 def test_cli_parser_repo_id() -> None:
     """--repo-id should be accepted on subcommands."""
     parser = build_parser()

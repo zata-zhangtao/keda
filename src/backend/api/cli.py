@@ -1,4 +1,10 @@
-"""Command-line interface for issue-agent-runner."""
+"""Command-line interface for issue-agent-runner.
+
+NOTE: This argparse-based parser is still the execution backend for
+``backend.api.cli_typer``. When adding or changing CLI options, defaults, or
+argument structure, keep ``cli_typer.py`` in sync so the actual ``iar`` entry
+point and its help text stay consistent.
+"""
 
 from __future__ import annotations
 
