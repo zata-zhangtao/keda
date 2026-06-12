@@ -671,6 +671,30 @@ class GitHubCliClient:
             return None
         return str(raw_prs[0].get("url", ""))
 
+    def find_merged_pr_by_head(self, branch: str) -> str | None:
+        """Return PR URL if a merged PR exists for the branch."""
+        result = self._runner.run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--head",
+                branch,
+                "--state",
+                "merged",
+                "--json",
+                "url",
+            ],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code != 0:
+            return None
+        raw_prs = json.loads(result.stdout or "[]")
+        if not raw_prs:
+            return None
+        return str(raw_prs[0].get("url", ""))
+
     def get_remote_base_sha(self, remote: str, base_branch: str) -> str:
         """Return the SHA of the remote base branch."""
         result = self._runner.run(

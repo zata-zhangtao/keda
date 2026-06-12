@@ -376,6 +376,22 @@ class IGitHubClient(ABC):
         ...
 
     @abstractmethod
+    def find_merged_pr_by_head(self, branch: str) -> str | None:
+        """若该分支存在已合并的 PR，则返回其 URL。
+
+        用于检测 squash merge 或 rebase merge 后的分支：这些合并方式
+        不会使源分支的提交成为基线分支的祖先，因此需要依赖 PR 状态判断
+        分支是否可以安全清理。
+
+        Args:
+            branch: 作为来源（head）的分支名。
+
+        Returns:
+            str | None: 命中的已合并 PR 的 URL；若不存在则返回 ``None``。
+        """
+        ...
+
+    @abstractmethod
     def get_remote_base_sha(self, remote: str, base_branch: str) -> str:
         """返回远端基线分支（base branch）的 SHA。
 

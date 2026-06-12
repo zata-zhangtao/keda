@@ -40,6 +40,7 @@ class FakeGitHubClient(IGitHubClient):
         self._pr_comments: dict[int, list[str]] = {}
         self._pr_contexts: dict[str, object | None] = {}
         self._open_prs: dict[str, str | None] = {}
+        self._merged_prs: dict[str, str | None] = {}
         self._remote_base_sha: str = "remote-base-sha"
         self._issue_states: dict[int, str] = {}
         self._issue_title: str | None = None
@@ -144,6 +145,10 @@ class FakeGitHubClient(IGitHubClient):
     def find_open_pr_by_head(self, branch: str) -> str | None:
         self.calls.append({"method": "find_open_pr_by_head", "branch": branch})
         return self._open_prs.get(branch)
+
+    def find_merged_pr_by_head(self, branch: str) -> str | None:
+        self.calls.append({"method": "find_merged_pr_by_head", "branch": branch})
+        return self._merged_prs.get(branch)
 
     def get_remote_base_sha(self, remote: str, base_branch: str) -> str:
         self.calls.append(

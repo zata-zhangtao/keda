@@ -183,17 +183,18 @@ def _evaluate_issue_branch(
             candidate_worktree_path,
         )
 
-    if not request.force and not _branch_is_merged_to_remote_base(
+    if not request.force and not _branch_is_effectively_merged(
         repo_path,
         branch,
         remote=request.remote,
         base_branch=request.base_branch,
+        github_client=github_client,
         process_runner=process_runner,
     ):
         return _skipped(
             candidate,
-            f"branch is not merged into {request.remote}/{request.base_branch}; "
-            "use --force to delete",
+            f"branch is not merged into {request.remote}/{request.base_branch} "
+            "and no merged PR was found; use --force to delete",
             candidate_worktree_path,
         )
 
@@ -210,6 +211,8 @@ def _evaluate_issue_branch(
         candidate,
         repo_path=repo_path,
         worktree_path=candidate_worktree_path,
+        remote=request.remote,
+        base_branch=request.base_branch,
         force=request.force,
         process_runner=process_runner,
     )
@@ -309,7 +312,7 @@ def _worktree_has_changes(worktree_path: Path, process_runner: IProcessRunner) -
     return bool(status_result.stdout.strip())
 
 
-def _branch_is_merged_to_remote_base(
+def _branch_is_ancestor_merged(
     repo_path: Path,
     branch: str,
     *,
@@ -317,6 +320,7 @@ def _branch_is_merged_to_remote_base(
     base_branch: str,
     process_runner: IProcessRunner,
 ) -> bool:
+    """Return whether ``branch`` is an ancestor of the remote base branch."""
     merge_base_result = process_runner.run(
         ["git", "merge-base", "--is-ancestor", branch, f"{remote}/{base_branch}"],
         cwd=repo_path,
@@ -325,11 +329,39 @@ def _branch_is_merged_to_remote_base(
     return merge_base_result.return_code == 0
 
 
+def _branch_is_effectively_merged(
+    repo_path: Path,
+    branch: str,
+    *,
+    remote: str,
+    base_branch: str,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+) -> bool:
+    """Return whether the branch is safe to delete as already merged.
+
+    A regular merge is detected via git ancestry. Squash and rebase merges do
+    not make the source branch an ancestor of the base branch, so we fall back
+    to asking GitHub whether a PR from this branch has been merged.
+    """
+    if _branch_is_ancestor_merged(
+        repo_path,
+        branch,
+        remote=remote,
+        base_branch=base_branch,
+        process_runner=process_runner,
+    ):
+        return True
+    return github_client.find_merged_pr_by_head(branch) is not None
+
+
 def _delete_issue_branch(
     candidate: IssueBranchCandidate,
     *,
     repo_path: Path,
     worktree_path: Path | None,
+    remote: str,
+    base_branch: str,
     force: bool,
     process_runner: IProcessRunner,
 ) -> WorktreeCleanupBranchResult:
@@ -360,7 +392,14 @@ def _delete_issue_branch(
                 worktree_path,
             )
 
-    branch_delete_flag = "-D" if force else "-d"
+    ancestry_merged = _branch_is_ancestor_merged(
+        repo_path,
+        candidate.branch,
+        remote=remote,
+        base_branch=base_branch,
+        process_runner=process_runner,
+    )
+    branch_delete_flag = "-d" if ancestry_merged and not force else "-D"
     delete_branch_result = process_runner.run(
         ["git", "branch", branch_delete_flag, candidate.branch],
         cwd=repo_path,

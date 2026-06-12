@@ -432,7 +432,7 @@ class AgentRunnerInteractiveDecisionSettings(BaseModel):
     default_output_dir: str = "logs/agent-runner/decisions"
     planner_timeout_seconds: int = 120
     max_context_chars: int = 24000
-    allow_execute_yes: bool = True
+    allow_execute_yes: bool = True  # Allow --yes to skip confirmation.
 
 
 class AgentRunnerDeliberationSettings(BaseModel):

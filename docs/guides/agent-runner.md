@@ -420,7 +420,7 @@ iar worktree cleanup --yes --force
 - `refs/remotes/<remote>/issue-<number>` 已不存在
 - worktree 位于当前仓库的 `.iar-worktrees/` 下
 - 默认模式下 worktree 没有未提交或未跟踪文件
-- 默认模式下分支已经合入 `<remote>/<base_branch>`
+- 默认模式下分支已经合入 `<remote>/<base_branch>`，或者 GitHub 上存在以该分支 head 的已合并 PR（覆盖 squash / rebase merge 场景）
 
 历史 `<repo>-worktrees/tasks/issue-<number>` worktree 是旧 `just worktree`/`just implement` 路径，不会被 `iar worktree cleanup` 自动删除。确认安全后可手动执行：
 

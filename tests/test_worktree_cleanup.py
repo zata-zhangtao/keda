@@ -166,7 +166,56 @@ def test_cleanup_skips_unmerged_branch_by_default(tmp_path: Path) -> None:
     branch_result = cleanup_result.branches[0]
     assert branch_result.status is WorktreeCleanupStatus.SKIPPED
     assert "not merged into origin/main" in branch_result.reason
+    assert "no merged PR was found" in branch_result.reason
     assert "issue-11" in _local_branch_names(repo_path)
+    assert worktree_path.exists()
+
+
+def test_cleanup_deletes_squash_merged_branch_with_merged_pr(
+    tmp_path: Path,
+) -> None:
+    """Squash/rebase merges are not git ancestors; rely on merged PR state."""
+    repo_path = _init_remote_backed_repository(tmp_path)
+    worktree_path = _create_issue_worktree(repo_path, 13)
+    (worktree_path / "feature.txt").write_text("feature", encoding="utf-8")
+    _run_git(worktree_path, "add", "feature.txt")
+    _run_git(worktree_path, "commit", "-m", "feature")
+    github_client = _closed_issue_client(13)
+    github_client._merged_prs["issue-13"] = "https://github.com/example/repo/pull/13"
+
+    cleanup_result = cleanup_iar_worktrees(
+        WorktreeCleanupRequest(repo_path=repo_path, dry_run=False),
+        github_client=github_client,
+        process_runner=SubprocessRunner(),
+    )
+
+    branch_result = cleanup_result.branches[0]
+    assert branch_result.status is WorktreeCleanupStatus.DELETED
+    assert "issue-13" not in _local_branch_names(repo_path)
+    assert not worktree_path.exists()
+
+
+def test_cleanup_dry_run_reports_squash_merged_branch_with_merged_pr(
+    tmp_path: Path,
+) -> None:
+    """Dry-run should report squash-merged branches as would-delete."""
+    repo_path = _init_remote_backed_repository(tmp_path)
+    worktree_path = _create_issue_worktree(repo_path, 14)
+    (worktree_path / "feature.txt").write_text("feature", encoding="utf-8")
+    _run_git(worktree_path, "add", "feature.txt")
+    _run_git(worktree_path, "commit", "-m", "feature")
+    github_client = _closed_issue_client(14)
+    github_client._merged_prs["issue-14"] = "https://github.com/example/repo/pull/14"
+
+    cleanup_result = cleanup_iar_worktrees(
+        WorktreeCleanupRequest(repo_path=repo_path, dry_run=True),
+        github_client=github_client,
+        process_runner=SubprocessRunner(),
+    )
+
+    branch_result = cleanup_result.branches[0]
+    assert branch_result.status is WorktreeCleanupStatus.WOULD_DELETE
+    assert "issue-14" in _local_branch_names(repo_path)
     assert worktree_path.exists()
 
 
