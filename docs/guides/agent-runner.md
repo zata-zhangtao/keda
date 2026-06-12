@@ -208,19 +208,173 @@ uv run --project /path/to/keda iar init
 生成示例：
 
 ```toml
+# IAR 本地仓库配置
+# 本文件只覆盖当前仓库特有的配置；未指定的字段继承 config.toml / 环境变量的全局默认值。
+# 修改后无需重启 daemon，下一次轮询自动生效。
+# 完整字段说明见 docs/guides/agent-runner.md。
+
+# 仓库身份标识（用于多仓库管理时区分不同仓库）
 [agent_runner.repository]
+# 仓库在 IAR 中的唯一标识，通常与远程仓库名一致
 id = "target-repo"
+# 是否允许 runner 处理该仓库的 Issue
 enabled = true
+# 管理终端 / 日志中显示的友好名称
 display_name = "target-repo"
 
+# Git 发布配置：推送 remote、目标基础分支 base_branch
 [agent_runner.git]
+# 推送分支和创建 PR 时使用的 Git remote 名称
 remote = "origin"
+# 创建 worktree 与 PR 的目标基础分支
 base_branch = "main"
 
+# Issue worktree 的创建与定位命令；默认使用 iar worktree，通常无需修改
+[agent_runner.worktree]
+# 创建新 worktree 的命令；{issue_number} 和 {base_branch} 会被替换
+create_command = "iar worktree create --branch issue-{issue_number} --base-branch {base_branch}"
+# 复用已有 worktree 时定位路径的命令
+reuse_command = "iar worktree path --branch issue-{issue_number}"
+# 获取 worktree 绝对路径的命令
+path_command = "iar worktree path --branch issue-{issue_number}"
+
+# Runner 行为配置：每轮处理 Issue 数量、默认 agent、提交前验证命令
 [agent_runner.runner]
+# 每次轮询每个仓库最多处理多少个 Issue
+max_issues = 1
+# 默认使用的 AI agent：auto / claude / codex / kimi
+default_agent = "auto"
+# Agent 失败后的最大重试次数
+max_recovery_attempts = 5
+# 每次重试前等待的秒数
+recovery_retry_delay_seconds = 30
+# 提交前自动运行的验证命令；任一命令失败会进入 recovery
 verification_commands = [
-  "git diff --check",
+    "git diff --check",
 ]
+
+# 发布前安全边界：自动合并开关、禁止提交的路径模式
+[agent_runner.safety]
+# 是否允许自动合并 PR（强烈建议保持 false）
+auto_merge = false
+# 提交前禁止变更的路径通配模式
+forbidden_path_patterns = [
+    ".env",
+    ".env.*",
+    "secrets/*",
+    "docker-compose.prod.yml",
+]
+
+# Realistic Validation 证据门禁配置
+[agent_runner.validation]
+# 是否启用 Realistic Validation 证据门禁
+enabled = true
+# worktree 内证据目录（默认被 info/exclude 排除，不会进入代码 diff）
+evidence_dir = ".iar/evidence"
+# orphan 证据分支前缀
+branch_prefix = "iar-evidence/"
+# 是否逐项检查证据文件格式
+evidence_format_check = true
+# 是否用 agent 解析 PRD 中的格式要求
+parse_evidence_format_with_agent = true
+
+# 实现 Agent 的 prompt 模板；默认 phase 与自定义阶段模板
+[agent_runner.prompts]
+# 默认使用的 prompt 阶段
+default_phase = "execution"
+
+[agent_runner.prompts.phases]
+
+# 提交前 AI review 门禁
+[agent_runner.pre_push_review]
+# 是否启用提交前 AI review
+enabled = true
+# 执行 review 的 agent：auto / claude / codex / kimi
+review_agent = "auto"
+# 是否允许实现 agent 与 reviewer 为同一个
+allow_same_agent = true
+# review 不通过时的最大修复轮数
+max_attempts = 2
+# review agent 最长运行秒数
+timeout_seconds = 900
+
+# Draft PR 创建后的自动 supervisor 配置
+[agent_runner.post_pr_supervisor]
+# 是否启用 post-PR supervisor
+enabled = true
+# 执行 supervisor 的 agent
+supervisor_agent = "auto"
+# supervisor 要求修复时的最大修复 / rebase 次数
+max_repair_attempts = 2
+
+# GitHub Issue / PR 内容生成（面向人类阅读，不影响实现 Agent）
+[agent_runner.generated_content]
+# 是否启用 AI 生成 Issue / PR 正文
+enabled = false
+# 生成失败时的回退方式（当前仅支持 template）
+fallback = "template"
+# 生成 prompt 的最大字符数
+max_input_chars = 20000
+# 执行生成的默认 agent：auto / claude / codex / kimi
+default_agent = "auto"
+
+# 从 PRD 生成 GitHub Issue 的模板
+[agent_runner.generated_content.issue_from_prd]
+# 是否从 PRD 生成 Issue
+enabled = false
+# 生成模式：template（模板渲染）或 agent（调用 AI）
+mode = "template"
+# 输出格式：json / markdown
+output = "json"
+# Issue 标题模板
+title_template = ""
+# Issue 正文模板，支持字符串或字符串列表
+body_template = ""
+# 执行生成的 agent
+agent = "auto"
+# 生成超时秒数
+timeout_seconds = 60
+# agent 模式使用的 prompt
+prompt = ""
+# PR 生成时是否包含 commit log
+include_commit_log = true
+# PR 生成时是否包含 diff stat
+include_diff_stat = true
+
+# 从 commit 信息生成 Draft PR 的模板
+[agent_runner.generated_content.draft_pr]
+# 是否生成 Draft PR 正文
+enabled = false
+# 生成模式：template（模板渲染）或 agent（调用 AI）
+mode = "template"
+# 输出格式：json / markdown
+output = "json"
+# PR 标题模板
+title_template = ""
+# PR 正文模板，支持字符串或字符串列表
+body_template = ""
+# 执行生成的 agent
+agent = "auto"
+# 生成超时秒数
+timeout_seconds = 60
+# agent 模式使用的 prompt
+prompt = ""
+# PR 生成时是否包含 commit log
+include_commit_log = true
+# PR 生成时是否包含 diff stat
+include_diff_stat = true
+
+# GitHub labels 状态流转配置（如你的仓库使用不同标签名，可取消注释并覆盖）
+# [agent_runner.labels]
+# ready = "agent/ready"
+# running = "agent/running"
+# supervising = "agent/supervising"
+# review = "agent/review"
+# failed = "agent/failed"
+# blocked = "agent/blocked"
+# codex = "agent/codex"
+# claude = "agent/claude"
+# kimi = "agent/kimi"
 ```
 
 仓库本地 `.iar.toml` 可覆盖 `git`、`runner`、`labels`、`worktree`、`safety`、`prompts`、`pre_push_review`、`post_pr_supervisor` 和 `generated_content`。`config.toml` 继续保存全局默认值、环境级设置和 legacy registry，不应保存 token、API key 或账号凭据。
