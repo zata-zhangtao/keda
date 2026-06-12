@@ -146,7 +146,9 @@ def test_transcript_runner_builds_claude_command() -> None:
     """Transcript runner should build claude deliberation command."""
     from pathlib import Path
 
-    from backend.engines.agent_runner.factory import _build_deliberation_command
+    from backend.engines.agent_runner.transcript_runner import (
+        _build_deliberation_command,
+    )
 
     cmd = _build_deliberation_command("claude", "hello", Path("/tmp"))
     assert cmd[0] == "claude"
@@ -158,7 +160,9 @@ def test_transcript_runner_builds_kimi_command() -> None:
     """Transcript runner should build kimi deliberation command."""
     from pathlib import Path
 
-    from backend.engines.agent_runner.factory import _build_deliberation_command
+    from backend.engines.agent_runner.transcript_runner import (
+        _build_deliberation_command,
+    )
 
     cmd = _build_deliberation_command("kimi", "hello", Path("/tmp"))
     assert cmd == ["kimi", "--quiet", "--input-format", "text"]
@@ -168,7 +172,9 @@ def test_transcript_runner_builds_codex_command() -> None:
     """Transcript runner should build codex deliberation command."""
     from pathlib import Path
 
-    from backend.engines.agent_runner.factory import _build_deliberation_command
+    from backend.engines.agent_runner.transcript_runner import (
+        _build_deliberation_command,
+    )
 
     cmd = _build_deliberation_command("codex", "hello", Path("relative/workspace"))
     assert cmd[0] == "codex"
@@ -402,7 +408,7 @@ def test_run_filtered_claude_stream_output_sink_preserves_newlines(
 
 def test_relay_process_stdout_output_sink_preserves_line_boundaries() -> None:
     """Non-Claude transcript streaming should keep stdout line endings."""
-    from backend.engines.agent_runner.factory import _relay_process_stdout
+    from backend.engines.agent_runner.transcript_runner import _relay_process_stdout
 
     mock_process = MagicMock()
     mock_process.stdout = iter(["first\n", "second\n"])

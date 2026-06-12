@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
-from backend.api.cli import build_parser
+from backend.api.cli_parser import build_parser
 from backend.infrastructure.logging.logger import Logger
 
 
