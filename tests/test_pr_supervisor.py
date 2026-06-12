@@ -2021,7 +2021,12 @@ def test_execute_rebase_real_git_conflict_allows_detached_head(
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
 
-    subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
     subprocess.run(
         ["git", "config", "user.name", "Test"],
         cwd=repo_path,
