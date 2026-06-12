@@ -2159,7 +2159,7 @@ def test_execute_rebase_real_git_conflict_allows_detached_head(
         _noop_run_agent,
     )
 
-    class _NoOpFetchPushRunner:
+    class _NoOpFetchRebasePushRunner:
         def __init__(self, delegate: SubprocessRunner) -> None:
             self._delegate = delegate
 
@@ -2182,6 +2182,23 @@ def test_execute_rebase_real_git_conflict_allows_detached_head(
                 and cmd[3] == "main"
             ):
                 return CommandResult(tuple(cmd), 0, "", "")
+            # The real rebase state is already set up manually above.
+            # execute_rebase must not run a second 'git rebase origin/main'
+            # while a rebase is in progress, because Git aborts the active
+            # rebase on some versions/platforms when the upstream is invalid.
+            # Return a synthetic conflict so the conflict recovery loop runs.
+            if (
+                len(cmd) >= 3
+                and cmd[0] == "git"
+                and cmd[1] == "rebase"
+                and cmd[2] == "origin/main"
+            ):
+                return CommandResult(
+                    tuple(cmd),
+                    1,
+                    "CONFLICT (content): Merge conflict in shared.txt",
+                    "",
+                )
             if (
                 len(cmd) >= 5
                 and cmd[0] == "git"
@@ -2200,7 +2217,7 @@ def test_execute_rebase_real_git_conflict_allows_detached_head(
                 input_text=input_text,
             )
 
-    process_runner = _NoOpFetchPushRunner(SubprocessRunner())
+    process_runner = _NoOpFetchRebasePushRunner(SubprocessRunner())
 
     config = AppConfig(
         post_pr_supervisor=PostPrSupervisorConfig(max_repair_attempts=1),
