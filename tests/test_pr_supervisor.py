@@ -746,6 +746,9 @@ def test_run_post_pr_supervisor_cycle_writes_comment() -> None:
     assert marker is not None
     assert marker.base_sha == "def456"
     assert marker.issue_comments_count == 1
+    # 空 stdout 触发 fail-closed；最终 action 必须随 marker 记录，
+    # 供下一轮 review pass 识别 mark_failed 结局
+    assert marker.action == "mark_failed"
 
 
 def test_run_post_pr_supervisor_cycle_parses_action() -> None:

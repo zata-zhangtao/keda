@@ -579,6 +579,12 @@ uv run iar review-daemon
 Supervisor 结果评论会把自身写入后的 Issue comment 数量记录进 marker，
 因此 runner 自己写出的 `Agent Runner Post-PR Supervisor` 评论不会触发下一轮重审。
 
+例外：最新 supervisor marker 记录的 action 为 `mark_failed` 时（如 agent
+基础设施崩溃重试耗尽、或输出不可解析触发 fail-closed），上一轮并没有产出
+有效评审结论。此时人工把 label 从 `agent/failed` 拨回 `agent/supervising`
+即视为明确的重试请求，即使上下文完全未变化也会重新运行 supervisor cycle，
+不需要靠加评论或推新 commit 来"制造变化"。
+
 PR context 读取使用当前 GitHub CLI 支持的 `statusCheckRollup` 字段聚合
 checks 状态：
 

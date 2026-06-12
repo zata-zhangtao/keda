@@ -393,11 +393,14 @@ def build_supervisor_result_comment(
     pr_comments_count: int | None = None,
 ) -> str:
     """Build the human-readable comment for a supervisor cycle result."""
+    # marker 中记录 action，使下一轮 review pass 能识别 mark_failed 结局，
+    # 在人工恢复 label 后允许同一上下文重新评审
     marker = format_event_marker(
         phase="post_pr_supervisor",
         cycle=cycle,
         head_sha=head_sha,
         base_sha=base_sha,
+        action=action,
         checks_state=checks_state,
         mergeable=mergeable,
         issue_comments_count=issue_comments_count,

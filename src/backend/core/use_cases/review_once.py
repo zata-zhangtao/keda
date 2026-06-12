@@ -44,6 +44,12 @@ def _context_changed_wide(
     """Return whether PR context has changed since the last supervisor event."""
     if last_marker is None:
         return True
+    # mark_failed 意味着上一轮 supervision 没有产出有效评审结论（例如 agent
+    # 基础设施崩溃重试耗尽，或输出不可解析触发 fail-closed）。Issue 能再次
+    # 进入评审队列说明人工已把 label 从 agent/failed 拨回，这本身就是明确的
+    # 重试请求，不应被"上下文未变化"的去重机制拦下
+    if last_marker.action == "mark_failed":
+        return True
     if last_marker.head_sha != pr_context.head_sha:
         return True
     if base_sha_remote and last_marker.base_sha != base_sha_remote:

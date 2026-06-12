@@ -26,14 +26,17 @@ def _marker_comment(
     *,
     head_sha: str = "abc123",
     base_sha: str = "def456",
+    action: str | None = None,
     checks_state: str = "PENDING",
     mergeable: bool = True,
     issue_comments_count: int = 1,
     pr_comments_count: int = 0,
 ) -> str:
+    action_part = f"action={action} " if action else ""
     return (
         "<!-- iar:event version=1 phase=post_pr_supervisor cycle=1 "
         f"head={head_sha} base={base_sha} pr_branch=issue-1 "
+        f"{action_part}"
         f"checks_state={checks_state} mergeable={'true' if mergeable else 'false'} "
         f"issue_comments_count={issue_comments_count} pr_comments_count={pr_comments_count} -->"
     )
@@ -508,6 +511,95 @@ def test_review_once_skips_after_supervisor_writes_its_own_comment() -> None:
     assert mock_cycle.called is False
     label_calls = [c for c in client.calls if c["method"] == "edit_issue_labels"]
     assert len(label_calls) == 0
+
+
+def test_review_once_reruns_supervisor_after_mark_failed_marker() -> None:
+    """A mark_failed marker must not suppress re-supervision of the same context.
+
+    mark_failed 没有产出有效评审结论（如 agent 基础设施崩溃重试耗尽）；
+    人工把 label 拨回 supervising 即是明确的重试请求。
+    """
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="B",
+        labels=("agent/supervising",),
+    )
+    client = FakeGitHubClient()
+    client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
+    client._issue_comments[1] = [
+        _marker_comment(
+            action="mark_failed", issue_comments_count=1, pr_comments_count=0
+        )
+    ]
+    # PR 上下文与 marker 完全一致：没有 mark_failed 放行的话本应被去重跳过
+    client._pr_contexts["issue-1"] = _make_pr_context()
+
+    with (
+        patch(
+            "backend.core.use_cases.review_once.create_or_reuse_worktree",
+            return_value=Path("."),
+        ),
+        patch(
+            "backend.core.use_cases.review_once.choose_agent",
+            return_value="codex",
+        ),
+        patch(
+            "backend.core.use_cases.review_once.run_post_pr_supervisor_cycle",
+            return_value=_supervisor_approve(),
+        ) as mock_cycle,
+    ):
+        outcome = _process_review_candidate(
+            issue=issue,
+            repo_path=Path("."),
+            config=AppConfig(),
+            agent="auto",
+            github_client=client,
+            process_runner=FakeProcessRunner(),
+        )
+
+    assert outcome != "skipped_context_unchanged"
+    assert mock_cycle.called is True
+
+
+def test_review_once_still_skips_unchanged_context_with_approve_marker() -> None:
+    """Markers now record action; a non-failed action must keep the dedup skip."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="B",
+        labels=("agent/supervising",),
+    )
+    client = FakeGitHubClient()
+    client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
+    client._issue_comments[1] = [
+        _marker_comment(
+            action="approve_for_human_review",
+            issue_comments_count=1,
+            pr_comments_count=0,
+        )
+    ]
+    client._pr_contexts["issue-1"] = _make_pr_context()
+
+    with patch(
+        "backend.core.use_cases.review_once.run_post_pr_supervisor_cycle",
+        return_value=_supervisor_approve(),
+    ) as mock_cycle:
+        outcome = _process_review_candidate(
+            issue=issue,
+            repo_path=Path("."),
+            config=AppConfig(),
+            agent="auto",
+            github_client=client,
+            process_runner=FakeProcessRunner(),
+        )
+
+    assert outcome == "skipped_context_unchanged"
+    assert mock_cycle.called is False
 
 
 def test_review_once_moves_review_label_to_supervising_on_change() -> None:
