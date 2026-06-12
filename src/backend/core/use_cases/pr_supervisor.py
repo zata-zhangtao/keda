@@ -271,11 +271,11 @@ def guard_supervisor_action_for_pr_state(
     action_result: SupervisorActionResult,
     pr_context: PullRequestContext,
 ) -> SupervisorActionResult:
-    """Prevent unsafe approval when deterministic PR state is not reviewable.
+    """Correct supervisor actions that contradict deterministic PR state.
 
     这是 LLM 决策与实际 PR 状态之间的守卫层：模型可能基于过时上下文
-    批准代码，而 GitHub 的 mergeable/checks_state 是更接近事实的
-    确定性信号，因此必须独立校验。
+    批准代码，或把可机器修复的冲突保守地搁置给人工，而 GitHub 的
+    mergeable/checks_state 是更接近事实的确定性信号，因此必须独立校验。
     """
     # 模型可能因为看到 Checks state: FAILURE 而保守地请求人工介入，但当唯一
     # 失败项是人工签核门且 PR 可合并时，语义正确的结局是转人工评审而非阻塞
@@ -300,16 +300,23 @@ def guard_supervisor_action_for_pr_state(
             head_sha=action_result.head_sha,
         )
 
-    if action_result.action != "approve_for_human_review":
-        return action_result
-
-    # mergeable=False 通常意味着存在冲突，直接批准会导致后续人工 Reviewer
-    # 无法合并，因此强制转交 rebase 流程先解决冲突
-    if pr_context.mergeable is False:
+    # mergeable=False 是确定性、机器可修的信号：冲突不会随等待自愈，而
+    # approve 会让人工 Reviewer 无法合并，request_human_input/wait_for_checks
+    # 会把 Issue 留在 blocked 或 supervising 状态——review 轮询不扫描 blocked，
+    # supervising 则因上下文未变而被跳过，冲突被永久搁置（真实案例：
+    # Issue #53 / PR #70）。因此这三类动作一律先改写为 rebase 解决冲突。
+    # mark_failed 保留终态：它也是 infra crash 与不可解析输出的兜底，
+    # 改写会在故障期间制造无意义的返工。
+    if pr_context.mergeable is False and action_result.action in (
+        "approve_for_human_review",
+        "request_human_input",
+        "wait_for_checks",
+    ):
         summary = (
-            "Approval blocked by PR mergeability gate: the PR is currently "
-            "conflicting or otherwise not mergeable. Requesting rebase before "
-            f"human review. Supervisor summary: {action_result.summary}"
+            "Action rewritten by PR mergeability gate: the PR is currently "
+            "conflicting or otherwise not mergeable, and "
+            f"'{action_result.action}' would leave the conflict unresolved. "
+            f"Requesting rebase first. Supervisor summary: {action_result.summary}"
         )
         return SupervisorActionResult(
             action="rebase_pr_branch",
@@ -318,6 +325,9 @@ def guard_supervisor_action_for_pr_state(
             verification_status=action_result.verification_status,
             head_sha=action_result.head_sha,
         )
+
+    if action_result.action != "approve_for_human_review":
+        return action_result
 
     if pr_context.checks_state == "FAILURE":
         # The Realistic Validation sign-off is an intentional manual gate;

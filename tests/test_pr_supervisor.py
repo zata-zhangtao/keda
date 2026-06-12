@@ -232,15 +232,16 @@ def test_supervisor_action_gate_keeps_human_input_with_other_failed_checks() -> 
     assert gated_result.summary == "Lint is broken and the fix is unclear."
 
 
-def test_supervisor_action_gate_keeps_human_input_when_not_mergeable() -> None:
-    """A conflicting PR must not be auto-approved even if only the gate fails."""
+def test_supervisor_action_gate_rebases_human_input_when_not_mergeable() -> None:
+    """A conflicting PR must be rebased, not parked in blocked where the
+    review poll never scans it again (real case: Issue #53 / PR #70)."""
     action_result = SupervisorActionResult(
         action="request_human_input",
         summary="PR has conflicts that need a decision.",
     )
     pr_context = PullRequestContext(
-        pr_url="https://github.com/example/repo/pull/1",
-        branch="issue-1",
+        pr_url="https://github.com/example/repo/pull/70",
+        branch="issue-53",
         head_sha="abc123",
         base_sha="def456",
         mergeable=False,
@@ -252,8 +253,70 @@ def test_supervisor_action_gate_keeps_human_input_when_not_mergeable() -> None:
 
     gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
 
-    assert gated_result.action == "request_human_input"
-    assert gated_result.summary == "PR has conflicts that need a decision."
+    assert gated_result.action == "rebase_pr_branch"
+    assert "mergeability gate" in gated_result.summary
+    assert "PR has conflicts that need a decision." in gated_result.summary
+
+
+def test_supervisor_action_gate_rebases_wait_for_checks_when_not_mergeable() -> None:
+    """Waiting on checks cannot resolve a conflict; the context-unchanged skip
+    would otherwise leave the Issue in supervising forever."""
+    action_result = SupervisorActionResult(
+        action="wait_for_checks",
+        summary="Checks still running.",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=False,
+        checks_state="PENDING",
+        checks_summary=("ci/build (status=IN_PROGRESS)",),
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "rebase_pr_branch"
+    assert "mergeability gate" in gated_result.summary
+
+
+def test_supervisor_action_gate_keeps_mark_failed_when_not_mergeable() -> None:
+    """mark_failed is a terminal escalation (also the infra-crash fallback);
+    rewriting it to rebase would create pointless rework during outages."""
+    action_result = SupervisorActionResult(
+        action="mark_failed",
+        summary="Supervisor agent infrastructure failure: exit 1.",
+    )
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=False,
+    )
+
+    gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+
+    assert gated_result.action == "mark_failed"
+    assert gated_result.summary == "Supervisor agent infrastructure failure: exit 1."
+
+
+def test_supervisor_action_gate_keeps_repair_actions_when_not_mergeable() -> None:
+    """Repair actions already address the conflict and must pass through."""
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+        mergeable=False,
+    )
+
+    for action in ("repair_pr_branch", "rebase_pr_branch", "resolve_conflict"):
+        action_result = SupervisorActionResult(action=action, summary="Fixing.")
+        gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
+        assert gated_result.action == action
+        assert gated_result.summary == "Fixing."
 
 
 def test_supervisor_action_gate_keeps_human_input_when_checks_pass() -> None:
