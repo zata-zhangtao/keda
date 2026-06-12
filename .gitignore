@@ -53,3 +53,7 @@ Thumbs.db
 
 # Claude planning session archives (local state, not for VCS)
 .local/state/gh/device-id
+
+# Realistic validation evidence and runner state (local only)
+.iar/evidence/
+.agent-runner/

@@ -32,11 +32,11 @@
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为。没有确认的 Validation Waiver，因此执行者必须实际运行并保存证据摘要。
 
-- [ ] **计划生成真实验证**：通过 subprocess 或真实终端执行 `uv run iar ask "判断下一步应该做什么" --repo <fixture-repo> --agent codex --plan-only`，在 PATH 注入 fake `codex`，验证 CLI 输出结构化计划并写入 `logs/agent-runner/decisions/`。
-- [ ] **确认执行真实验证**：通过 `uv run iar ask "从 PRD 创建 issue" --repo <fixture-repo> --agent codex --execute`，在 PATH 注入 fake `codex` 和 fake `gh`，验证未确认时不执行，确认后只调用白名单 use case。
-- [ ] **写操作防护真实验证**：通过 fake planner 返回未允许动作，例如 `git_push`、`daemon` 或任意 shell 命令，验证真实 CLI 返回非零，并且 fake `gh` 没有写调用。
-- [ ] **planner 只读防护真实验证**：当所选 agent 没有可验证只读 command builder 时，`iar ask` 必须 fail fast，而不是复用可能写仓库的内容生成命令。
-- [ ] **为什么单元测试不够**：本功能横跨 Typer CLI、shared dispatcher、agent 子进程、仓库目标解析、GitHub client 适配、use case 调度、TTY/非 TTY 确认和本地审计文件；真实入口验证才能证明这些边界按生产路径连接。
+- [x] **计划生成真实验证**：通过 subprocess 或真实终端执行 `uv run iar ask "判断下一步应该做什么" --repo <fixture-repo> --agent codex --plan-only`，在 PATH 注入 fake `codex`，验证 CLI 输出结构化计划并写入 `logs/agent-runner/decisions/`。证据：`rv-1-ask-plan-only.txt`。
+- [x] **确认执行真实验证**：通过 `uv run iar ask "从 PRD 创建 issue" --repo <fixture-repo> --agent codex --execute`，在 PATH 注入 fake `codex` 和 fake `gh`，验证未确认时不执行，确认后只调用白名单 use case。证据：`rv-4-ask-execute-confirmation.txt`。
+- [x] **写操作防护真实验证**：通过 fake planner 返回未允许动作，例如 `git_push`、`daemon` 或任意 shell 命令，验证真实 CLI 返回非零，并且 fake `gh` 没有写调用。证据：`rv-2-ask-rejects-unknown.txt`。
+- [x] **planner 只读防护真实验证**：当所选 agent 没有可验证只读 command builder 时，`iar ask` 必须 fail fast，而不是复用可能写仓库的内容生成命令。证据：`rv-3-interactive-decision-config.txt`。
+- [x] **为什么单元测试不够**：本功能横跨 Typer CLI、shared dispatcher、agent 子进程、仓库目标解析、GitHub client 适配、use case 调度、TTY/非 TTY 确认和本地审计文件；真实入口验证才能证明这些边界按生产路径连接。完整回归见 `rv-8-just-test.txt`。
 
 ### Delivery Dependencies
 
@@ -532,58 +532,58 @@ Live GitHub validation is optional and must be gated by an explicit environment 
 
 ### Architecture Acceptance
 
-- [ ] `iar ask` 的用户入口注册在 `src/backend/api/cli_typer.py`，并遵循当前 Typer/Rich CLI 结构。
-- [ ] `iar ask` 的业务规则位于 `src/backend/core/use_cases/interactive_decision.py` 或等价 core use case，不写在 `src/backend/api/cli.py` 或 `src/backend/api/cli_typer.py`。
-- [ ] core 层不导入 `src/backend/engines/`、`src/backend/infrastructure/` 或 `src/backend/api/`。
-- [ ] 所有 GitHub 写操作通过 `IGitHubClient` 或现有 use case 完成，不在 planner、CLI 或 core 中直接拼接 `gh` shell 命令。
-- [ ] 计划模型使用 frozen dataclass 或等价不可变值对象，并与 runner 执行模型保持职责分离。
-- [ ] 没有新增数据库、常驻服务、WebSocket 或通用 tool executor。
+- [x] `iar ask` 的用户入口注册在 `src/backend/api/cli_typer.py`，并遵循当前 Typer/Rich CLI 结构。
+- [x] `iar ask` 的业务规则位于 `src/backend/core/use_cases/interactive_decision.py` 或等价 core use case，不写在 `src/backend/api/cli.py` 或 `src/backend/api/cli_typer.py`。
+- [x] core 层不导入 `src/backend/engines/`、`src/backend/infrastructure/` 或 `src/backend/api/`。
+- [x] 所有 GitHub 写操作通过 `IGitHubClient` 或现有 use case 完成，不在 planner、CLI 或 core 中直接拼接 `gh` shell 命令。
+- [x] 计划模型使用 frozen dataclass 或等价不可变值对象，并与 runner 执行模型保持职责分离。
+- [x] 没有新增数据库、常驻服务、WebSocket 或通用 tool executor。
 
 ### Behavior Acceptance
 
-- [ ] `uv run iar ask "<prompt>"` 默认只输出计划并写入 `logs/agent-runner/decisions/<decision_id>/plan.json` 和 `plan.md`。
-- [ ] planner 输出未知 action type 时，CLI 非零退出，输出清晰错误，并且不执行任何写操作。
-- [ ] planner 输出未知参数或目标仓库外路径时，CLI 非零退出，且不执行任何写操作。
-- [ ] `create_issue_from_prd` 动作默认 `ready=false`，除非用户明确要求 ready/start/run 且确认执行。
-- [ ] `run_once` 动作默认 `max_issues=1`，并且不允许通过自然语言隐式启动 `daemon`。
-- [ ] `--execute` 在 TTY 中要求输入 `decision_id` 或 `action_id`；输入不匹配时不执行。
-- [ ] `--execute --yes` 只允许 low/medium 且允许非交互确认的动作；高风险动作必须失败并要求交互确认。
-- [ ] 所有执行动作写入 `execution.json` 和 `execution.md`，包含 action id、调用结果和错误摘要。
+- [x] `uv run iar ask "<prompt>"` 默认只输出计划并写入 `logs/agent-runner/decisions/<decision_id>/plan.json` 和 `plan.md`。
+- [x] planner 输出未知 action type 时，CLI 非零退出，输出清晰错误，并且不执行任何写操作。
+- [x] planner 输出未知参数或目标仓库外路径时，CLI 非零退出，且不执行任何写操作。
+- [x] `create_issue_from_prd` 动作默认 `ready=false`，除非用户明确要求 ready/start/run 且确认执行。
+- [x] `run_once` 动作默认 `max_issues=1`，并且不允许通过自然语言隐式启动 `daemon`。
+- [x] `--execute` 在 TTY 中要求输入 `decision_id` 或 `action_id`；输入不匹配时不执行。
+- [x] `--execute --yes` 只允许 low/medium 且允许非交互确认的动作；高风险动作必须失败并要求交互确认。
+- [x] 所有执行动作写入 `execution.json` 和 `execution.md`，包含 action id、调用结果和错误摘要。
 
 ### Safety Acceptance
 
-- [ ] `iar ask` 不允许 planner 输出 shell 命令作为可执行动作。
-- [ ] `daemon`、`review-daemon`、`git_push`、`git_merge`、`git_reset`、自动 merge、直接关闭 Issue、删除分支等动作被明确拒绝。
-- [ ] 默认 planner agent 来自 `[agent_runner.interactive_decision].default_agent`。
-- [ ] 默认 planner agent 有可验证只读 command builder；没有只读能力的 agent 不能用于 `iar ask` 执行。
-- [ ] planner prompt 明确列出 allowed actions、forbidden actions、risk levels 和输出 JSON schema。
+- [x] `iar ask` 不允许 planner 输出 shell 命令作为可执行动作。
+- [x] `daemon`、`review-daemon`、`git_push`、`git_merge`、`git_reset`、自动 merge、直接关闭 Issue、删除分支等动作被明确拒绝。
+- [x] 默认 planner agent 来自 `[agent_runner.interactive_decision].default_agent`。
+- [x] 默认 planner agent 有可验证只读 command builder；没有只读能力的 agent 不能用于 `iar ask` 执行。
+- [x] planner prompt 明确列出 allowed actions、forbidden actions、risk levels 和输出 JSON schema。
 
 ### Dependency Acceptance
 
-- [ ] `AgentRunnerSettings` 到 core config 的映射覆盖 interactive decision 新配置。
-- [ ] 目标仓库 `.iar.toml` 可以覆盖 interactive decision 配置，且覆盖行为与现有 repository local config 一致。
-- [ ] `tests/test_agent_config_consistency.py` 覆盖默认 planner agent 有安全 command builder。
-- [ ] `iar ask --repo` 与 `iar ask --repo-id` 互斥，且 repository target resolution 与 `iar run` / `iar issue create` 保持一致。
-- [ ] 没有新增外部 Python 依赖、Node 依赖、数据库或常驻服务。
+- [x] `AgentRunnerSettings` 到 core config 的映射覆盖 interactive decision 新配置。
+- [x] 目标仓库 `.iar.toml` 可以覆盖 interactive decision 配置，且覆盖行为与现有 repository local config 一致。
+- [x] `tests/test_agent_config_consistency.py` 覆盖默认 planner agent 有安全 command builder。
+- [x] `iar ask --repo` 与 `iar ask --repo-id` 互斥，且 repository target resolution 与 `iar run` / `iar issue create` 保持一致。
+- [x] 没有新增外部 Python 依赖、Node 依赖、数据库或常驻服务。
 
 ### Documentation Acceptance
 
-- [ ] `README.md` 包含 `iar ask` 的最小示例，并明确默认 plan-only。
-- [ ] `docs/guides/agent-runner.md` 包含白名单动作、确认策略、禁止动作、只读 planner 限制和 fake-boundary 验证说明。
-- [ ] `docs/guides/configuration.md` 包含 `[agent_runner.interactive_decision]` 示例。
-- [ ] 如新增独立文档页，则同步更新 `mkdocs.yml`；若只修改现有页面，则不新增 nav。
-- [ ] 旧的“1 个月内不实现 / 暂缓实现 / 3 个月只读数据”结论不再作为当前 pending PRD 的执行结论保留。
-- [ ] 文档示例优先使用现代命令名，例如 `iar issue create`、`iar run`、`iar review`，不新增对旧命令的推荐。
+- [x] `README.md` 包含 `iar ask` 的最小示例，并明确默认 plan-only。
+- [x] `docs/guides/agent-runner.md` 包含白名单动作、确认策略、禁止动作、只读 planner 限制和 fake-boundary 验证说明。
+- [x] `docs/guides/configuration.md` 包含 `[agent_runner.interactive_decision]` 示例。
+- [x] 如新增独立文档页，则同步更新 `mkdocs.yml`；若只修改现有页面，则不新增 nav。
+- [x] 旧的“1 个月内不实现 / 暂缓实现 / 3 个月只读数据”结论不再作为当前 pending PRD 的执行结论保留。
+- [x] 文档示例优先使用现代命令名，例如 `iar issue create`、`iar run`、`iar review`，不新增对旧命令的推荐。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_interactive_decision.py -q` 通过。
-- [ ] `uv run pytest tests/test_agent_runner_cli.py tests/test_agent_config_consistency.py -q` 通过。
-- [ ] 使用 fake planner 和 fake `gh` 通过真实 CLI 验证 `uv run iar ask ... --plan-only`。
-- [ ] 使用 fake planner 和 fake `gh` 通过真实 CLI 验证 `uv run iar ask ... --execute` 的确认防护。
-- [ ] 使用 fake planner 验证未知 action、未知参数和高风险 `--yes` 均 fail fast。
-- [ ] `uv run mkdocs build --strict` 通过。
-- [ ] `just test` 通过。
+- [x] `uv run pytest tests/test_interactive_decision.py -q` 通过。
+- [x] `uv run pytest tests/test_agent_runner_cli.py tests/test_agent_config_consistency.py -q` 通过。
+- [x] 使用 fake planner 和 fake `gh` 通过真实 CLI 验证 `uv run iar ask ... --plan-only`。
+- [x] 使用 fake planner 和 fake `gh` 通过真实 CLI 验证 `uv run iar ask ... --execute` 的确认防护。
+- [x] 使用 fake planner 验证未知 action、未知参数和高风险 `--yes` 均 fail fast。
+- [x] `uv run mkdocs build --strict` 通过。
+- [x] `just test` 通过。
 
 ## 8. Functional Requirements
 

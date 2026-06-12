@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
-from backend.api.cli import build_parser
+from backend.api.cli_parser import build_parser
 from backend.infrastructure.logging.logger import Logger
 
 
@@ -886,3 +886,350 @@ def test_main_run_rebase_conflict_detached_head() -> None:
 
     assert exit_code == 0
     mock_run.assert_called_once()
+
+
+def test_cli_parser_ask_defaults() -> None:
+    """ask should have sensible defaults."""
+    parser = build_parser()
+    parsed = parser.parse_args(["ask", "what should I do"])
+    assert parsed.command == "ask"
+    assert parsed.prompt == "what should I do"
+    assert parsed.agent == "auto"
+    assert parsed.plan_only is False
+    assert parsed.execute is False
+    assert parsed.yes is False
+    assert parsed.output is None
+
+
+def test_cli_parser_ask_with_options() -> None:
+    """ask should accept all defined options."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        [
+            "ask",
+            "create issue from prd",
+            "--agent",
+            "codex",
+            "--plan-only",
+            "--execute",
+            "--yes",
+            "--output",
+            "/tmp/out",
+            "--repo",
+            "/tmp/repo",
+        ]
+    )
+    assert parsed.command == "ask"
+    assert parsed.prompt == "create issue from prd"
+    assert parsed.agent == "codex"
+    assert parsed.plan_only is True
+    assert parsed.execute is True
+    assert parsed.yes is True
+    assert parsed.output == "/tmp/out"
+    assert parsed.repo == "/tmp/repo"
+
+
+def test_main_ask_plan_only_writes_audit(tmp_path, monkeypatch) -> None:
+    """ask --plan-only should write audit files without executing."""
+    from backend.api.cli import main
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    (repo_path / ".git").mkdir()
+    (repo_path / "tasks").mkdir()
+    (repo_path / "tasks" / "pending").mkdir()
+
+    fake_planner_stdout = (
+        '{"decision_id": "dec-test-123", '
+        '"user_prompt": "test", '
+        '"intent_summary": "Do nothing", '
+        '"risk_level": "low", '
+        '"actions": [{'
+        '"action_id": "A1", '
+        '"action_type": "no_op", '
+        '"title": "No action", '
+        '"rationale": "Nothing to do", '
+        '"parameters": {}, '
+        '"writes_external_state": false, '
+        '"confirmation_required": false'
+        "}], "
+        '"assumptions": [], '
+        '"warnings": [], '
+        '"requires_confirmation": false}'
+    )
+
+    mock_context = MagicMock()
+    mock_context.repo_path = repo_path
+    mock_context.config = MagicMock()
+    mock_context.config.interactive_decision.default_agent = "codex"
+    mock_context.config.interactive_decision.default_output_dir = str(
+        tmp_path / "decisions"
+    )
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+    mock_context.config.prompts.default_phase = "execution"
+
+    mock_planner = MagicMock()
+    mock_planner.generate.return_value = MagicMock(
+        return_code=0,
+        stdout=fake_planner_stdout,
+    )
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_planner_runner",
+        return_value=mock_planner,
+    ), patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+        exit_code = main(
+            [
+                "ask",
+                "what should I do",
+                "--plan-only",
+                "--repo",
+                str(repo_path),
+                "--output",
+                str(tmp_path / "decisions"),
+            ]
+        )
+
+    assert exit_code == 0
+    decision_dir = tmp_path / "decisions" / "dec-test-123"
+    assert (decision_dir / "plan.json").exists()
+    assert (decision_dir / "plan.md").exists()
+    assert (decision_dir / "context-summary.json").exists()
+
+
+def test_main_ask_rejects_unknown_action() -> None:
+    """ask should return non-zero when planner returns unknown action."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.config = MagicMock()
+    mock_context.config.interactive_decision.default_agent = "codex"
+    mock_context.config.interactive_decision.default_output_dir = "logs/decisions"
+    mock_context.config.labels = MagicMock()
+
+    fake_planner_stdout = (
+        '{"decision_id": "dec-test-456", '
+        '"user_prompt": "test", '
+        '"intent_summary": "Bad action", '
+        '"risk_level": "low", '
+        '"actions": [{'
+        '"action_id": "A1", '
+        '"action_type": "git_push", '
+        '"title": "Push", '
+        '"rationale": "Bad", '
+        '"parameters": {}, '
+        '"writes_external_state": true, '
+        '"confirmation_required": true'
+        "}], "
+        '"assumptions": [], '
+        '"warnings": [], '
+        '"requires_confirmation": false}'
+    )
+
+    mock_planner = MagicMock()
+    mock_planner.generate.return_value = MagicMock(
+        return_code=0,
+        stdout=fake_planner_stdout,
+    )
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_planner_runner",
+        return_value=mock_planner,
+    ), patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+        exit_code = main(["ask", "push to main", "--plan-only", "--repo", "/tmp/repo"])
+
+    assert exit_code == 1
+
+
+def test_main_ask_run_once_dry_run_dispatches_existing_use_case() -> None:
+    """ask --execute for run_once_dry_run should dispatch run_agent_repositories_once."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+    mock_context.config = MagicMock()
+    mock_context.config.interactive_decision.default_agent = "codex"
+    mock_context.config.interactive_decision.default_output_dir = "logs/decisions"
+    mock_context.config.labels = MagicMock()
+    mock_context.config.prompts.default_phase = "execution"
+
+    fake_planner_stdout = (
+        '{"decision_id": "dec-test-789", '
+        '"user_prompt": "test", '
+        '"intent_summary": "Dry run", '
+        '"risk_level": "low", '
+        '"actions": [{'
+        '"action_id": "A1", '
+        '"action_type": "run_once_dry_run", '
+        '"title": "Dry run", '
+        '"rationale": "Preview", '
+        '"parameters": {"agent": "auto", "max_issues": 1}, '
+        '"writes_external_state": false, '
+        '"confirmation_required": false'
+        "}], "
+        '"assumptions": [], '
+        '"warnings": [], '
+        '"requires_confirmation": false}'
+    )
+
+    mock_planner = MagicMock()
+    mock_planner.generate.return_value = MagicMock(
+        return_code=0,
+        stdout=fake_planner_stdout,
+    )
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_planner_runner",
+        return_value=mock_planner,
+    ), patch(
+        "backend.core.use_cases.interactive_decision.run_agent_repositories_once",
+        return_value=0,
+    ) as mock_run, patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+        exit_code = main(
+            [
+                "ask",
+                "dry run",
+                "--execute",
+                "--yes",
+                "--repo",
+                "/tmp/repo",
+            ]
+        )
+
+    assert exit_code == 0
+    mock_run.assert_called_once()
+    call_kwargs = mock_run.call_args.kwargs
+    assert call_kwargs["dry_run"] is True
+
+
+def test_main_ask_execute_confirmation_required_for_write_action() -> None:
+    """ask --execute for create_issue_from_prd requires confirmation and fails without TTY."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+    mock_context.config = MagicMock()
+    mock_context.config.interactive_decision.default_agent = "codex"
+    mock_context.config.interactive_decision.default_output_dir = "logs/decisions"
+    mock_context.config.labels = MagicMock()
+    mock_context.config.prompts.default_phase = "execution"
+
+    fake_planner_stdout = (
+        '{"decision_id": "dec-test-abc", '
+        '"user_prompt": "test", '
+        '"intent_summary": "Create issue", '
+        '"risk_level": "medium", '
+        '"actions": [{'
+        '"action_id": "A1", '
+        '"action_type": "create_issue_from_prd", '
+        '"title": "Create issue", '
+        '"rationale": "PRD is ready", '
+        '"parameters": {"prd_path": "tasks/pending/example.md", "ready": false}, '
+        '"writes_external_state": true, '
+        '"confirmation_required": true'
+        '}], "assumptions": [], "warnings": ["This will create a GitHub Issue."], '
+        '"requires_confirmation": true}'
+    )
+
+    mock_planner = MagicMock()
+    mock_planner.generate.return_value = MagicMock(
+        return_code=0,
+        stdout=fake_planner_stdout,
+    )
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_planner_runner",
+        return_value=mock_planner,
+    ), patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+        exit_code = main(
+            [
+                "ask",
+                "create issue from PRD",
+                "--execute",
+                "--repo",
+                "/tmp/repo",
+            ]
+        )
+
+    assert exit_code == 1
+
+
+def test_main_ask_execute_confirmation_wrong_input_skips_action(monkeypatch) -> None:
+    """ask --execute skips write action when user confirmation input does not match."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+    mock_context.config = MagicMock()
+    mock_context.config.interactive_decision.default_agent = "codex"
+    mock_context.config.interactive_decision.default_output_dir = "logs/decisions"
+    mock_context.config.labels = MagicMock()
+    mock_context.config.prompts.default_phase = "execution"
+
+    fake_planner_stdout = (
+        '{"decision_id": "dec-test-wrong", '
+        '"user_prompt": "test", '
+        '"intent_summary": "Create issue", '
+        '"risk_level": "medium", '
+        '"actions": [{'
+        '"action_id": "A1", '
+        '"action_type": "create_issue_from_prd", '
+        '"title": "Create issue", '
+        '"rationale": "PRD is ready", '
+        '"parameters": {"prd_path": "tasks/pending/example.md", "ready": false}, '
+        '"writes_external_state": true, '
+        '"confirmation_required": true'
+        '}], "assumptions": [], "warnings": [], "requires_confirmation": true}'
+    )
+
+    mock_planner = MagicMock()
+    mock_planner.generate.return_value = MagicMock(
+        return_code=0,
+        stdout=fake_planner_stdout,
+    )
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "wrong-confirmation")
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_planner_runner",
+        return_value=mock_planner,
+    ), patch(
+        "backend.core.use_cases.interactive_decision.create_issue_from_prd"
+    ) as mock_create, patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+        exit_code = main(
+            [
+                "ask",
+                "create issue from PRD",
+                "--execute",
+                "--repo",
+                "/tmp/repo",
+            ]
+        )
+
+    assert exit_code == 1
+    mock_create.assert_not_called()

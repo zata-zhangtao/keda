@@ -9,9 +9,6 @@ cases.
 from __future__ import annotations
 
 import dataclasses
-import subprocess
-import sys
-import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -24,6 +21,7 @@ from backend.core.shared.models.agent_deliberation import (
     DeliberationConfig,
     DeliberationEvent,
 )
+from backend.core.shared.models.agent_decision import InteractiveDecisionConfig
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
@@ -46,6 +44,7 @@ from backend.core.shared.interfaces.runner_console import (
     IRunnerProcessSupervisor,
 )
 from backend.engines.agent_runner.repository_local import detect_git_repository_root
+from backend.engines.agent_runner.transcript_runner import create_transcript_runner
 from backend.infrastructure.config.registry_editor import TomlRegistryEditor
 from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentSettings,
@@ -66,12 +65,7 @@ from backend.infrastructure.console.process_supervisor import (
 from backend.infrastructure.github_client import GitHubCliClient
 from backend.infrastructure.persistence.console_store import SqliteConsoleStore
 from backend.infrastructure.logging.logger import logger
-from backend.infrastructure.process_runner import (
-    SubprocessRunner,
-    _format_timestamped_line,
-    run_filtered_claude_stream,
-    should_filter_claude_stream,
-)
+from backend.infrastructure.process_runner import SubprocessRunner
 from backend.engines.agent_runner.deliberation_outputs import (
     write_deliberation_outputs,
 )
@@ -84,6 +78,7 @@ __all__ = [
     "create_github_client",
     "create_process_runner",
     "create_transcript_runner",
+    "create_planner_runner",
     "get_agent_runner_settings",
     "get_agent_runner_status_data",
     "build_app_config",
@@ -148,6 +143,7 @@ def build_app_config_from_settings(
     generated_content = _build_generated_content_config(
         agent_runner_settings.generated_content
     )
+    interactive_decision = agent_runner_settings.interactive_decision
 
     return AppConfig(
         labels=LabelConfig(
@@ -215,6 +211,14 @@ def build_app_config_from_settings(
             ),
         ),
         generated_content=generated_content,
+        interactive_decision=InteractiveDecisionConfig(
+            enabled=interactive_decision.enabled,
+            default_agent=interactive_decision.default_agent,
+            default_output_dir=interactive_decision.default_output_dir,
+            planner_timeout_seconds=interactive_decision.planner_timeout_seconds,
+            max_context_chars=interactive_decision.max_context_chars,
+            allow_execute_yes=interactive_decision.allow_execute_yes,
+        ),
     )
 
 
@@ -446,6 +450,9 @@ def merge_repository_config(
     generated_content = _merge_generated_content_config(
         global_config.generated_content, repo_settings.generated_content
     )
+    interactive_decision = _merge_optional_model(
+        global_config.interactive_decision, repo_settings.interactive_decision
+    )
     return AppConfig(
         labels=labels,
         git=git,
@@ -457,6 +464,7 @@ def merge_repository_config(
         pre_push_review=pre_push_review,
         post_pr_supervisor=post_pr_supervisor,
         generated_content=generated_content,
+        interactive_decision=interactive_decision,
     )
 
 
@@ -747,6 +755,63 @@ def _build_content_generation_command(
     ]
 
 
+class SafePlannerContentGenerator(IContentGenerator):
+    """Generate decision plans via a verified read-only agent subprocess.
+
+    Only agents that can be run with a verifiably read-only command are
+    accepted.  Unsafe agents raise ``ValueError`` instead of silently
+    downgrading safety.
+    """
+
+    def __init__(self, process_runner: SubprocessRunner) -> None:
+        self._process_runner = process_runner
+
+    def generate(
+        self,
+        agent_name: str,
+        prompt: str,
+        *,
+        cwd: Path,
+        timeout: int | None = None,
+    ) -> CommandResult:
+        """Run a verified read-only planner and return its output."""
+        command = _build_planner_command(agent_name, prompt, cwd)
+        return self._process_runner.run(
+            command, cwd=cwd, capture_output=True, timeout=timeout, check=False
+        )
+
+
+def _build_planner_command(agent_name: str, prompt: str, cwd: Path) -> list[str]:
+    """Return a verified read-only command for the given planner agent.
+
+    Raises:
+        ValueError: If the agent does not have a safe read-only command builder.
+    """
+    if agent_name == "codex":
+        return [
+            "codex",
+            "--cd",
+            str(cwd),
+            "--sandbox",
+            "read-only",
+            "--ask-for-approval",
+            "never",
+            "exec",
+            prompt,
+        ]
+    raise ValueError(
+        f"Agent '{agent_name}' does not have a verified read-only command builder "
+        f"for interactive decision planning. Use 'codex' instead."
+    )
+
+
+def create_planner_runner(
+    process_runner: SubprocessRunner | None = None,
+) -> SafePlannerContentGenerator:
+    """Create a safe planner runner instance."""
+    return SafePlannerContentGenerator(process_runner or SubprocessRunner())
+
+
 def create_content_generator(
     process_runner: SubprocessRunner | None = None,
 ) -> SubprocessContentGenerator:
@@ -840,219 +905,6 @@ def build_deliberation_config_from_settings(
         default_output_dir=deliberation_settings.default_output_dir,
         profiles=profiles,
     )
-
-
-class SubprocessTranscriptRunner:
-    """Run agents and emit deliberation events.
-
-    Implements ``IAgentTranscriptRunner`` via duck typing.
-    """
-
-    def __init__(self, process_runner: SubprocessRunner) -> None:
-        self._process_runner = process_runner
-
-    def run(
-        self,
-        agent_name: str,
-        prompt: str,
-        *,
-        cwd: Path,
-        event_sink: "Callable[[DeliberationEvent], None]",
-        output_sink: "Callable[[str], None] | None" = None,
-        display_sink: "Callable[[str], None] | None" = None,
-    ) -> "CommandResult":
-        """Run an agent and emit events.
-
-        Streams agent stdout to the terminal in real time while
-        collecting it for the deliberation transcript. When
-        ``output_sink`` is provided, rendered text chunks are passed
-        to it as they arrive. When ``display_sink`` is provided, the
-        agent's stderr (its human-readable reasoning/tool log) is routed
-        to it for live display only, without being collected into the
-        transcript.
-        """
-        command = _build_deliberation_command(agent_name, prompt, cwd)
-        _ = event_sink
-        if should_filter_claude_stream(command):
-            # Pass the prompt via stdin to avoid "Argument list too long"
-            # when the transcript grows across rounds.
-            command_no_prompt = [arg for arg in command if arg != "-p"]
-            if command_no_prompt and command_no_prompt[-1] == prompt:
-                command_no_prompt = command_no_prompt[:-1]
-            completed = run_filtered_claude_stream(
-                command_no_prompt,
-                cwd=cwd,
-                timeout=None,
-                collect_stdout=True,
-                prompt_text=prompt,
-                output_sink=output_sink,
-                display_sink=display_sink,
-            )
-            return CommandResult(
-                command=tuple(command_no_prompt),
-                return_code=completed.returncode,
-                stdout=completed.stdout,
-                stderr="",
-            )
-        if agent_name in ("kimi", "codex"):
-            # Pass the prompt via stdin to avoid "Argument list too long"
-            # when the transcript grows across rounds.
-            return _run_agent_with_stdin_prompt(
-                command, prompt, cwd, output_sink=output_sink, display_sink=display_sink
-            )
-        process = subprocess.Popen(
-            list(command),
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
-        return_code, stdout_text = _relay_process_stdout(
-            process, output_sink=output_sink, display_sink=display_sink
-        )
-        return CommandResult(
-            command=tuple(command),
-            return_code=return_code,
-            stdout=stdout_text,
-            stderr="",
-        )
-
-
-def _run_agent_with_stdin_prompt(
-    command: list[str],
-    prompt: str,
-    cwd: Path,
-    output_sink: "Callable[[str], None] | None" = None,
-    display_sink: "Callable[[str], None] | None" = None,
-) -> CommandResult:
-    """Run an agent subprocess, passing the prompt via stdin."""
-    process = subprocess.Popen(
-        list(command),
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stdin=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-    )
-
-    def _write_stdin() -> None:
-        if process.stdin is not None:
-            try:
-                process.stdin.write(prompt)
-            except BrokenPipeError:
-                pass
-            process.stdin.close()
-
-    threading.Thread(target=_write_stdin, daemon=True).start()
-    return_code, stdout_text = _relay_process_stdout(
-        process, output_sink=output_sink, display_sink=display_sink
-    )
-    return CommandResult(
-        command=tuple(command),
-        return_code=return_code,
-        stdout=stdout_text,
-        stderr="",
-    )
-
-
-def _pump_stderr(
-    process: subprocess.Popen[str],
-    display_sink: "Callable[[str], None] | None",
-) -> None:
-    """Drain subprocess stderr, routing each line to the display sink.
-
-    Agents such as ``codex`` write their human-readable reasoning/tool log
-    to stderr. When a ``display_sink`` is present it shows those lines live
-    without collecting them into the transcript. With no sink we preserve
-    the prior behaviour of echoing stderr to the terminal.
-    """
-    if process.stderr is None:
-        return
-    for line in process.stderr:
-        if display_sink is not None:
-            display_sink(line)
-        else:
-            print(_format_timestamped_line(line), end="", file=sys.stderr)
-
-
-def _relay_process_stdout(
-    process: subprocess.Popen[str],
-    output_sink: "Callable[[str], None] | None" = None,
-    display_sink: "Callable[[str], None] | None" = None,
-) -> tuple[int, str]:
-    """Relay subprocess stdout to terminal and logger.
-
-    Stderr is drained on a background thread so the agent's reasoning/tool
-    log reaches ``display_sink`` (live view) without blocking stdout or
-    leaking raw onto the terminal and corrupting the live region.
-    """
-    stderr_thread: threading.Thread | None = None
-    if process.stderr is not None:
-        stderr_thread = threading.Thread(
-            target=_pump_stderr, args=(process, display_sink), daemon=True
-        )
-        stderr_thread.start()
-    stdout_lines: list[str] = []
-    try:
-        if process.stdout is not None:
-            for line in process.stdout:
-                stdout_lines.append(line)
-                if output_sink is not None:
-                    # The sink drives the live view and the workspace file;
-                    # avoid writing to stdout (would corrupt the live region).
-                    output_sink(line)
-                else:
-                    logger.info("%s", line.rstrip("\n"))
-                    timestamped = _format_timestamped_line(line)
-                    print(timestamped, end="")
-        return_code = process.wait(timeout=None)
-    except Exception:
-        process.kill()
-        process.wait()
-        raise
-    if stderr_thread is not None:
-        stderr_thread.join(timeout=5)
-    return return_code, "".join(stdout_lines)
-
-
-def _build_deliberation_command(agent_name: str, prompt: str, cwd: Path) -> list[str]:
-    if agent_name == "claude":
-        return [
-            "claude",
-            "--dangerously-skip-permissions",
-            "--verbose",
-            "-p",
-            "--output-format",
-            "stream-json",
-            "--include-partial-messages",
-            prompt,
-        ]
-    if agent_name == "kimi":
-        return ["kimi", "--quiet", "--input-format", "text"]
-    return [
-        "codex",
-        "--cd",
-        str(cwd.resolve()),
-        "--sandbox",
-        "read-only",
-        "--ask-for-approval",
-        "never",
-        "exec",
-    ]
-
-
-def create_transcript_runner(
-    process_runner: SubprocessRunner | None = None,
-) -> SubprocessTranscriptRunner:
-    """Create a transcript runner instance."""
-    return SubprocessTranscriptRunner(process_runner or SubprocessRunner())
 
 
 def create_event_sink(

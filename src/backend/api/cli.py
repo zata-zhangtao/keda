@@ -32,6 +32,7 @@ from backend.core.use_cases.run_agent_deliberation import (
     create_default_session_id,
     run_agent_deliberation,
 )
+from backend.core.use_cases.interactive_decision import run_interactive_decision
 from backend.core.use_cases.run_agent_repositories_once import (
     run_agent_repositories_once,
 )
@@ -52,6 +53,7 @@ from backend.engines.agent_runner.factory import (
     create_content_generator,
     create_event_sink,
     create_github_client,
+    create_planner_runner,
     create_process_runner,
     create_transcript_runner,
     get_agent_runner_settings,
@@ -193,31 +195,6 @@ def _ensure_gh_auth_or_prompt(
     raise SystemExit(1)
 
 
-def add_common_options(parser: argparse.ArgumentParser) -> None:
-    """Allow global options before or after the effective subcommand."""
-    parser.add_argument(
-        "--repo", default=argparse.SUPPRESS, help="Target repository path."
-    )
-    parser.add_argument(
-        "--repo-id", default=argparse.SUPPRESS, help="Target configured repository ID."
-    )
-    parser.add_argument(
-        "--config",
-        default=argparse.SUPPRESS,
-        help="Deprecated: config is loaded from config.toml and env vars.",
-    )
-
-
-def add_all_repositories_option(parser: argparse.ArgumentParser) -> None:
-    """Allow explicit multi-repository selection for configured repositories."""
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        dest="all_repositories",
-        help="Process all enabled configured repositories.",
-    )
-
-
 def _print_worktree_cleanup_result(cleanup_result: WorktreeCleanupResult) -> None:
     """Print a concise branch cleanup summary."""
     if not cleanup_result.branches:
@@ -272,239 +249,6 @@ def _resolve_cli_repository_targets(
         repo_path_override=repo_override,
         all_repositories=getattr(parsed, "all_repositories", False),
     )
-
-
-def build_parser() -> argparse.ArgumentParser:
-    """Build the CLI parser."""
-    parser = argparse.ArgumentParser(prog="iar")
-    parser.add_argument("--repo", default=None, help="Target repository path.")
-    parser.add_argument(
-        "--repo-id", default=None, help="Target configured repository ID."
-    )
-    parser.add_argument(
-        "--config",
-        help="Deprecated: config is loaded from config.toml and env vars.",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    init_parser = subparsers.add_parser(
-        "init", help="Create repository-local .iar.toml config."
-    )
-    init_parser.add_argument("--dry-run", action="store_true")
-    init_parser.add_argument("--force", action="store_true")
-    init_parser.add_argument("--id", dest="repository_id")
-    init_parser.add_argument("--display-name")
-    init_parser.add_argument("--remote")
-    init_parser.add_argument("--base-branch")
-
-    labels_parser = subparsers.add_parser("labels", help="Manage GitHub labels.")
-    labels_subparsers = labels_parser.add_subparsers(
-        dest="labels_command", required=True
-    )
-    labels_sync_parser = labels_subparsers.add_parser(
-        "sync", help="Sync standard labels to the repository."
-    )
-    add_common_options(labels_sync_parser)
-    add_all_repositories_option(labels_sync_parser)
-
-    issue_parser = subparsers.add_parser(
-        "issue", help="Create and manage GitHub Issues."
-    )
-    issue_subparsers = issue_parser.add_subparsers(dest="issue_command", required=True)
-    issue_create_parser = issue_subparsers.add_parser(
-        "create", help="Create a GitHub Issue from a PRD file."
-    )
-    issue_create_parser.set_defaults(command="issue create")
-    issue_create_parser.add_argument("prd_path")
-    issue_create_parser.add_argument(
-        "--type", choices=("feature", "refactor", "bug"), default="feature"
-    )
-    issue_create_parser.add_argument("--title")
-    issue_create_parser.add_argument(
-        "--ready",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Add the ready label so a runner can pick the Issue up.",
-    )
-    issue_create_parser.add_argument(
-        "--agent",
-        choices=("auto", "codex", "claude", "kimi", "none"),
-        default="auto",
-        help="Optional agent routing label to add to the Issue.",
-    )
-    issue_create_parser.add_argument(
-        "--publish-prd",
-        action="store_true",
-        help="Commit and push only the target PRD before adding the ready label.",
-    )
-    issue_create_parser.add_argument("--force", action="store_true")
-    issue_create_parser.add_argument(
-        "--group",
-        default="",
-        help="Task group name (materialised as task-group/<name> label).",
-    )
-    issue_create_parser.add_argument(
-        "--depends-on",
-        action="append",
-        type=int,
-        default=[],
-        help="Upstream Issue number this Issue depends on (repeatable).",
-    )
-    issue_create_parser.add_argument(
-        "--depends-on-group",
-        action="append",
-        type=str,
-        default=[],
-        help="Upstream group label this Issue depends on (repeatable).",
-    )
-    add_common_options(issue_create_parser)
-
-    run_parser = subparsers.add_parser("run")
-    run_parser.add_argument("--dry-run", action="store_true")
-    run_parser.add_argument(
-        "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
-    )
-    run_parser.add_argument("--max-issues", type=int)
-    add_common_options(run_parser)
-    add_all_repositories_option(run_parser)
-
-    daemon_parser = subparsers.add_parser("daemon")
-    daemon_parser.add_argument("--interval", type=int, default=None)
-    daemon_parser.add_argument(
-        "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
-    )
-    daemon_parser.add_argument("--max-issues", type=int)
-    add_common_options(daemon_parser)
-    add_all_repositories_option(daemon_parser)
-
-    review_parser = subparsers.add_parser("review")
-    review_parser.add_argument("--dry-run", action="store_true")
-    review_parser.add_argument(
-        "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
-    )
-    review_parser.add_argument("--max-issues", type=int)
-    add_common_options(review_parser)
-    add_all_repositories_option(review_parser)
-
-    review_daemon_parser = subparsers.add_parser("review-daemon")
-    review_daemon_parser.add_argument("--interval", type=int, default=None)
-    review_daemon_parser.add_argument(
-        "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
-    )
-    review_daemon_parser.add_argument("--max-issues", type=int)
-    add_common_options(review_daemon_parser)
-    add_all_repositories_option(review_daemon_parser)
-
-    recover_parser = subparsers.add_parser(
-        "recover",
-        help="Resume a failed publish operation for an Issue.",
-    )
-    recover_parser.add_argument(
-        "--issue",
-        type=int,
-        required=True,
-        help="Issue number to recover publish for.",
-    )
-    recover_parser.add_argument(
-        "--branch",
-        default=None,
-        help="Explicitly confirm the current branch name.",
-    )
-    add_common_options(recover_parser)
-
-    blocked_continue_parser = subparsers.add_parser(
-        "blocked-continue",
-        help="Resume a blocked Issue after resolving forbidden paths.",
-    )
-    blocked_continue_parser.add_argument(
-        "--issue",
-        type=int,
-        required=True,
-        help="Issue number to continue.",
-    )
-    blocked_continue_parser.add_argument(
-        "--agent",
-        choices=("auto", "codex", "claude", "kimi"),
-        default="auto",
-        help="Agent runner to use.",
-    )
-    add_common_options(blocked_continue_parser)
-
-    deliberate_parser = subparsers.add_parser(
-        "deliberate", help="Run a multi-agent deliberation session."
-    )
-    deliberate_parser.add_argument(
-        "prompt", help="The requirement or question to deliberate."
-    )
-    deliberate_parser.add_argument(
-        "--agents",
-        default="architect,skeptic,implementer",
-        help="Comma-separated participant profile IDs.",
-    )
-    deliberate_parser.add_argument(
-        "--rounds", type=int, default=None, help="Number of discussion rounds."
-    )
-    deliberate_parser.add_argument(
-        "--synthesizer", default=None, help="Agent to run synthesis."
-    )
-    deliberate_parser.add_argument(
-        "--output",
-        default=None,
-        help="Output directory for deliberation files.",
-    )
-    deliberate_parser.add_argument(
-        "--session-id", default=None, help="Optional session ID for reproducibility."
-    )
-    add_common_options(deliberate_parser)
-
-    worktree_parser = subparsers.add_parser(
-        "worktree",
-        help="Manage iAR-owned Git worktrees for the current repository.",
-    )
-    worktree_subparsers = worktree_parser.add_subparsers(
-        dest="worktree_command", required=True
-    )
-    worktree_create_parser = worktree_subparsers.add_parser(
-        "create", help="Create a worktree at .iar-worktrees/<branch>."
-    )
-    worktree_create_parser.add_argument(
-        "--branch", required=True, help="Branch name to create."
-    )
-    worktree_create_parser.add_argument(
-        "--base-branch", required=True, help="Existing branch to fork from."
-    )
-    worktree_path_parser = worktree_subparsers.add_parser(
-        "path", help="Print the absolute worktree path for a branch."
-    )
-    worktree_path_parser.add_argument(
-        "--branch", required=True, help="Branch name to resolve."
-    )
-    worktree_remove_parser = worktree_subparsers.add_parser(
-        "remove", help="Remove a worktree and prune Git metadata."
-    )
-    worktree_remove_parser.add_argument(
-        "--branch", required=True, help="Branch name whose worktree to remove."
-    )
-    worktree_cleanup_parser = worktree_subparsers.add_parser(
-        "cleanup",
-        help="Delete stale local issue branches whose Issue is closed.",
-    )
-    worktree_cleanup_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview cleanup without deleting anything.",
-    )
-    worktree_cleanup_parser.add_argument(
-        "--yes",
-        action="store_true",
-        help="Actually delete eligible branches and worktrees.",
-    )
-    worktree_cleanup_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Also delete dirty or unmerged eligible branches.",
-    )
-    return parser
 
 
 def _resolve_run_trigger(command_kind: str) -> str:
@@ -921,6 +665,61 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 logger.error("blocked-continue failed: %s", exc)
                 error_console.print(f"[red]blocked-continue failed:[/] {exc}")
                 return 1
+
+        if parsed.command == "ask":
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
+                repo_id=repo_id,
+                repo_override=repo_override,
+            )
+            if len(contexts) != 1:
+                logger.error(
+                    "ask requires exactly one target repository. "
+                    "Use --repo or --repo-id to specify."
+                )
+                return 1
+            context = contexts[0]
+            _ensure_gh_auth_or_prompt(context.repo_path, process_runner)
+            github_client = create_github_client(context.repo_path, process_runner)
+            planner_runner = create_planner_runner(process_runner)
+            content_generator = create_content_generator(process_runner)
+            agent = parsed.agent
+            if agent == "auto":
+                agent = context.config.interactive_decision.default_agent
+            output_dir = None
+            if parsed.output:
+                output_dir = Path(parsed.output)
+            deliberation_config = build_deliberation_config_from_settings(
+                runner_settings
+            )
+            transcript_runner = create_transcript_runner(process_runner)
+            output_view = create_output_view()
+            event_sink = create_event_sink(
+                Path(context.config.interactive_decision.default_output_dir),
+                output_view,
+            )
+            return run_interactive_decision(
+                user_prompt=parsed.prompt,
+                context=context,
+                config=context.config.interactive_decision,
+                agent=agent,
+                plan_only=parsed.plan_only,
+                execute=parsed.execute,
+                auto_confirm=parsed.yes,
+                output_dir=output_dir,
+                planner_runner=planner_runner,
+                github_client=github_client,
+                process_runner=process_runner,
+                content_generator=content_generator,
+                github_client_factory=github_client_factory,
+                deliberation_deps={
+                    "config": deliberation_config,
+                    "transcript_runner": transcript_runner,
+                    "event_sink": event_sink,
+                    "output_view": output_view,
+                },
+            )
 
         if parsed.command == "deliberate":
             deliberation_settings = runner_settings.deliberation

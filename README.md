@@ -117,6 +117,29 @@ iar run --all
 iar daemon
 ```
 
+### 自然语言决策入口（`iar ask`）
+
+`iar ask` 是一个受限自然语言决策入口。默认只生成计划并写入审计文件，不执行任何副作用：
+
+```bash
+# 默认只输出计划
+uv run iar ask "帮我判断现在应该创建 issue 还是启动任务"
+
+# 显式指定 planner agent（默认 codex）
+uv run iar ask "从 pending PRD 中挑一个最适合创建 issue 的任务" --agent codex
+
+# 只打印计划，适合 CI 验证
+uv run iar ask "现在可以跑一个 ready issue 吗" --plan-only
+
+# 进入确认执行流程（TTY 中要求输入 decision_id）
+uv run iar ask "从 tasks/pending/example.md 创建 issue" --execute
+
+# 非交互执行（仅允许 low/medium 风险动作）
+uv run iar ask "运行一次 dry-run 看看 ready 队列" --execute --yes
+```
+
+白名单动作包括：`show_status`、`run_deliberation`、`create_issue_from_prd`、`mark_issue_ready`、`run_once_dry_run`、`run_once`、`review_once_dry_run`、`review_once`、`needs_clarification`、`no_op`。禁止动作包括 `git_push`、`git_merge`、`daemon`、任意 shell 命令等。Planner agent 必须通过可验证只读命令运行；目前仅 `codex` 被验证为安全。
+
 ### 清理已关闭 Issue 的本地分支
 
 `iar worktree cleanup` 用于清理本地遗留的 `issue-<number>` 分支及
