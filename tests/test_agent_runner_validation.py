@@ -462,10 +462,10 @@ def test_ensure_no_evidence_paths_in_changes_blocks_leak(tmp_path: Path) -> None
     """Evidence paths in the diff refuse publication."""
     fake_runner = FakeProcessRunner(
         responses={
-            ("git", "status", "--porcelain"): CommandResult(
-                command=("git", "status", "--porcelain"),
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                command=("git", "status", "--porcelain", "-z"),
                 return_code=0,
-                stdout="A  .iar/evidence/rv-1.png\nM  src/app.py\n",
+                stdout="A  .iar/evidence/rv-1.png\0M  src/app.py\0",
                 stderr="",
             )
         }

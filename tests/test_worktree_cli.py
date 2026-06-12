@@ -147,6 +147,123 @@ def test_iar_worktree_path_cli_real_entry(
     assert captured.out.strip() == expected
 
 
+def test_iar_worktree_create_cli_copies_missing_env_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``iar worktree create`` must carry gitignored ``.env*`` files over.
+
+    ``git worktree add`` only materializes tracked files, so without the
+    copy step every fresh worktree is born without ``.env`` and agent
+    commands that read worktree-local env files break.
+    """
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / ".gitignore").write_text(".env*\n!.env*.example\n", encoding="utf-8")
+    (repo_path / ".env.example").write_text("EXAMPLE=tracked\n", encoding="utf-8")
+    _run_git(repo_path, "add", ".gitignore", ".env.example")
+    _run_git(repo_path, "commit", "-m", "track env example")
+    (repo_path / ".env").write_text("SECRET=1\n", encoding="utf-8")
+    nested_env_path = repo_path / "tests" / "playwright-e2e" / ".env"
+    nested_env_path.parent.mkdir(parents=True)
+    nested_env_path.write_text("E2E=1\n", encoding="utf-8")
+
+    monkeypatch.chdir(repo_path)
+    exit_code = main(
+        ["worktree", "create", "--branch", "cli-env", "--base-branch", "main"]
+    )
+
+    assert exit_code == 0
+    worktree_path = repo_path / WORKTREE_DIR_NAME / "cli-env"
+    assert (worktree_path / ".env").read_text(encoding="utf-8") == "SECRET=1\n"
+    assert (worktree_path / "tests" / "playwright-e2e" / ".env").read_text(
+        encoding="utf-8"
+    ) == "E2E=1\n"
+    # The tracked example file comes from git itself, not the copy step.
+    assert (worktree_path / ".env.example").read_text(
+        encoding="utf-8"
+    ) == "EXAMPLE=tracked\n"
+    # Copied env files are gitignored, so the worktree must stay clean —
+    # otherwise `iar worktree cleanup` would refuse to delete it later.
+    status_result = _run_git(worktree_path, "status", "--porcelain")
+    assert status_result.stdout.strip() == ""
+
+
+def test_create_or_reuse_worktree_heals_env_files_on_reuse(
+    tmp_path: Path,
+) -> None:
+    """Reusing an existing env-less worktree backfills missing env files.
+
+    Worktrees created before the env-copy fix exist on disk without
+    ``.env``; the next ``iar run`` that reuses them must heal the gap
+    instead of leaving them broken forever.
+    """
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / ".gitignore").write_text(".env*\n", encoding="utf-8")
+    _run_git(repo_path, "add", ".gitignore")
+    _run_git(repo_path, "commit", "-m", "ignore env files")
+    (repo_path / ".env").write_text("SECRET=1\n", encoding="utf-8")
+    manager = WorktreeManager(repo_path, SubprocessRunner())
+    worktree_path = manager.create(branch="issue-42", base_branch="main")
+    assert not (worktree_path / ".env").exists()
+
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="false",
+            reuse_command="true",
+            path_command=f"echo {worktree_path}",
+            base_branch="main",
+        )
+    )
+    issue = IssueSummary(
+        number=42,
+        title="demo",
+        url="https://example/issues/42",
+        body="",
+        labels=(),
+    )
+    resolved_worktree_path = create_or_reuse_worktree(
+        repo_path, issue, config, SubprocessRunner()
+    )
+
+    assert resolved_worktree_path == worktree_path.resolve()
+    assert (worktree_path / ".env").read_text(encoding="utf-8") == "SECRET=1\n"
+
+
+def test_create_or_reuse_worktree_anchors_relative_path_output_to_repo(
+    tmp_path: Path,
+) -> None:
+    """A relative ``path_command`` output must anchor to the repo, not cwd.
+
+    ``path_command`` runs with ``cwd=repo_path``; before the fix a relative
+    stdout was resolved against the daemon process cwd, pointing at a
+    directory that does not exist (or worse, the wrong repository).
+    """
+    repo_path = _init_git_repository(tmp_path, "target")
+    manager = WorktreeManager(repo_path, SubprocessRunner())
+    worktree_path = manager.create(branch="issue-77", base_branch="main")
+
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="false",
+            reuse_command="true",
+            path_command=f"echo {WORKTREE_DIR_NAME}/issue-77",
+            base_branch="main",
+        )
+    )
+    issue = IssueSummary(
+        number=77,
+        title="demo",
+        url="https://example/issues/77",
+        body="",
+        labels=(),
+    )
+
+    resolved_worktree_path = create_or_reuse_worktree(
+        repo_path, issue, config, SubprocessRunner()
+    )
+
+    assert resolved_worktree_path == worktree_path.resolve()
+
+
 def test_create_or_reuse_worktree_fails_fast_on_missing_path(
     tmp_path: Path,
 ) -> None:

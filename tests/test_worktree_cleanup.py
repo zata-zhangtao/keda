@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -106,6 +107,34 @@ def test_cleanup_deletes_clean_merged_closed_issue_branch(tmp_path: Path) -> Non
     assert cleanup_result.branches[0].status is WorktreeCleanupStatus.DELETED
     assert "issue-8" not in _local_branch_names(repo_path)
     assert not worktree_path.exists()
+
+
+def test_cleanup_handles_manually_deleted_worktree_directory(
+    tmp_path: Path,
+) -> None:
+    """A manually removed worktree directory must not crash the cleanup run.
+
+    The stale entry still shows up in ``git worktree list --porcelain``
+    (as prunable); running ``git status`` with the missing directory as
+    cwd would raise OSError. Cleanup must instead treat it as clean,
+    remove the stale registration, and delete the branch.
+    """
+    repo_path = _init_remote_backed_repository(tmp_path)
+    worktree_path = _create_issue_worktree(repo_path, 31)
+    shutil.rmtree(worktree_path)
+    github_client = _closed_issue_client(31)
+
+    cleanup_result = cleanup_iar_worktrees(
+        WorktreeCleanupRequest(repo_path=repo_path, dry_run=False),
+        github_client=github_client,
+        process_runner=SubprocessRunner(),
+    )
+
+    assert cleanup_result.deleted_count == 1
+    assert cleanup_result.branches[0].status is WorktreeCleanupStatus.DELETED
+    assert "issue-31" not in _local_branch_names(repo_path)
+    worktree_list_result = _run_git(repo_path, "worktree", "list", "--porcelain")
+    assert str(worktree_path) not in worktree_list_result.stdout
 
 
 def test_cleanup_skips_dirty_worktree_by_default(tmp_path: Path) -> None:

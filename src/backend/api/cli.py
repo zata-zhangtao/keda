@@ -45,6 +45,7 @@ from backend.core.use_cases.worktree_cleanup import (
     WorktreeCleanupStatus,
     cleanup_iar_worktrees,
 )
+from backend.core.use_cases.worktree_env import copy_missing_env_files
 from backend.core.shared.models.agent_deliberation import DeliberationSession
 from backend.core.shared.models.agent_runner import LabelConfig
 from backend.engines.agent_runner.factory import (
@@ -337,7 +338,18 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             return 1
         manager = build_worktree_manager(repo_root_path, process_runner)
         if parsed.worktree_command == "create":
-            manager.create(branch=parsed.branch, base_branch=parsed.base_branch)
+            created_worktree_path = manager.create(
+                branch=parsed.branch, base_branch=parsed.base_branch
+            )
+            copied_env_paths = copy_missing_env_files(
+                repo_root_path, created_worktree_path
+            )
+            if copied_env_paths:
+                logger.info(
+                    "Copied %d missing env file(s) into worktree %s",
+                    len(copied_env_paths),
+                    created_worktree_path,
+                )
             return 0
         if parsed.worktree_command == "path":
             print(str(manager.worktree_path(parsed.branch)))

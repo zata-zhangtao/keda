@@ -305,6 +305,13 @@ def _issue_is_closed(
 
 
 def _worktree_has_changes(worktree_path: Path, process_runner: IProcessRunner) -> bool:
+    # A manually deleted worktree directory still appears in
+    # `git worktree list --porcelain` (as prunable). Running git with the
+    # missing directory as cwd would raise OSError and abort the whole
+    # cleanup run; treat it as clean so deletion proceeds and
+    # `git worktree remove` clears the stale registration.
+    if not worktree_path.exists():
+        return False
     status_result = process_runner.run(
         ["git", "status", "--porcelain"],
         cwd=worktree_path,

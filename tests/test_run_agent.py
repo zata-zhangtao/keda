@@ -986,10 +986,10 @@ def test_validate_safe_changes_rejects_forbidden_path(tmp_path: Path) -> None:
 
     fake_runner = FakeProcessRunner(
         responses={
-            ("git", "status", "--porcelain"): CommandResult(
-                command=("git", "status", "--porcelain"),
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                command=("git", "status", "--porcelain", "-z"),
                 return_code=0,
-                stdout=" M .env\n",
+                stdout=" M .env\0",
                 stderr="",
             ),
         }
@@ -1714,6 +1714,12 @@ def test_commit_requested_changes_rejects_forbidden_paths(tmp_path: Path) -> Non
                 command=("git", "status", "--porcelain"),
                 return_code=0,
                 stdout=" M .env\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                command=("git", "status", "--porcelain", "-z"),
+                return_code=0,
+                stdout=" M .env\0",
                 stderr="",
             ),
         }

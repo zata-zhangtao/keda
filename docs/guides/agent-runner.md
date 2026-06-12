@@ -398,6 +398,18 @@ include_diff_stat = true
 
 历史命令 `iar run-once`、`iar review-once`、`iar issue-from-prd` 和 `iar recover-publish` 已被删除；请改用 `iar run` / `iar review` / `iar issue create` / `iar recover`。
 
+## worktree 中的本地 env 文件
+
+`git worktree add` 只会物化被 Git 跟踪的文件，gitignored 的 `.env*`（密钥、本地配置）不会自动出现在新 worktree 里。为此 runner 在 worktree 创建/复用后会自动补齐缺失的 env 文件：
+
+- `iar worktree create` 和 `iar run` 的 create/reuse 流程都会把主仓库目录下的 `.env*` 文件按相对路径复制到 worktree（含子目录，如 `tests/playwright-e2e/.env`）
+- 只复制 worktree 中**缺失**的文件：被跟踪的 `.env*.example` 与 worktree 内已修改的 `.env` 永远不会被覆盖
+- 复用已有 worktree 时同样补齐（旧 worktree 缺 `.env` 的，下一次 `iar run` 会自动治愈）
+- 扫描会跳过 `.git`、`.iar-worktrees`、`.venv`、`node_modules` 等目录，避免把其他 worktree 的 env 文件复制串
+- 与旧的 `just worktree` 脚本不同，这里**不会**用 `.env.example` 兜底生成 `.env`：用示例值静默跑测试比明确的缺配置失败更危险
+- 复制是 best effort：单个文件失败（如悬空 symlink）只记日志，不会中断 agent run
+- 复制过来的文件保持 gitignored 状态，不会让 worktree 变脏，也不影响 `iar worktree cleanup` 的默认清理判定
+
 ## 清理 stale issue worktree
 
 当 Issue 对应的 PR 合并并删除远端分支后，本地可能仍保留 `issue-<number>` 分支和 `.iar-worktrees/issue-<number>`。可以用 `iar worktree cleanup` 做一次安全清理：

@@ -63,19 +63,35 @@ def has_changes(worktree_path: Path, process_runner: IProcessRunner) -> bool:
 def list_changed_paths(
     worktree_path: Path, process_runner: IProcessRunner
 ) -> list[str]:
-    """List changed paths in a worktree."""
+    """List changed paths in a worktree.
+
+    Uses NUL-separated ``--porcelain -z`` output so paths containing
+    non-ASCII or special characters arrive verbatim. Plain ``--porcelain``
+    C-quotes such paths (``"secrets/\\345\\257\\206..."``), and the quoted
+    text would slip past the fnmatch-based forbidden-path safety checks.
+    """
     status_result = process_runner.run(
-        ["git", "status", "--porcelain"], cwd=worktree_path
+        ["git", "status", "--porcelain", "-z"], cwd=worktree_path
     )
+    status_tokens = status_result.stdout.split("\0")
     changed_paths: list[str] = []
-    for status_line in status_result.stdout.splitlines():
-        if not status_line:
+    token_index = 0
+    while token_index < len(status_tokens):
+        status_entry = status_tokens[token_index]
+        token_index += 1
+        # Minimum entry is "XY p": two status chars, a space, one path char.
+        if len(status_entry) < 4:
             continue
-        raw_path_text = status_line[3:]
-        if " -> " in raw_path_text:
-            changed_paths.extend(raw_path_text.split(" -> ", maxsplit=1))
-        else:
-            changed_paths.append(raw_path_text)
+        status_code = status_entry[:2]
+        changed_paths.append(status_entry[3:])
+        # Renames/copies emit the source path as the next NUL token.
+        if ("R" in status_code or "C" in status_code) and token_index < len(
+            status_tokens
+        ):
+            rename_source_path = status_tokens[token_index]
+            token_index += 1
+            if rename_source_path:
+                changed_paths.append(rename_source_path)
     return changed_paths
 
 

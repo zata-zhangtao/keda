@@ -177,7 +177,13 @@ def _find_worktree_path_for_issue(
         format_command(config.worktree.path_command, issue_number=issue.number),
         cwd=repo_path,
     )
-    worktree_path = Path(path_result.stdout.strip()).resolve()
+    # path_command runs with cwd=repo_path, so a relative output must be
+    # anchored there too — bare resolve() would anchor it to the daemon
+    # process cwd instead.
+    worktree_path_output = Path(path_result.stdout.strip())
+    if not worktree_path_output.is_absolute():
+        worktree_path_output = repo_path / worktree_path_output
+    worktree_path = worktree_path_output.resolve()
     if not worktree_path.exists():
         raise FileNotFoundError(
             "worktree path does not exist (path_command output): "

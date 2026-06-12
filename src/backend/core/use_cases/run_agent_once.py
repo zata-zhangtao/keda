@@ -94,6 +94,7 @@ from backend.core.use_cases.agent_runner_validation import (
     ensure_validation_evidence_ready,
     format_validation_evidence_failure,
 )
+from backend.core.use_cases.worktree_env import copy_missing_env_files
 
 _logger = logging.getLogger(__name__)
 
@@ -216,6 +217,12 @@ def create_or_reuse_worktree(
     exist. If it does not, a :class:`FileNotFoundError` is raised that
     carries the three commands' return codes and stdout excerpts so the
     next engineer can see exactly which step went wrong.
+
+    Finally, gitignored ``.env*`` files missing from the worktree are
+    copied over from the main checkout (``git worktree add`` never
+    materializes them), so agent commands that read worktree-local env
+    files see the same configuration as the main checkout. Reused
+    worktrees are healed the same way; existing files are not touched.
     """
     create_result = process_runner.run(
         format_command(
@@ -241,7 +248,13 @@ def create_or_reuse_worktree(
         format_command(config.worktree.path_command, issue_number=issue.number),
         cwd=repo_path,
     )
-    worktree_path = Path(path_result.stdout.strip()).resolve()
+    # path_command runs with cwd=repo_path, so a relative output must be
+    # anchored there too — bare resolve() would anchor it to the daemon
+    # process cwd instead.
+    worktree_path_output = Path(path_result.stdout.strip())
+    if not worktree_path_output.is_absolute():
+        worktree_path_output = repo_path / worktree_path_output
+    worktree_path = worktree_path_output.resolve()
     if not worktree_path.exists():
         raise FileNotFoundError(
             "worktree path does not exist after create/reuse/path pipeline: "
@@ -254,6 +267,14 @@ def create_or_reuse_worktree(
         )
     # 证据目录本地排除：截图/输出证据永远不进代码 diff。
     ensure_evidence_dir_excluded(worktree_path, config, process_runner)
+    copied_env_paths = copy_missing_env_files(repo_path, worktree_path)
+    if copied_env_paths:
+        _logger.info(
+            "Copied %d missing env file(s) into worktree %s: %s",
+            len(copied_env_paths),
+            worktree_path,
+            ", ".join(str(env_path) for env_path in copied_env_paths),
+        )
     return worktree_path
 
 
