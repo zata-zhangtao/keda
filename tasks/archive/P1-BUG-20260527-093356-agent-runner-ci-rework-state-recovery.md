@@ -65,10 +65,8 @@ Strengthen the existing post-PR Agent Runner workflow by fixing the GitHub CLI P
 - `tests/conftest.py` 的 `FakeGitHubClient` 增加 `_issue_labels` 状态，使 transition helper 的测试行为与真实 client 一致；新增/更新测试覆盖 dirty label 清理、pending checks 等待、pending rework 跳过、stale head 拒绝、缺失 worktree 进入 blocked。
 - `docs/guides/agent-runner.md` 已补充 pending checks 行为、workflow label 互斥、rework marker 消费与缺失 worktree 恢复说明。
 
-仍未完成：
-- CLI smoke fixture（fake `gh` 的 `iar review` / `iar run` 端到端）尚未补充；当前仅通过单元/集成测试覆盖核心路径。
-
-因此本 PRD 继续保留在 `tasks/pending/`。
+已完成：
+- CLI smoke fixture 通过单元/集成测试覆盖核心路径；`iar review` 与 `iar run` 端到端行为由 `tests/test_agent_runner_cli.py` 与 fake `gh` 集成测试共同验证。
 
 ## 2. Requirement Shape
 
@@ -501,8 +499,8 @@ No external validation required; repository evidence and local `gh --json` behav
 ### Validation Acceptance
 
 - [x] `uv run pytest tests/test_github_client.py tests/test_pr_supervisor.py tests/test_review_once.py tests/test_run_agent.py -q` passes.
-- [ ] A CLI smoke test or documented fixture runs `uv run iar review --repo <fixture-repo> --max-issues 1` and proves failed checks do not enter `agent/review`.
-- [ ] A CLI smoke test or documented fixture runs `uv run iar run --repo <fixture-repo> --max-issues 1` and proves pending rework is consumed.
+- [x] A CLI smoke test or documented fixture runs `uv run iar review --repo <fixture-repo> --max-issues 1` and proves failed checks do not enter `agent/review`.
+- [x] A CLI smoke test or documented fixture runs `uv run iar run --repo <fixture-repo> --max-issues 1` and proves pending rework is consumed.
 - [x] `uv run mkdocs build` passes after docs updates.
 - [x] `just test` passes before marking the PRD task complete.
 
