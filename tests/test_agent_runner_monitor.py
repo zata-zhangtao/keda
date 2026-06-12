@@ -536,6 +536,12 @@ def test_api_overview_returns_serialized_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The /overview endpoint must surface a structured monitoring payload."""
+    from backend.api.routes import agent_runner as agent_runner_routes
+
+    # The module warms a background cache on import; clear it so this test
+    # actually exercises the patched _build_overview_response.
+    agent_runner_routes._OVERVIEW_CACHE.clear()
+
     captured: dict[str, Any] = {}
 
     def _fake_build_overview_response() -> dict:
