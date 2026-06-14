@@ -190,6 +190,8 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "validation.branch_prefix": "orphan 证据分支前缀",
     "validation.evidence_format_check": "是否逐项检查证据文件格式",
     "validation.parse_evidence_format_with_agent": "是否用 agent 解析 PRD 中的格式要求",
+    "validation.language": "证据 prompt 与 PR 评论的固定标签语言，如 zh-CN / en-US",
+    "validation.structured_evidence": "是否要求带 iar:structured-evidence marker 的 Issue 提供 evidence.json manifest",
     "prompts.default_phase": "默认使用的 prompt 阶段",
     "prompts.phases": "自定义阶段模板，值为字符串或字符串列表",
     "pre_push_review.enabled": "是否启用提交前 AI review",

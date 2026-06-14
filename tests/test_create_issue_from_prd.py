@@ -929,3 +929,95 @@ def test_build_issue_body_falls_back_to_first_h2_section() -> None:
     assert "Background content here." in body
     assert "## Summary" in body
     assert "- PRD path: `tasks/example.md`" in body
+
+
+def test_create_issue_from_prd_materializes_structured_evidence_marker(
+    tmp_path: Path,
+) -> None:
+    """PRDs with Realistic Validation produce the structured evidence marker."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "tasks" / "pending" / "structured.md"
+    prd.parent.mkdir(parents=True)
+    prd.write_text(
+        "# PRD: Structured\n\n"
+        "### Realistic Validation\n\n"
+        "- [ ] Item A\n"
+        "- [ ] Item B\n",
+        encoding="utf-8",
+    )
+
+    create_issue_from_prd(
+        request=_request(repo, Path("tasks/pending/structured.md")),
+        github_client=fake_client,
+    )
+
+    create_call = next(c for c in fake_client.calls if c["method"] == "create_issue")
+    assert (
+        '<!-- iar:structured-evidence version=1 language="zh-CN" -->'
+        in create_call["body"]
+    )
+
+
+def test_create_issue_from_prd_honors_validation_language(
+    tmp_path: Path,
+) -> None:
+    """The structured evidence marker reflects the configured validation language."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "tasks" / "pending" / "structured.md"
+    prd.parent.mkdir(parents=True)
+    prd.write_text(
+        "# PRD: Structured\n\n" "### Realistic Validation\n\n" "- [ ] Item A\n",
+        encoding="utf-8",
+    )
+
+    create_issue_from_prd(
+        request=_request(
+            repo,
+            Path("tasks/pending/structured.md"),
+            validation_language="en-US",
+        ),
+        github_client=fake_client,
+    )
+
+    create_call = next(c for c in fake_client.calls if c["method"] == "create_issue")
+    assert (
+        '<!-- iar:structured-evidence version=1 language="en-US" -->'
+        in create_call["body"]
+    )
+
+
+def test_create_issue_from_prd_skips_marker_when_structured_evidence_disabled(
+    tmp_path: Path,
+) -> None:
+    """When structured evidence is disabled, no marker is materialized."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "tasks" / "pending" / "structured.md"
+    prd.parent.mkdir(parents=True)
+    prd.write_text(
+        "# PRD: Structured\n\n" "### Realistic Validation\n\n" "- [ ] Item A\n",
+        encoding="utf-8",
+    )
+
+    create_issue_from_prd(
+        request=_request(
+            repo,
+            Path("tasks/pending/structured.md"),
+            structured_evidence=False,
+        ),
+        github_client=fake_client,
+    )
+
+    create_call = next(c for c in fake_client.calls if c["method"] == "create_issue")
+    assert "iar:structured-evidence" not in create_call["body"]

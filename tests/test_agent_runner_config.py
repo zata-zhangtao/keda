@@ -536,3 +536,81 @@ def test_require_iar_repository_initialized_rejects_missing_agent_runner_section
     with pytest.raises(IARRepositoryNotInitializedError) as exc_info:
         require_iar_repository_initialized(repo_path)
     assert str(repo_path / ".iar.toml") in str(exc_info.value)
+
+
+def test_merge_repository_config_inherits_generated_content() -> None:
+    """Unoverridden generated_content fields should inherit from global config."""
+    from backend.engines.agent_runner.factory import merge_repository_config
+
+    global_config = AppConfig(
+        generated_content=AgentRunnerGeneratedContentSettings(
+            enabled=True,
+            max_input_chars=10000,
+            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
+                enabled=True, mode="template", title_template="global"
+            ),
+        )
+    )
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        generated_content=AgentRunnerGeneratedContentSettings(
+            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
+                title_template="repo"
+            ),
+        ),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.generated_content.enabled is True
+    assert merged.generated_content.max_input_chars == 10000
+    assert merged.generated_content.issue_from_prd.title_template == "repo"
+    assert merged.generated_content.issue_from_prd.mode == "template"
+
+
+def test_build_app_config_maps_validation_language_and_structured_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validation language and structured-evidence flags reach the core config."""
+    from backend.infrastructure.config.settings import AgentRunnerValidationSettings
+
+    original_loader = settings_module._load_toml_section_data
+
+    def load_empty_agent_runner(section_name: str) -> dict[str, object]:
+        if section_name == "agent_runner":
+            return {}
+        return original_loader(section_name)
+
+    monkeypatch.setattr(
+        settings_module, "_load_toml_section_data", load_empty_agent_runner
+    )
+
+    settings = AgentRunnerSettings(
+        validation=AgentRunnerValidationSettings(
+            language="en-US", structured_evidence=False
+        )
+    )
+    app_config = build_app_config_from_settings(settings)
+    assert app_config.validation.language == "en-US"
+    assert app_config.validation.structured_evidence is False
+
+
+def test_merge_repository_config_overrides_validation_language(
+    tmp_path: Path,
+) -> None:
+    """Repository-local .iar.toml can override validation language."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "target-local"
+
+[agent_runner.validation]
+language = "en-US"
+structured_evidence = false
+""",
+    )
+    settings = _make_settings()
+    contexts = resolve_repository_targets(settings, repo_path_override=str(repo_path))
+    assert len(contexts) == 1
+    assert contexts[0].config.validation.language == "en-US"
+    assert contexts[0].config.validation.structured_evidence is False

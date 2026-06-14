@@ -468,6 +468,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                         getattr(parsed, "depends_on_group", []) or []
                     ),
                     parse_evidence_format_with_agent=context.config.validation.parse_evidence_format_with_agent,
+                    validation_language=context.config.validation.language,
+                    structured_evidence=context.config.validation.structured_evidence,
                 ),
                 github_client=github_client,
                 process_runner=process_runner,

@@ -47,6 +47,16 @@ from backend.core.use_cases.agent_runner_evidence_format import (
     extract_evidence_format_markers as extract_evidence_format_markers,
 )
 from backend.core.use_cases.agent_runner_git import list_changed_paths
+from backend.core.use_cases.agent_runner_structured_evidence import (
+    EvidenceUpload,
+    ValidationEvidenceError,
+    build_evidence_blob_url,
+    build_structured_evidence_prompt_suffix,
+    format_structured_evidence_marker,
+    has_structured_evidence_marker,
+    render_structured_evidence_comment,
+    validate_evidence_manifest,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -91,10 +101,6 @@ _INLINE_TEXT_SUFFIXES = {".txt", ".log", ".md", ".out"}
 _MAX_INLINE_EVIDENCE_CHARS = 3000
 
 
-class ValidationEvidenceError(RuntimeError):
-    """Raised when required Realistic Validation evidence is missing."""
-
-
 @dataclass(frozen=True)
 class ValidationChecklistState:
     """Parsed state of the PR body Realistic Validation checklist."""
@@ -102,15 +108,6 @@ class ValidationChecklistState:
     total: int
     checked_count: int
     unchecked_count: int
-
-
-@dataclass(frozen=True)
-class EvidenceUpload:
-    """Result of pushing evidence files to the orphan evidence branch."""
-
-    branch: str
-    commit_sha: str
-    file_names: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -246,23 +243,39 @@ def build_issue_validation_section(
     checklist_items: list[str],
     waiver_reason: str | None,
     format_waiver_reason: str | None = None,
+    language: str = "zh-CN",
+    structured_evidence: bool = True,
 ) -> str:
     """Build the deterministic ``## Realistic Validation`` Issue body block.
 
     与 AI 生成正文无关的确定性物化：waiver 优先（出现 marker、无清单），
     否则输出未勾选清单与证据要求说明；PRD 声明了 Evidence Format Waiver
     时附带格式豁免 marker（证据仍必须存在，仅跳过逐项格式对账）。
+
+    当 ``structured_evidence`` 为 true 且存在 checklist 时，在区块开头附加
+    ``iar:structured-evidence`` hidden marker。
     """
+    structured_marker = ""
+    if structured_evidence and checklist_items and waiver_reason is None:
+        structured_marker = format_structured_evidence_marker(language) + "\n\n"
+
     if waiver_reason is not None:
-        return "\n".join(
+        section_lines = [
+            "## Realistic Validation",
+            "",
+        ]
+        if structured_marker:
+            section_lines.append(structured_marker.rstrip())
+            section_lines.append("")
+        section_lines.extend(
             [
-                "## Realistic Validation",
-                "",
                 format_validation_waiver_marker(waiver_reason),
                 "",
                 f"Validation waived by operator: {waiver_reason}",
             ]
         )
+        return "\n".join(section_lines)
+
     format_waiver_lines: list[str] = []
     if format_waiver_reason is not None:
         format_waiver_lines = [
@@ -275,6 +288,7 @@ def build_issue_validation_section(
         [
             "## Realistic Validation",
             "",
+            structured_marker,
             *format_waiver_lines,
             "The executing agent MUST run each item through the real entry "
             "point and save evidence (screenshots or captured output) to "
@@ -315,7 +329,7 @@ def build_validation_prompt_line(issue: IssueSummary, config: AppConfig) -> str:
         enforcement_text = (
             "The runner refuses to publish when the evidence directory is " "empty. "
         )
-    return (
+    prompt_parts = [
         "Realistic Validation is MANDATORY for this Issue: actually execute "
         "every item of the Realistic Validation checklist through the real "
         "entry points (not only unit tests), and save one evidence file per "
@@ -326,7 +340,15 @@ def build_validation_prompt_line(issue: IssueSummary, config: AppConfig) -> str:
         "Do not substitute the real entry point an item describes with "
         "fakes, mocks, or TestClient. Never put evidence files under "
         "version control and never capture secrets in them."
-    )
+    ]
+    if has_structured_evidence_marker(issue.body):
+        structured_suffix = build_structured_evidence_prompt_suffix(
+            config.validation.language
+        )
+        prompt_parts.append(
+            structured_suffix.format(evidence_dir=config.validation.evidence_dir)
+        )
+    return " ".join(prompt_parts)
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +440,10 @@ def ensure_validation_evidence_ready(
     按任务关（Issue body 带 ``iar:evidence-format-waived`` marker），
     关闭后退化为仅要求证据目录非空。
 
+    对于带 ``iar:structured-evidence`` marker 的 Issue，额外校验
+    ``evidence.json`` manifest：字段完整性、item 覆盖、证据文件存在性与
+    编号一致性、语言一致性。
+
     Raises:
         ValidationEvidenceError: 要求验证但证据缺失或与清单不匹配。
     """
@@ -433,6 +459,15 @@ def ensure_validation_evidence_ready(
             "UI behavior, captured terminal output as .txt for CLI behavior) "
             "named like `rv-1-<slug>.png` into that directory."
         )
+    if has_structured_evidence_marker(issue.body):
+        checklist_items = extract_realistic_validation_items(issue.body)
+        validate_evidence_manifest(
+            issue_body=issue.body,
+            checklist_items=checklist_items,
+            worktree_path=worktree_path,
+            config=config,
+        )
+        return
     if not evidence_format_check_required(issue.body, config):
         return
     coverage_problems = collect_evidence_coverage_problems(
@@ -646,16 +681,6 @@ def parse_pr_number(pr_url: str) -> int | None:
     return int(url_match.group("number"))
 
 
-def _blob_url(pr_url: str, branch: str, file_name: str) -> str | None:
-    """Build the repository blob URL for an evidence file."""
-    url_match = _PR_URL_PATTERN.search(pr_url)
-    if not url_match:
-        return None
-    owner = url_match.group("owner")
-    repo = url_match.group("repo")
-    return f"https://github.com/{owner}/{repo}/blob/{branch}/{file_name}"
-
-
 def _truncate_inline_evidence(file_text: str) -> str:
     """Limit inline-quoted evidence text in PR comments."""
     if len(file_text) <= _MAX_INLINE_EVIDENCE_CHARS:
@@ -673,8 +698,31 @@ def build_evidence_comment(
     config: AppConfig,
     pr_url: str,
     head_sha: str,
+    issue_body: str = "",
 ) -> str:
-    """Build the PR evidence comment with embedded images and quoted text."""
+    """Build the PR evidence comment with embedded images and quoted text.
+
+    当 ``issue_body`` 带 ``iar:structured-evidence`` marker 时，按 checklist item
+    分组渲染结构化证据块（命令、摘要、解释、风险、SHA-256）；否则按文件名平铺，
+    保持与旧 Issue 的兼容。
+    """
+    if has_structured_evidence_marker(issue_body):
+        checklist_items = extract_realistic_validation_items(issue_body)
+        report = validate_evidence_manifest(
+            issue_body=issue_body,
+            checklist_items=checklist_items,
+            worktree_path=worktree_path,
+            config=config,
+        )
+        return render_structured_evidence_comment(
+            report=report,
+            upload=upload,
+            worktree_path=worktree_path,
+            config=config,
+            pr_url=pr_url,
+            head_sha=head_sha,
+        )
+
     marker = (
         f"<!-- iar:validation-evidence version=1 head={head_sha} "
         f"branch={upload.branch} count={len(upload.file_names)} -->"
@@ -693,7 +741,7 @@ def build_evidence_comment(
     ]
     for file_name in upload.file_names:
         file_suffix = Path(file_name).suffix.lower()
-        file_blob_url = _blob_url(pr_url, upload.branch, file_name)
+        file_blob_url = build_evidence_blob_url(pr_url, upload.branch, file_name)
         comment_lines.extend(["", f"### {file_name}"])
         if file_blob_url and file_suffix in IMAGE_EVIDENCE_SUFFIXES:
             comment_lines.append(f"![{file_name}]({file_blob_url}?raw=true)")
@@ -771,6 +819,7 @@ def publish_validation_evidence(
             config=config,
             pr_url=pr_url,
             head_sha=head_sha,
+            issue_body=issue.body,
         ),
     )
     return upload

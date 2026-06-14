@@ -106,6 +106,9 @@ class IssueFromPrdRequest:
         group: 可选的任务组名称，会被物化为 ``task-group/<name>`` label。
         depends_on: 显式指定的上游 Issue 编号列表（与 PRD 声明合并去重）。
         depends_on_group: 显式指定的上游 group 列表（与 PRD 声明合并去重）。
+        parse_evidence_format_with_agent: 是否用 agent 解析 PRD 中的格式要求。
+        validation_language: Realistic Validation 固定标签语言，如 ``zh-CN``。
+        structured_evidence: 是否为该 Issue 物化 ``iar:structured-evidence`` marker。
     """
 
     repo_path: Path
@@ -124,6 +127,8 @@ class IssueFromPrdRequest:
     depends_on: tuple[int, ...] = ()
     depends_on_group: tuple[str, ...] = ()
     parse_evidence_format_with_agent: bool = True
+    validation_language: str = "zh-CN"
+    structured_evidence: bool = True
 
 
 @dataclass(frozen=True)
@@ -1151,6 +1156,8 @@ def create_issue_from_prd(
             checklist_items=validation_checklist_items,
             waiver_reason=validation_waiver_reason,
             format_waiver_reason=extract_evidence_format_waiver_reason(prd_text),
+            language=request.validation_language,
+            structured_evidence=request.structured_evidence,
         )
         if format_markers:
             validation_section = f"{format_markers}\n\n{validation_section}"
