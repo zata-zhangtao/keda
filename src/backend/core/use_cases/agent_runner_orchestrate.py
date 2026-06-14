@@ -47,7 +47,7 @@ from backend.core.use_cases.agent_runner_blocked_claim import (
     _acquire_blocked_claim_lock,
     _release_blocked_claim_lock,
 )
-from backend.core.use_cases.agent_runner_git import has_changes
+from backend.core.use_cases.agent_runner_git import has_changes, get_current_branch
 from backend.core.use_cases.agent_runner_workflow import (
     claim_blocked_issue,
     find_latest_unconsumed_marker,
@@ -72,12 +72,13 @@ from backend.core.use_cases.pr_supervisor import (
     execute_rebase,
     execute_repair,
 )
-from backend.core.use_cases.run_agent_once import (
+from backend.core.use_cases.agent_runner_worktree_branch import (
     _ensure_worktree_branch,
+)
+from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
     format_command,
-    get_current_branch,
     get_head_sha,
 )
 

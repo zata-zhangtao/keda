@@ -20,6 +20,10 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_runner_events import (
     format_event_marker,
 )
+from backend.core.use_cases.agent_runner_commit import (
+    read_commit_request,
+    remove_commit_request,
+)
 from backend.core.use_cases.run_agent_once import (
     commit_requested_changes,
     ensure_verification_passed,
@@ -27,8 +31,6 @@ from backend.core.use_cases.run_agent_once import (
     get_current_branch,
     get_head_sha,
     has_changes,
-    read_commit_request,
-    remove_commit_request,
     run_agent_with_prompt,
     run_verification,
     validate_safe_changes,
