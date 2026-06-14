@@ -1,5 +1,7 @@
 # P1-FEAT-20260614-224914 — PR 审阅预览部署能力（PR Preview Deployment）
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/86
+
 ## 1. Introduction & Goals
 
 ### Problem Statement
