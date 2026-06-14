@@ -146,7 +146,7 @@ iar labels sync --repo-id keda
 |---|---|
 | `Group` | 本 Issue 所属的任务组，会被物化为 `task-group/<name>` label |
 | `Depends on groups` | 上游任务组，该组下全部 Issue closed 后才满足 |
-| `Depends on tasks/issues` | 上游 Issue 编号或 PRD 引用；Issue 支持 `#N` / `N`，PRD 支持 repo-relative 路径或 `tasks/` 下唯一文件名/文件 stem，多个用逗号/分号或 Markdown 子列表分隔 |
+| `Depends on tasks/issues` | 上游 Issue 编号或 PRD 引用；Issue 支持 `#N` / `N`，PRD 支持 repo-relative 路径或 `tasks/` 下唯一文件名/文件 stem，多个用逗号/分号或 Markdown 子列表分隔；引用后可以追加说明文字，解析器只提取引用 token |
 | `Gate type` | `hard` = 阻塞门禁；`soft` = 仅文档信息，不阻塞；`none` = 不生成依赖 marker |
 | `Notes` | 自由备注 |
 
@@ -1994,6 +1994,7 @@ PRD 的 `Delivery Dependencies` 小节会解析为三种依赖边：
 
 - `Depends on tasks/issues: #42`：等待上游 Issue 关闭。
 - `Depends on tasks/issues: tasks/pending/xxx.md`：等待上游 PRD 合并或归档。
+- `Depends on tasks/issues: tasks/archive/xxx.md`：视为已完成上游；默认 pending 视图不展示 archived PRD，但仍会用它们解析依赖。
 - `Depends on groups: infra`：等待该 group 下所有 Issue 关闭。
 
-存在未满足依赖的 PRD 显示为「等待中」并给出阻塞原因；形成环的依赖会标红提示修正。
+存在未满足依赖的 PRD 显示为「等待中」并给出阻塞原因；无法解析的 PRD 引用显示为「依赖未解析」；形成环的依赖会标红提示修正。

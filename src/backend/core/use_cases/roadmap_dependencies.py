@@ -157,6 +157,8 @@ def evaluate_roadmap_dependencies(
             elif dep.kind is RoadmapDependencyKind.PRD:
                 upstream = prd_by_path.get(dep.to_path)
                 if upstream is None:
+                    if dep.to_path.startswith("tasks/archive/"):
+                        continue
                     blockers.append(f"上游 PRD {dep.to_path} 不存在")
                 elif upstream.state not in {
                     RoadmapPrdState.MERGED,

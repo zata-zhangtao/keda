@@ -18,6 +18,7 @@ from backend.core.use_cases.generated_content import (
     _validate_issue_body,
     _validate_pr_body,
     build_issue_context,
+    extract_first_h2_section,
     generate_issue_content,
     generate_pr_content,
 )
@@ -485,6 +486,49 @@ This is the intro.
     assert context.relative_prd_path == "tasks/example.md"
     assert context.prd_introduction == "This is the intro."
     assert "Goal 1" in context.prd_goals
+
+
+def test_extract_first_h2_section_extracts_first_section() -> None:
+    """extract_first_h2_section should return content under the first ## heading."""
+    prd_text = """# PRD: Example
+
+## 1. Background and Goals
+
+First section content.
+
+## 2. Requirements
+
+Second section content.
+"""
+    assert extract_first_h2_section(prd_text) == "First section content."
+
+
+def test_extract_first_h2_section_returns_empty_when_no_h2() -> None:
+    """extract_first_h2_section should return empty string when there is no ## heading."""
+    assert extract_first_h2_section("# Only H1\n\nSome text.") == ""
+
+
+def test_build_issue_context_falls_back_to_first_h2_section() -> None:
+    """When no known introduction keyword matches, use the first ## section as introduction."""
+    prd_text = """# PRD: Example
+
+## 1. 背景与目标
+
+This should be used as introduction.
+
+## 2. 需求形态
+
+Requirements here.
+"""
+    context = build_issue_context(
+        issue_type="feature",
+        title="[Feature] Example",
+        relative_prd_path=Path("tasks/example.md"),
+        prd_text=prd_text,
+        acceptance_items=[],
+    )
+    assert context.prd_introduction == "This should be used as introduction."
+    assert "Requirements here." in context.prd_requirement_shape
 
 
 def test_build_pr_context_collects_git_info() -> None:

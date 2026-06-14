@@ -199,18 +199,20 @@ def scan_roadmap_prds(
         parsed from the file; callers should resolve live GitHub state via
         :mod:`roadmap_state_resolver`.
     """
-    target_dirs = _resolve_prd_directories(repo_path, dirs)
+    dependency_index_dirs = _resolve_prd_directories(repo_path, dirs)
+    target_dirs = dependency_index_dirs
     if not include_archived:
-        target_dirs = [d for d in target_dirs if "archive" not in d.name]
+        target_dirs = [d for d in dependency_index_dirs if "archive" not in d.name]
 
     # First pass: collect all PRD paths and issue numbers for dependency resolution.
     prd_path_to_issue_number: dict[str, int | None] = {}
     candidate_files: list[tuple[Path, Path]] = []
-    for target_dir in target_dirs:
+    for target_dir in dependency_index_dirs:
         for md_path in sorted(target_dir.glob("*.md")):
             relative_path = md_path.relative_to(repo_path).as_posix()
-            candidate_files.append((target_dir, md_path))
             prd_path_to_issue_number[relative_path] = None
+            if target_dir in target_dirs:
+                candidate_files.append((target_dir, md_path))
 
     # Second pass: parse issue numbers so PRD refs can map to issue numbers later.
     for _target_dir, md_path in candidate_files:

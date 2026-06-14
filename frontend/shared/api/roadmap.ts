@@ -37,11 +37,19 @@ export async function updateRoadmapSettings(params: {
   });
 }
 
-export async function startRoadmapPrd(repoId: string, prdPath: string): Promise<RoadmapActionResult> {
-  const encodedPath = btoa(prdPath)
+function encodePrdPath(prdPath: string): string {
+  const bytes = new TextEncoder().encode(prdPath);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary)
     .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+    .replace(/\//g, "_");
+}
+
+export async function startRoadmapPrd(repoId: string, prdPath: string): Promise<RoadmapActionResult> {
+  const encodedPath = encodePrdPath(prdPath);
   return post(`${BASE_PATH}/prds/${encodedPath}/start`, { repo_id: repoId });
 }
 

@@ -50,6 +50,13 @@ _DELIVERY_DEPENDENCIES_HEADER_RE = re.compile(
 
 _DELIVERY_FIELD_RE = re.compile(r"^-\s+(?P<key>[A-Za-z/\s]+?)\s*:\s*(?P<value>.*?)\s*$")
 _DELIVERY_LIST_ITEM_RE = re.compile(r"^\s+-\s+(?P<value>.*?)\s*$")
+_DELIVERY_CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+_DELIVERY_ISSUE_PREFIX_RE = re.compile(r"#?\d+(?=$|[\s,;，；()（）])")
+_DELIVERY_ISSUE_TOKEN_RE = re.compile(r"#?\d+")
+_DELIVERY_PRD_STEM_RE = re.compile(r"P\d+-[A-Za-z0-9_.-]+")
+_DELIVERY_PRD_PATH_RE = re.compile(
+    r"(?P<path>(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.md)" r"(?=$|[\s,;，；()（）])"
+)
 _NONE_DEPENDENCY_VALUES = {"", "none", "n/a", "na", "-"}
 
 
@@ -200,12 +207,76 @@ def _parse_issue_or_prd_refs(values: list[str]) -> tuple[list[int], list[str]]:
     """
     numbers: list[int] = []
     prd_refs: list[str] = []
-    for item in _split_dependency_values(values):
-        if re.fullmatch(r"#?\d+", item):
-            numbers.append(int(item.lstrip("#")))
-            continue
-        prd_refs.append(item)
+    for raw_dependency_value in values:
+        for dependency_ref in _extract_dependency_reference_tokens(
+            raw_dependency_value
+        ):
+            if re.fullmatch(r"#?\d+", dependency_ref):
+                numbers.append(int(dependency_ref.lstrip("#")))
+                continue
+            prd_refs.append(dependency_ref)
     return numbers, prd_refs
+
+
+def _extract_dependency_reference_tokens(raw_dependency_value: str) -> list[str]:
+    """Extract structured dependency references from one field/list value."""
+    stripped_dependency_value = raw_dependency_value.strip()
+    if stripped_dependency_value.lower() in _NONE_DEPENDENCY_VALUES:
+        return []
+
+    code_span_refs = [
+        match.group(1).strip()
+        for match in _DELIVERY_CODE_SPAN_RE.finditer(stripped_dependency_value)
+        if match.group(1).strip()
+    ]
+    dependency_code_span_refs = [
+        code_span_ref
+        for code_span_ref in code_span_refs
+        if _looks_like_issue_or_prd_ref(code_span_ref)
+    ]
+    value_without_code_spans = _DELIVERY_CODE_SPAN_RE.sub(
+        " ", stripped_dependency_value
+    )
+
+    structured_refs = list(dependency_code_span_refs)
+    fallback_refs: list[str] = []
+    for dependency_segment in re.split(r"[,;，；]", value_without_code_spans):
+        stripped_segment = dependency_segment.strip().strip("`").strip()
+        if stripped_segment.lower() in _NONE_DEPENDENCY_VALUES:
+            continue
+
+        issue_match = _DELIVERY_ISSUE_PREFIX_RE.match(stripped_segment)
+        if issue_match:
+            structured_refs.append(issue_match.group(0))
+            continue
+
+        prd_path_match = _DELIVERY_PRD_PATH_RE.search(stripped_segment)
+        if prd_path_match:
+            structured_refs.append(prd_path_match.group("path"))
+            continue
+
+        fallback_ref = re.split(r"\s+|[（(]", stripped_segment, maxsplit=1)[0]
+        normalized_fallback_ref = fallback_ref.strip("`").strip()
+        if normalized_fallback_ref.lower() not in _NONE_DEPENDENCY_VALUES:
+            fallback_refs.append(normalized_fallback_ref)
+
+    if structured_refs:
+        return structured_refs
+    if code_span_refs and not value_without_code_spans.strip():
+        return code_span_refs
+    return fallback_refs
+
+
+def _looks_like_issue_or_prd_ref(candidate_ref: str) -> bool:
+    """Return whether a code span looks like a dependency reference."""
+    stripped_candidate_ref = candidate_ref.strip()
+    if _DELIVERY_ISSUE_TOKEN_RE.fullmatch(stripped_candidate_ref):
+        return True
+    if _DELIVERY_PRD_PATH_RE.search(stripped_candidate_ref):
+        return True
+    if stripped_candidate_ref.startswith("tasks/"):
+        return True
+    return bool(_DELIVERY_PRD_STEM_RE.fullmatch(stripped_candidate_ref))
 
 
 # ---------------------------------------------------------------------------

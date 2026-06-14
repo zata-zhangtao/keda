@@ -11,8 +11,8 @@
 在现有 Agent Runner 管理终端中新增独立的 **Idea Inbox** 模块，复用 `config.toml` / `.iar.toml` 的 repository registry 和现有 `IContentGenerator` agent 调用能力：
 
 - **数据来源**：继续以目标仓库内 `tasks/inbox/ideas.md` 为原话事实来源，`tasks/inbox/summary.md` 为可重写派生总结；新增 `tasks/inbox/prd-drafts/` 保存待确认 PRD 草稿，不直接写入 `tasks/pending/`。
-- **后端入口**：新增受控 API 读取 inbox、追加原话、刷新 summary、生成 PRD 草稿、人工确认草稿落入 `tasks/pending/`；API route 只做 DTO 转换，核心逻辑在 `core/use_cases/idea_inbox*.py`。
-- **前端入口**：在现有管理终端新增 `/ideas` 页面，和 `/roadmap` 分开；页面支持按项目查看原话、summary、草稿列表、生成草稿、确认入库。
+- **后端入口**：新增 `agent-runner` 命名空间下的受控 API 读取 inbox、追加原话、刷新 summary、生成 PRD 草稿、人工确认草稿落入 `tasks/pending/`；API route 只做 DTO 转换、仓库上下文解析和 composition 调用，核心文件读写与草稿状态规则在 `core/use_cases/idea_inbox*.py`。
+- **前端入口**：在现有管理终端新增 `/ideas` 页面，和已归档交付的 `/roadmap` 分开；页面支持按项目查看原话、summary、草稿列表、生成草稿、确认入库。
 - **AI 交互**：PRD 草稿生成复用 `IContentGenerator` / `generated_content.py` 模式，不新增 LLM SDK；系统只生成 draft，人确认后才将草稿写入 pending。
 - **跨平台采集**：先实现一个签名校验的通用 inbound endpoint，以 `repo_id` 或显式 `@项目名` 路由到目标项目；飞书等 IM 通过 provider adapter 接入，不让 IM 消息直接绕过草稿确认流程。
 
@@ -24,7 +24,7 @@
 - 在前端新增想法后，目标仓库 `tasks/inbox/ideas.md` 只追加新条目，已有内容字节级不被重写。
 - 从一个或多个想法生成 PRD 草稿后，草稿落在 `tasks/inbox/prd-drafts/`，不会进入 `tasks/pending/`。
 - 人在前端确认草稿后，系统按 PRD 命名规则创建 `tasks/pending/<PRIORITY>-<TYPE>-<YYYYMMDD-HHMMSS>-<slug>.md`。
-- 通用 inbound endpoint 可通过签名校验和 `repo_id` 把外部消息追加到对应项目 inbox；缺少明确项目绑定时拒绝。
+- `agent-runner` 命名空间下的通用 inbound endpoint 可通过签名校验和 `repo_id` 把外部消息追加到对应项目 inbox；缺少明确项目绑定时拒绝。
 - docs 记录本地前端、AI 草稿、外部 IM 接入和安全边界。
 
 ### Realistic Validation
@@ -43,9 +43,10 @@
 - Depends on groups:
   - none
 - Depends on tasks/issues:
-  - `tasks/pending/P1-FEAT-20260614-200054-frontend-prd-roadmap.md`（软相关；共享前端 shell 与 PRD 工作流语义，但 Idea Inbox 可独立交付）
-- Gate type: soft
-- Notes: 本 PRD 是 Roadmap 的上游输入模块，不依赖 Roadmap 的调度实现完成；若 Roadmap 同时改导航与 shared API，需要在实现时合并前端路由和类型改动。
+  - `tasks/archive/P1-FEAT-20260611-205725-agent-runner-unified-ops-console.md`（已完成；提供管理终端 shell、仓库 registry、进程/审计模式）
+  - `tasks/archive/P1-FEAT-20260614-200054-frontend-prd-roadmap.md`（已完成；提供 `/roadmap` 页面、`agent-runner/roadmap` API 命名和 Playwright smoke 模式）
+- Gate type: none
+- Notes: 本 PRD 是 Roadmap 的上游输入模块，当前无未完成的硬依赖；实现时应复用已落地的 console / roadmap 前端与 API 命名模式。
 
 ## 2. Requirement Shape
 
@@ -76,9 +77,10 @@
 | `tasks/inbox/summary.md` | AI 派生总结 | 前端读取；刷新 summary 时可重写 |
 | `frontend/src/main-app.tsx` | React 路由定义 | 新增 `/ideas` route |
 | `frontend/src/components/app-sidebar.tsx` | 管理终端导航 | 新增 Idea Inbox 导航项 |
-| `frontend/shared/api/console.ts` / `types.ts` | console API wrapper 与 DTO | 新增 idea inbox API wrapper 或拆新 `ideaInbox.ts` |
+| `frontend/shared/api/console.ts` / `roadmap.ts` / `types.ts` | console / roadmap API wrapper 与 DTO 模式 | 新增 `ideaInbox.ts`，沿用 `BASE_PATH = "/v1/agent-runner/idea-inbox"` |
 | `src/backend/api/routes/agent_runner_console.py` | 现有 console 写 API | 不继续塞入该文件；新增独立 route |
-| `src/backend/api/app.py` | FastAPI route 注册 | 注册 `idea_inbox` route |
+| `src/backend/api/routes/agent_runner_roadmap.py` | 已完成的 Roadmap API | 复用 route 命名、序列化、repo 解析和缓存/审计风格 |
+| `src/backend/api/app.py` | FastAPI route 注册 | 注册 `agent_runner_idea_inbox` route |
 | `src/backend/engines/agent_runner/factory.py` | repository registry 与 `IContentGenerator` 装配 | 复用 repository context、content generator |
 | `src/backend/core/use_cases/generated_content.py` | AI 内容生成模式 | 复用 prompt/agent 调用与 fallback 约定 |
 | `src/backend/infrastructure/config/settings.py` | `config.toml` / `.iar.toml` 配置 | 新增非敏感 idea inbox 配置；secrets 不进 TOML |
@@ -87,7 +89,7 @@
 
 ### Existing Path
 
-当前最接近路径是“统一管理终端”：`frontend/src/pages/*`、`frontend/shared/api/console.ts`、`src/backend/api/routes/agent_runner_console.py`、`src/backend/core/use_cases/repository_registry.py`。Idea Inbox 应复用这个前端 shell 和 registry，但后端新增独立 `idea_inbox` route/use case，避免继续扩大 console route 的职责。
+当前最接近路径是“统一管理终端 + Roadmap”：`frontend/src/pages/*`、`frontend/shared/api/console.ts`、`frontend/shared/api/roadmap.ts`、`src/backend/api/routes/agent_runner_console.py`、`src/backend/api/routes/agent_runner_roadmap.py`、`src/backend/core/use_cases/repository_registry.py`。Idea Inbox 应复用这个前端 shell、registry、route 注册和 `/api/v1/agent-runner/*` 命名模式，但后端新增独立 `agent_runner_idea_inbox` route/use case，避免继续扩大 console 或 roadmap route 的职责。
 
 ### Reuse Candidates
 
@@ -95,22 +97,23 @@
 - `IContentGenerator` 与 `generated_content.py`：生成 PRD 草稿，不新增 agent SDK。
 - `TomlRegistryEditor` / repository registry：外部消息的项目绑定来源。
 - `tasks/inbox/ideas.md` 和 `summary.md`：沿用当前文件约定。
-- `tests/playwright-e2e/tests/workflows/console-pages.no-auth.spec.ts`：新增页面 smoke 模式。
+- `tests/playwright-e2e/tests/smoke/roadmap.spec.ts` 与 `roadmap-realistic.spec.ts`：复用页面 smoke、API route mocking 和 evidence 保存模式。
 
 ### Architecture Constraints
 
 - 后端遵守 `api/ -> core/ -> engines/ -> infrastructure/`。`core` use case 可以使用标准库文件 I/O，但不能 import infrastructure。
-- API route 不直接操作磁盘或 agent；route 调 core use case，具体 repository context / generator 由 engines factory 装配。
+- API route 不直接承载文件格式规则或 agent prompt；route 可像 `agent_runner_roadmap.py` 一样解析 `repo_id` 并通过 engines factory 装配 repository context / generator，然后调用 core use case。
 - 所有 Python 文本 I/O 显式 `encoding="utf-8"`。
 - `frontend/` 只通过 `/api/*` HTTP 调后端，不直接读本地文件。
 - `tests/playwright-e2e/` 使用 npm，不套 Python 命名规范。
 
 ### Existing PRD Relationship
 
-- `tasks/pending/P1-FEAT-20260614-200054-frontend-prd-roadmap.md`：软相关。该 PRD 管 PRD 执行可视化与开始/调度流程；本 PRD 管想法采集与草稿生成。两者共享前端 shell，但没有硬依赖。
-- `tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md`：相关但不重复。该 PRD 是 Issue → PRD，本 PRD 是 Idea → PRD draft。
+- `tasks/archive/P1-FEAT-20260614-200054-frontend-prd-roadmap.md`：已完成。该 PRD 提供 `/roadmap` 页面、`agent-runner/roadmap` API、Roadmap Playwright smoke 和 PRD 执行视图；本 PRD 管想法采集与草稿生成，应复用其页面/API 组织方式但不混入 Roadmap 状态模型。
 - `tasks/archive/P1-FEAT-20260611-205725-agent-runner-unified-ops-console.md`：已完成，是本 PRD 的前端 shell、registry 和审计风格来源。
-- 当前 pending PRDs 中未发现重复 Idea Inbox 前端化或跨平台采集工作。
+- `tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md`：相关但不重复。该 PRD 是 Issue → PRD，本 PRD 是 Idea → PRD draft。
+- `tasks/pending/P1-FEAT-20260614-203811-structured-validation-evidence.md`：独立 pending。它增强 runner 验证证据，不阻塞 Idea Inbox。
+- 当前 pending PRDs 中未发现重复 Idea Inbox 前端化或跨平台采集工作；本 PRD 当前无硬依赖。
 
 ### Potential Redundancy Risks
 
@@ -127,8 +130,8 @@
 
 1. 新增 `core/use_cases/idea_inbox.py` 处理 inbox 文件读写：读取 ideas、追加想法、读取/刷新 summary。
 2. 新增 `core/use_cases/idea_prd_drafts.py` 处理草稿：调用 `IContentGenerator` 生成 PRD draft，保存到 `tasks/inbox/prd-drafts/`；确认后才创建 pending PRD。
-3. 新增 `api/routes/idea_inbox.py` 暴露 `/api/v1/idea-inbox/*`，支持本地前端和外部 inbound。
-4. 新增 `/ideas` 页面，展示项目选择、原话流、summary、草稿列表和确认动作。
+3. 新增 `api/routes/agent_runner_idea_inbox.py` 暴露 `/api/v1/agent-runner/idea-inbox/*`，支持本地前端和外部 inbound，并沿用 `agent_runner_roadmap.py` 的 repository context 解析方式。
+4. 新增 `/ideas` 页面，展示项目选择、原话流、summary、草稿列表和确认动作，前端 wrapper 使用 `frontend/shared/api/ideaInbox.ts`。
 5. 外部 IM 首版只要求“明确项目绑定 + 签名校验 + append-only 入库”；飞书 provider 作为 adapter，不作为核心状态源。
 
 ### Why This Fits
@@ -136,6 +139,7 @@
 - 保留 `ideas.md` 的 append-only 事实源，不破坏当前 idea-inbox skill 的工作方式。
 - 草稿目录提供人工审阅缓冲区，符合“先生成 PRD 草稿，再由人确认后落入 `tasks/pending/`”的已确认要求。
 - 复用现有管理终端和 repository registry，避免新增前端应用或项目配置体系。
+- 复用已完成 Roadmap 的 `/api/v1/agent-runner/<module>` API 命名和 Playwright smoke 模式，减少前端 shared API 与 route 注册分歧。
 - 外部入口只做采集和路由，不扩大为任意自动执行能力。
 
 ### Alternatives Considered
@@ -191,14 +195,20 @@ This section is a living implementation guide based on current repository analys
 
 #### API 入口
 
-新增 `src/backend/api/routes/idea_inbox.py`：
+新增 `src/backend/api/routes/agent_runner_idea_inbox.py`：
 
-- `GET /api/v1/idea-inbox/repositories/{repo_id}`：读取 snapshot。
-- `POST /api/v1/idea-inbox/repositories/{repo_id}/ideas`：前端追加想法。
-- `POST /api/v1/idea-inbox/repositories/{repo_id}/summary/refresh`：刷新 summary。
-- `POST /api/v1/idea-inbox/repositories/{repo_id}/drafts`：生成 PRD 草稿。
-- `POST /api/v1/idea-inbox/repositories/{repo_id}/drafts/{draft_id}/approve`：确认入 pending。
-- `POST /api/v1/idea-inbox/inbound`：外部入口；必须带签名和可解析 `repo_id`。
+- `GET /api/v1/agent-runner/idea-inbox/repositories/{repo_id}`：读取 snapshot。
+- `POST /api/v1/agent-runner/idea-inbox/repositories/{repo_id}/ideas`：前端追加想法。
+- `POST /api/v1/agent-runner/idea-inbox/repositories/{repo_id}/summary/refresh`：刷新 summary。
+- `POST /api/v1/agent-runner/idea-inbox/repositories/{repo_id}/drafts`：生成 PRD 草稿。
+- `POST /api/v1/agent-runner/idea-inbox/repositories/{repo_id}/drafts/{draft_id}/approve`：确认入 pending。
+- `POST /api/v1/agent-runner/idea-inbox/inbound`：外部入口；必须带签名和可解析 `repo_id`。
+
+route 职责边界：
+
+- route 负责 Pydantic request/response、`repo_id` → repository context、HTTP status、签名 header 读取。
+- 文件格式、append-only 规则、draft 状态机、pending 命名和 generator prompt 均放在 core use case。
+- `src/backend/api/app.py` 注册时沿用当前模式：从 `backend.api.routes` import `agent_runner_idea_inbox`，再 `app.include_router(agent_runner_idea_inbox.router, prefix="/api/v1")`。
 
 #### 前端入口
 
@@ -209,6 +219,8 @@ This section is a living implementation guide based on current repository analys
 - 中区：summary 展示与刷新按钮。
 - 右侧/下区：PRD 草稿列表，支持生成、查看、确认入库。
 - 所有写操作弹确认或 toast；确认 pending 时显示目标路径。
+- `ideaInbox.ts` 的 `BASE_PATH` 必须为 `"/v1/agent-runner/idea-inbox"`，由 `frontend/shared/api/client.ts` 统一拼接 `/api`。
+- repository selector 复用 `fetchRegistryRepositories()` 的 DTO，不硬编码 `keda-main` 作为唯一选项；无 enabled repo 时展示空状态并禁用写操作。
 
 #### 跨平台接入
 
@@ -252,15 +264,15 @@ This section is a living implementation guide based on current repository analys
 │       【总结】如需配置 language 或 inbound 开关，保持为非敏感字段并支持 .iar.toml 覆盖
 │
 ├── API
-│   ├── src/backend/api/routes/idea_inbox.py
+│   ├── src/backend/api/routes/agent_runner_idea_inbox.py
 │   │   [新增]
-│   │   【总结】暴露本地前端与外部 inbound 的受控 Idea Inbox API
+│   │   【总结】在 agent-runner 命名空间下暴露本地前端与外部 inbound 的受控 Idea Inbox API
 │   │   ├── repository snapshot / append / refresh summary / draft / approve endpoints
 │   │   └── inbound endpoint 做签名校验与 repo_id 路由
 │   │
 │   └── src/backend/api/app.py
 │       [修改]
-│       【总结】注册 idea_inbox router
+│       【总结】注册 agent_runner_idea_inbox router
 │
 ├── Infrastructure
 │   └── src/backend/infrastructure/config/settings.py
@@ -282,7 +294,7 @@ This section is a living implementation guide based on current repository analys
 │   │
 │   ├── frontend/shared/api/ideaInbox.ts
 │   │   [新增]
-│   │   【总结】封装 /api/v1/idea-inbox API 调用
+│   │   【总结】封装 /api/v1/agent-runner/idea-inbox API 调用
 │   │
 │   └── frontend/shared/api/types.ts
 │       [修改]
@@ -297,9 +309,9 @@ This section is a living implementation guide based on current repository analys
 │   │   [检查/可能修改]
 │   │   【总结】如 app route 注册或 auth fixture 影响 API tests，补充路由 smoke
 │   │
-│   └── tests/playwright-e2e/tests/workflows/idea-inbox.no-auth.spec.ts
+│   └── tests/playwright-e2e/tests/smoke/idea-inbox.spec.ts
 │       [新增]
-│       【总结】覆盖 /ideas 页面读取、追加想法和草稿确认交互
+│       【总结】覆盖 /ideas 页面读取、追加想法和草稿确认交互；沿用 roadmap smoke 的 API mock 与证据保存方式
 │
 └── Docs
     ├── docs/guides/agent-runner.md
@@ -322,23 +334,25 @@ rg -n "tasks/inbox|Idea Inbox|ideas.md|summary.md" .
 rg -n "include_router|APIRouter" src/backend/api
 rg -n "IContentGenerator|generate_issue_content|generated_content" src/backend/core src/backend/engines tests
 rg -n "resolve_repository_targets|resolve_repository_targets_with_diagnostics|repo_id" src/backend/engines src/backend/core src/backend/api
+rg -n "agent-runner/roadmap|BASE_PATH|startRoadmapPrd|fetchRoadmapPrds" frontend/shared src/backend/api tests
 rg -n "app-sidebar|main-app|Routes|BASE_PATH" frontend/src frontend/shared
 rg -n "fetchRegistryRepositories|RegistryRepositoryEntry" frontend/shared frontend/src
 ```
 
 - 如果 `tasks/inbox/ideas.md` 文件格式在实现前变化，先更新 parser；不要用脆弱的行号定位。
-- 如果 Roadmap PRD 已实现并新增 `/roadmap` API/types，合并前端 shared types，避免重复 `RepositorySelector`。
+- Roadmap 已实现；新增 API 和前端 wrapper 时优先比照 `agent_runner_roadmap.py`、`frontend/shared/api/roadmap.ts`、`tests/playwright-e2e/tests/smoke/roadmap.spec.ts`，不要新建第二种 API base path 或 Playwright fixture 风格。
 - 如果 `create_issue_from_prd.py` 已进一步增长，草稿确认不要复用其中私有函数；把 PRD 命名与写入规则做成独立小 helper 或复用公开 helper。
 - inbound 签名失败必须返回 401/403，不得落盘；项目无法解析必须返回 400 或进入明确的 `unassigned` 文件，不能悄悄写入默认项目。
+- 修改后运行 `rg -n "/api/v1/idea-inbox|/v1/idea-inbox|routes/idea_inbox.py" frontend src tests docs tasks/pending/P1-FEAT-20260614-203810-frontend-idea-inbox-cross-platform.md`，应只剩历史讨论或无结果；目标实现应使用 `agent-runner/idea-inbox`。
 
 ### Flow Or Architecture Diagram
 
 ```mermaid
 flowchart TD
     User["Operator"] --> IdeasPage["前端 /ideas"]
-    IM["Feishu / Other IM"] --> Inbound["POST /api/v1/idea-inbox/inbound"]
+    IM["Feishu / Other IM"] --> Inbound["POST /api/v1/agent-runner/idea-inbox/inbound"]
 
-    IdeasPage --> API["routes/idea_inbox.py"]
+    IdeasPage --> API["routes/agent_runner_idea_inbox.py"]
     Inbound --> API
     API --> RepoResolve["engines factory: resolve repo_id"]
     API --> InboxUseCase["core/use_cases/idea_inbox.py"]
@@ -409,15 +423,15 @@ No relational database changes in this PRD; the diagram documents file-backed pe
 
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
 |---|---|---|---|---|---|---|
-| `/ideas` 页面展示真实 inbox | Browser hitting frontend `/ideas` + backend API | e2e/manual | GitHub 可不参与；文件系统真实 | `keda-main` registry entry，`tasks/inbox/*` | `uv run python -m backend.main`；另起 `just frontend dev`；访问 `/ideas` 截图 | Yes |
-| append-only 想法追加 | `POST /api/v1/idea-inbox/repositories/{repo_id}/ideas` | API/integration | 无 mock；写临时 repo 文件系统 | 临时 git repo + `tasks/inbox/ideas.md` fixture | `uv run pytest tests/test_idea_inbox.py -k "append_only" -q`，并用 curl 对本地后端验证 | Yes |
-| PRD 草稿生成 | `POST /api/v1/idea-inbox/repositories/{repo_id}/drafts` | integration | `IContentGenerator` fake；文件系统真实 | idea fixture + fake PRD markdown output | `uv run pytest tests/test_idea_inbox.py -k "create_prd_draft" -q` | Yes |
-| 草稿确认入 pending | `POST /api/v1/idea-inbox/repositories/{repo_id}/drafts/{draft_id}/approve` | integration/API | 无 mock；文件系统真实 | pending-review 草稿 | `uv run pytest tests/test_idea_inbox.py -k "approve_prd_draft" -q`；确认文件名符合 `P*-TYPE-YYYYMMDD-HHMMSS-slug.md` | Yes |
-| 外部 inbound 签名与路由 | `POST /api/v1/idea-inbox/inbound` | API/smoke | provider payload fake；签名逻辑真实 | `IAR_IDEA_INBOX_INBOUND_SECRET`，repo_id fixture | `curl -X POST http://127.0.0.1:8000/api/v1/idea-inbox/inbound ...`；验证 2xx 入库、非法签名 401 | Yes |
-| 前端 build 与 Playwright smoke | `just frontend build` + `just e2e no-auth` | build/e2e | Playwright 可 mock API | npm deps | `just frontend build && just e2e no-auth` | Yes |
+| `/ideas` 页面展示真实 inbox | Browser hitting frontend `/ideas` + backend API | e2e/manual | GitHub 可不参与；文件系统真实 | enabled registry entry，`tasks/inbox/*` | `just run`；访问 `http://127.0.0.1:5173/ideas`；或 `just e2e smoke` 跑 `tests/playwright-e2e/tests/smoke/idea-inbox.spec.ts` | Yes |
+| append-only 想法追加 | `POST /api/v1/agent-runner/idea-inbox/repositories/{repo_id}/ideas` | API/integration | 无 mock；写临时 repo 文件系统 | 临时 git repo + `tasks/inbox/ideas.md` fixture | `uv run pytest tests/test_idea_inbox.py -k "append_only" -q`，并用 curl 对本地后端验证 | Yes |
+| PRD 草稿生成 | `POST /api/v1/agent-runner/idea-inbox/repositories/{repo_id}/drafts` | integration | `IContentGenerator` fake；文件系统真实 | idea fixture + fake PRD markdown output | `uv run pytest tests/test_idea_inbox.py -k "create_prd_draft" -q` | Yes |
+| 草稿确认入 pending | `POST /api/v1/agent-runner/idea-inbox/repositories/{repo_id}/drafts/{draft_id}/approve` | integration/API | 无 mock；文件系统真实 | pending-review 草稿 | `uv run pytest tests/test_idea_inbox.py -k "approve_prd_draft" -q`；确认文件名符合 `P*-TYPE-YYYYMMDD-HHMMSS-slug.md` | Yes |
+| 外部 inbound 签名与路由 | `POST /api/v1/agent-runner/idea-inbox/inbound` | API/smoke | provider payload fake；签名逻辑真实 | `IAR_IDEA_INBOX_INBOUND_SECRET`，repo_id fixture | `curl -X POST http://127.0.0.1:8000/api/v1/agent-runner/idea-inbox/inbound -H "Content-Type: application/json" -H "X-IAR-Signature: <signature>" -d '{"provider":"manual","repo_id":"keda-main","sender":"tester","text":"idea","occurred_at":"2026-06-14T20:15:00+08:00"}'`；验证 2xx 入库、非法签名 401 | Yes |
+| 前端 build 与 Playwright smoke | `just frontend build` + `just e2e smoke` | build/e2e | Playwright 可 mock API | npm deps；首次运行前 `just e2e-install` | `just frontend build && just e2e smoke` | Yes |
 | 全量回归 | `just test` | test | 无 | 无 | `just test` | Yes |
 
-失败排查提示：页面空白先查 `frontend/shared/api/client.ts` 的 `/api` 拼接和 router 注册；append-only 失败先查是否误用了 `write_text` 覆盖 `ideas.md`；draft approve 失败先查 draft metadata 和 pending 文件名冲突；inbound 失败先查 secret 环境变量和 `repo_id` 是否在 registry 中 enabled。
+失败排查提示：页面空白先查 `frontend/shared/api/client.ts` 的 `/api` 拼接、`frontend/shared/api/ideaInbox.ts` 的 `BASE_PATH` 和 `src/backend/api/app.py` 的 router 注册；append-only 失败先查是否误用了 `write_text` 覆盖 `ideas.md`；draft approve 失败先查 draft metadata 和 pending 文件名冲突；inbound 失败先查 secret 环境变量、签名 header 和 `repo_id` 是否在 registry 中 enabled。
 
 ### Interactive Prototype Change Log
 
@@ -427,8 +441,8 @@ No interactive prototype file changes in this PRD.
 
 | Topic | Source | Checked On | Relevant Finding | Impact On Recommendation |
 |---|---|---|---|---|
-| Feishu custom bot webhook | `https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN` | 2026-06-14 | Custom bot webhook is oriented around sending bot messages to chats, not receiving arbitrary user ideas into this system. | Do not use custom bot webhook as the primary inbound idea ingestion path. |
-| Feishu event subscriptions | `https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/request-url-configuration-case` | 2026-06-14 | Feishu app event subscriptions use a configured request URL for events. | Feishu inbound should be a provider adapter over the generic signed inbound endpoint. |
+| Feishu custom bot webhook | `https://open.feishu.cn/document/client-docs/bot-v3/bot-overview` | 2026-06-15 | Custom bot webhook is documented as a URL that receives HTTP requests to push messages to a Feishu group. | Do not use custom bot webhook as the primary user-message ingestion path. |
+| Feishu event subscriptions | `https://open.feishu.cn/document/server-docs/event-subscription-guide/overview` and `https://open.feishu.cn/document/event-subscription-guide/event-subscriptions/event-subscription-configure-/choose-a-subscription-mode/send-notifications-to-developers-server` | 2026-06-15 | Event subscription sends event JSON to a configured developer server endpoint. | Feishu inbound should be a provider adapter over the generic signed inbound endpoint. |
 
 ## 6. Definition Of Done
 
@@ -438,15 +452,16 @@ No interactive prototype file changes in this PRD.
 - PRD 草稿必须人工确认后才写入 `tasks/pending/`。
 - 外部 inbound 有签名校验和显式项目路由；非法或无法路由消息不落入默认项目。
 - docs 记录使用方式、配置、外部接入边界和安全注意事项。
-- `just test`、`just frontend build`、相关 Playwright smoke 和 `uv run mkdocs build --strict` 通过。
+- `just test`、`just frontend build`、`just e2e smoke` 和 `uv run mkdocs build --strict` 通过。
 
 ## 7. Acceptance Checklist
 
 ### Architecture Acceptance
 
 - [ ] Idea Inbox 后端核心逻辑位于 `src/backend/core/use_cases/idea_inbox.py` / `idea_prd_drafts.py`，不直接 import `backend.infrastructure`。
+- [ ] Idea Inbox API 位于 `src/backend/api/routes/agent_runner_idea_inbox.py`，并在 `src/backend/api/app.py` 以 `/api/v1` prefix 注册。
 - [ ] API route 不直接读写 `tasks/inbox` 文件，而是调用 core use case。
-- [ ] 前端只通过 `/api/v1/idea-inbox/*` 调用后端，不直接读取本地文件。
+- [ ] 前端只通过 `/api/v1/agent-runner/idea-inbox/*` 调用后端，不直接读取本地文件。
 - [ ] 未新增数据库表；ideas 和 drafts 仍由仓库 Markdown 文件承载。
 - [ ] repository 选择复用现有 registry / `repo_id`，未新增第二套项目映射。
 
@@ -472,7 +487,7 @@ No interactive prototype file changes in this PRD.
 
 - [ ] `uv run pytest tests/test_idea_inbox.py -q` 通过。
 - [ ] `just frontend build` 通过。
-- [ ] `just e2e no-auth` 或新增 `/ideas` Playwright smoke 通过。
+- [ ] `just e2e smoke` 中新增 `/ideas` Playwright smoke 通过。
 - [ ] `uv run mkdocs build --strict` 通过。
 - [ ] `just test` 全量通过。
 - [ ] 真实入口验证：本地后端 + 前端完成一次想法追加、一次草稿生成、一次草稿确认入 pending，并留存终端输出或截图。
@@ -481,16 +496,17 @@ No interactive prototype file changes in this PRD.
 
 - **FR-1**：系统必须提供 `/ideas` 前端页面，与 `/roadmap` 分开。
 - **FR-2**：系统必须按 `repo_id` 读取目标仓库的 `tasks/inbox/ideas.md`、`summary.md` 和 `prd-drafts/`。
-- **FR-3**：系统必须以 append-only 方式追加想法到 `ideas.md`，不得重写已有原话。
-- **FR-4**：系统必须允许刷新 `summary.md`，且 summary 明确是 AI 派生、事实以 `ideas.md` 为准。
-- **FR-5**：系统必须能从选定想法生成 PRD 草稿，并将草稿保存到 `tasks/inbox/prd-drafts/`。
-- **FR-6**：系统必须要求人确认草稿后才写入 `tasks/pending/`。
-- **FR-7**：确认草稿写入 pending 时，文件名必须符合 `P0/P1/P2/P3-TYPE-YYYYMMDD-HHMMSS-slug.md`。
-- **FR-8**：系统必须复用 `IContentGenerator` 生成 summary / draft，不新增 LLM SDK。
-- **FR-9**：系统必须提供签名校验的外部 inbound endpoint。
-- **FR-10**：外部 inbound 必须显式携带或解析出 `repo_id` / 项目绑定，不能自动猜项目。
-- **FR-11**：Feishu 等 provider adapter 只能把消息转换为通用 inbound payload，不能直接创建 pending PRD。
-- **FR-12**：所有文本文件 I/O 必须显式 `encoding="utf-8"`。
+- **FR-3**：系统必须通过 `/api/v1/agent-runner/idea-inbox/*` API 读取和修改 inbox，不引入平行 `/api/v1/idea-inbox/*` 命名空间。
+- **FR-4**：系统必须以 append-only 方式追加想法到 `ideas.md`，不得重写已有原话。
+- **FR-5**：系统必须允许刷新 `summary.md`，且 summary 明确是 AI 派生、事实以 `ideas.md` 为准。
+- **FR-6**：系统必须能从选定想法生成 PRD 草稿，并将草稿保存到 `tasks/inbox/prd-drafts/`。
+- **FR-7**：系统必须要求人确认草稿后才写入 `tasks/pending/`。
+- **FR-8**：确认草稿写入 pending 时，文件名必须符合 `P0/P1/P2/P3-TYPE-YYYYMMDD-HHMMSS-slug.md`。
+- **FR-9**：系统必须复用 `IContentGenerator` 生成 summary / draft，不新增 LLM SDK。
+- **FR-10**：系统必须提供签名校验的外部 inbound endpoint。
+- **FR-11**：外部 inbound 必须显式携带或解析出 `repo_id` / 项目绑定，不能自动猜项目。
+- **FR-12**：Feishu 等 provider adapter 只能把消息转换为通用 inbound payload，不能直接创建 pending PRD。
+- **FR-13**：所有文本文件 I/O 必须显式 `encoding="utf-8"`。
 
 ## 9. Non-Goals
 

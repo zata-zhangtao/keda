@@ -112,6 +112,23 @@ class TestParseDeliveryDependencies:
         assert result.depends_on_issues == ()
         assert result.depends_on_prds == ("P2-FEAT-20260527-190923-prd-from-issue",)
 
+    def test_prd_reference_with_code_span_and_note_is_cleaned(self) -> None:
+        prd_text = """
+## Delivery Dependencies
+
+- Depends on tasks/issues:
+  - `tasks/archive/P1-FEAT-20260611-205725-agent-runner-unified-ops-console.md`（已完成；提供管理终端 shell、仓库 registry、进程/审计模式）
+  - `tasks/archive/P1-FEAT-20260614-200054-frontend-prd-roadmap.md` (已完成; 提供 `/roadmap` 页面)
+- Gate type: none
+"""
+        result = parse_delivery_dependencies(prd_text)
+
+        assert result.depends_on_issues == ()
+        assert result.depends_on_prds == (
+            "tasks/archive/P1-FEAT-20260611-205725-agent-runner-unified-ops-console.md",
+            "tasks/archive/P1-FEAT-20260614-200054-frontend-prd-roadmap.md",
+        )
+
     def test_soft_gate(self) -> None:
         prd_text = """
 ## Delivery Dependencies

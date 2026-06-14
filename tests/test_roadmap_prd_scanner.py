@@ -150,3 +150,38 @@ def test_unresolved_prd_dependency_is_marked(tmp_path: Path) -> None:
         dep.kind is RoadmapDependencyKind.UNRESOLVED
         for dep in prds[0].delivery_dependencies
     )
+
+
+def test_archived_prd_dependency_is_resolved_even_when_hidden(tmp_path: Path) -> None:
+    """Archived PRD refs should resolve from pending scans."""
+    _write_prd(
+        tmp_path,
+        "tasks/archive/P1-FEAT-20260614-200054-frontend-prd-roadmap.md",
+        (
+            "# PRD: Roadmap\n\n"
+            "- GitHub Issue: https://github.com/org/repo/issues/42\n\n"
+            "## Acceptance Checklist\n- [x] a\n"
+        ),
+    )
+    _write_prd(
+        tmp_path,
+        "tasks/pending/P1-FEAT-20260614-203810-frontend-idea-inbox-cross-platform.md",
+        (
+            "# PRD: Idea Inbox\n\n"
+            "## Delivery Dependencies\n"
+            "- Depends on tasks/issues: `tasks/archive/P1-FEAT-20260614-200054-frontend-prd-roadmap.md`（已完成）\n"
+        ),
+    )
+
+    pending_only_prds = scan_roadmap_prds(tmp_path, include_archived=False)
+    pending_prd = next(
+        prd
+        for prd in pending_only_prds
+        if prd.prd_path
+        == "tasks/pending/P1-FEAT-20260614-203810-frontend-idea-inbox-cross-platform.md"
+    )
+    assert pending_prd.delivery_dependencies
+    assert pending_prd.delivery_dependencies[0].kind is RoadmapDependencyKind.PRD
+    assert pending_prd.delivery_dependencies[0].to_path == (
+        "tasks/archive/P1-FEAT-20260614-200054-frontend-prd-roadmap.md"
+    )

@@ -248,7 +248,7 @@ class GeneratedContentTargetConfig:
     title_template: str = ""
     body_template: str = ""
     agent: str = "auto"
-    timeout_seconds: int = 60
+    timeout_seconds: int = 120
     prompt: str = ""
     include_commit_log: bool = True
     include_diff_stat: bool = True

@@ -100,6 +100,24 @@ def test_prd_dependency_blocks_until_upstream_merged() -> None:
     assert blockers[downstream.prd_path] is None
 
 
+def test_archived_prd_dependency_is_satisfied_when_hidden() -> None:
+    """A resolved archived PRD path should not block pending-only views."""
+    downstream = _make_prd(
+        "tasks/pending/P1-FEAT-20260101-downstream.md",
+        dependencies=(
+            RoadmapDependency(
+                from_path="tasks/pending/P1-FEAT-20260101-downstream.md",
+                to_path="tasks/archive/P1-FEAT-20260101-upstream.md",
+                kind=RoadmapDependencyKind.PRD,
+            ),
+        ),
+    )
+    client = FakeGitHubClient()
+    blockers = evaluate_roadmap_dependencies([downstream], client, LabelConfig())
+
+    assert blockers[downstream.prd_path] is None
+
+
 def test_cycle_is_detected() -> None:
     """A dependency cycle should be reported as a block reason."""
     a = _make_prd(

@@ -483,7 +483,7 @@ class AgentRunnerGeneratedContentTargetSettings(BaseModel):
     title_template: str | list[str] = ""
     body_template: str | list[str] = ""
     agent: str = "auto"
-    timeout_seconds: int = 60
+    timeout_seconds: int = 120
     prompt: str | list[str] = ""
     include_commit_log: bool = True
     include_diff_stat: bool = True

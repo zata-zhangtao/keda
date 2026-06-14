@@ -19,6 +19,7 @@ from backend.core.shared.models.agent_runner import (
 )
 from backend.core.use_cases.create_issue_from_prd import (
     IssueFromPrdRequest,
+    build_issue_body,
     create_issue_from_prd,
 )
 from backend.infrastructure.process_runner import SubprocessRunner
@@ -909,3 +910,22 @@ def test_create_issue_from_prd_disabled_uses_fallback(tmp_path: Path) -> None:
     create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
     assert len(create_calls) == 1
     assert "- PRD path: `tasks/example.md`" in create_calls[0]["body"]
+
+
+def test_build_issue_body_falls_back_to_first_h2_section() -> None:
+    """When PRD introduction keyword does not match, use the first ## section."""
+    body = build_issue_body(
+        relative_prd_path=Path("tasks/example.md"),
+        title="[Feature] Example",
+        acceptance_items=["- [ ] item"],
+        prd_text=(
+            "# PRD: Example\n\n"
+            "## 1. 背景与目标\n\n"
+            "Background content here.\n\n"
+            "## 2. 需求形态\n\n"
+            "Requirements here.\n"
+        ),
+    )
+    assert "Background content here." in body
+    assert "## Summary" in body
+    assert "- PRD path: `tasks/example.md`" in body

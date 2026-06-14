@@ -154,6 +154,32 @@ def extract_prd_section(prd_text: str, section_keywords: tuple[str, ...]) -> str
     return "\n".join(section_lines).strip()
 
 
+def extract_first_h2_section(prd_text: str) -> str:
+    """提取 PRD 中第一个 ``## `` 二级标题下的全部内容。
+
+    当按关键词提取引言失败时，使用此函数作为兜底：无论第一节标题如何命名，
+    都把它下面的内容取出来，避免 Issue fallback 正文出现空的 Summary。
+
+    Args:
+        prd_text: PRD 的完整文本。
+
+    Returns:
+        第一个 ``## `` 章节的内容；未找到 ``## `` 标题时返回空字符串。
+    """
+    lines = prd_text.splitlines()
+    in_section = False
+    section_lines: list[str] = []
+    for line in lines:
+        if line.startswith("## "):
+            if in_section:
+                break
+            in_section = True
+            continue
+        if in_section:
+            section_lines.append(line)
+    return "\n".join(section_lines).strip()
+
+
 # ---------------------------------------------------------------------------
 # 上下文构建
 # ---------------------------------------------------------------------------
@@ -186,6 +212,8 @@ def build_issue_context(
     introduction = extract_prd_section(
         prd_text, ("introduction", "intro", "引言", "概述")
     )
+    if not introduction:
+        introduction = extract_first_h2_section(prd_text)
     goals = extract_prd_section(prd_text, ("goal", "目标"))
     requirement_shape = extract_prd_section(prd_text, ("requirement", "需求", "shape"))
     change_impact_tree = extract_prd_section(

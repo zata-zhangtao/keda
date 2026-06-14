@@ -53,6 +53,7 @@ from backend.core.use_cases.agent_runner_validation import (
 )
 from backend.core.use_cases.generated_content import (
     build_issue_context,
+    extract_first_h2_section,
     extract_prd_section,
     generate_issue_content,
 )
@@ -241,10 +242,13 @@ def build_issue_body(
 
     # 从 PRD 中提取引言/目标章节，使 Issue 正文自成一体。
     # 使用与 AI 上下文构建器相同的关键词列表，确保 template、agent、
-    # fallback 三条路径保持一致。
+    # fallback 三条路径保持一致。若未匹配到关键词，则兜底取第一个 ## 标题
+    # 下的全部内容，避免中文 PRD（如“背景与目标”）出现空引言。
     introduction = extract_prd_section(
         prd_text, ("introduction", "intro", "引言", "概述")
     )
+    if not introduction:
+        introduction = extract_first_h2_section(prd_text)
     body_parts: list[str] = [
         "## Summary",
         "",
