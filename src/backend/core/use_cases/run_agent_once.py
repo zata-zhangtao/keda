@@ -281,11 +281,11 @@ def create_or_reuse_worktree(
             worktree_path,
             ", ".join(str(env_path) for env_path in copied_env_paths),
         )
-    _reconcile_worktree_with_remote_branch(worktree_path, config, process_runner)
     expected_branch = f"issue-{issue.number}"
     _ensure_worktree_branch(
         worktree_path, expected_branch, issue, config, process_runner
     )
+    _reconcile_worktree_with_remote_branch(worktree_path, config, process_runner)
     return worktree_path
 
 

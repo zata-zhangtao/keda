@@ -13,6 +13,7 @@ __all__ = [
     "get_current_branch",
     "get_head_sha",
     "has_changes",
+    "has_rebase_metadata",
     "is_detached_head",
     "list_changed_paths",
     "list_git_remotes",
@@ -70,6 +71,24 @@ def get_active_rebase_target(
             return raw_name[len("refs/heads/") :]
         return raw_name
     return None
+
+
+def has_rebase_metadata(worktree_path: Path, process_runner: IProcessRunner) -> bool:
+    """Return whether Git reports active rebase metadata for the worktree."""
+    for rebase_dir in ("rebase-merge", "rebase-apply"):
+        result = process_runner.run(
+            ["git", "rev-parse", "--git-path", rebase_dir],
+            cwd=worktree_path,
+            check=False,
+        )
+        if result.return_code != 0 or not result.stdout.strip():
+            continue
+        rebase_path = Path(result.stdout.strip())
+        if not rebase_path.is_absolute():
+            rebase_path = worktree_path / rebase_path
+        if rebase_path.exists():
+            return True
+    return False
 
 
 def run_verification(

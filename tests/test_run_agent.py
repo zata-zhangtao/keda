@@ -4030,6 +4030,154 @@ def test_create_or_reuse_worktree_calls_reconcile(tmp_path: Path) -> None:
     assert ("git", "branch", "--show-current") in commands
 
 
+def test_create_or_reuse_worktree_heals_detached_before_reconcile(
+    tmp_path: Path,
+) -> None:
+    """Detached worktree is reattached before remote branch reconciliation."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    path_command = ("echo", str(worktree_path))
+
+    class _DetachedThenBranchRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__(
+                responses={
+                    path_command: CommandResult(
+                        command=path_command,
+                        return_code=0,
+                        stdout=f"{worktree_path}\n",
+                        stderr="",
+                    ),
+                    ("git", "rev-parse", "--git-path", "info/exclude"): CommandResult(
+                        command=("git", "rev-parse", "--git-path", "info/exclude"),
+                        return_code=1,
+                        stdout="",
+                        stderr="",
+                    ),
+                    ("git", "rev-parse", "--abbrev-ref", "HEAD"): CommandResult(
+                        command=("git", "rev-parse", "--abbrev-ref", "HEAD"),
+                        return_code=0,
+                        stdout="HEAD\n",
+                        stderr="",
+                    ),
+                    (
+                        "git",
+                        "rev-parse",
+                        "--git-path",
+                        "rebase-merge/head-name",
+                    ): CommandResult(
+                        command=(
+                            "git",
+                            "rev-parse",
+                            "--git-path",
+                            "rebase-merge/head-name",
+                        ),
+                        return_code=0,
+                        stdout="missing-rebase-merge-head-name\n",
+                        stderr="",
+                    ),
+                    (
+                        "git",
+                        "rev-parse",
+                        "--git-path",
+                        "rebase-apply/head-name",
+                    ): CommandResult(
+                        command=(
+                            "git",
+                            "rev-parse",
+                            "--git-path",
+                            "rebase-apply/head-name",
+                        ),
+                        return_code=0,
+                        stdout="missing-rebase-apply-head-name\n",
+                        stderr="",
+                    ),
+                    ("git", "rev-parse", "--git-path", "rebase-merge"): CommandResult(
+                        command=("git", "rev-parse", "--git-path", "rebase-merge"),
+                        return_code=0,
+                        stdout="missing-rebase-merge\n",
+                        stderr="",
+                    ),
+                    ("git", "rev-parse", "--git-path", "rebase-apply"): CommandResult(
+                        command=("git", "rev-parse", "--git-path", "rebase-apply"),
+                        return_code=0,
+                        stdout="missing-rebase-apply\n",
+                        stderr="",
+                    ),
+                    ("git", "rev-parse", "HEAD"): CommandResult(
+                        command=("git", "rev-parse", "HEAD"),
+                        return_code=0,
+                        stdout="detached-sha\n",
+                        stderr="",
+                    ),
+                    (
+                        "git",
+                        "show-ref",
+                        "--verify",
+                        "--quiet",
+                        "refs/heads/issue-123",
+                    ): CommandResult(
+                        command=(
+                            "git",
+                            "show-ref",
+                            "--verify",
+                            "--quiet",
+                            "refs/heads/issue-123",
+                        ),
+                        return_code=0,
+                        stdout="",
+                        stderr="",
+                    ),
+                    ("git", "rev-parse", "refs/heads/issue-123"): CommandResult(
+                        command=("git", "rev-parse", "refs/heads/issue-123"),
+                        return_code=0,
+                        stdout="detached-sha\n",
+                        stderr="",
+                    ),
+                    ("git", "checkout", "issue-123"): CommandResult(
+                        command=("git", "checkout", "issue-123"),
+                        return_code=0,
+                        stdout="",
+                        stderr="",
+                    ),
+                    ("git", "branch", "--show-current"): CommandResult(
+                        command=("git", "branch", "--show-current"),
+                        return_code=0,
+                        stdout="issue-123\n",
+                        stderr="",
+                    ),
+                    _worktree_reconcile_ls_remote_result(exists=False)[
+                        0
+                    ]: _worktree_reconcile_ls_remote_result(exists=False)[1],
+                }
+            )
+
+    fake_runner = _DetachedThenBranchRunner()
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command=f"echo created {worktree_path}",
+            reuse_command=f"echo reused {worktree_path}",
+            path_command=f"echo {worktree_path}",
+        )
+    )
+
+    result_path = create_or_reuse_worktree(
+        tmp_path,
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        config,
+        fake_runner,
+    )
+
+    assert result_path == worktree_path.resolve()
+    commands = [tuple(c) for c in fake_runner.calls]
+    checkout_index = commands.index(("git", "checkout", "issue-123"))
+    ls_remote_index = commands.index(
+        ("git", "ls-remote", "--heads", "origin", "issue-123")
+    )
+    assert checkout_index < ls_remote_index
+    assert ("git", "ls-remote", "--heads", "origin", "") not in commands
+
+
 # Real Git integration helpers
 
 
@@ -5068,6 +5216,109 @@ def test_ensure_worktree_branch_aborts_conflicted_rebase_after_agent_fails_real_
     assert not (worktree_path / ".git" / "rebase-apply").exists()
 
 
+def test_ensure_worktree_branch_rejects_mismatched_rebase_target(
+    tmp_path: Path,
+) -> None:
+    """Active rebase for a different branch is left for manual recovery."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    rebase_merge = worktree_path / ".git" / "rebase-merge"
+    rebase_merge.mkdir(parents=True)
+    head_name = rebase_merge / "head-name"
+    head_name.write_text("refs/heads/issue-999", encoding="utf-8")
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "--abbrev-ref", "HEAD"),
+                return_code=0,
+                stdout="HEAD\n",
+                stderr="",
+            ),
+            ("git", "rev-parse", "--git-path", "rebase-merge/head-name"): CommandResult(
+                command=("git", "rev-parse", "--git-path", "rebase-merge/head-name"),
+                return_code=0,
+                stdout=f"{head_name}\n",
+                stderr="",
+            ),
+        }
+    )
+
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    with pytest.raises(
+        RuntimeError,
+        match="active rebase for branch 'issue-999'.*expects 'issue-123'",
+    ):
+        _ensure_worktree_branch(
+            worktree_path,
+            "issue-123",
+            IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+            AppConfig(),
+            fake_runner,
+        )
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "rebase", "--continue") not in commands
+    assert ("git", "rebase", "--abort") not in commands
+    assert ("git", "checkout", "issue-999") not in commands
+
+
+def test_ensure_worktree_branch_rejects_unconfirmed_rebase_target(
+    tmp_path: Path,
+) -> None:
+    """Active rebase with unreadable target is not treated as plain detached HEAD."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    rebase_merge = worktree_path / ".git" / "rebase-merge"
+    rebase_merge.mkdir(parents=True)
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "--abbrev-ref", "HEAD"),
+                return_code=0,
+                stdout="HEAD\n",
+                stderr="",
+            ),
+            ("git", "rev-parse", "--git-path", "rebase-merge/head-name"): CommandResult(
+                command=("git", "rev-parse", "--git-path", "rebase-merge/head-name"),
+                return_code=0,
+                stdout=f"{rebase_merge / 'missing-head-name'}\n",
+                stderr="",
+            ),
+            ("git", "rev-parse", "--git-path", "rebase-apply/head-name"): CommandResult(
+                command=("git", "rev-parse", "--git-path", "rebase-apply/head-name"),
+                return_code=0,
+                stdout=f"{worktree_path / '.git' / 'rebase-apply' / 'head-name'}\n",
+                stderr="",
+            ),
+            ("git", "rev-parse", "--git-path", "rebase-merge"): CommandResult(
+                command=("git", "rev-parse", "--git-path", "rebase-merge"),
+                return_code=0,
+                stdout=f"{rebase_merge}\n",
+                stderr="",
+            ),
+        }
+    )
+
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    with pytest.raises(RuntimeError, match="target branch cannot be confirmed"):
+        _ensure_worktree_branch(
+            worktree_path,
+            "issue-123",
+            IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+            AppConfig(),
+            fake_runner,
+        )
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "checkout", "issue-123") not in commands
+    assert ("git", "checkout", "-b", "issue-123") not in commands
+    assert ("git", "rebase", "--abort") not in commands
+
+
 def test_create_or_reuse_worktree_heals_detached_head_real_git(tmp_path: Path) -> None:
     """create_or_reuse_worktree recovers a reused worktree in detached HEAD."""
     repo_path = tmp_path / "repo"
@@ -5122,6 +5373,98 @@ def test_create_or_reuse_worktree_heals_detached_head_real_git(tmp_path: Path) -
         text=True,
     ).stdout.strip()
     assert current_branch == "issue-123"
+
+
+def test_create_or_reuse_worktree_heals_detached_head_before_remote_reconcile_real_git(
+    tmp_path: Path,
+) -> None:
+    """Detached reused worktree heals before remote reconciliation probes branch."""
+    remote_path = tmp_path / "remote.git"
+    local_path = tmp_path / "local"
+
+    _git_init_bare(remote_path)
+    local_repo = _git_init(local_path)
+    subprocess.run(
+        ["git", "-C", str(local_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    issue_sha = _git_commit(local_repo, "issue start")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    worktree_path = tmp_path / "issue-123"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(local_repo),
+            "worktree",
+            "add",
+            str(worktree_path),
+            "issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "checkout", "--detach", issue_sha],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="echo create-fail",
+            reuse_command="echo reused",
+            path_command=f"echo {worktree_path}",
+        )
+    )
+
+    result_path = create_or_reuse_worktree(
+        local_path,
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        config,
+        SubprocessRunner(),
+    )
+
+    assert result_path == worktree_path.resolve()
+    current_branch = subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    current_head = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_branch == "issue-123"
+    assert current_head == issue_sha
 
 
 def test_commit_requested_changes_rejects_detached_head(tmp_path: Path) -> None:

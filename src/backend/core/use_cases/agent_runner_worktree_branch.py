@@ -18,6 +18,7 @@ from backend.core.use_cases.agent_runner_git import (
     get_active_rebase_target,
     get_current_branch,
     get_head_sha,
+    has_rebase_metadata,
     has_changes,
     is_detached_head,
     run_verification,
@@ -59,10 +60,22 @@ def _ensure_worktree_branch(
 
     rebase_target = get_active_rebase_target(worktree_path, process_runner)
     if rebase_target is not None:
+        if rebase_target != expected_branch:
+            raise RuntimeError(
+                f"Worktree {worktree_path} is in an active rebase for branch "
+                f"'{rebase_target}', but Issue #{issue.number} expects "
+                f"'{expected_branch}'. Manual reconciliation is required."
+            )
         _recover_from_active_rebase(
             worktree_path, rebase_target, issue, config, process_runner
         )
         return
+    if has_rebase_metadata(worktree_path, process_runner):
+        raise RuntimeError(
+            f"Worktree {worktree_path} is in an active rebase, but the target "
+            f"branch cannot be confirmed for Issue #{issue.number}. Manual "
+            "reconciliation is required."
+        )
 
     _attach_branch_to_detached_head(worktree_path, expected_branch, process_runner)
 
