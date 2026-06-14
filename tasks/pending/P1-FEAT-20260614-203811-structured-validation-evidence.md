@@ -1,5 +1,7 @@
 # PRD: Realistic Validation 结构化证据可信度增强
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/85
+
 ## 1. Introduction & Goals
 
 ### Problem Statement
