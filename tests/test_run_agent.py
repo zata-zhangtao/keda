@@ -4870,7 +4870,13 @@ def test_ensure_worktree_branch_creates_branch_for_detached_head_real_git(
     from backend.infrastructure.process_runner import SubprocessRunner
     from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
 
-    _ensure_worktree_branch(worktree_path, "issue-123", SubprocessRunner())
+    _ensure_worktree_branch(
+        worktree_path,
+        "issue-123",
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        AppConfig(),
+        SubprocessRunner(),
+    )
 
     current_branch = subprocess.run(
         ["git", "-C", str(worktree_path), "branch", "--show-current"],
@@ -4920,7 +4926,13 @@ def test_ensure_worktree_branch_fast_forwards_branch_real_git(tmp_path: Path) ->
     from backend.infrastructure.process_runner import SubprocessRunner
     from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
 
-    _ensure_worktree_branch(worktree_path, "issue-123", SubprocessRunner())
+    _ensure_worktree_branch(
+        worktree_path,
+        "issue-123",
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        AppConfig(),
+        SubprocessRunner(),
+    )
 
     current_branch = subprocess.run(
         ["git", "-C", str(worktree_path), "branch", "--show-current"],
@@ -4979,13 +4991,19 @@ def test_ensure_worktree_branch_raises_when_branch_diverged_real_git(
     from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
 
     with pytest.raises(RuntimeError, match="diverged"):
-        _ensure_worktree_branch(worktree_path, "issue-123", SubprocessRunner())
+        _ensure_worktree_branch(
+            worktree_path,
+            "issue-123",
+            IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+            AppConfig(),
+            SubprocessRunner(),
+        )
 
 
-def test_ensure_worktree_branch_aborts_conflicted_rebase_real_git(
+def test_ensure_worktree_branch_aborts_conflicted_rebase_after_agent_fails_real_git(
     tmp_path: Path,
 ) -> None:
-    """Active rebase with conflicts is aborted and the target branch checked out."""
+    """Active rebase with conflicts falls back to abort when agent resolution fails."""
     repo_path = tmp_path / "repo"
     worktree_path = tmp_path / "issue-123"
     repo = _git_init(repo_path)
@@ -5031,7 +5049,13 @@ def test_ensure_worktree_branch_aborts_conflicted_rebase_real_git(
     from backend.infrastructure.process_runner import SubprocessRunner
     from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
 
-    _ensure_worktree_branch(worktree_path, "issue-123", SubprocessRunner())
+    _ensure_worktree_branch(
+        worktree_path,
+        "issue-123",
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        AppConfig(),
+        SubprocessRunner(),
+    )
 
     current_branch = subprocess.run(
         ["git", "-C", str(worktree_path), "branch", "--show-current"],
@@ -5169,3 +5193,126 @@ def test_publish_changes_rejects_detached_head(tmp_path: Path) -> None:
             github_client=fake_client,
             process_runner=fake_runner,
         )
+
+
+def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> None:
+    """Active rebase with conflicts is resolved by the configured agent."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    git_dir = worktree_path / ".git"
+    git_dir.mkdir()
+    rebase_merge = git_dir / "rebase-merge"
+    rebase_merge.mkdir()
+    head_name = rebase_merge / "head-name"
+    head_name.write_text("refs/heads/issue-123", encoding="utf-8")
+
+    class _AgentWritingRunner(FakeProcessRunner):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            input_text=None,
+        ):
+            if command[0] in ("claude", "kimi", "codex"):
+                request_path = cwd / ".agent-runner" / "commit-request.json"
+                request_path.parent.mkdir(parents=True, exist_ok=True)
+                request_path.write_text(
+                    '{"commit_message": "agent: resolve rebase conflicts"}',
+                    encoding="utf-8",
+                )
+                (cwd / "file.txt").write_text("resolved\n", encoding="utf-8")
+                return CommandResult(tuple(command), 0, "", "")
+            if tuple(command) == ("git", "status", "--porcelain"):
+                return CommandResult(tuple(command), 0, " M file.txt\n", "")
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+                input_text=input_text,
+            )
+
+    fake_runner = _AgentWritingRunner(
+        responses={
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "--abbrev-ref", "HEAD"),
+                return_code=0,
+                stdout="HEAD\n",
+                stderr="",
+            ),
+            ("git", "rev-parse", "--git-path", "rebase-merge/head-name"): CommandResult(
+                command=("git", "rev-parse", "--git-path", "rebase-merge/head-name"),
+                return_code=0,
+                stdout=f"{head_name}\n",
+                stderr="",
+            ),
+            ("git", "diff", "--name-only", "--diff-filter", "U"): CommandResult(
+                command=("git", "diff", "--name-only", "--diff-filter", "U"),
+                return_code=0,
+                stdout="file.txt\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "add", "-A"): CommandResult(
+                command=("git", "add", "-A"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            (
+                "git",
+                "commit",
+                "-m",
+                "agent: resolve rebase conflicts",
+            ): CommandResult(
+                command=("git", "commit", "-m", "agent: resolve rebase conflicts"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "--continue"): CommandResult(
+                command=("git", "rebase", "--continue"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("echo", "ok"): CommandResult(
+                command=("echo", "ok"),
+                return_code=0,
+                stdout="ok\n",
+                stderr="",
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-123\n",
+                stderr="",
+            ),
+        }
+    )
+
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    issue = IssueSummary(number=123, title="T", url="U", body="B", labels=())
+    config = AppConfig(
+        runner=RunnerConfig(
+            default_agent="claude",
+            verification_commands=["echo ok"],
+        )
+    )
+
+    _ensure_worktree_branch(worktree_path, "issue-123", issue, config, fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "commit", "-m", "agent: resolve rebase conflicts") in commands

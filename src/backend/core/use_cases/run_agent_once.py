@@ -281,13 +281,17 @@ def create_or_reuse_worktree(
         )
     _reconcile_worktree_with_remote_branch(worktree_path, config, process_runner)
     expected_branch = f"issue-{issue.number}"
-    _ensure_worktree_branch(worktree_path, expected_branch, process_runner)
+    _ensure_worktree_branch(
+        worktree_path, expected_branch, issue, config, process_runner
+    )
     return worktree_path
 
 
 def _ensure_worktree_branch(
     worktree_path: Path,
     expected_branch: str,
+    issue: IssueSummary,
+    config: AppConfig,
     process_runner: IProcessRunner,
 ) -> None:
     """Make sure the worktree is on the expected branch, self-healing when safe.
@@ -297,7 +301,10 @@ def _ensure_worktree_branch(
     the Issue). This helper recovers automatically:
 
     - Active rebase: try ``git rebase --continue`` when there are no conflicts;
-      otherwise ``git rebase --abort`` and checkout the recorded target branch.
+      when conflicts exist, ask the configured agent to resolve them and then
+      continue the rebase. If the agent cannot resolve the conflicts after the
+      configured number of attempts, abort the rebase and checkout the recorded
+      target branch so the runner can still proceed.
     - Detached HEAD without active rebase: move the expected branch to the
       current detached HEAD when the move is a fast-forward or the branch does
       not exist yet. If the branch and HEAD have diverged, raise a clear error
@@ -308,7 +315,9 @@ def _ensure_worktree_branch(
 
     rebase_target = get_active_rebase_target(worktree_path, process_runner)
     if rebase_target is not None:
-        _recover_from_active_rebase(worktree_path, rebase_target, process_runner)
+        _recover_from_active_rebase(
+            worktree_path, rebase_target, issue, config, process_runner
+        )
         return
 
     _attach_branch_to_detached_head(worktree_path, expected_branch, process_runner)
@@ -317,22 +326,89 @@ def _ensure_worktree_branch(
 def _recover_from_active_rebase(
     worktree_path: Path,
     rebase_target: str,
+    issue: IssueSummary,
+    config: AppConfig,
     process_runner: IProcessRunner,
 ) -> None:
-    """Leave an active rebase in a clean checkout of ``rebase_target``."""
-    conflict_result = process_runner.run(
-        ["git", "diff", "--name-only", "--diff-filter", "U"],
-        cwd=worktree_path,
-        check=False,
-    )
-    if not conflict_result.stdout.strip():
+    """Leave an active rebase in a clean checkout of ``rebase_target``.
+
+    Reuses the same agent-driven conflict resolution strategy as the post-PR
+    supervisor: when ``git rebase --continue`` cannot proceed because of
+    conflicts, the configured agent is prompted to resolve them and write a
+    commit request. The runner stages the resolved files, verifies them, and
+    continues the rebase. Only after exhausting the configured repair attempts
+    do we fall back to ``git rebase --abort``.
+    """
+    from backend.core.use_cases.pr_supervisor import build_conflict_resolution_prompt
+
+    def _try_continue_rebase() -> bool:
         continue_result = process_runner.run(
             ["git", "rebase", "--continue"],
             cwd=worktree_path,
             check=False,
         )
-        if continue_result.return_code == 0:
+        return continue_result.return_code == 0
+
+    def _conflicted_files() -> list[str]:
+        diff_names_result = process_runner.run(
+            ["git", "diff", "--name-only", "--diff-filter", "U"],
+            cwd=worktree_path,
+            check=False,
+        )
+        return [
+            line.strip()
+            for line in diff_names_result.stdout.splitlines()
+            if line.strip()
+        ]
+
+    if not _conflicted_files() and _try_continue_rebase():
+        return
+
+    max_attempts = max(0, config.post_pr_supervisor.max_repair_attempts)
+    for _attempt in range(1, max_attempts + 1):
+        conflicted = _conflicted_files()
+        if not conflicted:
+            if _try_continue_rebase():
+                return
+            break
+
+        prompt = build_conflict_resolution_prompt(
+            issue,
+            rebase_target,
+            get_head_sha(worktree_path, process_runner),
+            conflicted,
+        )
+        agent_name = choose_agent(issue, config, "auto")
+        try:
+            run_agent_with_prompt(agent_name, prompt, worktree_path, process_runner)
+        except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            _logger.warning(
+                "Agent conflict resolution attempt %d/%d failed for Issue #%d: %s",
+                _attempt,
+                max_attempts,
+                issue.number,
+                exc,
+            )
+            continue
+
+        request_path = worktree_path / ".agent-runner" / "commit-request.json"
+        if not request_path.is_file():
+            continue
+        commit_message = read_commit_request(worktree_path, issue)
+        remove_commit_request(worktree_path)
+        if not has_changes(worktree_path, process_runner):
+            raise RuntimeError("Agent requested a commit but produced no file changes.")
+        validate_safe_changes(worktree_path, config, process_runner)
+        process_runner.run(["git", "add", "-A"], cwd=worktree_path)
+        verification_results = run_verification(worktree_path, config, process_runner)
+        ensure_verification_passed(verification_results)
+        process_runner.run(
+            ["git", "commit", "-m", commit_message],
+            cwd=worktree_path,
+        )
+        if _try_continue_rebase():
             return
+
     process_runner.run(["git", "rebase", "--abort"], cwd=worktree_path, check=False)
     if is_detached_head(worktree_path, process_runner):
         process_runner.run(["git", "checkout", rebase_target], cwd=worktree_path)

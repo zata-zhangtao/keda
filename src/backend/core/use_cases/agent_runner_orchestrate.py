@@ -418,7 +418,9 @@ def _process_blocked_resolution(
         repo_path, issue, config, process_runner
     )
     expected_branch = f"issue-{issue.number}"
-    _ensure_worktree_branch(worktree_path, expected_branch, process_runner)
+    _ensure_worktree_branch(
+        worktree_path, expected_branch, issue, config, process_runner
+    )
     current_branch = get_current_branch(worktree_path, process_runner)
     if current_branch != expected_branch:
         raise RuntimeError(
@@ -756,7 +758,9 @@ def _process_running_publish_recovery(
         repo_path, issue, config, process_runner
     )
     expected_branch = f"issue-{issue.number}"
-    _ensure_worktree_branch(worktree_path, expected_branch, process_runner)
+    _ensure_worktree_branch(
+        worktree_path, expected_branch, issue, config, process_runner
+    )
 
     # 检查是否有可复用的本地 commit
     commit_result = _reuse_existing_local_commit(
