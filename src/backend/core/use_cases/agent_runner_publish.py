@@ -125,6 +125,8 @@ def publish_changes(
         RuntimeError: 分支不匹配或远程不存在。
     """
     branch = get_current_branch(worktree_path, process_runner)
+    if not branch:
+        raise RuntimeError("Refusing to publish: worktree is in detached HEAD state.")
     if expected_branch is not None and branch != expected_branch:
         raise RuntimeError(
             f"Refusing to publish from unexpected branch: {branch} "

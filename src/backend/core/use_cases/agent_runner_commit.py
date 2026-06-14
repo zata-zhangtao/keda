@@ -152,6 +152,8 @@ def commit_requested_changes(
         subprocess.CalledProcessError: git add 或 git commit 命令失败。
     """
     current_branch = get_current_branch(worktree_path, process_runner)
+    if not current_branch:
+        raise RuntimeError("Refusing to commit: worktree is in detached HEAD state.")
     if current_branch != expected_branch:
         raise RuntimeError(f"Refusing to commit on unexpected branch: {current_branch}")
     commit_message = read_commit_request(worktree_path, issue)

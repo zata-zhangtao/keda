@@ -47,7 +47,7 @@ from backend.core.use_cases.agent_runner_blocked_claim import (
     _acquire_blocked_claim_lock,
     _release_blocked_claim_lock,
 )
-from backend.core.use_cases.agent_runner_git import has_changes
+from backend.core.use_cases.agent_runner_git import has_changes, get_current_branch
 from backend.core.use_cases.agent_runner_workflow import (
     claim_blocked_issue,
     find_latest_unconsumed_marker,
@@ -72,11 +72,13 @@ from backend.core.use_cases.pr_supervisor import (
     execute_rebase,
     execute_repair,
 )
+from backend.core.use_cases.agent_runner_worktree_branch import (
+    _ensure_worktree_branch,
+)
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
     format_command,
-    get_current_branch,
     get_head_sha,
 )
 
@@ -416,8 +418,11 @@ def _process_blocked_resolution(
     worktree_path = _find_worktree_path_for_issue(
         repo_path, issue, config, process_runner
     )
-    current_branch = get_current_branch(worktree_path, process_runner)
     expected_branch = f"issue-{issue.number}"
+    _ensure_worktree_branch(
+        worktree_path, expected_branch, issue, config, process_runner
+    )
+    current_branch = get_current_branch(worktree_path, process_runner)
     if current_branch != expected_branch:
         raise RuntimeError(
             f"Blocked resolution aborted: on branch {current_branch}, "
@@ -753,7 +758,10 @@ def _process_running_publish_recovery(
     worktree_path = _find_worktree_path_for_issue(
         repo_path, issue, config, process_runner
     )
-    expected_branch = get_current_branch(worktree_path, process_runner)
+    expected_branch = f"issue-{issue.number}"
+    _ensure_worktree_branch(
+        worktree_path, expected_branch, issue, config, process_runner
+    )
 
     # 检查是否有可复用的本地 commit
     commit_result = _reuse_existing_local_commit(

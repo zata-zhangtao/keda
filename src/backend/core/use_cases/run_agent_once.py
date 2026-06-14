@@ -38,8 +38,6 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_runner_commit import (
     EmptyCommitRequestError,
     commit_requested_changes,
-    read_commit_request,
-    remove_commit_request,
     sanitize_commit_message,
     unstage_changes,
 )
@@ -74,9 +72,11 @@ from backend.core.use_cases.agent_runner_feedback import (
     truncate_recovery_output,
 )
 from backend.core.use_cases.agent_runner_git import (
+    get_active_rebase_target,
     get_current_branch,
     get_head_sha,
     has_changes,
+    is_detached_head,
     list_changed_paths,
     list_git_remotes,
     run_verification,
@@ -94,6 +94,10 @@ from backend.core.use_cases.agent_runner_validation import (
     ensure_validation_evidence_ready,
     format_validation_evidence_failure,
 )
+from backend.core.use_cases.agent_runner_worktree_branch import (
+    _ensure_worktree_branch,
+    _reconcile_worktree_with_remote_branch,
+)
 from backend.core.use_cases.worktree_env import copy_missing_env_files
 
 _logger = logging.getLogger(__name__)
@@ -106,6 +110,8 @@ __all__ = [
     "EmptyCommitRequestError",
     "UnrecoverableError",
     "VerificationFailedError",
+    "_ensure_worktree_branch",
+    "_reconcile_worktree_with_remote_branch",
     "build_blocked_continuation_prompt",
     "build_prompt",
     "build_recovery_prompt",
@@ -128,14 +134,14 @@ __all__ = [
     "format_recovery_failure_summary",
     "format_result_for_recovery",
     "format_verification_failure",
+    "get_active_rebase_target",
     "get_current_branch",
     "get_head_sha",
     "has_changes",
+    "is_detached_head",
     "list_changed_paths",
     "list_git_remotes",
     "publish_changes",
-    "read_commit_request",
-    "remove_commit_request",
     "resolve_prd_archive_path",
     "run_agent",
     "run_agent_until_committed",
@@ -275,6 +281,11 @@ def create_or_reuse_worktree(
             worktree_path,
             ", ".join(str(env_path) for env_path in copied_env_paths),
         )
+    _reconcile_worktree_with_remote_branch(worktree_path, config, process_runner)
+    expected_branch = f"issue-{issue.number}"
+    _ensure_worktree_branch(
+        worktree_path, expected_branch, issue, config, process_runner
+    )
     return worktree_path
 
 

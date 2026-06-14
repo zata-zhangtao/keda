@@ -33,6 +33,7 @@ from backend.core.use_cases.run_agent_once import (
     choose_agent,
     classify_failure,
     commit_requested_changes,
+    create_or_reuse_worktree,
     detect_usage_limit_root_cause,
     ensure_prd_delivery_ready,
     extract_agent_response_text,
@@ -46,6 +47,7 @@ from backend.core.use_cases.run_agent_once import (
     resolve_prd_archive_path,
     run_agent_with_prompt,
     validate_safe_changes,
+    _reconcile_worktree_with_remote_branch,
 )
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
@@ -1612,6 +1614,12 @@ def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> No
                 command=("git", "rev-parse", "HEAD"),
                 return_code=0,
                 stdout="before-sha\n",
+                stderr="",
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-123\n",
                 stderr="",
             ),
             ("git", "status", "--porcelain"): CommandResult(
@@ -3691,3 +3699,1620 @@ def test_run_once_rebase_conflict_detached_head(
         "issue-73",
     ) in commands
     assert not any(c[:2] == ("git", "commit") for c in commands)
+
+
+def _worktree_reconcile_branch_result(branch: str = "issue-123") -> CommandResult:
+    return CommandResult(
+        command=("git", "branch", "--show-current"),
+        return_code=0,
+        stdout=f"{branch}\n",
+        stderr="",
+    )
+
+
+def _worktree_reconcile_ls_remote_result(
+    *, exists: bool, remote: str = "origin", branch: str = "issue-123"
+) -> tuple[tuple[str, ...], CommandResult]:
+    stdout = f"abc123\trefs/heads/{branch}\n" if exists else ""
+    command = ("git", "ls-remote", "--heads", remote, branch)
+    return command, CommandResult(
+        command=command, return_code=0, stdout=stdout, stderr=""
+    )
+
+
+def _worktree_reconcile_rev_parse_result(
+    ref: str, sha: str
+) -> tuple[tuple[str, ...], CommandResult]:
+    command = ("git", "rev-parse", ref)
+    return command, CommandResult(
+        command=command, return_code=0, stdout=f"{sha}\n", stderr=""
+    )
+
+
+def _worktree_reconcile_ancestor_result(
+    ancestor: str, descendant: str, is_ancestor: bool
+) -> tuple[tuple[str, ...], CommandResult]:
+    command = ("git", "merge-base", "--is-ancestor", ancestor, descendant)
+    return command, CommandResult(
+        command=command, return_code=0 if is_ancestor else 1, stdout="", stderr=""
+    )
+
+
+def _worktree_reconcile_status_result(dirty: bool) -> CommandResult:
+    return CommandResult(
+        command=("git", "status", "--porcelain"),
+        return_code=0,
+        stdout=" M file.txt\n" if dirty else "",
+        stderr="",
+    )
+
+
+def test_worktree_reconcile_remote_ahead_clean_fast_forwards(tmp_path: Path) -> None:
+    """Clean local-behind worktree fast-forwards to the fetched remote branch."""
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): _worktree_reconcile_branch_result(),
+            _worktree_reconcile_ls_remote_result(exists=True)[
+                0
+            ]: _worktree_reconcile_ls_remote_result(exists=True)[1],
+            _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[1],
+            _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
+                1
+            ],
+            _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", True)[
+                0
+            ]: _worktree_reconcile_ancestor_result(
+                "local-sha", "origin/issue-123", True
+            )[1],
+            _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
+                0
+            ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
+            ("git", "status", "--porcelain"): _worktree_reconcile_status_result(
+                dirty=False
+            ),
+            ("git", "merge", "--ff-only", "origin/issue-123"): CommandResult(
+                command=("git", "merge", "--ff-only", "origin/issue-123"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+
+    _reconcile_worktree_with_remote_branch(tmp_path, AppConfig(), fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert (
+        "git",
+        "fetch",
+        "origin",
+        "+issue-123:refs/remotes/origin/issue-123",
+    ) in commands
+    assert ("git", "merge", "--ff-only", "origin/issue-123") in commands
+
+
+def test_worktree_reconcile_remote_ahead_dirty_fails(tmp_path: Path) -> None:
+    """Dirty local-behind worktree fails instead of resetting local changes."""
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): _worktree_reconcile_branch_result(),
+            _worktree_reconcile_ls_remote_result(exists=True)[
+                0
+            ]: _worktree_reconcile_ls_remote_result(exists=True)[1],
+            _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[1],
+            _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
+                1
+            ],
+            _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", True)[
+                0
+            ]: _worktree_reconcile_ancestor_result(
+                "local-sha", "origin/issue-123", True
+            )[1],
+            _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
+                0
+            ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
+            ("git", "status", "--porcelain"): _worktree_reconcile_status_result(
+                dirty=True
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="uncommitted changes"):
+        _reconcile_worktree_with_remote_branch(tmp_path, AppConfig(), fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "merge", "--ff-only", "origin/issue-123") not in commands
+    assert ("git", "reset", "--hard") not in commands
+
+
+def test_worktree_reconcile_local_ahead_preserved(tmp_path: Path) -> None:
+    """Local-ahead worktree is left untouched to support publish recovery."""
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): _worktree_reconcile_branch_result(),
+            _worktree_reconcile_ls_remote_result(exists=True)[
+                0
+            ]: _worktree_reconcile_ls_remote_result(exists=True)[1],
+            _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[1],
+            _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
+                1
+            ],
+            _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", False)[
+                0
+            ]: _worktree_reconcile_ancestor_result(
+                "local-sha", "origin/issue-123", False
+            )[1],
+            _worktree_reconcile_ancestor_result("remote-sha", "HEAD", True)[
+                0
+            ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", True)[1],
+        }
+    )
+
+    _reconcile_worktree_with_remote_branch(tmp_path, AppConfig(), fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "merge", "--ff-only", "origin/issue-123") not in commands
+    assert ("git", "reset", "--hard") not in commands
+
+
+def test_worktree_reconcile_diverged_fails(tmp_path: Path) -> None:
+    """Diverged branch fails and requests manual reconciliation."""
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): _worktree_reconcile_branch_result(),
+            _worktree_reconcile_ls_remote_result(exists=True)[
+                0
+            ]: _worktree_reconcile_ls_remote_result(exists=True)[1],
+            _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[1],
+            _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
+                1
+            ],
+            _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", False)[
+                0
+            ]: _worktree_reconcile_ancestor_result(
+                "local-sha", "origin/issue-123", False
+            )[1],
+            _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
+                0
+            ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="diverged"):
+        _reconcile_worktree_with_remote_branch(tmp_path, AppConfig(), fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "merge") not in commands
+    assert ("git", "rebase") not in commands
+    assert ("git", "reset") not in commands
+
+
+def test_worktree_reconcile_missing_remote_branch_noops(tmp_path: Path) -> None:
+    """No-op when the configured remote does not have the current branch."""
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): _worktree_reconcile_branch_result(),
+            _worktree_reconcile_ls_remote_result(exists=False)[
+                0
+            ]: _worktree_reconcile_ls_remote_result(exists=False)[1],
+        }
+    )
+
+    _reconcile_worktree_with_remote_branch(tmp_path, AppConfig(), fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "fetch") not in commands
+
+
+def test_worktree_reconcile_already_synced_noops(tmp_path: Path) -> None:
+    """No-op when local HEAD equals the fetched remote branch."""
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): _worktree_reconcile_branch_result(),
+            _worktree_reconcile_ls_remote_result(exists=True)[
+                0
+            ]: _worktree_reconcile_ls_remote_result(exists=True)[1],
+            _worktree_reconcile_rev_parse_result("HEAD", "same-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("HEAD", "same-sha")[1],
+            _worktree_reconcile_rev_parse_result("origin/issue-123", "same-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "same-sha")[1],
+        }
+    )
+
+    _reconcile_worktree_with_remote_branch(tmp_path, AppConfig(), fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "merge", "--ff-only", "origin/issue-123") not in commands
+
+
+def test_worktree_reconcile_uses_configured_remote(tmp_path: Path) -> None:
+    """Reconcile uses config.git.remote instead of hard-coded origin."""
+    config = AppConfig(git=GitConfig(remote="zata"))
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): _worktree_reconcile_branch_result(),
+            _worktree_reconcile_ls_remote_result(exists=True, remote="zata")[
+                0
+            ]: _worktree_reconcile_ls_remote_result(exists=True, remote="zata")[1],
+            _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[1],
+            _worktree_reconcile_rev_parse_result("zata/issue-123", "remote-sha")[
+                0
+            ]: _worktree_reconcile_rev_parse_result("zata/issue-123", "remote-sha")[1],
+            _worktree_reconcile_ancestor_result("local-sha", "zata/issue-123", True)[
+                0
+            ]: _worktree_reconcile_ancestor_result("local-sha", "zata/issue-123", True)[
+                1
+            ],
+            _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
+                0
+            ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
+            ("git", "status", "--porcelain"): _worktree_reconcile_status_result(
+                dirty=False
+            ),
+            ("git", "merge", "--ff-only", "zata/issue-123"): CommandResult(
+                command=("git", "merge", "--ff-only", "zata/issue-123"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+
+    _reconcile_worktree_with_remote_branch(tmp_path, config, fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "ls-remote", "--heads", "zata", "issue-123") in commands
+    assert (
+        "git",
+        "fetch",
+        "zata",
+        "+issue-123:refs/remotes/zata/issue-123",
+    ) in commands
+    assert ("git", "merge", "--ff-only", "zata/issue-123") in commands
+
+
+def test_create_or_reuse_worktree_calls_reconcile(tmp_path: Path) -> None:
+    """create_or_reuse_worktree should invoke remote branch reconciliation."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    path_command = ("echo", str(worktree_path))
+    fake_runner = FakeProcessRunner(
+        responses={
+            path_command: CommandResult(
+                command=path_command,
+                return_code=0,
+                stdout=f"{worktree_path}\n",
+                stderr="",
+            ),
+            ("git", "branch", "--show-current"): _worktree_reconcile_branch_result(),
+            _worktree_reconcile_ls_remote_result(exists=False)[
+                0
+            ]: _worktree_reconcile_ls_remote_result(exists=False)[1],
+        }
+    )
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command=f"echo created {worktree_path}",
+            reuse_command=f"echo reused {worktree_path}",
+            path_command=f"echo {worktree_path}",
+        )
+    )
+
+    result_path = create_or_reuse_worktree(
+        tmp_path,
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        config,
+        fake_runner,
+    )
+
+    assert result_path == worktree_path.resolve()
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "branch", "--show-current") in commands
+
+
+# Real Git integration helpers
+
+
+def _git_init_bare(path: Path) -> Path:
+    subprocess.run(
+        ["git", "init", "--bare", str(path)], check=True, capture_output=True
+    )
+    return path
+
+
+def _git_init(path: Path) -> Path:
+    subprocess.run(["git", "init", str(path)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(path), "branch", "-M", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "test@example.com"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "Test User"],
+        check=True,
+        capture_output=True,
+    )
+    return path
+
+
+def _git_commit(path: Path, message: str) -> str:
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "--allow-empty", "-m", message],
+        check=True,
+        capture_output=True,
+    )
+    sha_result = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return sha_result.stdout.strip()
+
+
+def test_worktree_reconcile_remote_ahead_real_git_fast_forwards(tmp_path: Path) -> None:
+    """Reused clean worktree fast-forwards when remote branch is ahead."""
+    remote_path = tmp_path / "remote.git"
+    local_path = tmp_path / "local"
+
+    _git_init_bare(remote_path)
+    local_repo = _git_init(local_path)
+    subprocess.run(
+        ["git", "-C", str(local_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "issue start")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    worktree_path = tmp_path / "issue-123"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(local_repo),
+            "worktree",
+            "add",
+            str(worktree_path),
+            "issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    local_head_before = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    # Advance remote issue-123 from another clone
+    other_path = tmp_path / "other"
+    other_repo = _git_init(other_path)
+    subprocess.run(
+        ["git", "-C", str(other_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other_repo), "fetch", "origin"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(other_repo),
+            "checkout",
+            "-b",
+            "issue-123",
+            "--track",
+            "origin/issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    remote_head = _git_commit(other_repo, "remote advance")
+    subprocess.run(
+        ["git", "-C", str(other_repo), "push", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    _reconcile_worktree_with_remote_branch(
+        worktree_path, AppConfig(), SubprocessRunner()
+    )
+
+    local_head_after = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert local_head_before != remote_head
+    assert local_head_after == remote_head
+
+
+def test_worktree_reconcile_local_ahead_real_git_preserved(tmp_path: Path) -> None:
+    """Local-ahead worktree keeps its commits when remote is behind."""
+    remote_path = tmp_path / "remote.git"
+    local_path = tmp_path / "local"
+
+    _git_init_bare(remote_path)
+    local_repo = _git_init(local_path)
+    subprocess.run(
+        ["git", "-C", str(local_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "issue start")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    worktree_path = tmp_path / "issue-123"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(local_repo),
+            "worktree",
+            "add",
+            str(worktree_path),
+            "issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    local_ahead = _git_commit(worktree_path, "local only")
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    _reconcile_worktree_with_remote_branch(
+        worktree_path, AppConfig(), SubprocessRunner()
+    )
+
+    local_head_after = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert local_head_after == local_ahead
+
+
+def test_worktree_reconcile_dirty_real_git_fails(tmp_path: Path) -> None:
+    """Dirty worktree behind remote fails without destructive reset."""
+    remote_path = tmp_path / "remote.git"
+    local_path = tmp_path / "local"
+
+    _git_init_bare(remote_path)
+    local_repo = _git_init(local_path)
+    subprocess.run(
+        ["git", "-C", str(local_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    tracked = local_path / "tracked.txt"
+    tracked.write_text("base\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "add", "tracked.txt"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "issue start")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    worktree_path = tmp_path / "issue-123"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(local_repo),
+            "worktree",
+            "add",
+            str(worktree_path),
+            "issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    # Advance remote issue-123
+    other_path = tmp_path / "other"
+    other_repo = _git_init(other_path)
+    subprocess.run(
+        ["git", "-C", str(other_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other_repo), "fetch", "origin"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(other_repo),
+            "checkout",
+            "-b",
+            "issue-123",
+            "--track",
+            "origin/issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(other_repo, "remote advance")
+    subprocess.run(
+        ["git", "-C", str(other_repo), "push", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+
+    # Make worktree dirty
+    dirty_file = worktree_path / "tracked.txt"
+    dirty_file.write_text("dirty\n", encoding="utf-8")
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    with pytest.raises(RuntimeError, match="uncommitted changes"):
+        _reconcile_worktree_with_remote_branch(
+            worktree_path, AppConfig(), SubprocessRunner()
+        )
+
+    status = subprocess.run(
+        ["git", "-C", str(worktree_path), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert "tracked.txt" in status
+
+
+def test_worktree_reconcile_diverged_real_git_fails(tmp_path: Path) -> None:
+    """Diverged worktree fails and does not rebase, merge, or reset."""
+    remote_path = tmp_path / "remote.git"
+    local_path = tmp_path / "local"
+
+    _git_init_bare(remote_path)
+    local_repo = _git_init(local_path)
+    subprocess.run(
+        ["git", "-C", str(local_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "issue start")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    worktree_path = tmp_path / "issue-123"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(local_repo),
+            "worktree",
+            "add",
+            str(worktree_path),
+            "issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    # Local commit in worktree
+    local_head = _git_commit(worktree_path, "local advance")
+
+    # Force-push a different history to remote
+    other_path = tmp_path / "other"
+    other_repo = _git_init(other_path)
+    subprocess.run(
+        ["git", "-C", str(other_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other_repo), "fetch", "origin"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(other_repo),
+            "checkout",
+            "-b",
+            "issue-123",
+            "--track",
+            "origin/issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other_repo), "reset", "--hard", "origin/main"],
+        check=True,
+        capture_output=True,
+    )
+    _ = _git_commit(other_repo, "diverged remote advance")
+    subprocess.run(
+        ["git", "-C", str(other_repo), "push", "--force", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    with pytest.raises(RuntimeError, match="diverged"):
+        _reconcile_worktree_with_remote_branch(
+            worktree_path, AppConfig(), SubprocessRunner()
+        )
+
+    final_head = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert final_head == local_head
+
+
+def test_worktree_reconcile_custom_remote_real_git(tmp_path: Path) -> None:
+    """Reconcile fast-forwards using a non-origin remote name."""
+    remote_path = tmp_path / "remote.git"
+    local_path = tmp_path / "local"
+
+    _git_init_bare(remote_path)
+    local_repo = _git_init(local_path)
+    subprocess.run(
+        ["git", "-C", str(local_repo), "remote", "add", "zata", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "zata", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "issue start")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "zata", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    worktree_path = tmp_path / "issue-123"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(local_repo),
+            "worktree",
+            "add",
+            str(worktree_path),
+            "issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    other_path = tmp_path / "other"
+    other_repo = _git_init(other_path)
+    subprocess.run(
+        ["git", "-C", str(other_repo), "remote", "add", "zata", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other_repo), "fetch", "zata"], check=True, capture_output=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(other_repo),
+            "checkout",
+            "-b",
+            "issue-123",
+            "--track",
+            "zata/issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    remote_head = _git_commit(other_repo, "zata advance")
+    subprocess.run(
+        ["git", "-C", str(other_repo), "push", "zata", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    config = AppConfig(git=GitConfig(remote="zata"))
+    _reconcile_worktree_with_remote_branch(worktree_path, config, SubprocessRunner())
+
+    local_head_after = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert local_head_after == remote_head
+
+
+def test_create_or_reuse_worktree_real_git_fast_forwards(tmp_path: Path) -> None:
+    """create_or_reuse_worktree fast-forwards a reused clean worktree."""
+    remote_path = tmp_path / "remote.git"
+    local_path = tmp_path / "local"
+
+    _git_init_bare(remote_path)
+    local_repo = _git_init(local_path)
+    subprocess.run(
+        ["git", "-C", str(local_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(local_repo, "issue start")
+    subprocess.run(
+        ["git", "-C", str(local_repo), "push", "-u", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(local_repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    worktree_path = tmp_path / "issue-123"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(local_repo),
+            "worktree",
+            "add",
+            str(worktree_path),
+            "issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    other_path = tmp_path / "other"
+    other_repo = _git_init(other_path)
+    subprocess.run(
+        ["git", "-C", str(other_repo), "remote", "add", "origin", str(remote_path)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(other_repo), "fetch", "origin"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(other_repo),
+            "checkout",
+            "-b",
+            "issue-123",
+            "--track",
+            "origin/issue-123",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    remote_head = _git_commit(other_repo, "remote advance")
+    subprocess.run(
+        ["git", "-C", str(other_repo), "push", "origin", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="echo create-fail",
+            reuse_command="echo reused",
+            path_command=f"echo {worktree_path}",
+        )
+    )
+
+    result_path = create_or_reuse_worktree(
+        local_path,
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        config,
+        SubprocessRunner(),
+    )
+
+    assert result_path == worktree_path.resolve()
+    local_head_after = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert local_head_after == remote_head
+
+
+def test_worktree_reconcile_run_once(tmp_path: Path) -> None:
+    """run_once issues reconcile commands before invoking the agent."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: run once reconcile")
+
+    class _ReconcileOrderRunner(FakeProcessRunner):
+        def __init__(self, wt_path: Path) -> None:
+            super().__init__()
+            self._wt_path = wt_path
+            self._sha_calls = 0
+            self._status_calls = 0
+            self._committed = False
+            self.responses = {
+                ("git", "remote"): _git_remote_result("origin"),
+                (
+                    "git",
+                    "ls-remote",
+                    "--heads",
+                    "origin",
+                    "refs/heads/iar-evidence/*",
+                ): CommandResult(
+                    command=(
+                        "git",
+                        "ls-remote",
+                        "--heads",
+                        "origin",
+                        "refs/heads/iar-evidence/*",
+                    ),
+                    return_code=0,
+                    stdout="",
+                    stderr="",
+                ),
+                (
+                    "git",
+                    "branch",
+                    "--show-current",
+                ): _worktree_reconcile_branch_result(),
+                _worktree_reconcile_ls_remote_result(exists=True)[
+                    0
+                ]: _worktree_reconcile_ls_remote_result(exists=True)[1],
+                _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
+                    0
+                ]: _worktree_reconcile_rev_parse_result(
+                    "origin/issue-123", "remote-sha"
+                )[1],
+                _worktree_reconcile_ancestor_result(
+                    "local-sha", "origin/issue-123", True
+                )[0]: _worktree_reconcile_ancestor_result(
+                    "local-sha", "origin/issue-123", True
+                )[1],
+                _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
+                    0
+                ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
+                ("git", "merge", "--ff-only", "origin/issue-123"): CommandResult(
+                    command=("git", "merge", "--ff-only", "origin/issue-123"),
+                    return_code=0,
+                    stdout="",
+                    stderr="",
+                ),
+                ("git", "rev-parse", "--git-path", "info/exclude"): CommandResult(
+                    command=("git", "rev-parse", "--git-path", "info/exclude"),
+                    return_code=0,
+                    stdout=".git/info/exclude\n",
+                    stderr="",
+                ),
+                ("git", "rev-list", "--count", "origin/main..HEAD"): CommandResult(
+                    command=("git", "rev-list", "--count", "origin/main..HEAD"),
+                    return_code=0,
+                    stdout="0\n",
+                    stderr="",
+                ),
+                ("git", "push", "-u", "origin", "issue-123"): CommandResult(
+                    command=("git", "push", "-u", "origin", "issue-123"),
+                    return_code=0,
+                    stdout="",
+                    stderr="",
+                ),
+            }
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            input_text=None,
+        ):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                self._sha_calls += 1
+                sha = (
+                    "after-sha"
+                    if self._committed
+                    else "remote-sha"
+                    if self._sha_calls > 1
+                    else "local-sha"
+                )
+                return CommandResult(command_tuple, 0, f"{sha}\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                self._status_calls += 1
+                status_stdout = (
+                    ""
+                    if self._status_calls == 1 or self._committed
+                    else " M file.txt\n?? .agent-runner/commit-request.json\n"
+                )
+                return CommandResult(command_tuple, 0, status_stdout, "")
+            if command_tuple[:1] == ("codex",):
+                (self._wt_path / "fake.txt").write_text("change\n", encoding="utf-8")
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "commit", "-m", "agent: run once reconcile"):
+                self._committed = True
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    path_command = ("echo", str(worktree_path))
+    fake_runner = _ReconcileOrderRunner(worktree_path)
+    fake_runner.responses[path_command] = CommandResult(
+        command=path_command, return_code=0, stdout=f"{worktree_path}\n", stderr=""
+    )
+    config = _config_with_review_disabled(worktree_path, "echo ok")
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=fake_runner,
+    )
+
+    assert exit_code == 0
+    commands = [tuple(c) for c in fake_runner.calls]
+    merge_index = commands.index(("git", "merge", "--ff-only", "origin/issue-123"))
+    codex_indices = [i for i, c in enumerate(commands) if c[:1] == ("codex",)]
+    assert codex_indices
+    assert all(merge_index < idx for idx in codex_indices)
+
+
+def test_ensure_worktree_branch_creates_branch_for_detached_head_real_git(
+    tmp_path: Path,
+) -> None:
+    """Detached HEAD without an existing branch is healed by creating it."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "on branch")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    detached_sha = _git_commit(worktree_path, "detached commit")
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "checkout", detached_sha],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "-D", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    _ensure_worktree_branch(
+        worktree_path,
+        "issue-123",
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        AppConfig(),
+        SubprocessRunner(),
+    )
+
+    current_branch = subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_branch == "issue-123"
+    head_sha = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head_sha == detached_sha
+
+
+def test_ensure_worktree_branch_fast_forwards_branch_real_git(tmp_path: Path) -> None:
+    """Detached HEAD ahead of the expected branch is healed by fast-forward."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "on branch")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    detached_sha = _git_commit(worktree_path, "detached commit")
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "checkout", detached_sha],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    _ensure_worktree_branch(
+        worktree_path,
+        "issue-123",
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        AppConfig(),
+        SubprocessRunner(),
+    )
+
+    current_branch = subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_branch == "issue-123"
+    head_sha = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head_sha == detached_sha
+
+
+def test_ensure_worktree_branch_raises_when_branch_diverged_real_git(
+    tmp_path: Path,
+) -> None:
+    """Detached HEAD that diverged from the expected branch cannot be healed."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "on branch")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    detached_sha = _git_commit(worktree_path, "detached commit")
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "checkout", detached_sha],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "branch moved on")
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    with pytest.raises(RuntimeError, match="diverged"):
+        _ensure_worktree_branch(
+            worktree_path,
+            "issue-123",
+            IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+            AppConfig(),
+            SubprocessRunner(),
+        )
+
+
+def test_ensure_worktree_branch_aborts_conflicted_rebase_after_agent_fails_real_git(
+    tmp_path: Path,
+) -> None:
+    """Active rebase with conflicts falls back to abort when agent resolution fails."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    file_path = repo / "file.txt"
+    file_path.write_text("main content\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", str(file_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "main commit")
+
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    file_path.write_text("issue content\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", str(file_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "issue commit")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "rebase", "main"],
+        check=False,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    _ensure_worktree_branch(
+        worktree_path,
+        "issue-123",
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        AppConfig(),
+        SubprocessRunner(),
+    )
+
+    current_branch = subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_branch == "issue-123"
+    assert not (worktree_path / ".git" / "rebase-merge").exists()
+    assert not (worktree_path / ".git" / "rebase-apply").exists()
+
+
+def test_create_or_reuse_worktree_heals_detached_head_real_git(tmp_path: Path) -> None:
+    """create_or_reuse_worktree recovers a reused worktree in detached HEAD."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "on branch")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    detached_sha = _git_commit(worktree_path, "detached commit")
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "checkout", detached_sha],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="echo create-fail",
+            reuse_command="echo reused",
+            path_command=f"echo {worktree_path}",
+        )
+    )
+
+    result_path = create_or_reuse_worktree(
+        repo_path,
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        config,
+        SubprocessRunner(),
+    )
+
+    assert result_path == worktree_path.resolve()
+    current_branch = subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_branch == "issue-123"
+
+
+def test_commit_requested_changes_rejects_detached_head(tmp_path: Path) -> None:
+    """Commit proxy must refuse to commit when the worktree is detached."""
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+    commit_request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    commit_request_path.parent.mkdir(parents=True, exist_ok=True)
+    commit_request_path.write_text(
+        '{"commit_message": "agent: commit"}', encoding="utf-8"
+    )
+    file_path = worktree_path / "file.txt"
+    file_path.write_text("change\n", encoding="utf-8")
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="echo",
+            reuse_command="echo",
+            path_command="echo",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="detached HEAD"):
+        commit_requested_changes(
+            IssueSummary(number=1, title="T", url="U", body="B", labels=()),
+            worktree_path,
+            config,
+            fake_runner,
+            expected_branch="issue-1",
+        )
+
+
+def test_publish_changes_rejects_detached_head(tmp_path: Path) -> None:
+    """Publish must refuse to push when the worktree is detached."""
+    fake_client = FakeGitHubClient()
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="echo",
+            reuse_command="echo",
+            path_command="echo",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="detached HEAD"):
+        publish_changes(
+            issue=IssueSummary(number=1, title="T", url="U", body="B", labels=()),
+            worktree_path=tmp_path / "wt",
+            config=config,
+            github_client=fake_client,
+            process_runner=fake_runner,
+        )
+
+
+def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> None:
+    """Active rebase with conflicts is resolved by the configured agent."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    git_dir = worktree_path / ".git"
+    git_dir.mkdir()
+    rebase_merge = git_dir / "rebase-merge"
+    rebase_merge.mkdir()
+    head_name = rebase_merge / "head-name"
+    head_name.write_text("refs/heads/issue-123", encoding="utf-8")
+
+    class _AgentWritingRunner(FakeProcessRunner):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            input_text=None,
+        ):
+            if command[0] in ("claude", "kimi", "codex"):
+                request_path = cwd / ".agent-runner" / "commit-request.json"
+                request_path.parent.mkdir(parents=True, exist_ok=True)
+                request_path.write_text(
+                    '{"commit_message": "agent: resolve rebase conflicts"}',
+                    encoding="utf-8",
+                )
+                (cwd / "file.txt").write_text("resolved\n", encoding="utf-8")
+                return CommandResult(tuple(command), 0, "", "")
+            if tuple(command) == ("git", "status", "--porcelain"):
+                return CommandResult(tuple(command), 0, " M file.txt\n", "")
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+                input_text=input_text,
+            )
+
+    fake_runner = _AgentWritingRunner(
+        responses={
+            ("git", "rev-parse", "--abbrev-ref", "HEAD"): CommandResult(
+                command=("git", "rev-parse", "--abbrev-ref", "HEAD"),
+                return_code=0,
+                stdout="HEAD\n",
+                stderr="",
+            ),
+            ("git", "rev-parse", "--git-path", "rebase-merge/head-name"): CommandResult(
+                command=("git", "rev-parse", "--git-path", "rebase-merge/head-name"),
+                return_code=0,
+                stdout=f"{head_name}\n",
+                stderr="",
+            ),
+            ("git", "diff", "--name-only", "--diff-filter", "U"): CommandResult(
+                command=("git", "diff", "--name-only", "--diff-filter", "U"),
+                return_code=0,
+                stdout="file.txt\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "add", "-A"): CommandResult(
+                command=("git", "add", "-A"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            (
+                "git",
+                "commit",
+                "-m",
+                "agent: resolve rebase conflicts",
+            ): CommandResult(
+                command=("git", "commit", "-m", "agent: resolve rebase conflicts"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "rebase", "--continue"): CommandResult(
+                command=("git", "rebase", "--continue"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("echo", "ok"): CommandResult(
+                command=("echo", "ok"),
+                return_code=0,
+                stdout="ok\n",
+                stderr="",
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-123\n",
+                stderr="",
+            ),
+        }
+    )
+
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    issue = IssueSummary(number=123, title="T", url="U", body="B", labels=())
+    config = AppConfig(
+        runner=RunnerConfig(
+            default_agent="claude",
+            verification_commands=["echo ok"],
+        )
+    )
+
+    _ensure_worktree_branch(worktree_path, "issue-123", issue, config, fake_runner)
+
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "commit", "-m", "agent: resolve rebase conflicts") in commands
