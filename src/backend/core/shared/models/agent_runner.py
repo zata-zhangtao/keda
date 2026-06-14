@@ -242,7 +242,7 @@ class SupervisorActionResult:
 class GeneratedContentTargetConfig:
     """Configuration for a single generated-content target."""
 
-    enabled: bool = False
+    enabled: bool = True
     mode: str = "template"
     output: str = "json"
     title_template: str = ""
@@ -258,7 +258,7 @@ class GeneratedContentTargetConfig:
 class GeneratedContentConfig:
     """Generated-content configuration for Issues and PRs."""
 
-    enabled: bool = False
+    enabled: bool = True
     fallback: str = "template"
     max_input_chars: int = 20000
     default_agent: str = "auto"

@@ -332,7 +332,7 @@ crash_retry_max_backoff_seconds = 600
 # GitHub Issue / PR 内容生成（面向人类阅读，不影响实现 Agent）
 [agent_runner.generated_content]
 # 是否启用 AI 生成 Issue / PR 正文
-enabled = false
+enabled = true
 # 生成失败时的回退方式（当前仅支持 template）
 fallback = "template"
 # 生成 prompt 的最大字符数
@@ -343,7 +343,7 @@ default_agent = "auto"
 # 从 PRD 生成 GitHub Issue 的模板
 [agent_runner.generated_content.issue_from_prd]
 # 是否从 PRD 生成 Issue
-enabled = false
+enabled = true
 # 生成模式：template（模板渲染）或 agent（调用 AI）
 mode = "template"
 # 输出格式：json / markdown
@@ -366,7 +366,7 @@ include_diff_stat = true
 # 从 commit 信息生成 Draft PR 的模板
 [agent_runner.generated_content.draft_pr]
 # 是否生成 Draft PR 正文
-enabled = false
+enabled = true
 # 生成模式：template（模板渲染）或 agent（调用 AI）
 mode = "template"
 # 输出格式：json / markdown
@@ -1356,13 +1356,13 @@ Prompt 模板支持以下变量占位符：
 
 ```toml
 [agent_runner.generated_content]
-enabled = false
+enabled = true
 fallback = "template"
 max_input_chars = 20000
 default_agent = "auto"
 
 [agent_runner.generated_content.issue_from_prd]
-enabled = false
+enabled = true
 mode = "template"
 output = "json"
 title_template = "{prd_title}"
@@ -1387,7 +1387,7 @@ prompt = [
 ]
 
 [agent_runner.generated_content.draft_pr]
-enabled = false
+enabled = true
 mode = "template"
 output = "markdown"
 include_commit_log = true

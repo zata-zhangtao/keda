@@ -477,7 +477,7 @@ class AgentRunnerDeliberationSettings(BaseModel):
 class AgentRunnerGeneratedContentTargetSettings(BaseModel):
     """Generated-content target configuration supporting TOML string-list syntax."""
 
-    enabled: bool = False
+    enabled: bool = True
     mode: str = "template"
     output: str = "json"
     title_template: str | list[str] = ""
@@ -501,7 +501,7 @@ class AgentRunnerGeneratedContentTargetSettings(BaseModel):
 class AgentRunnerGeneratedContentSettings(BaseModel):
     """Generated-content configuration for Issues and PRs."""
 
-    enabled: bool = False
+    enabled: bool = True
     fallback: str = "template"
     max_input_chars: int = 20000
     default_agent: str = "auto"
