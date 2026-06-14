@@ -62,9 +62,13 @@ export function PrdCard({ prd, onStart, starting }: PrdCardProps) {
             <CardTitle className="truncate text-base" title={prd.title}>
               {prd.title}
             </CardTitle>
-            <p className="mt-0.5 text-xs text-slate-500">{prd.prd_path}</p>
+            <p className="mt-0.5 truncate text-xs text-slate-500" title={prd.prd_path}>
+              {prd.prd_path}
+            </p>
           </div>
-          <Badge variant={STATE_VARIANTS[prd.state]}>{STATE_LABELS[prd.state]}</Badge>
+          <Badge variant={STATE_VARIANTS[prd.state]} className="shrink-0">
+            {STATE_LABELS[prd.state]}
+          </Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
