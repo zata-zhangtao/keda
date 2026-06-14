@@ -46,7 +46,11 @@ def _init_git_repository(tmp_path: Path, name: str) -> Path:
     _run_git(repo_path, "config", "user.email", "test@example.com")
     _run_git(repo_path, "config", "user.name", "Test User")
     (repo_path / "README.md").write_text("placeholder", encoding="utf-8")
-    _run_git(repo_path, "add", "README.md")
+    (repo_path / ".iar.toml").write_text(
+        '[agent_runner.repository]\nid = "test-repo"\n',
+        encoding="utf-8",
+    )
+    _run_git(repo_path, "add", "README.md", ".iar.toml")
     _run_git(repo_path, "commit", "-m", "init")
     return repo_path
 

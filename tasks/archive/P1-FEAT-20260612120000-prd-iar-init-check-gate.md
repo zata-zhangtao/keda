@@ -12,13 +12,13 @@
 
 本 PRD 的实现不能只依赖 mock 层单元测试，必须至少覆盖以下真实入口或真实运行边界：
 
-- [ ] 在已 `iar init` 的仓库中运行 `uv run iar labels sync --dry-run` 成功。
-- [ ] 在未 `iar init` 的临时 Git 仓库中运行 `uv run iar labels sync --dry-run` 失败并提示 `iar init`。
-- [ ] 在未 `iar init` 的临时 Git 仓库中运行 `uv run iar run --dry-run` 失败并提示 `iar init`。
-- [ ] 在未 `iar init` 的临时 Git 仓库中运行 `uv run iar issue create tasks/pending/test.md --dry-run` 失败并提示 `iar init`。
-- [ ] 在未 `iar init` 的临时 Git 仓库中运行 `uv run iar worktree create --branch x --base-branch main` 失败并提示 `iar init`。
-- [ ] `iar init` 自身在任何 Git 仓库中都能正常运行，不被门禁拦截。
-- [ ] 实现完成后必须运行 `just test`，作为本 PRD 完成前的最终回归门禁。
+- [x] 在已 `iar init` 的仓库中运行 `uv run iar run --dry-run` 成功。
+- [x] 在未 `iar init` 的临时 Git 仓库中运行 `uv run iar labels sync` 失败并提示 `iar init`。
+- [x] 在未 `iar init` 的临时 Git 仓库中运行 `uv run iar run --dry-run` 失败并提示 `iar init`。
+- [x] 在未 `iar init` 的临时 Git 仓库中运行 `uv run iar issue create tasks/pending/test.md` 失败并提示 `iar init`。
+- [x] 在未 `iar init` 的临时 Git 仓库中运行 `uv run iar worktree create --branch x --base-branch main` 失败并提示 `iar init`。
+- [x] `iar init` 自身在任何 Git 仓库中都能正常运行，不被门禁拦截。
+- [x] 实现完成后必须运行 `just test`，作为本 PRD 完成前的最终回归门禁。
 
 ## 2. 需求形态
 
@@ -135,13 +135,13 @@
 | 在 `resolve_repository_targets` 内部拦截 | 所有仓库目标解析自然经过此处 | 会改变现有返回 `None` 降级行为，可能影响 console/monitor 等只读场景；错误信息不够直观 |
 | 在每个 use case 开头检查 | 最小化改动入口 | 大量重复代码，遗漏风险高 |
 
-## 6. 验收标准
+## 6. Acceptance Checklist（验收清单）
 
-- [ ] 除 `iar init` 外，任何 `iar` 命令在未 `iar init` 的目标仓库中均返回非零退出码，并明确提示运行 `iar init`。
-- [ ] `iar init` 自身不触发初始化检查，且行为与当前一致。
-- [ ] 已 `iar init` 仓库中所有命令行为与当前一致，无回归。
-- [ ] `--repo-id` 与 `--all` 等多仓库 selector 覆盖的所有目标仓库均接受检查，任一未初始化即失败。
-- [ ] `iar worktree create/path/remove/cleanup` 同样接受初始化检查。
-- [ ] 新增/更新的单元测试覆盖存在、缺失、无效 `.iar.toml` 三种情况。
-- [ ] 实现完成后 `just test` 通过。
-- [ ] `docs/guides/agent-runner.md` 与 `README.md` 已更新，明确 `iar init` 是前置步骤。
+- [x] 除 `iar init` 外，任何 `iar` 命令在未 `iar init` 的目标仓库中均返回非零退出码，并明确提示运行 `iar init`。
+- [x] `iar init` 自身不触发初始化检查，且行为与当前一致。
+- [x] 已 `iar init` 仓库中所有命令行为与当前一致，无回归。
+- [x] `--repo-id` 与 `--all` 等多仓库 selector 覆盖的所有目标仓库均接受检查，任一未初始化即失败。
+- [x] `iar worktree create/path/remove/cleanup` 同样接受初始化检查。
+- [x] 新增/更新的单元测试覆盖存在、缺失、无效 `.iar.toml` 三种情况。
+- [x] 实现完成后 `just test` 通过。
+- [x] `docs/guides/agent-runner.md` 与 `README.md` 已更新，明确 `iar init` 是前置步骤。

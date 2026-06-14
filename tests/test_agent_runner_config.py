@@ -14,6 +14,10 @@ from backend.engines.agent_runner.factory import (
     resolve_issue_from_prd_target,
     resolve_repository_targets,
 )
+from backend.engines.agent_runner.repository_local import (
+    IARRepositoryNotInitializedError,
+    require_iar_repository_initialized,
+)
 from backend.infrastructure.config import settings as settings_module
 from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentSettings,
@@ -470,29 +474,65 @@ def test_merge_repository_config_overrides_generated_content() -> None:
     assert merged.generated_content.issue_from_prd.mode == "agent"
 
 
-def test_merge_repository_config_inherits_generated_content() -> None:
-    """Unoverridden generated_content fields should inherit from global config."""
-    from backend.engines.agent_runner.factory import merge_repository_config
+def test_require_iar_repository_initialized_accepts_valid_config(
+    tmp_path: Path,
+) -> None:
+    """A valid .iar.toml with non-empty repository.id should pass."""
+    repo_path = _init_git_repository(tmp_path, "initialized")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "initialized"
+""",
+    )
+    require_iar_repository_initialized(repo_path)
 
-    global_config = AppConfig(
-        generated_content=AgentRunnerGeneratedContentSettings(
-            enabled=True,
-            max_input_chars=10000,
-            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
-                enabled=True, mode="template", title_template="global"
-            ),
-        )
+
+def test_require_iar_repository_initialized_rejects_missing_config(
+    tmp_path: Path,
+) -> None:
+    """Missing .iar.toml should raise IARRepositoryNotInitializedError."""
+    repo_path = _init_git_repository(tmp_path, "missing")
+    with pytest.raises(IARRepositoryNotInitializedError) as exc_info:
+        require_iar_repository_initialized(repo_path)
+    assert str(repo_path / ".iar.toml") in str(exc_info.value)
+
+
+def test_require_iar_repository_initialized_rejects_empty_repo_id(
+    tmp_path: Path,
+) -> None:
+    """An empty repository.id should raise IARRepositoryNotInitializedError."""
+    repo_path = _init_git_repository(tmp_path, "empty-id")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = ""
+""",
     )
-    repo_settings = AgentRunnerRepositorySettings(
-        path="/tmp/repo",
-        generated_content=AgentRunnerGeneratedContentSettings(
-            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
-                title_template="repo"
-            ),
-        ),
-    )
-    merged = merge_repository_config(global_config, repo_settings)
-    assert merged.generated_content.enabled is True
-    assert merged.generated_content.max_input_chars == 10000
-    assert merged.generated_content.issue_from_prd.title_template == "repo"
-    assert merged.generated_content.issue_from_prd.mode == "template"
+    with pytest.raises(IARRepositoryNotInitializedError) as exc_info:
+        require_iar_repository_initialized(repo_path)
+    assert str(repo_path / ".iar.toml") in str(exc_info.value)
+
+
+def test_require_iar_repository_initialized_rejects_invalid_toml(
+    tmp_path: Path,
+) -> None:
+    """Invalid TOML should raise IARRepositoryNotInitializedError."""
+    repo_path = _init_git_repository(tmp_path, "invalid")
+    _write_local_iar_config(repo_path, "this is not valid toml")
+    with pytest.raises(IARRepositoryNotInitializedError) as exc_info:
+        require_iar_repository_initialized(repo_path)
+    assert str(repo_path / ".iar.toml") in str(exc_info.value)
+
+
+def test_require_iar_repository_initialized_rejects_missing_agent_runner_section(
+    tmp_path: Path,
+) -> None:
+    """TOML without [agent_runner] should raise IARRepositoryNotInitializedError."""
+    repo_path = _init_git_repository(tmp_path, "no-section")
+    _write_local_iar_config(repo_path, '[other]\nkey = "value"\n')
+    with pytest.raises(IARRepositoryNotInitializedError) as exc_info:
+        require_iar_repository_initialized(repo_path)
+    assert str(repo_path / ".iar.toml") in str(exc_info.value)

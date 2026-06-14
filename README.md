@@ -81,6 +81,8 @@ iar completion show --shell zsh
 
 ### 初始化与配置
 
+**前置步骤：所有 `iar` 子命令（除 `iar init` 本身外）都要求目标仓库已经执行过 `iar init`**。未初始化时命令会立即失败并提示运行 `iar init`。
+
 ```bash
 # 在目标仓库初始化本地配置
 iar init

@@ -14,6 +14,7 @@ from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGitSettings,
     AgentRunnerLocalSettings,
+    AgentRunnerPostPrSupervisorSettings,
     AgentRunnerPrePushReviewSettings,
     AgentRunnerPromptSettings,
     AgentRunnerRepositoryMetadataSettings,
@@ -21,10 +22,52 @@ from backend.infrastructure.config.settings import (
     AgentRunnerSafetySettings,
     AgentRunnerValidationSettings,
     AgentRunnerWorktreeSettings,
-    AgentRunnerPostPrSupervisorSettings,
     IAR_REPOSITORY_CONFIG_FILENAME,
+    load_agent_runner_local_settings,
 )
 from backend.infrastructure.process_runner import CommandResult, SubprocessRunner
+
+
+class IARRepositoryNotInitializedError(Exception):
+    """Raised when a target repository has not run `iar init`."""
+
+    def __init__(self, repo_root_path: Path, config_path: Path) -> None:
+        self.repo_root_path = repo_root_path
+        self.config_path = config_path
+        super().__init__(
+            f"Repository '{repo_root_path}' is not initialized for iar. "
+            f"Expected local config: {config_path}"
+        )
+
+
+def require_iar_repository_initialized(
+    repo_root_path: Path,
+    process_runner: SubprocessRunner | None = None,  # noqa: ARG001
+) -> None:
+    """Raise if the repository lacks a valid .iar.toml.
+
+    A valid local config means:
+    - `.iar.toml` exists as a regular file.
+    - It is parseable TOML.
+    - It contains an `[agent_runner]` section.
+    - `repository.id` is non-empty.
+
+    Args:
+        repo_root_path: Target Git repository root path.
+        process_runner: Optional subprocess runner (unused, kept for API
+            symmetry with other repository-local helpers).
+
+    Raises:
+        IARRepositoryNotInitializedError: If the repository is not initialized.
+    """
+    config_path = repo_root_path / IAR_REPOSITORY_CONFIG_FILENAME
+    try:
+        local_settings = load_agent_runner_local_settings(repo_root_path)
+    except ValueError as exc:
+        raise IARRepositoryNotInitializedError(repo_root_path, config_path) from exc
+
+    if local_settings is None or not local_settings.id:
+        raise IARRepositoryNotInitializedError(repo_root_path, config_path)
 
 
 @dataclass(frozen=True)
