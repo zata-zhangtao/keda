@@ -1,6 +1,7 @@
 # PRD: Issue 驱动 PRD 自动生成与重写
 
-- GitHub Issue: (待创建)
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/87
+
 
 ## 1. Introduction & Goals
 
