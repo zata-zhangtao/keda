@@ -1,5 +1,7 @@
 # PRD: iar 命令仓库初始化门禁
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/82
+
 ## 1. 背景与目标
 
 当前除 `iar init` 外的所有 `iar` 命令在目标仓库缺少 `.iar.toml` 时都会静默降级运行：使用 `config.toml` 全局默认值、用目录名作为 `repo_id`、使用 `origin` 作为默认 remote 等。这会导致标签同步到错误仓库、Issue 创建到错误项目、runner 推送到错误 remote 等难以排查的问题。
