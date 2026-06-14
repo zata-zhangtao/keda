@@ -410,6 +410,17 @@ include_diff_stat = true
 - 复制是 best effort：单个文件失败（如悬空 symlink）只记日志，不会中断 agent run
 - 复制过来的文件保持 gitignored 状态，不会让 worktree 变脏，也不影响 `iar worktree cleanup` 的默认清理判定
 
+## worktree 分支安全与自动修复
+
+`iar run` 在把 agent 放入 worktree 前会执行两项准备：
+
+1. **远程分支对齐**：如果 `refs/remotes/<remote>/issue-<number>` 存在，则 fetch 并仅当本地分支是其祖先、且 worktree 干净时做 fast-forward；dirty、diverged 或本地领先场景会保留本地状态并失败/继续，不会 destructive reset。
+2. **分支状态自愈**：如果 worktree 处于 detached HEAD（例如 post-PR supervisor 正在 rebase 或被人工 checkout 到某个 commit），runner 会尝试自动恢复：
+   - 处于 active rebase 时：无冲突则 `rebase --continue`；有冲突则 `rebase --abort` 并 checkout 目标分支。
+   - 单纯 detached HEAD：若 `issue-<number>` 分支不存在或当前 HEAD 领先于该分支，则把分支指到当前 HEAD 并 checkout；若已分叉则报错，避免静默丢失历史。
+
+如果恢复失败，runner 会把 Issue 标记为 `failed` 并给出可操作的错误信息；成功则继续正常执行 agent、验证和发布流程。
+
 ## 清理 stale issue worktree
 
 当 Issue 对应的 PR 合并并删除远端分支后，本地可能仍保留 `issue-<number>` 分支和 `.iar-worktrees/issue-<number>`。可以用 `iar worktree cleanup` 做一次安全清理：

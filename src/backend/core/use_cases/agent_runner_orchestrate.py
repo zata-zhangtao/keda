@@ -73,6 +73,7 @@ from backend.core.use_cases.pr_supervisor import (
     execute_repair,
 )
 from backend.core.use_cases.run_agent_once import (
+    _ensure_worktree_branch,
     choose_agent,
     create_or_reuse_worktree,
     format_command,
@@ -416,8 +417,9 @@ def _process_blocked_resolution(
     worktree_path = _find_worktree_path_for_issue(
         repo_path, issue, config, process_runner
     )
-    current_branch = get_current_branch(worktree_path, process_runner)
     expected_branch = f"issue-{issue.number}"
+    _ensure_worktree_branch(worktree_path, expected_branch, process_runner)
+    current_branch = get_current_branch(worktree_path, process_runner)
     if current_branch != expected_branch:
         raise RuntimeError(
             f"Blocked resolution aborted: on branch {current_branch}, "
@@ -753,7 +755,8 @@ def _process_running_publish_recovery(
     worktree_path = _find_worktree_path_for_issue(
         repo_path, issue, config, process_runner
     )
-    expected_branch = get_current_branch(worktree_path, process_runner)
+    expected_branch = f"issue-{issue.number}"
+    _ensure_worktree_branch(worktree_path, expected_branch, process_runner)
 
     # 检查是否有可复用的本地 commit
     commit_result = _reuse_existing_local_commit(

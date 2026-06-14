@@ -74,9 +74,11 @@ from backend.core.use_cases.agent_runner_feedback import (
     truncate_recovery_output,
 )
 from backend.core.use_cases.agent_runner_git import (
+    get_active_rebase_target,
     get_current_branch,
     get_head_sha,
     has_changes,
+    is_detached_head,
     list_changed_paths,
     list_git_remotes,
     run_verification,
@@ -128,9 +130,11 @@ __all__ = [
     "format_recovery_failure_summary",
     "format_result_for_recovery",
     "format_verification_failure",
+    "get_active_rebase_target",
     "get_current_branch",
     "get_head_sha",
     "has_changes",
+    "is_detached_head",
     "list_changed_paths",
     "list_git_remotes",
     "publish_changes",
@@ -276,7 +280,105 @@ def create_or_reuse_worktree(
             ", ".join(str(env_path) for env_path in copied_env_paths),
         )
     _reconcile_worktree_with_remote_branch(worktree_path, config, process_runner)
+    expected_branch = f"issue-{issue.number}"
+    _ensure_worktree_branch(worktree_path, expected_branch, process_runner)
     return worktree_path
+
+
+def _ensure_worktree_branch(
+    worktree_path: Path,
+    expected_branch: str,
+    process_runner: IProcessRunner,
+) -> None:
+    """Make sure the worktree is on the expected branch, self-healing when safe.
+
+    A worktree can end up in detached HEAD because of a concurrent or aborted
+    rebase (e.g. the post-PR supervisor rebased while the main runner claimed
+    the Issue). This helper recovers automatically:
+
+    - Active rebase: try ``git rebase --continue`` when there are no conflicts;
+      otherwise ``git rebase --abort`` and checkout the recorded target branch.
+    - Detached HEAD without active rebase: move the expected branch to the
+      current detached HEAD when the move is a fast-forward or the branch does
+      not exist yet. If the branch and HEAD have diverged, raise a clear error
+      so a human can decide which history to keep.
+    """
+    if not is_detached_head(worktree_path, process_runner):
+        return
+
+    rebase_target = get_active_rebase_target(worktree_path, process_runner)
+    if rebase_target is not None:
+        _recover_from_active_rebase(worktree_path, rebase_target, process_runner)
+        return
+
+    _attach_branch_to_detached_head(worktree_path, expected_branch, process_runner)
+
+
+def _recover_from_active_rebase(
+    worktree_path: Path,
+    rebase_target: str,
+    process_runner: IProcessRunner,
+) -> None:
+    """Leave an active rebase in a clean checkout of ``rebase_target``."""
+    conflict_result = process_runner.run(
+        ["git", "diff", "--name-only", "--diff-filter", "U"],
+        cwd=worktree_path,
+        check=False,
+    )
+    if not conflict_result.stdout.strip():
+        continue_result = process_runner.run(
+            ["git", "rebase", "--continue"],
+            cwd=worktree_path,
+            check=False,
+        )
+        if continue_result.return_code == 0:
+            return
+    process_runner.run(["git", "rebase", "--abort"], cwd=worktree_path, check=False)
+    if is_detached_head(worktree_path, process_runner):
+        process_runner.run(["git", "checkout", rebase_target], cwd=worktree_path)
+
+
+def _attach_branch_to_detached_head(
+    worktree_path: Path,
+    expected_branch: str,
+    process_runner: IProcessRunner,
+) -> None:
+    """Move ``expected_branch`` to the detached HEAD when it is safe to do so."""
+    detached_sha = get_head_sha(worktree_path, process_runner)
+    branch_ref = f"refs/heads/{expected_branch}"
+    branch_exists_result = process_runner.run(
+        ["git", "show-ref", "--verify", "--quiet", branch_ref],
+        cwd=worktree_path,
+        check=False,
+    )
+
+    if branch_exists_result.return_code != 0:
+        process_runner.run(
+            ["git", "checkout", "-b", expected_branch],
+            cwd=worktree_path,
+        )
+        return
+
+    branch_sha = _rev_parse(worktree_path, branch_ref, process_runner)
+    if detached_sha == branch_sha:
+        process_runner.run(["git", "checkout", expected_branch], cwd=worktree_path)
+        return
+
+    branch_is_ancestor = _is_ancestor(
+        worktree_path, branch_sha, detached_sha, process_runner
+    )
+    if branch_is_ancestor:
+        process_runner.run(
+            ["git", "checkout", "-B", expected_branch, detached_sha],
+            cwd=worktree_path,
+        )
+        return
+
+    raise RuntimeError(
+        f"Worktree {worktree_path} is in detached HEAD and the expected branch "
+        f"'{expected_branch}' has diverged from HEAD ({detached_sha[:8]}). "
+        "Manual reconciliation is required to decide which history to keep."
+    )
 
 
 def _remote_branch_exists(

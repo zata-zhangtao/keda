@@ -1616,6 +1616,12 @@ def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> No
                 stdout="before-sha\n",
                 stderr="",
             ),
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-123\n",
+                stderr="",
+            ),
             ("git", "status", "--porcelain"): CommandResult(
                 command=("git", "status", "--porcelain"),
                 return_code=0,
@@ -4823,3 +4829,343 @@ def test_worktree_reconcile_run_once(tmp_path: Path) -> None:
     codex_indices = [i for i, c in enumerate(commands) if c[:1] == ("codex",)]
     assert codex_indices
     assert all(merge_index < idx for idx in codex_indices)
+
+
+def test_ensure_worktree_branch_creates_branch_for_detached_head_real_git(
+    tmp_path: Path,
+) -> None:
+    """Detached HEAD without an existing branch is healed by creating it."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "on branch")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    detached_sha = _git_commit(worktree_path, "detached commit")
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "checkout", detached_sha],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "-D", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    _ensure_worktree_branch(worktree_path, "issue-123", SubprocessRunner())
+
+    current_branch = subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_branch == "issue-123"
+    head_sha = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head_sha == detached_sha
+
+
+def test_ensure_worktree_branch_fast_forwards_branch_real_git(tmp_path: Path) -> None:
+    """Detached HEAD ahead of the expected branch is healed by fast-forward."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "on branch")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    detached_sha = _git_commit(worktree_path, "detached commit")
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "checkout", detached_sha],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    _ensure_worktree_branch(worktree_path, "issue-123", SubprocessRunner())
+
+    current_branch = subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_branch == "issue-123"
+    head_sha = subprocess.run(
+        ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head_sha == detached_sha
+
+
+def test_ensure_worktree_branch_raises_when_branch_diverged_real_git(
+    tmp_path: Path,
+) -> None:
+    """Detached HEAD that diverged from the expected branch cannot be healed."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "on branch")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    detached_sha = _git_commit(worktree_path, "detached commit")
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "checkout", detached_sha],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "branch moved on")
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    with pytest.raises(RuntimeError, match="diverged"):
+        _ensure_worktree_branch(worktree_path, "issue-123", SubprocessRunner())
+
+
+def test_ensure_worktree_branch_aborts_conflicted_rebase_real_git(
+    tmp_path: Path,
+) -> None:
+    """Active rebase with conflicts is aborted and the target branch checked out."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    file_path = repo / "file.txt"
+    file_path.write_text("main content\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", str(file_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "main commit")
+
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    file_path.write_text("issue content\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", str(file_path)],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "issue commit")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "rebase", "main"],
+        check=False,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+    from backend.core.use_cases.run_agent_once import _ensure_worktree_branch
+
+    _ensure_worktree_branch(worktree_path, "issue-123", SubprocessRunner())
+
+    current_branch = subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_branch == "issue-123"
+    assert not (worktree_path / ".git" / "rebase-merge").exists()
+    assert not (worktree_path / ".git" / "rebase-apply").exists()
+
+
+def test_create_or_reuse_worktree_heals_detached_head_real_git(tmp_path: Path) -> None:
+    """create_or_reuse_worktree recovers a reused worktree in detached HEAD."""
+    repo_path = tmp_path / "repo"
+    worktree_path = tmp_path / "issue-123"
+    repo = _git_init(repo_path)
+    _git_commit(repo, "initial")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "-b", "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "on branch")
+    subprocess.run(
+        ["git", "-C", str(repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", str(worktree_path), "issue-123"],
+        check=True,
+        capture_output=True,
+    )
+    detached_sha = _git_commit(worktree_path, "detached commit")
+    subprocess.run(
+        ["git", "-C", str(worktree_path), "checkout", detached_sha],
+        check=True,
+        capture_output=True,
+    )
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="echo create-fail",
+            reuse_command="echo reused",
+            path_command=f"echo {worktree_path}",
+        )
+    )
+
+    result_path = create_or_reuse_worktree(
+        repo_path,
+        IssueSummary(number=123, title="T", url="U", body="B", labels=()),
+        config,
+        SubprocessRunner(),
+    )
+
+    assert result_path == worktree_path.resolve()
+    current_branch = subprocess.run(
+        ["git", "-C", str(worktree_path), "branch", "--show-current"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_branch == "issue-123"
+
+
+def test_commit_requested_changes_rejects_detached_head(tmp_path: Path) -> None:
+    """Commit proxy must refuse to commit when the worktree is detached."""
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+    commit_request_path = worktree_path / ".agent-runner" / "commit-request.json"
+    commit_request_path.parent.mkdir(parents=True, exist_ok=True)
+    commit_request_path.write_text(
+        '{"commit_message": "agent: commit"}', encoding="utf-8"
+    )
+    file_path = worktree_path / "file.txt"
+    file_path.write_text("change\n", encoding="utf-8")
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="echo",
+            reuse_command="echo",
+            path_command="echo",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="detached HEAD"):
+        commit_requested_changes(
+            IssueSummary(number=1, title="T", url="U", body="B", labels=()),
+            worktree_path,
+            config,
+            fake_runner,
+            expected_branch="issue-1",
+        )
+
+
+def test_publish_changes_rejects_detached_head(tmp_path: Path) -> None:
+    """Publish must refuse to push when the worktree is detached."""
+    fake_client = FakeGitHubClient()
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="echo",
+            reuse_command="echo",
+            path_command="echo",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="detached HEAD"):
+        publish_changes(
+            issue=IssueSummary(number=1, title="T", url="U", body="B", labels=()),
+            worktree_path=tmp_path / "wt",
+            config=config,
+            github_client=fake_client,
+            process_runner=fake_runner,
+        )
