@@ -416,7 +416,7 @@ include_diff_stat = true
 
 1. **远程分支对齐**：如果 `refs/remotes/<remote>/issue-<number>` 存在，则 fetch 并仅当本地分支是其祖先、且 worktree 干净时做 fast-forward；dirty、diverged 或本地领先场景会保留本地状态并失败/继续，不会 destructive reset。
 2. **分支状态自愈**：如果 worktree 处于 detached HEAD（例如 post-PR supervisor 正在 rebase 或被人工 checkout 到某个 commit），runner 会尝试自动恢复：
-   - 处于 active rebase 时：无冲突则 `rebase --continue`；有冲突则 `rebase --abort` 并 checkout 目标分支。
+   - 处于 active rebase 时：无冲突则 `rebase --continue`；有冲突则调用配置的 AI agent 解决冲突并继续 rebase，和 post-PR supervisor 的冲突解决策略一致。只有 agent 在 `max_repair_attempts` 次尝试后仍无法解决，才会 fallback 到 `rebase --abort` 并 checkout 目标分支。
    - 单纯 detached HEAD：若 `issue-<number>` 分支不存在或当前 HEAD 领先于该分支，则把分支指到当前 HEAD 并 checkout；若已分叉则报错，避免静默丢失历史。
 
 如果恢复失败，runner 会把 Issue 标记为 `failed` 并给出可操作的错误信息；成功则继续正常执行 agent、验证和发布流程。
