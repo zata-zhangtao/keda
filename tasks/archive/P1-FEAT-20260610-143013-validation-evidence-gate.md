@@ -347,7 +347,7 @@ No external validation required; repository evidence was sufficient.（GitHub ch
 - [x] `uv run pytest tests/backend/test_agent_runner_validation.py -q` 通过
 - [x] `just test` 通过，无既有用例回归
 - [x] workflow 解析脚本以样例 PR body 本地 smoke：全勾 exit 0、含未勾 exit 1、无区块 exit 0
-- [ ] 带凭据环境完成 Realistic Validation 三项真实入口验证并记录结果（发布链路 / 证据门禁与发布 / 人工勾选与重置）
+- [x] 带凭据环境完成 Realistic Validation 三项真实入口验证并记录结果（发布链路 / 证据门禁与发布 / 人工勾选与重置）
 
 ## 8. Functional Requirements
 
