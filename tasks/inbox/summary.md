@@ -16,16 +16,14 @@ _最后更新：2026-06-14 21:36_
 - 前端路线图 + 交互式 PRD 执行编排 → 已升级：`tasks/pending/P1-FEAT-20260614-200054-frontend-prd-roadmap.md`，理由：路线图展示、开始按钮、review 高亮、依赖调度与 iar 封装属于同一条 PRD 生命周期体验，应在一个功能中统一建模（来源：2026-06-14 19:07、2026-06-14 19:41、2026-06-14 19:45、2026-06-14 19:46、2026-06-14 19:48、2026-06-14 19:53、2026-06-14 19:54）
 - Idea Inbox 前端化与跨平台采集 → 已升级：`tasks/pending/P1-FEAT-20260614-203810-frontend-idea-inbox-cross-platform.md`，理由：这是 Roadmap 的上游输入模块，涉及前端入口、项目路由、AI 交互、飞书等外部入口与 Idea → PRD 的转换流程，应与 Roadmap 分开设计（来源：2026-06-14 20:15）
 - Realistic Validation Evidence 结构化可信度增强 → 已升级：`tasks/pending/P1-FEAT-20260614-203811-structured-validation-evidence.md`，理由：改动集中在证据生成、证据 comment、项目语言和 reviewer 审核体验，范围独立且会影响所有执行 PR 的验收流程（来源：2026-06-14 20:24）
-- PR 审阅预览部署能力 → 建议 PRD：`P1-FEAT-<timestamp>-pr-preview-deployment`，理由：该能力直接服务人工审阅 PR，横跨远程服务器配置、密钥注入、部署脚本模板、commit/PR 环境变量、部署结果 URL 回传和失败诊断，建议独立成 PRD（来源：2026-06-14 21:16、2026-06-14 21:17）
-- 部署脚本模板/工具封装 → 可作为上一个 PRD 的首个交付切片，理由：用户已给出偏好“默认 Docker + Traefik”并指出 `zata-ops` 有可复用脚本；先做模板化封装可降低后续多项目部署接入成本（来源：2026-06-14 21:17）
+- PR 审阅预览部署能力 → 已升级：`tasks/pending/P1-FEAT-20260614-224914-pr-preview-deployment.md`，理由：该能力直接服务人工审阅 PR，横跨远程服务器配置、密钥注入、部署脚本模板、commit/PR 环境变量、部署结果 URL 回传和失败诊断，已独立成 PRD（来源：2026-06-14 21:16、2026-06-14 21:17）
+- 部署脚本模板/工具封装 → 已并入上一条 PRD 作为首个交付切片（`deploy/vps-traefik/` 复用既有约定），理由：用户已给出偏好“默认 Docker + Traefik”并指出 `zata-ops` 有可复用脚本；先做模板化封装可降低后续多项目部署接入成本（来源：2026-06-14 21:17）
 
 ## 待澄清问题
 
-- 远程服务器配置应放在项目配置、全局配置还是环境变量中？密钥只放环境变量时，如何关联到具体项目/服务器？（来源：2026-06-14 21:16）
-- PR 预览部署是在 PR 创建后自动触发，还是由 reviewer/Agent 显式点击触发？部署失败时是否阻塞 PR review 状态流转？（来源：2026-06-14 21:16）
-- 部署模板的边界是什么：只提供 Docker + Traefik 默认模板，还是允许项目自定义脚本覆盖？从 `zata-ops` 复制脚本时需要确认哪些脚本可通用、哪些依赖该项目环境（来源：2026-06-14 21:17）
 
 ## 已升级
 - 前端 PRD 路线图与交互工作流 → `tasks/pending/P1-FEAT-20260614-200054-frontend-prd-roadmap.md`（来源：2026-06-14 19:07、2026-06-14 19:41、2026-06-14 19:45、2026-06-14 19:46、2026-06-14 19:48、2026-06-14 19:53、2026-06-14 19:54）
 - Idea Inbox 前端化与跨平台采集 → `tasks/pending/P1-FEAT-20260614-203810-frontend-idea-inbox-cross-platform.md`（来源：2026-06-14 20:15）
 - Realistic Validation Evidence 结构化证据可信度增强 → `tasks/pending/P1-FEAT-20260614-203811-structured-validation-evidence.md`（来源：2026-06-14 20:24）
+- PR 审阅预览部署能力（含 Docker+Traefik 部署模板首切片）→ `tasks/pending/P1-FEAT-20260614-224914-pr-preview-deployment.md`（来源：2026-06-14 21:16、2026-06-14 21:17）
