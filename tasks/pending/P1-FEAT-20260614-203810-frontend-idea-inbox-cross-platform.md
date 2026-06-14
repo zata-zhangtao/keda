@@ -1,5 +1,7 @@
 # PRD: 前端 Idea Inbox 与跨平台采集
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/84
+
 ## 1. Introduction & Goals
 
 ### Problem Statement
