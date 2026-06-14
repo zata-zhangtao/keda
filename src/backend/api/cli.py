@@ -279,7 +279,7 @@ def _create_run_history_store_or_none():
 def _handle_not_initialized_error(exc: IARRepositoryNotInitializedError) -> int:
     """Print a friendly error and suggest running `iar init`."""
     error_console.print("[red]Repository is not initialized for iar.[/]")
-    error_console.print(f"Expected local config: {exc.config_path}")
+    error_console.print(f"Expected local config: {exc.config_path}", soft_wrap=True)
     error_console.print("Run the following command from the repository root:")
     error_console.print("  iar init")
     return 1
