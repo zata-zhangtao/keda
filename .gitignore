@@ -55,5 +55,5 @@ Thumbs.db
 .local/state/gh/device-id
 
 # Realistic validation evidence and runner state (local only)
-.iar/evidence/
+.iar
 .agent-runner/

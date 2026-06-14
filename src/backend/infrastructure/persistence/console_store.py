@@ -5,7 +5,7 @@
 - 使用 stdlib ``sqlite3`` 而非 SQLAlchemy/alembic：CLI 直跑 ``iar run``
   也要写运行记录，不能要求 PostgreSQL 常驻；本地单文件零依赖。
 - WAL + busy_timeout 容忍多个 runner 进程并发收尾写库。
-- 通过 ``PRAGMA user_version`` 做就地迁移（当前版本 1）。
+- 通过 ``PRAGMA user_version`` 做就地迁移（当前版本 2）。
 - 任何写入失败都不允许向上抛出阻断 runner 主流程，降级为日志警告。
 """
 
@@ -65,7 +65,7 @@ class DailyRunTrendEntry:
     average_duration_seconds: float | None
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _CREATE_RUN_RECORDS = """
 CREATE TABLE IF NOT EXISTS run_records (
@@ -97,9 +97,31 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 )
 """
 
+_CREATE_ROADMAP_QUEUE = """
+CREATE TABLE IF NOT EXISTS roadmap_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id TEXT NOT NULL,
+    prd_path TEXT NOT NULL,
+    status TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    error_detail TEXT
+)
+"""
+
+_CREATE_ROADMAP_SETTINGS = """
+CREATE TABLE IF NOT EXISTS roadmap_settings (
+    repo_id TEXT PRIMARY KEY,
+    max_parallel INTEGER NOT NULL,
+    default_view TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
 
 class SqliteConsoleStore:
-    """``IRunHistoryStore`` 端口的 SQLite 实现（鸭子类型）。"""
+    """``IRunHistoryStore`` 与 ``IRoadmapStore`` 端口的 SQLite 实现（鸭子类型）。"""
 
     def __init__(self, db_path: str | Path) -> None:
         """初始化存储并确保 schema 就绪。
@@ -124,8 +146,12 @@ class SqliteConsoleStore:
         current_version = int(current_version_row[0])
         if current_version >= _SCHEMA_VERSION:
             return
-        connection.execute(_CREATE_RUN_RECORDS)
-        connection.execute(_CREATE_AUDIT_LOGS)
+        if current_version < 1:
+            connection.execute(_CREATE_RUN_RECORDS)
+            connection.execute(_CREATE_AUDIT_LOGS)
+        if current_version < 2:
+            connection.execute(_CREATE_ROADMAP_QUEUE)
+            connection.execute(_CREATE_ROADMAP_SETTINGS)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         connection.commit()
 
@@ -275,6 +301,151 @@ class SqliteConsoleStore:
             )
             for trend_row in trend_rows
         ]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Roadmap queue / settings (IRoadmapStore duck-type implementation)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_roadmap_settings(self, repo_id: str) -> RoadmapSettingsEntry | None:
+        """读取指定仓库的 roadmap 设置。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT repo_id, max_parallel, default_view, updated_at "
+                "FROM roadmap_settings WHERE repo_id = ?",
+                (repo_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return RoadmapSettingsEntry(
+            repo_id=row["repo_id"],
+            max_parallel=int(row["max_parallel"]),
+            default_view=row["default_view"],
+            updated_at=row["updated_at"],
+        )
+
+    def save_roadmap_settings(self, settings: RoadmapSettingsEntry) -> None:
+        """保存或更新 roadmap 设置；失败时抛出异常。"""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO roadmap_settings (repo_id, max_parallel, default_view, updated_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(repo_id) DO UPDATE SET "
+                "max_parallel=excluded.max_parallel, default_view=excluded.default_view, updated_at=excluded.updated_at",
+                (
+                    settings.repo_id,
+                    settings.max_parallel,
+                    settings.default_view,
+                    settings.updated_at,
+                ),
+            )
+            connection.commit()
+
+    def enqueue_roadmap(self, entry: RoadmapQueueEntry) -> int:
+        """将 PRD 加入 roadmap 队列，返回自增 ID；失败时抛出异常。"""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "INSERT INTO roadmap_queue (repo_id, prd_path, status, trigger, started_at, finished_at, error_detail) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry.repo_id,
+                    entry.prd_path,
+                    entry.status,
+                    entry.trigger,
+                    entry.started_at,
+                    entry.finished_at,
+                    entry.error_detail,
+                ),
+            )
+            connection.commit()
+            return int(cursor.lastrowid)
+
+    def list_roadmap_queue(
+        self, *, repo_id: str | None = None, status: str | None = None
+    ) -> list[RoadmapQueueEntry]:
+        """列出 roadmap 队列条目。"""
+        query = (
+            "SELECT id, repo_id, prd_path, status, trigger, started_at, finished_at, error_detail "
+            "FROM roadmap_queue"
+        )
+        conditions: list[str] = []
+        params: list[object] = []
+        if repo_id is not None:
+            conditions.append("repo_id = ?")
+            params.append(repo_id)
+        if status is not None:
+            conditions.append("status = ?")
+            params.append(status)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id ASC"
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return [
+            RoadmapQueueEntry(
+                entry_id=int(row["id"]),
+                repo_id=row["repo_id"],
+                prd_path=row["prd_path"],
+                status=row["status"],
+                trigger=row["trigger"],
+                started_at=row["started_at"],
+                finished_at=row["finished_at"],
+                error_detail=row["error_detail"],
+            )
+            for row in rows
+        ]
+
+    def update_roadmap_queue_status(
+        self,
+        *,
+        entry_id: int,
+        status: str,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+        error_detail: str | None = None,
+    ) -> None:
+        """更新队列条目的状态；失败时抛出异常。"""
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE roadmap_queue SET status = ?, started_at = ?, finished_at = ?, error_detail = ? "
+                "WHERE id = ?",
+                (status, started_at, finished_at, error_detail, entry_id),
+            )
+            connection.commit()
+
+    def clear_roadmap_queue(self, *, repo_id: str | None = None) -> None:
+        """清空 roadmap 队列；失败时抛出异常。"""
+        with self._connect() as connection:
+            if repo_id is None:
+                connection.execute("DELETE FROM roadmap_queue")
+            else:
+                connection.execute(
+                    "DELETE FROM roadmap_queue WHERE repo_id = ?", (repo_id,)
+                )
+            connection.commit()
+
+
+@dataclass(frozen=True)
+class RoadmapQueueEntry:
+    """roadmap 队列条目（与 core 侧同构，供 SQLite 实现使用）。"""
+
+    repo_id: str
+    prd_path: str
+    status: str
+    trigger: str
+    started_at: str | None
+    finished_at: str | None
+    error_detail: str | None
+    entry_id: int | None = None
+
+
+@dataclass(frozen=True)
+class RoadmapSettingsEntry:
+    """roadmap 用户设置（与 core 侧同构，供 SQLite 实现使用）。"""
+
+    repo_id: str
+    max_parallel: int
+    default_view: str
+    updated_at: str
 
 
 def summarize_params(params: dict) -> str:

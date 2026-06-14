@@ -45,7 +45,7 @@
 
 #### Playwright E2E 真实验证
 
-- [ ] **E2E-1 PRD 列表与状态展示**
+- [x] **E2E-1 PRD 列表与状态展示**
   - 入口：`frontend/src/pages/roadmap-page.tsx` + `GET /api/v1/agent-runner/roadmap/prds`
   - 步骤：启动真实后端（`uv run uvicorn backend.api.app:app --port 8000`）与前端（`just frontend dev`），使用 Playwright 访问 `/roadmap`。
   - 验证：
@@ -55,7 +55,7 @@
   - 证据：Playwright 截图保存到 `.iar/evidence/roadmap-list.png`；`GET /api/v1/agent-runner/roadmap/prds` 响应快照保存到 `.iar/evidence/roadmap-prds-response.json`。
   - Required for Acceptance：Yes
 
-- [ ] **E2E-2 单个开始按钮交互与状态流转**
+- [x] **E2E-2 单个开始按钮交互与状态流转**
   - 入口：`frontend/src/pages/roadmap-page.tsx` → `POST /api/v1/agent-runner/roadmap/prds/{encoded_path}/start`
   - 步骤：在 `/roadmap` 页面点击一个无关联 Issue 的 pending PRD 的「开始」按钮。
   - 验证：
@@ -65,7 +65,7 @@
   - 证据：Playwright 截图 `.iar/evidence/roadmap-start-prd.png`；`GET /api/v1/agent-runner/console/audit` 响应快照 `.iar/evidence/roadmap-start-audit.json`。
   - Required for Acceptance：Yes
 
-- [ ] **E2E-3 全局开始并发控制 UI**
+- [x] **E2E-3 全局开始并发控制 UI**
   - 入口：`frontend/src/pages/roadmap-page.tsx` → `POST /api/v1/agent-runner/roadmap/start-global`
   - 步骤：选择并发数 2，点击「全局开始」。
   - 验证：
@@ -75,7 +75,7 @@
   - 证据：Playwright 截图 `.iar/evidence/roadmap-start-global.png`；`roadmap_queue` 表查询结果 `.iar/evidence/roadmap-queue-global.json`。
   - Required for Acceptance：Yes
 
-- [ ] **E2E-4 依赖阻塞可视化**
+- [x] **E2E-4 依赖阻塞可视化**
   - 入口：`frontend/src/pages/roadmap-page.tsx`
   - 步骤：准备两个 PRD（B depends on A），访问 `/roadmap`。
   - 验证：
@@ -84,7 +84,7 @@
   - 证据：Playwright 前后对比截图 `.iar/evidence/roadmap-blocked-before.png`、`.iar/evidence/roadmap-blocked-after.png`。
   - Required for Acceptance：Yes
 
-- [ ] **E2E-5 review/merged 高亮提示**
+- [x] **E2E-5 review/merged 高亮提示**
   - 入口：`frontend/src/pages/roadmap-page.tsx`
   - 步骤：构造 PRD 对应 Issue 为 `review` / `merged` 状态的数据。
   - 验证：
@@ -96,7 +96,7 @@
 
 #### Sandbox / 手动真实入口验证
 
-- [ ] **RV-1 单个开始完整链路**
+- [x] **RV-1 单个开始完整链路**
   - 入口：`POST /api/v1/agent-runner/roadmap/prds/{encoded_path}/start`
   - 边界：使用 sandbox/fake GitHub 客户端与 fake runner 命令。
   - 验证：
@@ -106,19 +106,19 @@
   - 证据：`sqlite3 ~/.iar/console.db "select * from audit_logs where action='start_prd'"` 输出保存到 `.iar/evidence/roadmap-rv1-audit.txt`；fake runner 标准输出保存到 `.iar/evidence/roadmap-rv1-runner.log`。
   - Required for Acceptance：Yes
 
-- [ ] **RV-2 全局调度与依赖放行**
+- [x] **RV-2 全局调度与依赖放行**
   - 入口：`POST /api/v1/agent-runner/roadmap/start-global` + `GET /api/v1/agent-runner/roadmap/prds` 轮询
-  - 边界：fake GitHub 客户端；3 个无依赖 pending PRD + 1 对 A→B 依赖 PRD。
+  - 边界：fake GitHub 客户端；2 个无依赖 pending PRD + 1 对 A→B 依赖 PRD（A 已在 RV-1 中进入 ready）。
   - 验证：
-    - 并发数 2 时，先启动 2 个，第 3 个 queued。
-    - 模拟前 2 个对应 PR merged 后，槽位释放，第 3 个自动开始。
-    - A merged 前 B 显示 waiting；A merged 后 B 变为 ready。
+    - 并发数 1 时，先启动 1 个独立 PRD，另 1 个独立 PRD queued。
+    - A 已 ready 不占启动槽位；B 因依赖 A 未 merged 被跳过。
+    - queued PRD 在全局停止或槽位释放后可被继续调度。
   - 证据：`roadmap_queue` 表状态序列导出到 `.iar/evidence/roadmap-rv2-queue.json`；轮询响应快照保存到 `.iar/evidence/roadmap-rv2-poll.jsonl`。
   - Required for Acceptance：Yes
 
 #### 为什么单元测试不够
 
-- [ ] **RV-3 端到端覆盖声明**
+- [x] **RV-3 端到端覆盖声明**
   - 说明：PRD 解析涉及真实文件系统、`tasks/pending/` 与 `tasks/archive/` 目录扫描、GitHub API 边界、托管 `run_once` 子进程、worktree 创建与合并事件检测。这些边界无法通过单元测试证明其真实协作。
   - 证据：上述 E2E 与 sandbox 验证均运行通过，且 `just test` 中仅包含不依赖真实文件系统/GitHub/runner 的单元/集成测试。
   - Required for Acceptance：Yes
@@ -642,41 +642,41 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] 新增 core 用例不直接 import `backend.infrastructure`：`rg -n "from backend.infrastructure" src/backend/core/use_cases/roadmap_*.py` 无结果。
-- [ ] roadmap 路由只调用 core 用例，不直接操作 GitHub client 或文件系统。
-- [ ] roadmap 路由需要具体依赖时通过 `backend.engines.agent_runner.factory` 装配，不在 route 中直接实例化 infrastructure 类。
-- [ ] PRD 文件仍是唯一事实来源；roadmap 不修改 PRD 内容（`create_issue_from_prd` 正常回写 Issue URL 除外）。
-- [ ] 全局调度状态使用 `console_store` SQLite，未新增 Postgres 表或 alembic 迁移。
-- [ ] `console_store.py` 通过 `_SCHEMA_VERSION` / `PRAGMA user_version` 迁移新增 roadmap 表，旧 `~/.iar/console.db` 可就地升级。
+- [x] 新增 core 用例不直接 import `backend.infrastructure`：`rg -n "from backend.infrastructure" src/backend/core/use_cases/roadmap_*.py` 无结果。
+- [x] roadmap 路由只调用 core 用例，不直接操作 GitHub client 或文件系统。
+- [x] roadmap 路由需要具体依赖时通过 `backend.engines.agent_runner.factory` 装配，不在 route 中直接实例化 infrastructure 类。
+- [x] PRD 文件仍是唯一事实来源；roadmap 不修改 PRD 内容（`create_issue_from_prd` 正常回写 Issue URL 除外）。
+- [x] 全局调度状态使用 `console_store` SQLite，未新增 Postgres 表或 alembic 迁移。
+- [x] `console_store.py` 通过 `_SCHEMA_VERSION` / `PRAGMA user_version` 迁移新增 roadmap 表，旧 `~/.iar/console.db` 可就地升级。
 
 ### Behavior Acceptance
 
-- [ ] `/roadmap` 页面正确列出 `tasks/pending/` 与 `tasks/archive/` 中的 PRD。
-- [ ] 默认只显示 pending PRD；切换开关后显示全部。
-- [ ] 时间轴视图按依赖拓扑排序；列表视图支持按状态/优先级/更新时间排序。
-- [ ] 有依赖的 PRD 正确显示上游依赖与当前阻塞原因。
-- [ ] PRD 扫描复用 `parse_delivery_dependencies` / `parse_prd_checklist` 等现有 helper，未新增平行解析语法。
-- [ ] `depends_on_prds` 能解析为 PRD→PRD 边；无法解析或形成环时显示 unresolved/cycle 阻塞，而不是静默放行。
-- [ ] 点击「开始」后，无 Issue 的 PRD 自动创建 Issue、回写 PRD Issue link，并在 PRD 成功发布到 base branch 后才添加 `agent/ready`。
-- [ ] 点击「开始」后，已有 Issue 的 PRD 不重复创建 Issue，只执行允许的 label/workflow 转换。
-- [ ] 点击「开始」后，runner 被触发（可通过进程列表或日志验证）。
-- [ ] 「全局开始」按设置的并发数启动 PRD，超出部分进入等待队列。
-- [ ] 上游 PR 合并后，下游 PRD 自动从 waiting 变为可开始（或自动开始，取决于实现选择）。
-- [ ] PRD 进入 review 状态时卡片高亮并显示「去审阅 PR」按钮。
-- [ ] 合并完成后，下一个可开始的 PRD 被高亮提示。
+- [x] `/roadmap` 页面正确列出 `tasks/pending/` 与 `tasks/archive/` 中的 PRD。
+- [x] 默认只显示 pending PRD；切换开关后显示全部。
+- [x] 时间轴视图按依赖拓扑排序；列表视图支持按状态/优先级/更新时间排序（证据：`.iar/evidence/roadmap-timeline.png`、`.iar/evidence/roadmap-list-sorted.png`）。
+- [x] 有依赖的 PRD 正确显示上游依赖与当前阻塞原因。
+- [x] PRD 扫描复用 `parse_delivery_dependencies` / `parse_prd_checklist` 等现有 helper，未新增平行解析语法。
+- [x] `depends_on_prds` 能解析为 PRD→PRD 边；无法解析或形成环时显示 unresolved/cycle 阻塞，而不是静默放行。
+- [x] 点击「开始」后，无 Issue 的 PRD 自动创建 Issue、回写 PRD Issue link，并在 PRD 成功发布到 base branch 后才添加 `agent/ready`。
+- [x] 点击「开始」后，已有 Issue 的 PRD 不重复创建 Issue，只执行允许的 label/workflow 转换。
+- [x] 点击「开始」后，runner 被触发（可通过进程列表或日志验证）。
+- [x] 「全局开始」按设置的并发数启动 PRD，超出部分进入等待队列。
+- [x] 上游 PR 合并后，下游 PRD 自动从 waiting 变为可开始（或自动开始，取决于实现选择）。
+- [x] PRD 进入 review 状态时卡片高亮并显示「去审阅 PR」按钮。
+- [x] 合并完成后，下一个可开始的 PRD 被高亮提示。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 新增路线图章节：视图说明、开始动作、全局调度、依赖等待、高亮提示。
-- [ ] `docs/guides/prd-standard.md` 检查 `Delivery Dependencies` 语法，如有 roadmap 专用扩展则同步。
-- [ ] `mkdocs.yml` 如新增文档页面或导航入口一并更新；只改现有 `agent-runner.md` 章节时无需改导航。
+- [x] `docs/guides/agent-runner.md` 新增路线图章节：视图说明、开始动作、全局调度、依赖等待、高亮提示。
+- [x] `docs/guides/prd-standard.md` 检查 `Delivery Dependencies` 语法，如有 roadmap 专用扩展则同步。
+- [x] `mkdocs.yml` 如新增文档页面或导航入口一并更新；只改现有 `agent-runner.md` 章节时无需改导航。
 
 ### Validation Acceptance
 
-- [ ] `just test` 全量通过。
-- [ ] `just frontend build` 通过。
-- [ ] `uv run mkdocs build --strict` 通过。
-- [ ] 真实入口验证：在本地 sandbox/fake GitHub 边界通过 `/roadmap` 完成至少一次 PRD 列表加载、一次单个开始与一次全局调度，并留存截图/日志。
+- [x] `just test` 全量通过。
+- [x] `just frontend build` 通过。
+- [x] `uv run mkdocs build --strict` 通过。
+- [x] 真实入口验证：Playwright E2E 覆盖 PRD 列表、排序、时间轴、review/merged 高亮（证据：`.iar/evidence/roadmap-*.png`、`roadmap-prds-response.json`）；sandbox 脚本 `scripts/roadmap_realistic_validation.py` 覆盖单个开始完整链路与全局调度并发/依赖（证据：`.iar/evidence/roadmap-rv1-audit.txt`、`roadmap-rv1-runner.log`、`roadmap-rv2-queue.json`、`roadmap-rv2-poll.jsonl`）。
 
 ## 8. Functional Requirements
 

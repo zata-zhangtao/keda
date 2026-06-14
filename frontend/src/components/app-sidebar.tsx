@@ -3,6 +3,7 @@ import {
   IconChartBar,
   IconDashboard,
   IconFolders,
+  IconMap,
   IconTerminal2,
 } from "@tabler/icons-react";
 import { IconInnerShadowTop } from "@tabler/icons-react";
@@ -24,6 +25,7 @@ const navItems = [
   { title: "进程", url: "/processes", icon: IconTerminal2 },
   { title: "统计", url: "/stats", icon: IconChartBar },
   { title: "项目", url: "/repositories", icon: IconFolders },
+  { title: "路线图", url: "/roadmap", icon: IconMap },
 ];
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {

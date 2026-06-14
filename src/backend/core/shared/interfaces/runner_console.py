@@ -254,3 +254,71 @@ class IRepositoryRegistryEditor(ABC):
             KeyError: repo_id 不存在。
         """
         ...
+
+
+@dataclass(frozen=True)
+class RoadmapQueueEntry:
+    """roadmap 全局调度队列的一条记录（core 侧端口类型）。"""
+
+    repo_id: str
+    prd_path: str
+    status: str  # queued / running / completed / failed
+    trigger: str  # manual / global
+    started_at: str | None
+    finished_at: str | None
+    error_detail: str | None
+    entry_id: int | None = None
+
+
+@dataclass(frozen=True)
+class RoadmapSettingsEntry:
+    """roadmap 用户设置（core 侧端口类型）。"""
+
+    repo_id: str
+    max_parallel: int
+    default_view: str  # timeline / list
+    updated_at: str
+
+
+class IRoadmapStore(ABC):
+    """roadmap 调度队列与设置的旁路存储端口。"""
+
+    @abstractmethod
+    def get_roadmap_settings(self, repo_id: str) -> RoadmapSettingsEntry | None:
+        """读取指定仓库的 roadmap 设置；不存在时返回 ``None``。"""
+        ...
+
+    @abstractmethod
+    def save_roadmap_settings(self, settings: RoadmapSettingsEntry) -> None:
+        """保存或更新 roadmap 设置；失败时抛出异常。"""
+        ...
+
+    @abstractmethod
+    def enqueue_roadmap(self, entry: RoadmapQueueEntry) -> int:
+        """将 PRD 加入 roadmap 队列，返回自增 ID；失败时抛出异常。"""
+        ...
+
+    @abstractmethod
+    def list_roadmap_queue(
+        self, *, repo_id: str | None = None, status: str | None = None
+    ) -> list[RoadmapQueueEntry]:
+        """列出 roadmap 队列条目，支持按仓库与状态过滤。"""
+        ...
+
+    @abstractmethod
+    def update_roadmap_queue_status(
+        self,
+        *,
+        entry_id: int,
+        status: str,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+        error_detail: str | None = None,
+    ) -> None:
+        """更新队列条目的状态；失败时抛出异常。"""
+        ...
+
+    @abstractmethod
+    def clear_roadmap_queue(self, *, repo_id: str | None = None) -> None:
+        """清空 roadmap 队列；失败时抛出异常。"""
+        ...
