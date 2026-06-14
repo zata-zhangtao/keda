@@ -1942,3 +1942,58 @@ uv run iar ask "运行一次 dry-run 看看 ready 队列" --execute --yes
 
 - `execution.json`：执行结果
 - `execution.md`：执行摘要
+
+
+## 路线图（Roadmap）
+
+管理终端提供 `/roadmap` 页面，以 PRD 文件为粒度展示 `tasks/pending/` 与 `tasks/archive/` 中的任务全景。
+
+### 视图说明
+
+- 默认只显示 `pending` PRD，勾选「显示已归档」后同时展示 `archived` PRD。
+- 每个 PRD 卡片展示：标题、当前状态、验收清单进度、关联 Issue、依赖关系与下一步操作。
+- 列表视图按优先级（P0 → P3）与更新时间排序；时间轴视图在后续版本中提供。
+
+### 状态映射
+
+PRD 的 GitHub Issue label 被映射为统一状态：
+
+| 状态 | 来源 |
+|---|---|
+| 未开始 | 无 Issue 或 Issue 无 workflow label |
+| 就绪 | `agent/ready` |
+| 运行中 | `agent/running` |
+| 监督中 | `agent/supervising` |
+| 待审阅 | `agent/review` 或存在 open PR |
+| 失败 | `agent/failed` |
+| 阻塞 | `agent/blocked` |
+| 已合并 | Issue 关闭且 PR 已合并 |
+| 已归档 | PRD 位于 `tasks/archive/` |
+| 等待中 | 依赖未满足 |
+
+### 单个开始
+
+点击 PRD 卡片上的「开始」按钮后，后端会：
+
+1. 若 PRD 无 Issue，调用 `create_issue_from_prd` 的安全路径（`publish_prd=True, queue_ready=True`），在 PRD 成功发布到 base branch 后添加 `agent/ready`。
+2. 若 PRD 已有 Issue，直接添加 `agent/ready` 并移除 `agent/failed`。
+3. 启动一次 `iar run` 托管进程。
+
+### 全局调度
+
+在控制面板设置并发数（1–10）后点击「全局开始」：
+
+- 系统扫描所有无依赖且可安全进入 ready 的 pending PRD。
+- 按优先级排序，同时启动最多 N 个 PRD。
+- 超出槽位的 PRD 进入 `roadmap_queue` 等待队列。
+- 点击「停止全局调度」可清空等待队列，已运行的进程不会被中断。
+
+### 依赖等待
+
+PRD 的 `Delivery Dependencies` 小节会解析为三种依赖边：
+
+- `Depends on tasks/issues: #42`：等待上游 Issue 关闭。
+- `Depends on tasks/issues: tasks/pending/xxx.md`：等待上游 PRD 合并或归档。
+- `Depends on groups: infra`：等待该 group 下所有 Issue 关闭。
+
+存在未满足依赖的 PRD 显示为「等待中」并给出阻塞原因；形成环的依赖会标红提示修正。

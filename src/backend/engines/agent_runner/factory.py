@@ -39,6 +39,7 @@ from backend.core.shared.models.agent_runner import (
     WorktreeConfig,
 )
 from backend.core.shared.interfaces.runner_console import (
+    IRoadmapStore,
     IRepositoryRegistryEditor,
     IRunHistoryStore,
     IRunnerProcessSupervisor,
@@ -89,6 +90,7 @@ __all__ = [
     "create_transcript_runner",
     "write_deliberation_outputs",
     "create_event_sink",
+    "create_roadmap_store",
 ]
 
 
@@ -854,6 +856,12 @@ def resolve_issue_from_prd_target(
 
 def create_console_store() -> IRunHistoryStore:
     """创建管理终端的运行历史 / 审计 SQLite 存储。"""
+    console_settings = get_agent_runner_settings().console
+    return SqliteConsoleStore(console_settings.history_db_path)
+
+
+def create_roadmap_store() -> IRoadmapStore:
+    """创建 roadmap 队列 / 设置存储（与 console_store 共用同一个 SQLite 文件）。"""
     console_settings = get_agent_runner_settings().console
     return SqliteConsoleStore(console_settings.history_db_path)
 

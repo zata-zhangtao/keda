@@ -32,6 +32,16 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    preview: {
+      port: 4173,
+      proxy: {
+        // 生产构建预览时同样把 /api 透传到后端，便于 E2E 与手动验证。
+        "/api": {
+          target: backendBaseUrl,
+          changeOrigin: true,
+        },
+      },
+    },
     build: {
       rollupOptions: {
         output: {

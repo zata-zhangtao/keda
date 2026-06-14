@@ -6,7 +6,11 @@ import sqlite3
 from pathlib import Path
 
 from backend.core.shared.interfaces.runner_console import AuditEntry, RunRecord
-from backend.infrastructure.persistence.console_store import SqliteConsoleStore
+from backend.infrastructure.persistence.console_store import (
+    RoadmapQueueEntry,
+    RoadmapSettingsEntry,
+    SqliteConsoleStore,
+)
 
 
 def _make_run_record(
@@ -122,3 +126,68 @@ def test_append_failure_degrades_to_warning(tmp_path: Path) -> None:
     raw_connection.close()
     # 表被删掉后 append 不得抛出。
     store.append_run(_make_run_record())
+
+
+def test_roadmap_settings_round_trip(tmp_path: Path) -> None:
+    """Roadmap settings should be persisted and retrievable."""
+    store = SqliteConsoleStore(tmp_path / "console.db")
+    settings = store.get_roadmap_settings("keda-main")
+    assert settings is None
+
+    store.save_roadmap_settings(
+        RoadmapSettingsEntry(
+            repo_id="keda-main",
+            max_parallel=3,
+            default_view="timeline",
+            updated_at="2026-06-14T12:00:00+00:00",
+        )
+    )
+    settings = store.get_roadmap_settings("keda-main")
+    assert settings is not None
+    assert settings.max_parallel == 3
+    assert settings.default_view == "timeline"
+
+
+def test_roadmap_queue_round_trip(tmp_path: Path) -> None:
+    """Roadmap queue entries should be persisted and filterable."""
+    store = SqliteConsoleStore(tmp_path / "console.db")
+    entry_id = store.enqueue_roadmap(
+        RoadmapQueueEntry(
+            repo_id="keda-main",
+            prd_path="tasks/pending/P1-FEAT-20260101-a.md",
+            status="queued",
+            trigger="global",
+            started_at=None,
+            finished_at=None,
+            error_detail=None,
+        )
+    )
+    queue = store.list_roadmap_queue(repo_id="keda-main")
+    assert len(queue) == 1
+    assert queue[0].entry_id == entry_id
+    assert queue[0].prd_path == "tasks/pending/P1-FEAT-20260101-a.md"
+
+    store.update_roadmap_queue_status(
+        entry_id=entry_id, status="running", started_at="2026-06-14T12:00:00+00:00"
+    )
+    running = store.list_roadmap_queue(repo_id="keda-main", status="running")
+    assert len(running) == 1
+    assert running[0].status == "running"
+
+
+def test_schema_migration_from_version_1(tmp_path: Path) -> None:
+    """An existing v1 database should be migrated to v2 in-place."""
+    db_path = tmp_path / "console.db"
+    SqliteConsoleStore(db_path)
+    raw = sqlite3.connect(db_path)
+    version = raw.execute("PRAGMA user_version").fetchone()[0]
+    assert version >= 2
+    tables = {
+        row[0]
+        for row in raw.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert "roadmap_queue" in tables
+    assert "roadmap_settings" in tables
+    raw.close()

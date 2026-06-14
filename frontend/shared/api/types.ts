@@ -240,3 +240,72 @@ export type UnreachableRepository = {
   configured_path: string;
   error: string;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Roadmap
+// Keep these aligned with the backend dataclasses under
+// `src/backend/core/shared/models/roadmap.py`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type RoadmapPrdState =
+  | "not_started"
+  | "ready"
+  | "running"
+  | "supervising"
+  | "review"
+  | "failed"
+  | "blocked"
+  | "merged"
+  | "archived"
+  | "unresolved_dependency"
+  | "waiting";
+
+export type RoadmapDependencyKind = "prd" | "issue" | "group" | "unresolved";
+
+export type RoadmapDependency = {
+  from_path: string;
+  to_path: string;
+  kind: RoadmapDependencyKind;
+  detail: string;
+};
+
+export type RoadmapNextAction = {
+  label: string;
+  url: string | null;
+};
+
+export type RoadmapPrd = {
+  prd_path: string;
+  title: string;
+  status: "pending" | "archived";
+  priority: string;
+  issue_url: string | null;
+  issue_number: number | null;
+  state: RoadmapPrdState;
+  acceptance_total: number;
+  acceptance_checked: number;
+  delivery_dependencies: RoadmapDependency[];
+  updated_at: string;
+  block_reason: string | null;
+  next_action: RoadmapNextAction | null;
+};
+
+export type RoadmapSettings = {
+  repo_id: string;
+  max_parallel: number;
+  default_view: "timeline" | "list";
+  updated_at: string;
+};
+
+export type RoadmapActionResult = {
+  prd_path: string;
+  issue_number: number | null;
+  state: RoadmapPrdState;
+  detail: string;
+};
+
+export type RoadmapGlobalStartResult = {
+  started: RoadmapActionResult[];
+  queued: string[];
+  skipped: string[];
+};

@@ -45,7 +45,7 @@ export class ApiClient {
    */
   private async login(): Promise<void> {
     const { identifier, password } = getCredentials()
-    const response = await this.context.post('/auth/login', {
+    const response = await this.context.post('/api/auth/login', {
       data: { identifier, password },
     })
     await this.parseResponse<unknown>(response, 'Failed to authenticate the Playwright API client.')

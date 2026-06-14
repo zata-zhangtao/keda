@@ -26,6 +26,10 @@ const RepositoriesPage = lazy(async () => ({
   default: (await import("@/pages/repositories-page")).RepositoriesPage,
 }));
 
+const RoadmapPage = lazy(async () => ({
+  default: (await import("@/pages/roadmap-page")).RoadmapPage,
+}));
+
 function PageLoadingFallback() {
   return (
     <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">
@@ -47,6 +51,7 @@ function AppShell() {
             <Route path="processes" element={<ProcessesPage />} />
             <Route path="stats" element={<StatsPage />} />
             <Route path="repositories" element={<RepositoriesPage />} />
+            <Route path="roadmap" element={<RoadmapPage />} />
           </Routes>
         </Suspense>
       </SidebarInset>
