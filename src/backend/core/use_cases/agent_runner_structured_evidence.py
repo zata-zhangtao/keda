@@ -499,8 +499,10 @@ def _render_evidence_file_lines(
         except OSError:
             file_text = _label(language, "unreadable")
         truncated_text = _truncate_inline_evidence(file_text.rstrip(), language)
-        indented_text = "\n".join(f"  - {line}" for line in truncated_text.splitlines())
-        lines.extend(["  - ```text", indented_text, "  - ```"])
+        lines.append("  - ```text")
+        for content_line in truncated_text.splitlines():
+            lines.append(f"    {content_line}")
+        lines.append("    ```")
 
     if blob_url:
         lines.append(f"  - [{_label(language, 'open_file')}]({blob_url})")

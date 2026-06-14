@@ -228,6 +228,32 @@ def test_build_evidence_comment_groups_by_item_in_chinese(tmp_path: Path) -> Non
     assert expected_sha in comment
 
 
+def test_build_evidence_comment_renders_text_evidence_as_code_block(
+    tmp_path: Path,
+) -> None:
+    """Text evidence is inlined as a properly indented fenced code block."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    files = _write_evidence_files(evidence_dir)
+    _write_manifest(evidence_dir)
+    body = _ISSUE_BODY + "\n" + format_structured_evidence_marker("zh-CN")
+
+    comment = build_evidence_comment(
+        upload=EvidenceUpload(
+            branch="iar-evidence/issue-42",
+            commit_sha="commit1",
+            file_names=tuple(files.keys()),
+        ),
+        worktree_path=tmp_path,
+        config=AppConfig(),
+        pr_url="https://github.com/example/repo/pull/7",
+        head_sha="abc1234",
+        issue_body=body,
+    )
+
+    assert "  - ```text\n    demo run\n    ok\n    ```" in comment
+    assert "  - demo run" not in comment
+
+
 def test_build_evidence_comment_uses_english_labels(tmp_path: Path) -> None:
     """A marker with language en-US renders English fixed labels."""
     evidence_dir = tmp_path / ".iar" / "evidence"
