@@ -7,6 +7,9 @@ import subprocess
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
+import pytest
+
+from backend.api.cli import main
 from backend.api.cli_parser import build_parser
 from backend.infrastructure.logging.logger import Logger
 
@@ -173,7 +176,9 @@ def test_main_daemon_default_interval_uses_config(monkeypatch) -> None:
     with patch(
         "backend.api.cli.resolve_repository_targets",
         return_value=[mock_context],
-    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon:
+    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon, patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
         exit_code = main(["daemon", "--all"])
 
     assert exit_code == 0
@@ -194,7 +199,9 @@ def test_main_review_daemon_default_interval_uses_config(monkeypatch) -> None:
     with patch(
         "backend.api.cli.resolve_repository_targets",
         return_value=[mock_context],
-    ), patch("backend.api.cli.run_review_daemon") as mock_daemon:
+    ), patch("backend.api.cli.run_review_daemon") as mock_daemon, patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
         exit_code = main(["review-daemon", "--all"])
 
     assert exit_code == 0
@@ -215,7 +222,9 @@ def test_main_daemon_interval_override(monkeypatch) -> None:
     with patch(
         "backend.api.cli.resolve_repository_targets",
         return_value=[mock_context],
-    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon:
+    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon, patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
         exit_code = main(["daemon", "--all", "--interval", "300"])
 
     assert exit_code == 0
@@ -341,7 +350,9 @@ def test_main_passes_all_repositories_selector() -> None:
         return_value=[mock_context],
     ) as mock_resolve, patch(
         "backend.api.cli.run_agent_repositories_once", return_value=0
-    ), patch("backend.api.cli.create_github_client"):
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
         exit_code = main(["run", "--all", "--dry-run"])
 
     assert exit_code == 0
@@ -362,7 +373,9 @@ def test_main_run_passes_all_repositories_selector() -> None:
         return_value=[mock_context],
     ) as mock_resolve, patch(
         "backend.api.cli.run_agent_repositories_once", return_value=0
-    ) as mock_run, patch("backend.api.cli.create_github_client"):
+    ) as mock_run, patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
         exit_code = main(["run", "--all", "--dry-run", "--agent", "codex"])
 
     assert exit_code == 0
@@ -385,7 +398,9 @@ def test_main_typer_top_level_repo_selector_is_honored() -> None:
         return_value=[mock_context],
     ) as mock_resolve, patch(
         "backend.api.cli.run_agent_repositories_once", return_value=0
-    ), patch("backend.api.cli.create_github_client"):
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
         exit_code = main(["--repo", "/tmp/repo", "run", "--dry-run"])
 
     assert exit_code == 0
@@ -408,7 +423,7 @@ def test_main_labels_sync_iterates_multiple_repos() -> None:
         return_value=[mock_context_a, mock_context_b],
     ), patch("backend.api.cli.sync_labels") as mock_sync, patch(
         "backend.api.cli.create_github_client"
-    ):
+    ), patch("backend.api.cli.require_iar_repository_initialized"):
         exit_code = main(["labels", "sync"])
         assert exit_code == 0
         assert mock_sync.call_count == 2
@@ -671,15 +686,17 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
         )
 
     with patch("backend.api.cli.create_process_runner"), patch(
-        "backend.api.cli.get_agent_runner_settings"
-    ) as mock_settings, patch(
+        "backend.api.cli.detect_git_repository_root", return_value=tmp_path / "repo"
+    ), patch("backend.api.cli.get_agent_runner_settings") as mock_settings, patch(
         "backend.api.cli.build_deliberation_config_from_settings"
     ) as mock_config, patch("backend.api.cli.create_transcript_runner"), patch(
         "backend.api.cli.create_event_sink"
     ) as mock_event_sink, patch(
         "backend.api.cli.run_agent_deliberation",
         side_effect=fake_run_agent_deliberation,
-    ), patch("backend.api.cli.write_deliberation_outputs") as mock_write:
+    ), patch("backend.api.cli.write_deliberation_outputs") as mock_write, patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
         mock_settings.return_value.deliberation.default_output_dir = str(output_root)
         mock_settings.return_value.deliberation.default_rounds = 2
         mock_settings.return_value.deliberation.default_synthesizer = "claude"
@@ -729,7 +746,7 @@ def test_main_review_dispatches_review_workflow() -> None:
         return_value=[mock_context],
     ), patch("backend.api.cli.create_github_client") as mock_client, patch(
         "backend.api.cli.review_once", return_value=0
-    ) as mock_review:
+    ) as mock_review, patch("backend.api.cli.require_iar_repository_initialized"):
         exit_code = main(["review", "--dry-run", "--agent", "claude"])
 
     assert exit_code == 0
@@ -809,7 +826,7 @@ def test_main_blocked_continue_success(capsys) -> None:
     ), patch("backend.api.cli.create_github_client"), patch(
         "backend.core.use_cases.blocked_continue.blocked_continue_issue",
         return_value=True,
-    ) as mock_blocked:
+    ) as mock_blocked, patch("backend.api.cli.require_iar_repository_initialized"):
         exit_code = main(["blocked-continue", "--issue", "42"])
 
     assert exit_code == 0
@@ -833,7 +850,7 @@ def test_main_blocked_continue_already_claimed(capsys) -> None:
     ), patch("backend.api.cli.create_github_client"), patch(
         "backend.core.use_cases.blocked_continue.blocked_continue_issue",
         return_value=False,
-    ) as mock_blocked:
+    ) as mock_blocked, patch("backend.api.cli.require_iar_repository_initialized"):
         exit_code = main(["blocked-continue", "--issue", "42"])
 
     assert exit_code == 0
@@ -857,7 +874,7 @@ def test_main_blocked_continue_failure_prints_error(capsys) -> None:
     ), patch("backend.api.cli.create_github_client"), patch(
         "backend.core.use_cases.blocked_continue.blocked_continue_issue",
         side_effect=BlockedContinueError("Worktree has uncommitted changes."),
-    ):
+    ), patch("backend.api.cli.require_iar_repository_initialized"):
         exit_code = main(["blocked-continue", "--issue", "42"])
 
     assert exit_code == 1
@@ -881,7 +898,7 @@ def test_main_run_rebase_conflict_detached_head() -> None:
         return_value=[mock_context],
     ), patch("backend.api.cli.create_github_client"), patch(
         "backend.api.cli.run_agent_repositories_once", return_value=0
-    ) as mock_run:
+    ) as mock_run, patch("backend.api.cli.require_iar_repository_initialized"):
         exit_code = main(["run", "--dry-run", "--agent", "claude"])
 
     assert exit_code == 0
@@ -982,7 +999,9 @@ def test_main_ask_plan_only_writes_audit(tmp_path, monkeypatch) -> None:
     ), patch("backend.api.cli.create_github_client"), patch(
         "backend.api.cli.create_planner_runner",
         return_value=mock_planner,
-    ), patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+    ), patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
         exit_code = main(
             [
                 "ask",
@@ -1098,7 +1117,9 @@ def test_main_ask_run_once_dry_run_dispatches_existing_use_case() -> None:
     ), patch(
         "backend.core.use_cases.interactive_decision.run_agent_repositories_once",
         return_value=0,
-    ) as mock_run, patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+    ) as mock_run, patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
         exit_code = main(
             [
                 "ask",
@@ -1233,3 +1254,132 @@ def test_main_ask_execute_confirmation_wrong_input_skips_action(monkeypatch) -> 
 
     assert exit_code == 1
     mock_create.assert_not_called()
+
+
+def _init_bare_git_repository(tmp_path: Path, name: str) -> Path:
+    """Create a throwaway Git repository without .iar.toml."""
+    repo_path = tmp_path / name
+    repo_path.mkdir()
+    subprocess.run(
+        ["git", "init", "--initial-branch=main"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    (repo_path / "README.md").write_text("placeholder", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+    )
+    return repo_path
+
+
+def test_main_labels_sync_fails_when_repository_not_initialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar labels sync` should fail fast without .iar.toml."""
+    repo_path = _init_bare_git_repository(tmp_path, "uninitialized")
+    monkeypatch.chdir(repo_path)
+
+    exit_code = main(["labels", "sync"])
+    captured = capsys.readouterr()
+    combined = f"{captured.out}\n{captured.err}"
+
+    assert exit_code == 1
+    assert "Repository is not initialized for iar" in _strip_ansi(combined)
+    assert "iar init" in _strip_ansi(combined)
+    assert ".iar.toml" in _strip_ansi(combined)
+
+
+def test_main_run_fails_when_repository_not_initialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar run --dry-run` should fail fast without .iar.toml."""
+    repo_path = _init_bare_git_repository(tmp_path, "uninitialized")
+    monkeypatch.chdir(repo_path)
+
+    exit_code = main(["run", "--dry-run"])
+    captured = capsys.readouterr()
+    combined = f"{captured.out}\n{captured.err}"
+
+    assert exit_code == 1
+    assert "Repository is not initialized for iar" in _strip_ansi(combined)
+    assert "iar init" in _strip_ansi(combined)
+
+
+def test_main_issue_create_fails_when_repository_not_initialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar issue create` should fail fast without .iar.toml."""
+    repo_path = _init_bare_git_repository(tmp_path, "uninitialized")
+    prd_path = repo_path / "tasks" / "pending" / "test.md"
+    prd_path.parent.mkdir(parents=True)
+    prd_path.write_text("# Test PRD\n\n## Summary\n\nTest.\n", encoding="utf-8")
+    monkeypatch.chdir(repo_path)
+
+    exit_code = main(["issue", "create", str(prd_path)])
+    captured = capsys.readouterr()
+    combined = f"{captured.out}\n{captured.err}"
+
+    assert exit_code == 1
+    assert "Repository is not initialized for iar" in _strip_ansi(combined)
+    assert "iar init" in _strip_ansi(combined)
+
+
+def test_main_worktree_create_fails_when_repository_not_initialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar worktree create` should fail fast without .iar.toml."""
+    repo_path = _init_bare_git_repository(tmp_path, "uninitialized")
+    monkeypatch.chdir(repo_path)
+
+    exit_code = main(
+        ["worktree", "create", "--branch", "feature-x", "--base-branch", "main"]
+    )
+    captured = capsys.readouterr()
+    combined = f"{captured.out}\n{captured.err}"
+
+    assert exit_code == 1
+    assert "Repository is not initialized for iar" in _strip_ansi(combined)
+    assert "iar init" in _strip_ansi(combined)
+
+
+def test_main_init_succeeds_when_repository_not_initialized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`iar init` must be exempt from the initialization gate."""
+    repo_path = _init_bare_git_repository(tmp_path, "uninitialized")
+    monkeypatch.chdir(repo_path)
+
+    exit_code = main(["init", "--dry-run"])
+
+    assert exit_code == 0

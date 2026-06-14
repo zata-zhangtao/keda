@@ -28,6 +28,21 @@ uv run iar --help
 iar --help
 ```
 
+### 初始化门禁
+
+除 `iar init` 外，所有 `iar` 子命令在执行前都会检查目标仓库是否已完成初始化（仓库根目录存在有效的 `.iar.toml`）。未初始化时命令会立即以非零退出码失败，并提示先运行 `iar init`：
+
+```bash
+# 首次在目标仓库使用前，必须先初始化
+iar init
+
+# 之后才能执行其他命令
+iar labels sync
+iar run --dry-run
+```
+
+`iar init` 本身不受门禁限制，包括 `--dry-run` 和 `--force` 形式。本 PRD 不提供 `--skip-init-check` 等绕过开关。
+
 ### Shell 自动补全
 
 `iar` 支持生成 shell completion。zsh 用户安装后，输入 `iar is<Tab>` 可补全到 `issue`：
@@ -196,7 +211,7 @@ agent/waiting              → 上游 closed → 自动放行
 
 ## 仓库本地配置
 
-`iar` 默认以当前 Git 仓库作为目标仓库。首次在目标仓库使用前，先生成仓库本地配置：
+`iar` 默认以当前 Git 仓库作为目标仓库。**首次在目标仓库使用前必须先执行 `iar init`**，否则除 `iar init` 外的所有命令都会失败并提示初始化。
 
 ```bash
 cd /path/to/target-repo

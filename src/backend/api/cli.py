@@ -65,9 +65,11 @@ from backend.engines.agent_runner.factory import (
 )
 from backend.engines.agent_runner.live_terminal import create_output_view
 from backend.engines.agent_runner.repository_local import (
+    IARRepositoryNotInitializedError,
     RepositoryInitOptions,
     detect_git_repository_root,
     initialize_repository_local_config,
+    require_iar_repository_initialized,
 )
 from backend.engines.agent_runner.worktree_cli import (
     build_worktree_manager,
@@ -274,6 +276,15 @@ def _create_run_history_store_or_none():
         return None
 
 
+def _handle_not_initialized_error(exc: IARRepositoryNotInitializedError) -> int:
+    """Print a friendly error and suggest running `iar init`."""
+    error_console.print("[red]Repository is not initialized for iar.[/]")
+    error_console.print(f"Expected local config: {exc.config_path}", soft_wrap=True)
+    error_console.print("Run the following command from the repository root:")
+    error_console.print("  iar init")
+    return 1
+
+
 def _run_parsed_command(parsed: argparse.Namespace) -> int:
     """Run a command after CLI arguments have been parsed."""
     if parsed.config:
@@ -333,9 +344,12 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
     if parsed.command == "worktree":
         try:
             repo_root_path = detect_git_repository_root(Path.cwd(), process_runner)
+            require_iar_repository_initialized(repo_root_path, process_runner)
         except ValueError as exc:
             logger.error("iar worktree failed: %s", exc)
             return 1
+        except IARRepositoryNotInitializedError as exc:
+            return _handle_not_initialized_error(exc)
         manager = build_worktree_manager(repo_root_path, process_runner)
         if parsed.worktree_command == "create":
             created_worktree_path = manager.create(
@@ -400,6 +414,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
             if contexts:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             for context in contexts:
@@ -417,6 +433,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_path_override=repo_override,
                 cwd=Path.cwd(),
             )
+            require_iar_repository_initialized(context.repo_path, process_runner)
             _ensure_gh_auth_or_prompt(context.repo_path, process_runner)
             github_client = create_github_client(context.repo_path, process_runner)
             _, relative_prd_path = resolve_prd_paths(
@@ -487,6 +504,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
             if contexts:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             content_generator = create_content_generator(process_runner)
@@ -509,6 +528,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
             if contexts:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             interval = (
@@ -535,6 +556,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
             if contexts:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             aggregated_exit_code = 0
@@ -569,6 +592,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
             if contexts:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             interval = (
@@ -598,6 +623,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_path_override=repo_override,
             )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
             if len(contexts) != 1:
                 logger.error(
                     "recover requires exactly one target repository. "
@@ -647,6 +674,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_path_override=repo_override,
             )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
             if len(contexts) != 1:
                 logger.error(
                     "blocked-continue requires exactly one target repository. "
@@ -685,6 +714,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
             if len(contexts) != 1:
                 logger.error(
                     "ask requires exactly one target repository. "
@@ -734,6 +765,12 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             )
 
         if parsed.command == "deliberate":
+            deliberate_repo_root_path = detect_git_repository_root(
+                Path.cwd(), process_runner
+            )
+            require_iar_repository_initialized(
+                deliberate_repo_root_path, process_runner
+            )
             deliberation_settings = runner_settings.deliberation
             output_dir = parsed.output or deliberation_settings.default_output_dir
             rounds = (
@@ -798,6 +835,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             write_deliberation_outputs(result, session, output_path)
             console.print(f"\n[green]Deliberation complete:[/] {output_path}")
             return 0
+    except IARRepositoryNotInitializedError as exc:
+        return _handle_not_initialized_error(exc)
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
         error_detail = _format_cli_exception(exc)
         logger.error("iar failed:\n%s", error_detail)
