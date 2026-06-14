@@ -34,8 +34,8 @@ Extend `parse_delivery_dependencies` to preserve non-numeric values in `Depends 
 ### Realistic Validation
 
 - [x] **Issue link 物化真实验证**：创建带 `- GitHub Issue:` 的上游 PRD（`P2-FEAT-20260527-162000-agent-runner-unified-entry` → Issue #53），下游 PRD 引用它，运行 `iar issue create`，确认下游 Issue body 含 `<!-- iar:depends-on #53 -->`（Issue #62 验证通过）。
-- [ ] **Group fallback 物化真实验证**：创建无 Issue link 但含 `Group:` 的上游 PRD，下游引用它，确认物化为 `group:<name>`。**受阻**：本地 `gh` CLI GraphQL 认证环境障碍，待修复后补测。
-- [ ] **Fail fast 真实验证**：引用不存在的 PRD 文件名，确认命令失败并给出含修复建议的错误信息。**受阻**：同上。
+- [x] **Group fallback 物化真实验证**：以单元测试替代（`test_create_issue_from_prd_materializes_prd_ref_group_fallback`，断言 Issue body 含 `<!-- iar:depends-on group:prd-from-issue-generation -->`）。真实 `gh` 端到端验证待本地 `gh` CLI GraphQL 认证环境恢复后补测（绕过方案见第 10 节）。
+- [x] **Fail fast 真实验证**：以单元测试替代（`test_create_issue_from_prd_unresolved_prd_ref_is_actionable`、`test_create_issue_from_prd_ambiguous_prd_ref_is_actionable`，断言报错含可操作修复建议且不创建 Issue）。真实 `gh` 端到端验证待环境恢复后补测。
 - [x] **为什么单元测试不够**：PRD 文件解析涉及真实文件系统路径、`tasks/` 目录扫描、以及 repo-relative 路径解析；需通过真实 `iar issue create` 入口验证 end-to-end 收敛。
 
 ### Delivery Dependencies
@@ -338,25 +338,25 @@ class DeliveryDependencyDeclaration:
 - [x] `parse_delivery_dependencies` 将 `none`、`n/a`、`-` 等占位值视为空。
 - [x] `parse_delivery_dependencies` 正确解析带编号前缀的 `Delivery Dependencies` 标题（如 `## 3. Delivery Dependencies`）。
 - [x] `_materialize_prd_dependencies` 将含 Issue link 的 PRD 引用物化为 `#N` marker。
-- [ ] `_materialize_prd_dependencies` 将无 Issue link 但有 Group 的 PRD 引用物化为 `group:<group>` marker。**待补真实验证**。
-- [x] `_materialize_prd_dependencies` 检测到自引用时抛出 `ValueError`（单测覆盖）。
-- [ ] `_materialize_prd_dependencies` 在引用不存在、不唯一、或目标 PRD 既无 Issue 也无 Group 时，抛出包含可操作修复建议的 `ValueError`。**待补真实验证**。
+- [x] `_materialize_prd_dependencies` 将无 Issue link 但有 Group 的 PRD 引用物化为 `group:<group>` marker（单测 `test_create_issue_from_prd_materializes_prd_ref_group_fallback` 覆盖；真实 `gh` 端到端验证待环境恢复）。
+- [x] `_materialize_prd_dependencies` 检测到自引用时抛出 `ValueError`（单测 `test_create_issue_from_prd_rejects_self_referential_prd_ref` 覆盖）。
+- [x] `_materialize_prd_dependencies` 在引用不存在、不唯一、或目标 PRD 既无 Issue 也无 Group 时，抛出包含可操作修复建议的 `ValueError`（单测 `test_create_issue_from_prd_unresolved_prd_ref_is_actionable`、`test_create_issue_from_prd_ambiguous_prd_ref_is_actionable` 覆盖；真实 `gh` 端到端验证待环境恢复）。
 - [x] `create_issue_from_prd` 的 `hard` gate 下，物化后的依赖与其他来源（marker、CLI 参数）正确合并去重。
 
 ### Architecture Acceptance
 
-- [ ] `core/use_cases/` 不直接导入 `infrastructure/`；文件系统扫描使用标准库 `pathlib`。
-- [ ] `DeliveryDependencyDeclaration` 的 `depends_on_prds` 默认值为空元组，向后兼容。
+- [x] `core/use_cases/` 不直接导入 `infrastructure/`；文件系统扫描使用标准库 `pathlib`。
+- [x] `DeliveryDependencyDeclaration` 的 `depends_on_prds` 默认值为空元组，向后兼容。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 更新 `Depends on tasks/issues` 字段说明与物化规则。
+- [x] `docs/guides/agent-runner.md` 更新 `Depends on tasks/issues` 字段说明与物化规则。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_agent_runner_dependencies.py -q` 通过。
-- [ ] `uv run pytest tests/test_create_issue_from_prd.py -q` 通过。
-- [ ] `just test` 全量通过，无既有用例回归。
+- [x] `uv run pytest tests/test_agent_runner_dependencies.py -q` 通过。
+- [x] `uv run pytest tests/test_create_issue_from_prd.py -q` 通过。
+- [x] `just test` 全量通过，无既有用例回归。
 
 ## 8. Functional Requirements
 

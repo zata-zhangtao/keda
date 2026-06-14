@@ -359,6 +359,37 @@ def test_create_issue_from_prd_ambiguous_prd_ref_is_actionable(
     assert "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md" in message
 
 
+def test_create_issue_from_prd_rejects_self_referential_prd_ref(
+    tmp_path: Path,
+) -> None:
+    """A PRD that depends on itself should fail fast as a self-dependency."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    fake_client = FakeGitHubClient()
+
+    prd = repo / "tasks" / "pending" / "downstream.md"
+    prd.parent.mkdir(parents=True)
+    prd.write_text(
+        "# PRD: Downstream\n\n"
+        "## Delivery Dependencies\n\n"
+        "- Depends on tasks/issues: tasks/pending/downstream.md\n"
+        "- Gate type: hard\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        create_issue_from_prd(
+            request=_request(repo, Path("tasks/pending/downstream.md")),
+            github_client=fake_client,
+        )
+
+    message = str(exc_info.value)
+    assert "it resolves to the current PRD" in message
+    assert "self-dependency" in message
+    assert [c for c in fake_client.calls if c["method"] == "create_issue"] == []
+
+
 def test_publish_prd_adds_ready_label_after_push(tmp_path: Path) -> None:
     """--publish-prd --ready should add ready only after the PRD push succeeds."""
     repo = tmp_path / "repo"
