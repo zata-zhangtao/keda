@@ -679,7 +679,7 @@ def execute_rebase(
                 )
                 ensure_verification_passed(verification_results)
                 continue_result = process_runner.run(
-                    ["git", "rebase", "--continue"],
+                    ["git", "-c", "core.editor=true", "rebase", "--continue"],
                     cwd=worktree_path,
                     check=False,
                 )
@@ -705,7 +705,7 @@ def execute_rebase(
                     )
                 # Agent 未修改文件，尝试继续 rebase，可能冲突已被外部解决
                 continue_result = process_runner.run(
-                    ["git", "rebase", "--continue"],
+                    ["git", "-c", "core.editor=true", "rebase", "--continue"],
                     cwd=worktree_path,
                     check=False,
                 )

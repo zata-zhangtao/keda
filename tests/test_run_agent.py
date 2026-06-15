@@ -3911,8 +3911,8 @@ def test_run_once_rebase_conflict_detached_head(
             stdout="",
             stderr="",
         ),
-        ("git", "rebase", "--continue"): CommandResult(
-            command=("git", "rebase", "--continue"),
+        ("git", "-c", "core.editor=true", "rebase", "--continue"): CommandResult(
+            command=("git", "-c", "core.editor=true", "rebase", "--continue"),
             return_code=0,
             stdout="",
             stderr="",
@@ -3973,7 +3973,7 @@ def test_run_once_rebase_conflict_detached_head(
 
     assert exit_code == 0
     commands = [tuple(c) for c in fake_runner.calls]
-    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "-c", "core.editor=true", "rebase", "--continue") in commands
     assert (
         "git",
         "push",
@@ -5542,7 +5542,7 @@ def test_ensure_worktree_branch_rejects_mismatched_rebase_target(
         )
 
     commands = [tuple(c) for c in fake_runner.calls]
-    assert ("git", "rebase", "--continue") not in commands
+    assert ("git", "-c", "core.editor=true", "rebase", "--continue") not in commands
     assert ("git", "rebase", "--abort") not in commands
     assert ("git", "checkout", "issue-999") not in commands
 
@@ -5906,8 +5906,8 @@ def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> 
                 stdout="",
                 stderr="",
             ),
-            ("git", "rebase", "--continue"): CommandResult(
-                command=("git", "rebase", "--continue"),
+            ("git", "-c", "core.editor=true", "rebase", "--continue"): CommandResult(
+                command=("git", "-c", "core.editor=true", "rebase", "--continue"),
                 return_code=0,
                 stdout="",
                 stderr="",
@@ -5940,5 +5940,5 @@ def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> 
     _ensure_worktree_branch(worktree_path, "issue-123", issue, config, fake_runner)
 
     commands = [tuple(c) for c in fake_runner.calls]
-    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "-c", "core.editor=true", "rebase", "--continue") in commands
     assert ("git", "commit", "-m", "agent: resolve rebase conflicts") in commands

@@ -1087,8 +1087,8 @@ def test_execute_rebase_resolves_conflict_via_agent(tmp_path: Path) -> None:
                 stdout=" M file.py\n",
                 stderr="",
             ),
-            ("git", "rebase", "--continue"): CommandResult(
-                command=("git", "rebase", "--continue"),
+            ("git", "-c", "core.editor=true", "rebase", "--continue"): CommandResult(
+                command=("git", "-c", "core.editor=true", "rebase", "--continue"),
                 return_code=0,
                 stdout="",
                 stderr="",
@@ -1112,7 +1112,7 @@ def test_execute_rebase_resolves_conflict_via_agent(tmp_path: Path) -> None:
         supervisor_agent="codex",
     )
     commands = [tuple(c) for c in fake_runner.calls]
-    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "-c", "core.editor=true", "rebase", "--continue") in commands
     assert ("git", "push", "--force-with-lease", "origin", "issue-1") in commands
 
 
@@ -1160,8 +1160,8 @@ def test_execute_rebase_conflict_exhaustion(tmp_path: Path) -> None:
                 stdout="",
                 stderr="",
             ),
-            ("git", "rebase", "--continue"): CommandResult(
-                command=("git", "rebase", "--continue"),
+            ("git", "-c", "core.editor=true", "rebase", "--continue"): CommandResult(
+                command=("git", "-c", "core.editor=true", "rebase", "--continue"),
                 return_code=1,
                 stdout="",
                 stderr="still conflicted",
@@ -1189,7 +1189,9 @@ def test_execute_rebase_conflict_exhaustion(tmp_path: Path) -> None:
         )
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "rebase", "--abort") in commands
-    assert commands.count(("git", "rebase", "--continue")) == 2
+    assert (
+        commands.count(("git", "-c", "core.editor=true", "rebase", "--continue")) == 2
+    )
 
 
 def test_execute_rebase_conflict_agent_no_commit_request(tmp_path: Path) -> None:
@@ -1251,7 +1253,7 @@ def test_execute_rebase_conflict_agent_no_commit_request(tmp_path: Path) -> None
         )
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "rebase", "--abort") not in commands
-    assert ("git", "rebase", "--continue") not in commands
+    assert ("git", "-c", "core.editor=true", "rebase", "--continue") not in commands
 
 
 def test_dirty_worktree_before_supervisor_blocks_approval(tmp_path: Path) -> None:
@@ -1560,8 +1562,8 @@ def test_execute_rebase_allows_detached_head_when_active_rebase_target_matches(
                 stdout="",
                 stderr="",
             ),
-            ("git", "rebase", "--continue"): CommandResult(
-                command=("git", "rebase", "--continue"),
+            ("git", "-c", "core.editor=true", "rebase", "--continue"): CommandResult(
+                command=("git", "-c", "core.editor=true", "rebase", "--continue"),
                 return_code=0,
                 stdout="",
                 stderr="",
@@ -1605,7 +1607,7 @@ def test_execute_rebase_allows_detached_head_when_active_rebase_target_matches(
         supervisor_agent="codex",
     )
     commands = [tuple(c) for c in fake_runner.calls]
-    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "-c", "core.editor=true", "rebase", "--continue") in commands
     assert ("git", "push", "--force-with-lease", "origin", "issue-1") in commands
     assert ("git", "commit", "-m", "resolve conflict") not in commands
     assert ("git", "rebase", "--abort") not in commands
@@ -1745,7 +1747,7 @@ def test_execute_rebase_rejects_mismatched_active_rebase_target(
         )
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "add", "-A") not in commands
-    assert ("git", "rebase", "--continue") not in commands
+    assert ("git", "-c", "core.editor=true", "rebase", "--continue") not in commands
     assert ("git", "push", "--force-with-lease", "origin", "issue-1") not in commands
     assert ("git", "rebase", "--abort") not in commands
 
@@ -1892,7 +1894,7 @@ def test_execute_rebase_rejects_unknown_active_rebase_target(
         )
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "add", "-A") not in commands
-    assert ("git", "rebase", "--continue") not in commands
+    assert ("git", "-c", "core.editor=true", "rebase", "--continue") not in commands
     assert ("git", "push", "--force-with-lease", "origin", "issue-1") not in commands
     assert ("git", "rebase", "--abort") not in commands
 
@@ -1958,8 +1960,8 @@ def test_execute_rebase_conflict_path_does_not_run_git_commit(
                 stdout="",
                 stderr="",
             ),
-            ("git", "rebase", "--continue"): CommandResult(
-                command=("git", "rebase", "--continue"),
+            ("git", "-c", "core.editor=true", "rebase", "--continue"): CommandResult(
+                command=("git", "-c", "core.editor=true", "rebase", "--continue"),
                 return_code=0,
                 stdout="",
                 stderr="",
@@ -2003,7 +2005,7 @@ def test_execute_rebase_conflict_path_does_not_run_git_commit(
         supervisor_agent="codex",
     )
     commands = [tuple(c) for c in fake_runner.calls]
-    assert ("git", "rebase", "--continue") in commands
+    assert ("git", "-c", "core.editor=true", "rebase", "--continue") in commands
     assert ("git", "push", "--force-with-lease", "origin", "issue-1") in commands
     assert not any(c[:2] == ("git", "commit") for c in commands)
 

@@ -100,7 +100,7 @@ def _recover_from_active_rebase(
 
     def _try_continue_rebase() -> bool:
         continue_result = process_runner.run(
-            ["git", "rebase", "--continue"],
+            ["git", "-c", "core.editor=true", "rebase", "--continue"],
             cwd=worktree_path,
             check=False,
         )
