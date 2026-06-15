@@ -12,10 +12,10 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RoadmapList } from "@/components/roadmap/roadmap-list";
 import { RoadmapTimeline } from "@/components/roadmap/roadmap-timeline";
+import { fetchRegistryRepositories } from "@shared/api/console";
 import {
   fetchRoadmapPrds,
   fetchRoadmapSettings,
@@ -24,7 +24,11 @@ import {
   stopGlobalRoadmap,
   updateRoadmapSettings,
 } from "@shared/api/roadmap";
-import type { RoadmapPrd, RoadmapSettings } from "@shared/api/types";
+import type {
+  RegistryRepositoryEntry,
+  RoadmapPrd,
+  RoadmapSettings,
+} from "@shared/api/types";
 
 const POLL_INTERVAL_MS = 30000;
 
@@ -40,6 +44,8 @@ export function RoadmapPage() {
   const [loading, setLoading] = useState(true);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [selectedRepoId, setSelectedRepoId] = useState("");
+  const [repositories, setRepositories] = useState<RegistryRepositoryEntry[]>([]);
+  const [reposLoading, setReposLoading] = useState(true);
   const [settings, setSettings] = useState<RoadmapSettings | null>(null);
   const [view, setView] = useState<RoadmapView>("list");
   const [startingPath, setStartingPath] = useState<string | null>(null);
@@ -61,7 +67,23 @@ export function RoadmapPage() {
   }, [selectedRepoId, includeArchived]);
 
   useEffect(() => {
-    setSelectedRepoId((current) => current || "keda-main");
+    setReposLoading(true);
+    fetchRegistryRepositories()
+      .then((loadedRepositories) => {
+        const enabledRepositories = loadedRepositories.filter((repo) => repo.enabled);
+        setRepositories(enabledRepositories);
+        if (enabledRepositories.length === 0) {
+          return;
+        }
+        const preferred =
+          enabledRepositories.find((repo) => repo.repo_id === "keda-main") ??
+          enabledRepositories[0];
+        setSelectedRepoId((current) => current || preferred.repo_id);
+      })
+      .catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : "加载仓库列表失败。");
+      })
+      .finally(() => setReposLoading(false));
   }, []);
 
   useEffect(() => {
@@ -170,12 +192,23 @@ export function RoadmapPage() {
           <CardTitle className="text-sm">控制面板</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center gap-3">
-          <Input
-            className="w-48"
-            placeholder="仓库 ID"
+          <select
+            className="h-9 w-48 rounded-md border border-slate-200 bg-transparent px-2 text-sm dark:border-slate-700"
             value={selectedRepoId}
             onChange={(event) => setSelectedRepoId(event.target.value)}
-          />
+            disabled={reposLoading || repositories.length === 0}
+            aria-label="选择仓库"
+          >
+            {repositories.length === 0 ? (
+              <option value="">{reposLoading ? "加载中…" : "无可用仓库"}</option>
+            ) : (
+              repositories.map((repo) => (
+                <option key={repo.repo_id} value={repo.repo_id}>
+                  {repo.display_name ?? repo.repo_id}
+                </option>
+              ))
+            )}
+          </select>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"

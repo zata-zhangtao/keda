@@ -234,6 +234,19 @@ export type RegistryRepositoryEntry = {
   path_exists: boolean;
 };
 
+export type DiscoveredRepositoryEntry = {
+  repo_id: string;
+  path: string;
+  display_name: string | null;
+  already_registered: boolean;
+};
+
+export type BatchAddRepositoriesResult = {
+  added: RegistryRepositoryEntry[];
+  skipped: string[];
+  errors: { repo_id: string; detail: string }[];
+};
+
 export type UnreachableRepository = {
   repo_id: string;
   display_name: string;

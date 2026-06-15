@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, is_dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -40,6 +41,7 @@ from backend.core.use_cases.repository_registry import (
     list_registry_repositories,
     set_registry_repository_enabled,
 )
+from backend.engines.agent_runner.repository_local import discover_iar_repositories
 from backend.engines.agent_runner.factory import (
     create_console_store,
     create_github_client,
@@ -301,10 +303,37 @@ class SetRepositoryEnabledRequest(BaseModel):
     enabled: bool
 
 
+class BatchAddRepositoryItem(BaseModel):
+    """批量添加接口中的单个仓库项。"""
+
+    repo_id: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    display_name: str | None = None
+
+
+class BatchAddRepositoriesRequest(BaseModel):
+    """批量添加 registry 仓库条目的请求体。"""
+
+    repositories: list[BatchAddRepositoryItem]
+
+
 @router.get("/agent-runner/repositories")
 def list_console_repositories() -> dict:
     """列出 registry 的全部仓库条目（含路径存在性）。"""
     entries = list_registry_repositories(create_registry_editor())
+    return {"repositories": [_serialize(entry) for entry in entries]}
+
+
+@router.get("/agent-runner/repositories/discover")
+def discover_console_repositories(scan_root: str) -> dict:
+    """扫描本地目录，发现已初始化 IAR 的 git 仓库候选。"""
+    try:
+        entries = discover_iar_repositories(
+            scan_root=Path(scan_root),
+            editor=create_registry_editor(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"repositories": [_serialize(entry) for entry in entries]}
 
 
@@ -326,6 +355,39 @@ def add_console_repository(request: AddRepositoryRequest) -> dict:
         detail=f"Added repository at {entry.path}.",
     )
     return _serialize(entry)
+
+
+@router.post("/agent-runner/repositories/batch", status_code=201)
+def batch_add_console_repositories(request: BatchAddRepositoriesRequest) -> dict:
+    """批量添加 registry 仓库条目，已存在的 ID 自动跳过。"""
+    editor = create_registry_editor()
+    added: list[dict] = []
+    skipped: list[str] = []
+    errors: list[dict] = []
+
+    for item in request.repositories:
+        try:
+            entry = add_registry_repository(
+                editor=editor,
+                repo_id=item.repo_id,
+                path=item.path,
+                display_name=item.display_name,
+            )
+        except RegistryValidationError as exc:
+            error_message = str(exc)
+            if "already exists" in error_message:
+                skipped.append(item.repo_id)
+                continue
+            errors.append({"repo_id": item.repo_id, "detail": error_message})
+            continue
+        added.append(_serialize(entry))
+        _audit_process_action(
+            action="registry_add",
+            repo_id=item.repo_id,
+            detail=f"Added repository at {entry.path}.",
+        )
+
+    return {"added": added, "skipped": skipped, "errors": errors}
 
 
 @router.patch("/agent-runner/repositories/{repo_id}")

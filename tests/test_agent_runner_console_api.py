@@ -184,6 +184,87 @@ def test_registry_endpoints(console_environment, tmp_path: Path) -> None:
     assert "[agent_runner.repositories.second]" in config_text
 
 
+def _write_iar_toml(repo_root: Path, repo_id: str, display_name: str) -> None:
+    """Helper to write a minimal .iar.toml for discovery tests."""
+    iar_toml = repo_root / ".iar.toml"
+    iar_toml.write_text(
+        "[agent_runner]\n"
+        "[agent_runner.repository]\n"
+        f'id = "{repo_id}"\n'
+        f'display_name = "{display_name}"\n',
+        encoding="utf-8",
+    )
+
+
+def test_discover_iar_repositories_finds_local_repos(
+    console_environment, tmp_path: Path
+) -> None:
+    """Discover endpoint must find IAR-initialized git repositories."""
+    scan_root = tmp_path / "code"
+    scan_root.mkdir()
+
+    discovered_repo = scan_root / "foo"
+    discovered_repo.mkdir()
+    (discovered_repo / ".git").mkdir()
+    _write_iar_toml(discovered_repo, "foo", "Foo Project")
+
+    nested_parent = scan_root / "nested"
+    nested_parent.mkdir()
+    nested_repo = nested_parent / "bar"
+    nested_repo.mkdir()
+    (nested_repo / ".git").mkdir()
+    _write_iar_toml(nested_repo, "bar", "Bar Project")
+
+    non_iar_repo = scan_root / "baz"
+    non_iar_repo.mkdir()
+    (non_iar_repo / ".git").mkdir()
+
+    response = client.get(
+        "/api/v1/agent-runner/repositories/discover",
+        params={"scan_root": str(scan_root)},
+    )
+    assert response.status_code == 200, response.text
+    discovered = response.json()["repositories"]
+    assert len(discovered) == 2
+    repo_ids = {entry["repo_id"] for entry in discovered}
+    assert repo_ids == {"bar", "foo"}
+    assert all("display_name" in entry for entry in discovered)
+    assert all("already_registered" in entry for entry in discovered)
+
+
+def test_batch_add_repositories_skips_existing(
+    console_environment, tmp_path: Path
+) -> None:
+    """Batch add should add new repos and skip already-registered ones."""
+    first_repo = tmp_path / "first"
+    first_repo.mkdir()
+    (first_repo / ".git").mkdir()
+
+    second_repo = tmp_path / "second"
+    second_repo.mkdir()
+    (second_repo / ".git").mkdir()
+
+    response = client.post(
+        "/api/v1/agent-runner/repositories/batch",
+        json={
+            "repositories": [
+                {"repo_id": "keda-main", "path": str(first_repo)},
+                {"repo_id": "second", "path": str(second_repo)},
+            ]
+        },
+    )
+    assert response.status_code == 201, response.text
+    result = response.json()
+    assert len(result["added"]) == 1
+    assert result["added"][0]["repo_id"] == "second"
+    assert result["skipped"] == ["keda-main"]
+    assert result["errors"] == []
+
+    list_response = client.get("/api/v1/agent-runner/repositories")
+    registered_ids = {r["repo_id"] for r in list_response.json()["repositories"]}
+    assert registered_ids == {"keda-main", "second"}
+
+
 def test_stats_history_empty(console_environment) -> None:
     """History endpoint must work with an empty store."""
     response = client.get("/api/v1/agent-runner/console/stats/history?days=7")

@@ -139,6 +139,35 @@ def test_cli_parser_worktree_cleanup() -> None:
     assert parsed.force is True
 
 
+def test_cli_parser_registry_scan() -> None:
+    """registry scan should accept an optional scan root."""
+    parser = build_parser()
+    parsed = parser.parse_args(["registry", "scan", "/Users/me/code"])
+    assert parsed.command == "registry"
+    assert parsed.registry_command == "scan"
+    assert parsed.scan_root == "/Users/me/code"
+
+
+def test_cli_parser_registry_sync_defaults() -> None:
+    """registry sync should default to current directory and not dry-run."""
+    parser = build_parser()
+    parsed = parser.parse_args(["registry", "sync"])
+    assert parsed.command == "registry"
+    assert parsed.registry_command == "sync"
+    assert parsed.scan_root == "."
+    assert parsed.dry_run is False
+
+
+def test_cli_parser_registry_sync_dry_run() -> None:
+    """registry sync should accept --dry-run."""
+    parser = build_parser()
+    parsed = parser.parse_args(["registry", "sync", "--dry-run", "/tmp"])
+    assert parsed.command == "registry"
+    assert parsed.registry_command == "sync"
+    assert parsed.dry_run is True
+    assert parsed.scan_root == "/tmp"
+
+
 def test_cli_parser_daemon() -> None:
     """daemon should accept interval and max-issues."""
     parser = build_parser()
@@ -1383,3 +1412,84 @@ def test_main_init_succeeds_when_repository_not_initialized(
     exit_code = main(["init", "--dry-run"])
 
     assert exit_code == 0
+
+
+def _write_iar_toml(repo_root: Path, repo_id: str) -> None:
+    """Write a minimal .iar.toml for CLI discovery tests."""
+    iar_toml = repo_root / ".iar.toml"
+    iar_toml.write_text(
+        "[agent_runner]\n" "[agent_runner.repository]\n" f'id = "{repo_id}"\n',
+        encoding="utf-8",
+    )
+
+
+def test_main_registry_scan_lists_discovered_repos(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry scan` should print discovered repositories."""
+    scan_root = tmp_path / "code"
+    scan_root.mkdir()
+    repo_path = scan_root / "foo"
+    repo_path.mkdir()
+    (repo_path / ".git").mkdir()
+    _write_iar_toml(repo_path, "foo")
+
+    exit_code = main(["registry", "scan", str(scan_root)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "[foo]" in _strip_ansi(captured.out)
+    assert "(new)" in _strip_ansi(captured.out)
+
+
+def test_main_registry_sync_dry_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry sync --dry-run` should not write config.toml."""
+    monkeypatch.chdir(tmp_path)
+    scan_root = tmp_path / "code"
+    scan_root.mkdir()
+    repo_path = scan_root / "bar"
+    repo_path.mkdir()
+    (repo_path / ".git").mkdir()
+    _write_iar_toml(repo_path, "bar")
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent_runner]\n", encoding="utf-8")
+
+    exit_code = main(["registry", "sync", "--dry-run", str(scan_root)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Would register" in _strip_ansi(captured.out)
+    assert "[agent_runner.repositories.bar]" not in config_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_main_registry_sync_registers_new_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry sync` should write discovered repos to config.toml."""
+    monkeypatch.chdir(tmp_path)
+    scan_root = tmp_path / "code"
+    scan_root.mkdir()
+    repo_path = scan_root / "baz"
+    repo_path.mkdir()
+    (repo_path / ".git").mkdir()
+    _write_iar_toml(repo_path, "baz")
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent_runner]\n", encoding="utf-8")
+
+    exit_code = main(["registry", "sync", str(scan_root)])
+
+    assert exit_code == 0
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "[agent_runner.repositories.baz]" in config_text

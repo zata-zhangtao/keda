@@ -25,7 +25,14 @@ from backend.infrastructure.config.settings import (
     IAR_REPOSITORY_CONFIG_FILENAME,
     load_agent_runner_local_settings,
 )
+from backend.core.shared.interfaces.runner_console import (
+    DiscoveredRepositoryEntry,
+    IRepositoryRegistryEditor,
+)
 from backend.infrastructure.process_runner import CommandResult, SubprocessRunner
+
+
+_MAX_SCAN_DEPTH = 4
 
 
 class IARRepositoryNotInitializedError(Exception):
@@ -627,3 +634,82 @@ def _remote_head_branch(
     if remote_head_result.return_code == 0 and remote_head_text.startswith(prefix):
         return remote_head_text[len(prefix) :]
     return None
+
+
+def discover_iar_repositories(
+    *,
+    scan_root: Path,
+    editor: IRepositoryRegistryEditor,
+) -> list[DiscoveredRepositoryEntry]:
+    """扫描本地目录，发现已初始化 IAR 的 git 仓库。
+
+    扫描 ``scan_root`` 下最多 ``_MAX_SCAN_DEPTH`` 层子目录，
+    对每个同时存在 ``.git`` 与 ``.iar.toml`` 的目录，读取本地配置
+    生成候选条目，并标记是否已注册到 registry。
+
+    Args:
+        scan_root: 扫描起始目录。
+        editor: registry 读取端口，用于判断仓库是否已注册。
+
+    Returns:
+        按 repo_id 排序的候选仓库列表。
+
+    Raises:
+        ValueError: ``scan_root`` 不存在或不是目录。
+    """
+    resolved_root = scan_root.expanduser().resolve()
+    if not resolved_root.is_dir():
+        raise ValueError(f"扫描目录不存在或不是目录：{resolved_root}")
+
+    registered_paths = {
+        str(Path(entry.path).expanduser().resolve())
+        for entry in editor.list_repositories()
+    }
+
+    discovered: dict[str, DiscoveredRepositoryEntry] = {}
+    for directory in _walk_directories(resolved_root, _MAX_SCAN_DEPTH):
+        if not _is_iar_git_repository(directory):
+            continue
+        local_settings = load_agent_runner_local_settings(directory)
+        repo_id = (
+            local_settings.id
+            if local_settings and local_settings.id
+            else _normalize_repository_id(directory.name)
+        )
+        display_name = (
+            local_settings.display_name
+            if local_settings and local_settings.display_name
+            else directory.name
+        )
+        resolved_path = str(directory)
+        if repo_id in discovered:
+            continue
+        discovered[repo_id] = DiscoveredRepositoryEntry(
+            repo_id=repo_id,
+            path=resolved_path,
+            display_name=display_name,
+            already_registered=resolved_path in registered_paths,
+        )
+
+    return [discovered[repo_id] for repo_id in sorted(discovered)]
+
+
+def _walk_directories(root: Path, max_depth: int):
+    """按广度优先遍历目录，yield 目录路径。"""
+    queue: list[tuple[Path, int]] = [(root, 0)]
+    while queue:
+        current, depth = queue.pop(0)
+        if depth >= max_depth:
+            continue
+        for child in current.iterdir():
+            if not child.is_dir():
+                continue
+            yield child
+            queue.append((child, depth + 1))
+
+
+def _is_iar_git_repository(directory: Path) -> bool:
+    """判断目录是否为带 IAR 配置的 git 仓库。"""
+    return (directory / ".git").exists() and (
+        directory / IAR_REPOSITORY_CONFIG_FILENAME
+    ).is_file()

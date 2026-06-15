@@ -13,11 +13,17 @@ import { Input } from "@/components/ui/input";
 import { formatLocalDateTime } from "@/lib/utils";
 import {
   addRegistryRepository,
+  batchAddRepositories,
+  discoverRepositories,
   fetchAuditLog,
   fetchRegistryRepositories,
   setRegistryRepositoryEnabled,
 } from "@shared/api/console";
-import type { AuditEntry, RegistryRepositoryEntry } from "@shared/api/types";
+import type {
+  AuditEntry,
+  DiscoveredRepositoryEntry,
+  RegistryRepositoryEntry,
+} from "@shared/api/types";
 
 export function RepositoriesPage() {
   const [repositories, setRepositories] = useState<RegistryRepositoryEntry[]>([]);
@@ -26,6 +32,13 @@ export function RepositoriesPage() {
   const [newRepoPath, setNewRepoPath] = useState("");
   const [newDisplayName, setNewDisplayName] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [scanRoot, setScanRoot] = useState("");
+  const [discovered, setDiscovered] = useState<DiscoveredRepositoryEntry[]>([]);
+  const [selectedDiscovered, setSelectedDiscovered] = useState<Set<string>>(
+    new Set(),
+  );
+  const [scanning, setScanning] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -67,6 +80,76 @@ export function RepositoriesPage() {
       toast.error(error instanceof Error ? error.message : "添加仓库失败。");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleScan() {
+    if (!scanRoot) {
+      toast.warning("请输入扫描根目录。");
+      return;
+    }
+    setScanning(true);
+    setSelectedDiscovered(new Set());
+    try {
+      const entries = await discoverRepositories(scanRoot);
+      setDiscovered(entries);
+      if (entries.length === 0) {
+        toast.info("未找到已初始化 IAR 的 git 仓库。");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "扫描失败。");
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  function toggleDiscoveredSelection(repoId: string) {
+    setSelectedDiscovered((previous) => {
+      const next = new Set(previous);
+      if (next.has(repoId)) {
+        next.delete(repoId);
+      } else {
+        next.add(repoId);
+      }
+      return next;
+    });
+  }
+
+  function selectAllUnregistered() {
+    const unregistered = discovered
+      .filter((entry) => !entry.already_registered)
+      .map((entry) => entry.repo_id);
+    setSelectedDiscovered(new Set(unregistered));
+  }
+
+  async function handleSyncSelected() {
+    const selectedEntries = discovered.filter((entry) =>
+      selectedDiscovered.has(entry.repo_id),
+    );
+    if (selectedEntries.length === 0) {
+      toast.warning("请先勾选要同步的仓库。");
+      return;
+    }
+    setSyncing(true);
+    try {
+      const result = await batchAddRepositories(selectedEntries);
+      const messages: string[] = [];
+      if (result.added.length > 0) {
+        messages.push(`已添加 ${result.added.length} 个`);
+      }
+      if (result.skipped.length > 0) {
+        messages.push(`跳过 ${result.skipped.length} 个已注册`);
+      }
+      if (result.errors.length > 0) {
+        messages.push(`${result.errors.length} 个失败`);
+      }
+      toast.success(messages.join("，") || "同步完成。");
+      setSelectedDiscovered(new Set());
+      await refresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "同步失败。");
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -153,6 +236,107 @@ export function RepositoriesPage() {
                 </tbody>
               </table>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">扫描本地 IAR 仓库</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              className="w-72"
+              placeholder="扫描根目录，如 /Users/zata/code"
+              value={scanRoot}
+              onChange={(event) => setScanRoot(event.target.value)}
+            />
+            <Button size="sm" onClick={() => void handleScan()} disabled={scanning}>
+              {scanning ? "扫描中…" : "扫描"}
+            </Button>
+          </div>
+
+          {discovered.length > 0 && (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-slate-500">
+                  共发现 {discovered.length} 个仓库，其中{" "}
+                  {discovered.filter((entry) => entry.already_registered).length}{" "}
+                  个已注册。
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => selectAllUnregistered()}
+                >
+                  全选未注册
+                </Button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-xs text-slate-500 dark:border-slate-700">
+                      <th className="py-2 pr-3">
+                        <input
+                          type="checkbox"
+                          checked={
+                            selectedDiscovered.size ===
+                            discovered.filter((entry) => !entry.already_registered)
+                              .length
+                          }
+                          onChange={(event) =>
+                            event.target.checked
+                              ? selectAllUnregistered()
+                              : setSelectedDiscovered(new Set())
+                          }
+                        />
+                      </th>
+                      <th className="py-2 pr-3">repo_id</th>
+                      <th className="py-2 pr-3">路径</th>
+                      <th className="py-2 pr-3">显示名</th>
+                      <th className="py-2 pr-3">状态</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {discovered.map((entry) => (
+                      <tr
+                        key={entry.repo_id}
+                        className="border-b border-slate-100 dark:border-slate-800"
+                      >
+                        <td className="py-2 pr-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedDiscovered.has(entry.repo_id)}
+                            disabled={entry.already_registered}
+                            onChange={() => toggleDiscoveredSelection(entry.repo_id)}
+                          />
+                        </td>
+                        <td className="py-2 pr-3 font-medium">{entry.repo_id}</td>
+                        <td className="py-2 pr-3 font-mono text-xs">{entry.path}</td>
+                        <td className="py-2 pr-3">
+                          {entry.display_name ?? "—"}
+                        </td>
+                        <td className="py-2 pr-3">
+                          <Badge variant={entry.already_registered ? "default" : "ready"}>
+                            {entry.already_registered ? "已注册" : "未注册"}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  onClick={() => void handleSyncSelected()}
+                  disabled={syncing || selectedDiscovered.size === 0}
+                >
+                  {syncing ? "同步中…" : `同步选中仓库 (${selectedDiscovered.size})`}
+                </Button>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

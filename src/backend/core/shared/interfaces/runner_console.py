@@ -223,6 +223,16 @@ class RegistryRepositoryEntry:
     path_exists: bool
 
 
+@dataclass(frozen=True)
+class DiscoveredRepositoryEntry:
+    """本地扫描发现的 IAR 仓库候选条目。"""
+
+    repo_id: str
+    path: str
+    display_name: str | None
+    already_registered: bool
+
+
 class IRepositoryRegistryEditor(ABC):
     """对仓库 registry（config.toml）的受限读写端口。
 

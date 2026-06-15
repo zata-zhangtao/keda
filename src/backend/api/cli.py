@@ -64,10 +64,12 @@ from backend.engines.agent_runner.factory import (
     write_deliberation_outputs,
 )
 from backend.engines.agent_runner.live_terminal import create_output_view
+from backend.engines.agent_runner.factory import create_registry_editor
 from backend.engines.agent_runner.repository_local import (
     IARRepositoryNotInitializedError,
     RepositoryInitOptions,
     detect_git_repository_root,
+    discover_iar_repositories,
     initialize_repository_local_config,
     require_iar_repository_initialized,
 )
@@ -339,6 +341,58 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Label sync failed (labels may already exist): %s", exc)
             error_console.print(f"[yellow]Label sync failed:[/] {exc}")
+        return 0
+
+    if parsed.command == "registry scan":
+        try:
+            entries = discover_iar_repositories(
+                scan_root=Path(parsed.scan_root),
+                editor=create_registry_editor(),
+            )
+        except ValueError as exc:
+            logger.error("iar registry scan failed: %s", exc)
+            return 1
+        if not entries:
+            console.print("[yellow]No IAR repositories found.[/]")
+            return 0
+        for entry in entries:
+            status = "registered" if entry.already_registered else "new"
+            print(f"[{entry.repo_id}] {entry.path} ({status})")
+        return 0
+
+    if parsed.command == "registry sync":
+        try:
+            entries = discover_iar_repositories(
+                scan_root=Path(parsed.scan_root),
+                editor=create_registry_editor(),
+            )
+        except ValueError as exc:
+            logger.error("iar registry sync failed: %s", exc)
+            return 1
+        new_entries = [entry for entry in entries if not entry.already_registered]
+        if not new_entries:
+            console.print("[green]No new IAR repositories to register.[/]")
+            return 0
+        if parsed.dry_run:
+            console.print("[cyan]Would register:[/]")
+            for entry in new_entries:
+                console.print(f"  {entry.repo_id}: {entry.path}")
+            return 0
+        editor = create_registry_editor()
+        added = 0
+        for entry in new_entries:
+            try:
+                editor.add_repository(
+                    repo_id=entry.repo_id,
+                    path=entry.path,
+                    display_name=entry.display_name,
+                )
+            except ValueError as exc:
+                logger.warning("Skipping %s: %s", entry.repo_id, exc)
+                continue
+            added += 1
+            console.print(f"[green]Registered:[/] {entry.repo_id}")
+        console.print(f"[green]Registered {added} repository(s).[/]")
         return 0
 
     if parsed.command == "worktree":

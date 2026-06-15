@@ -8,8 +8,10 @@
 import { get, patch, post } from "@shared/api/client";
 import type {
   AuditEntry,
+  BatchAddRepositoriesResult,
   ConsoleActionResult,
   DailyRunTrendEntry,
+  DiscoveredRepositoryEntry,
   ProcessLogChunk,
   RegistryRepositoryEntry,
   RepositoryCompletionStats,
@@ -141,6 +143,23 @@ export async function addRegistryRepository(params: {
   display_name?: string;
 }): Promise<RegistryRepositoryEntry> {
   return post<RegistryRepositoryEntry>(`${BASE_PATH}/repositories`, params);
+}
+
+export async function discoverRepositories(
+  scanRoot: string,
+): Promise<DiscoveredRepositoryEntry[]> {
+  const response = await get<{ repositories: DiscoveredRepositoryEntry[] }>(
+    `${BASE_PATH}/repositories/discover?scan_root=${encodeURIComponent(scanRoot)}`,
+  );
+  return response.repositories;
+}
+
+export async function batchAddRepositories(
+  repositories: DiscoveredRepositoryEntry[],
+): Promise<BatchAddRepositoriesResult> {
+  return post<BatchAddRepositoriesResult>(`${BASE_PATH}/repositories/batch`, {
+    repositories,
+  });
 }
 
 export async function setRegistryRepositoryEnabled(

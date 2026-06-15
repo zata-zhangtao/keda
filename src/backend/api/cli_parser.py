@@ -297,4 +297,36 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also delete dirty or unmerged eligible branches.",
     )
+
+    registry_parser = subparsers.add_parser(
+        "registry", help="Manage the repository registry in config.toml."
+    )
+    registry_subparsers = registry_parser.add_subparsers(
+        dest="registry_command", required=True
+    )
+    registry_scan_parser = registry_subparsers.add_parser(
+        "scan", help="Discover IAR-initialized git repositories under a path."
+    )
+    registry_scan_parser.add_argument(
+        "scan_root",
+        nargs="?",
+        default=".",
+        help="Directory to scan (default: current directory).",
+    )
+    registry_sync_parser = registry_subparsers.add_parser(
+        "sync",
+        help="Discover and register all IAR repositories under a path.",
+    )
+    registry_sync_parser.add_argument(
+        "scan_root",
+        nargs="?",
+        default=".",
+        help="Directory to scan (default: current directory).",
+    )
+    registry_sync_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print candidates without writing to config.toml.",
+    )
+
     return parser

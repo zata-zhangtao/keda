@@ -69,10 +69,15 @@ worktree_app = typer.Typer(
     help="Manage iAR-owned Git worktrees for the current repository.",
     no_args_is_help=True,
 )
+registry_app = typer.Typer(
+    help="Manage the repository registry in config.toml.",
+    no_args_is_help=True,
+)
 app.add_typer(labels_app, name="labels")
 app.add_typer(issue_app, name="issue")
 app.add_typer(completion_app, name="completion")
 app.add_typer(worktree_app, name="worktree")
+app.add_typer(registry_app, name="registry")
 
 RepoOption = Annotated[
     str | None, typer.Option("--repo", help="Target repository path.")
@@ -137,7 +142,8 @@ def _typer_selector_options(
 
 def _run_typer_command(command: str, **kwargs: Any) -> int:
     """Convert Typer command arguments to the dispatch namespace."""
-    return _run_parsed_command(argparse.Namespace(command=command, **kwargs))
+    namespace_kwargs = {"config": None, **kwargs}
+    return _run_parsed_command(argparse.Namespace(command=command, **namespace_kwargs))
 
 
 def _run_typer_repository_command(
@@ -279,6 +285,32 @@ def init_command(
         display_name=display_name,
         remote=remote,
         base_branch=base_branch,
+    )
+
+
+@registry_app.command("scan")
+def registry_scan_command(
+    scan_root: Annotated[str, typer.Argument(help="Directory to scan.")] = ".",
+) -> int:
+    """Discover IAR-initialized git repositories under a path."""
+    return _run_typer_command(
+        "registry scan",
+        scan_root=scan_root,
+    )
+
+
+@registry_app.command("sync")
+def registry_sync_command(
+    scan_root: Annotated[str, typer.Argument(help="Directory to scan.")] = ".",
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print candidates without writing.")
+    ] = False,
+) -> int:
+    """Discover and register all IAR repositories under a path."""
+    return _run_typer_command(
+        "registry sync",
+        scan_root=scan_root,
+        dry_run=dry_run,
     )
 
 
