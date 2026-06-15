@@ -51,8 +51,6 @@ from backend.core.use_cases.agent_runner_blocked_claim import (
 from backend.core.use_cases.agent_runner_git import (
     get_current_branch,
     has_changes,
-    has_rebase_metadata,
-    is_detached_head,
 )
 from backend.core.use_cases.agent_runner_workflow import (
     claim_blocked_issue,
@@ -85,8 +83,16 @@ from backend.core.use_cases.agent_runner_worktree_branch import (
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
-    format_command,
     get_head_sha,
+)
+from backend.core.use_cases.agent_runner_failure_marking import (
+    _mark_issue_blocked,
+    _mark_issue_failed,
+)
+from backend.core.use_cases.agent_runner_worktree_probe import (
+    _find_worktree_path_for_issue,
+    _has_existing_local_commit_ready_for_publish,
+    _worktree_needs_rebase_recovery,
 )
 
 _logger = logging.getLogger(__name__)
@@ -160,261 +166,6 @@ def _guard_running_issue_is_rework(
         )
         return False, None
     return True, marker
-
-
-def _find_worktree_path_for_issue(
-    repo_path: Path,
-    issue: IssueSummary,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> Path:
-    """根据 Issue 编号查找对应的 worktree 目录路径。
-
-    通过执行配置的 path_command 获取 worktree 路径。
-    path_command 通常是查找包含 issue 编号的 worktree 目录的脚本。
-
-    Args:
-        repo_path: 仓库根目录
-        issue: Issue 对象
-        config: 应用配置
-        process_runner: 进程运行器
-
-    Returns:
-        worktree 的绝对路径
-    """
-    path_result = process_runner.run(
-        format_command(config.worktree.path_command, issue_number=issue.number),
-        cwd=repo_path,
-    )
-    # path_command runs with cwd=repo_path, so a relative output must be
-    # anchored there too — bare resolve() would anchor it to the daemon
-    # process cwd instead.
-    worktree_path_output = Path(path_result.stdout.strip())
-    if not worktree_path_output.is_absolute():
-        worktree_path_output = repo_path / worktree_path_output
-    worktree_path = worktree_path_output.resolve()
-    if not worktree_path.exists():
-        raise FileNotFoundError(
-            "worktree path does not exist (path_command output): "
-            f"{worktree_path}. path_command return_code={path_result.return_code}, "
-            f"stdout={path_result.stdout!r}."
-        )
-    return worktree_path
-
-
-def _mark_issue_failed(
-    *,
-    issue: IssueSummary,
-    config: AppConfig,
-    github_client: IGitHubClient,
-    exc: Exception,
-) -> None:
-    """将 Issue 标记为失败状态。
-
-    最佳努力（best-effort）报告：即使标签或评论写入失败，
-    也保留原始异常，不吞没错误。
-
-    Args:
-        issue: Issue 对象
-        config: 应用配置
-        github_client: GitHub 客户端
-        exc: 捕获的异常对象
-    """
-    try:
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.failed
-        )
-    except Exception as label_exc:  # noqa: BLE001 - preserve original failure.
-        _logger.error(
-            "Failed to mark Issue #%d as %s: %s",
-            issue.number,
-            config.labels.failed,
-            label_exc,
-        )
-
-    from backend.core.use_cases.run_agent_once import (
-        PublishFailureError,
-        format_failure_comment,
-        format_minimal_failure_comment,
-        format_publish_failure_comment,
-    )
-
-    # 尝试从异常中提取尝试历史并格式化失败评论
-    attempt_results = getattr(exc, "attempt_results", None)
-    if isinstance(exc, PublishFailureError):
-        comment_body = format_publish_failure_comment(
-            exc,
-            issue.number,
-            worktree_path=exc.worktree_path,
-            failure_category=exc.failure_category,
-        )
-    elif attempt_results is not None:
-        comment_body = format_failure_comment(
-            exc, attempt_results, issue_number=issue.number
-        )
-    else:
-        comment_body = format_failure_comment(exc, issue_number=issue.number)
-    try:
-        github_client.comment_issue(issue.number, comment_body)
-    except Exception as comment_exc:  # noqa: BLE001 - preserve original failure.
-        _logger.error(
-            "Failed to comment on Issue #%d failure: %s",
-            issue.number,
-            comment_exc,
-        )
-        # The full report can be rejected by GitHub (oversized or control
-        # characters from agent output). Fall back to a minimal comment so the
-        # failure reason still reaches the Issue instead of being lost.
-        try:
-            github_client.comment_issue(
-                issue.number,
-                format_minimal_failure_comment(exc, issue_number=issue.number),
-            )
-        except Exception as fallback_exc:  # noqa: BLE001 - preserve original failure.
-            _logger.error(
-                "Failed to post fallback failure comment on Issue #%d: %s",
-                issue.number,
-                fallback_exc,
-            )
-
-
-def _mark_issue_blocked(
-    *,
-    issue: IssueSummary,
-    config: AppConfig,
-    github_client: IGitHubClient,
-    exc: Exception,
-) -> None:
-    """将 Issue 标记为 blocked 状态（forbidden path 拦截）。
-
-    Args:
-        issue: Issue 对象
-        config: 应用配置
-        github_client: GitHub 客户端
-        exc: 捕获的异常对象
-    """
-    from backend.core.use_cases.agent_runner_failure import (
-        ForbiddenBlockedError,
-        format_blocked_failure_comment,
-    )
-
-    try:
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.blocked
-        )
-    except Exception as label_exc:  # noqa: BLE001 - preserve original failure.
-        _logger.error(
-            "Failed to mark Issue #%d as %s: %s",
-            issue.number,
-            config.labels.blocked,
-            label_exc,
-        )
-
-    attempt_results = getattr(exc, "attempt_results", None)
-    if isinstance(exc, ForbiddenBlockedError) and attempt_results is not None:
-        comment_body = format_blocked_failure_comment(
-            exc, attempt_results, issue_number=issue.number
-        )
-    else:
-        comment_body = format_blocked_failure_comment(exc, issue_number=issue.number)
-    try:
-        github_client.comment_issue(issue.number, comment_body)
-    except Exception as comment_exc:  # noqa: BLE001 - preserve original failure.
-        _logger.error(
-            "Failed to comment on Issue #%d blocked: %s",
-            issue.number,
-            comment_exc,
-        )
-
-
-def _has_existing_local_commit_ready_for_publish(
-    *,
-    issue: IssueSummary,
-    repo_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> bool:
-    """检查 Issue 是否有可发布的本地提交。
-
-    用于 running 状态 Issue 的发布恢复检测。
-    轮询时发现 running Issue 会调用此函数判断是否可恢复发布。
-
-    检测条件：
-    1. 存在 worktree 目录
-    2. 有超过 base 分支的提交
-    3. 工作区干净（无未提交变更）
-
-    Args:
-        issue: Issue 对象
-        repo_path: 仓库根目录
-        config: 应用配置
-        process_runner: 进程运行器
-
-    Returns:
-        是否有可发布的本地 commit
-    """
-    try:
-        worktree_path = _find_worktree_path_for_issue(
-            repo_path, issue, config, process_runner
-        )
-        from backend.core.use_cases.agent_runner_publication import (
-            _count_local_commits_since_base,
-        )
-
-        return _count_local_commits_since_base(
-            worktree_path, config, process_runner
-        ) > 0 and not has_changes(worktree_path, process_runner)
-    except Exception as exc:  # noqa: BLE001 - candidate probing must not fail polling.
-        _logger.info(
-            "Skipping existing local commit probe for Issue #%d: %s",
-            issue.number,
-            exc,
-        )
-        return False
-
-
-def _worktree_needs_rebase_recovery(
-    *,
-    issue: IssueSummary,
-    repo_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-) -> bool:
-    """检查 running Issue 的 worktree 是否卡在中断的 rebase / detached HEAD。
-
-    runner 在 rebase 中途崩溃或被中断时，会把 Issue worktree 留在 detached HEAD
-    且带有 active rebase 元数据的状态。这种 worktree 的「领先 base 的干净 commit」
-    探测必然为假——HEAD 停在 base 上（领先数为 0），工作区又有暂存的冲突解决
-    （非干净），于是 :func:`_has_existing_local_commit_ready_for_publish` 不会把它
-    识别为可恢复，导致每轮轮询都静默跳过、永不自愈。此处显式识别该状态，交由
-    publish-recovery 路径里的 ``_ensure_worktree_branch`` 治愈（continue/abort
-    rebase 或把分支重新挂回 detached HEAD）。
-
-    Args:
-        issue: Issue 对象。
-        repo_path: 仓库根目录。
-        config: 应用配置。
-        process_runner: 进程运行器。
-
-    Returns:
-        worktree 是否处于需要恢复的 mid-rebase / detached HEAD 状态。
-    """
-    try:
-        worktree_path = _find_worktree_path_for_issue(
-            repo_path, issue, config, process_runner
-        )
-    except Exception as exc:  # noqa: BLE001 - 探测不得中断轮询。
-        _logger.info(
-            "Skipping rebase-recovery probe for Issue #%d: %s",
-            issue.number,
-            exc,
-        )
-        return False
-    if not worktree_path.exists():
-        return False
-    return has_rebase_metadata(worktree_path, process_runner) or is_detached_head(
-        worktree_path, process_runner
-    )
 
 
 _BLOCKED_RESOLUTION_COMPLETION_PHASES = {

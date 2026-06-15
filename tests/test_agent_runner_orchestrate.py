@@ -365,10 +365,11 @@ def test_worktree_needs_rebase_recovery_detects_rebase_and_detached(
 ) -> None:
     """Mid-rebase or detached-HEAD running worktrees must be flagged recoverable."""
     import backend.core.use_cases.agent_runner_orchestrate as orchestrate
+    from backend.core.use_cases import agent_runner_worktree_probe as probe
 
     issue = _make_ready_issue(85, "", ("agent/running",))
     monkeypatch.setattr(
-        orchestrate, "_find_worktree_path_for_issue", lambda *a, **k: tmp_path
+        probe, "_find_worktree_path_for_issue", lambda *a, **k: tmp_path
     )
 
     def _probe() -> bool:
@@ -380,18 +381,18 @@ def test_worktree_needs_rebase_recovery_detects_rebase_and_detached(
         )
 
     # Active rebase metadata present → recoverable.
-    monkeypatch.setattr(orchestrate, "has_rebase_metadata", lambda *a, **k: True)
-    monkeypatch.setattr(orchestrate, "is_detached_head", lambda *a, **k: False)
+    monkeypatch.setattr(probe, "has_rebase_metadata", lambda *a, **k: True)
+    monkeypatch.setattr(probe, "is_detached_head", lambda *a, **k: False)
     assert _probe() is True
 
     # Detached HEAD without rebase metadata → still recoverable.
-    monkeypatch.setattr(orchestrate, "has_rebase_metadata", lambda *a, **k: False)
-    monkeypatch.setattr(orchestrate, "is_detached_head", lambda *a, **k: True)
+    monkeypatch.setattr(probe, "has_rebase_metadata", lambda *a, **k: False)
+    monkeypatch.setattr(probe, "is_detached_head", lambda *a, **k: True)
     assert _probe() is True
 
     # Healthy worktree on its branch → not a recovery candidate.
-    monkeypatch.setattr(orchestrate, "has_rebase_metadata", lambda *a, **k: False)
-    monkeypatch.setattr(orchestrate, "is_detached_head", lambda *a, **k: False)
+    monkeypatch.setattr(probe, "has_rebase_metadata", lambda *a, **k: False)
+    monkeypatch.setattr(probe, "is_detached_head", lambda *a, **k: False)
     assert _probe() is False
 
 
@@ -400,13 +401,14 @@ def test_worktree_needs_rebase_recovery_missing_worktree_returns_false(
 ) -> None:
     """A missing worktree must not be treated as a rebase-recovery candidate."""
     import backend.core.use_cases.agent_runner_orchestrate as orchestrate
+    from backend.core.use_cases import agent_runner_worktree_probe as probe
 
     issue = _make_ready_issue(85, "", ("agent/running",))
 
     def _raise(*_args: object, **_kwargs: object) -> Path:
         raise FileNotFoundError("worktree path does not exist")
 
-    monkeypatch.setattr(orchestrate, "_find_worktree_path_for_issue", _raise)
+    monkeypatch.setattr(probe, "_find_worktree_path_for_issue", _raise)
 
     assert (
         orchestrate._worktree_needs_rebase_recovery(
