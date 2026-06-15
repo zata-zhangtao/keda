@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     IssueSummary,
@@ -219,10 +221,8 @@ def test_create_prd_from_issue_failure_no_write(tmp_path: Path) -> None:
         issue=issue,
         config=AppConfig(labels=LabelConfig(rework_prd="agent/rework-prd")),
     )
-    try:
-        from unittest.mock import patch
+    from unittest.mock import patch
 
-        with patch("pathlib.Path.write_text", broken_write_text):
+    with patch("pathlib.Path.write_text", broken_write_text):
+        with pytest.raises(RuntimeError, match="disk full"):
             create_prd_from_issue(request=request, github_client=fake_client)
-    except RuntimeError as exc:
-        assert "disk full" in str(exc)

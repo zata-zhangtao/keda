@@ -751,7 +751,7 @@ The next daemon pass or `iar run` will detect the label and process the Issue be
 2. **Collect**: It loads the Issue body and all comments.
 3. **Resolve Path**:
    - If the Issue body already contains a `- PRD path: \`...\`` anchor, the runner rewrites that same file.
-   - If no anchor exists, the runner generates a new filename under `tasks/pending/` using the pattern `YYYYMMDD-HHMMSS-prd-<slug>.md`.
+   - If no anchor exists, the runner generates a new filename under `tasks/pending/` using the pattern `P<priority>-<TYPE>-YYYYMMDD-HHMMSS-prd-<slug>.md` (priority/type are inferred from `priority/<p>` and `type/<t>` labels, or the `[Type]` title prefix).
 4. **Generate**: It calls the configured content generator (template, agent, or fallback) to produce the PRD markdown.
 5. **Write**: The PRD file is written (overwriting existing or creating new).
 6. **Update Issue**:
