@@ -67,6 +67,7 @@ jobs:
             fi
           elif [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
             pr_number="${INPUT_PR}"
+            commit_sha="$(gh pr view "${pr_number}" --json headRefOid -q .headRefOid)"
             should_deploy="true"
           elif [ "${EVENT_NAME}" = "issue_comment" ] && [ -n "${ISSUE_PR_URL}" ]; then
             pr_number="${ISSUE_NUMBER}"
@@ -97,7 +98,7 @@ jobs:
             image_var: BACKEND_IMAGE
           - name: frontend
             context: ./frontend
-            dockerfile: frontend/Dockerfile
+            dockerfile: Dockerfile
             image_var: FRONTEND_IMAGE
     steps:
       - name: Checkout repository
