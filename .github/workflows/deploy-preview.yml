@@ -198,14 +198,16 @@ jobs:
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
+          set +x
           rsync -avz --rsync-path="mkdir -p ${APP_DIR} && rsync" \
             deploy/vps-traefik/docker-compose.preview.yml \
             deploy/vps-traefik/deploy-preview.sh \
             "${SERVER_USER}@${SERVER_HOST}:${APP_DIR}/"
           ssh -o StrictHostKeyChecking=no \
             "${SERVER_USER}@${SERVER_HOST}" \
-            "cd ${APP_DIR} && bash deploy-preview.sh up"
+            "cd ${APP_DIR} && POSTGRES_PASSWORD='${POSTGRES_PASSWORD}' bash deploy-preview.sh up"
 
       - name: Upsert sticky preview comment
         if: ${{ always() }}
