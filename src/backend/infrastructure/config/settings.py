@@ -24,8 +24,24 @@ _CONFIG_DIR_PATH: Path = _SETTINGS_FILE_PATH.parent
 _INFRASTRUCTURE_DIR_PATH: Path = _CONFIG_DIR_PATH.parent
 _BACKEND_DIR_PATH: Path = _INFRASTRUCTURE_DIR_PATH.parent
 _SOURCE_DIR_PATH: Path = _BACKEND_DIR_PATH.parent
-_PROJECT_ROOT_PATH: Path = _SOURCE_DIR_PATH.parent
 IAR_REPOSITORY_CONFIG_FILENAME = ".iar.toml"
+
+
+def _resolve_project_root_from_settings_path(settings_path: Path) -> Path:
+    """Locate the project root by searching upward for ``pyproject.toml``.
+
+    First searches from the settings file location, then from the current
+    working directory. Falls back to the legacy directory-based heuristic when
+    no marker file is found, preserving behavior for non-package invocations.
+    """
+    for start_path in (settings_path, Path.cwd()):
+        for parent in start_path.parents:
+            if (parent / "pyproject.toml").is_file():
+                return parent
+    return _SOURCE_DIR_PATH.parent
+
+
+_PROJECT_ROOT_PATH: Path = _resolve_project_root_from_settings_path(_SETTINGS_FILE_PATH)
 
 
 def _find_config_toml() -> Path | None:
@@ -676,6 +692,36 @@ class AgentRunnerSettings(BaseSettings):
         )
 
 
+class PreviewSettings(BaseSettings):
+    """Preview deployment configuration (non-sensitive structure only)."""
+
+    model_config = SettingsConfigDict(env_prefix="PREVIEW_")
+
+    enabled: bool = False
+    base_domain: str = "preview.example.com"
+    project_slug: str = "keda"
+    app_dir_root: str = "/opt/preview"
+    registry_host: str = "ghcr.io"
+    registry_namespace: str = "zata-zhangtao"
+    traefik_network: str = "traefik"
+    url_scheme: str = "https"
+    subdomain_template: str = "pr-{pr_number}.{base_domain}"
+    compose_template: str = "{project_slug}-pr-{pr_number}"
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
+        file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return _env_toml_init_sources(
+            settings_cls, "preview", env_settings, init_settings
+        )
+
+
 class AppSettings(BaseSettings):
     """应用主配置 - 聚合所有子配置。"""
 
@@ -704,6 +750,7 @@ class AppSettings(BaseSettings):
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     timeouts: TimeoutSettings = Field(default_factory=TimeoutSettings)
     agent_runner: AgentRunnerSettings = Field(default_factory=AgentRunnerSettings)
+    preview: PreviewSettings = Field(default_factory=PreviewSettings)
 
     base_dir: Path = _PROJECT_ROOT_PATH
     log_dir: Path = Field(default_factory=lambda: _PROJECT_ROOT_PATH / "logs")
@@ -813,6 +860,7 @@ __all__ = [
     "EmbeddingSettings",
     "IAR_REPOSITORY_CONFIG_FILENAME",
     "MinioSettings",
+    "PreviewSettings",
     "QdrantSettings",
     "TimeoutSettings",
     "config",

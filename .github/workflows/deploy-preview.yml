@@ -1,0 +1,291 @@
+name: Preview Deployment
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+  issue_comment:
+    types:
+      - created
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to deploy"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || github.event.inputs.pr_number || github.event.issue.number }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  preview-context:
+    name: Resolve preview context
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.context.outputs.pr_number }}
+      commit_sha: ${{ steps.context.outputs.commit_sha }}
+      should_deploy: ${{ steps.context.outputs.should_deploy }}
+      should_teardown: ${{ steps.context.outputs.should_teardown }}
+    steps:
+      - name: Resolve context
+        id: context
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_PR_URL: ${{ github.event.issue.pull_request.url }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          ACTION: ${{ github.event.action }}
+        run: |
+          should_deploy="false"
+          should_teardown="false"
+          pr_number=""
+          commit_sha=""
+
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            pr_number="${PR_NUMBER}"
+            commit_sha="${PR_SHA}"
+            if [ "${ACTION}" = "closed" ]; then
+              should_teardown="true"
+            else
+              should_deploy="true"
+            fi
+          elif [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            pr_number="${INPUT_PR}"
+            should_deploy="true"
+          elif [ "${EVENT_NAME}" = "issue_comment" ] && [ -n "${ISSUE_PR_URL}" ]; then
+            pr_number="${ISSUE_NUMBER}"
+            commit_sha="$(gh pr view "${pr_number}" --json headRefOid -q .headRefOid)"
+            if [ "${COMMENT_BODY}" = "/deploy" ]; then
+              should_deploy="true"
+            fi
+          fi
+
+          echo "pr_number=${pr_number}" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+          echo "should_deploy=${should_deploy}" >> "$GITHUB_OUTPUT"
+          echo "should_teardown=${should_teardown}" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+  build-push:
+    name: Build and push preview images
+    runs-on: ubuntu-latest
+    needs: preview-context
+    if: ${{ needs.preview-context.outputs.should_deploy == 'true' }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: backend
+            context: .
+            dockerfile: src/backend/Dockerfile
+            image_var: BACKEND_IMAGE
+          - name: frontend
+            context: ./frontend
+            dockerfile: frontend/Dockerfile
+            image_var: FRONTEND_IMAGE
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preview-context.outputs.commit_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Sync dependencies
+        run: uv sync --all-extras --all-groups --frozen
+
+      - name: Derive preview environment
+        env:
+          GITHUB_ENV: ${{ github.env }}
+        run: |
+          uv run python scripts/preview_env.py \
+            --pr "${{ needs.preview-context.outputs.pr_number }}" \
+            --sha "${{ needs.preview-context.outputs.commit_sha }}" \
+            >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_HOST }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ env[matrix.image_var] }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy preview stack
+    runs-on: ubuntu-latest
+    needs:
+      - preview-context
+      - build-push
+    if: ${{ needs.preview-context.outputs.should_deploy == 'true' }}
+    environment:
+      name: preview
+      url: ${{ steps.preview_env.outputs.PREVIEW_URL }}
+    env:
+      PR_NUMBER: ${{ needs.preview-context.outputs.pr_number }}
+      COMMIT_SHA: ${{ needs.preview-context.outputs.commit_sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preview-context.outputs.commit_sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Sync dependencies
+        run: uv sync --all-extras --all-groups --frozen
+
+      - name: Derive preview environment
+        id: preview_env
+        env:
+          GITHUB_ENV: ${{ github.env }}
+        run: |
+          uv run python scripts/preview_env.py \
+            --pr "${PR_NUMBER}" \
+            --sha "${COMMIT_SHA}" >> "$GITHUB_ENV"
+          scheme="${PREVIEW_URL_SCHEME:-https}"
+          echo "PREVIEW_URL=${scheme}://${PREVIEW_DOMAIN}" >> "$GITHUB_ENV"
+          echo "PREVIEW_URL=${scheme}://${PREVIEW_DOMAIN}" >> "$GITHUB_OUTPUT"
+
+      - name: Add SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+          log-public-key: false
+
+      - name: Deploy to preview server
+        id: deploy
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          rsync -avz --rsync-path="mkdir -p ${APP_DIR} && rsync" \
+            deploy/vps-traefik/docker-compose.preview.yml \
+            deploy/vps-traefik/deploy-preview.sh \
+            "${SERVER_USER}@${SERVER_HOST}:${APP_DIR}/"
+          ssh -o StrictHostKeyChecking=no \
+            "${SERVER_USER}@${SERVER_HOST}" \
+            "cd ${APP_DIR} && bash deploy-preview.sh up"
+
+      - name: Upsert sticky preview comment
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIEW_URL: ${{ steps.preview_env.outputs.PREVIEW_URL }}
+        run: |
+          marker="<!-- preview-deploy -->"
+          if [ "${{ steps.deploy.outcome }}" = "success" ]; then
+            body=$(printf '%b' "🟢 Preview deployment ready\n\n- URL: ${PREVIEW_URL}\n- Commit: ${COMMIT_SHA:0:8}\n- Stack: ${COMPOSE_PROJECT_NAME}\n\nRe-deploy: comment \`/deploy\` · Logs: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\n${marker}")
+          else
+            body=$(printf '%b' "🔴 Preview deployment failed (does not block merge)\n\n- Commit: ${COMMIT_SHA:0:8}\n- Step: ssh deploy-preview.sh up\n- Logs: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\n\n${marker}")
+          fi
+
+          existing_comment_id=$(gh pr view "${PR_NUMBER}" --json comments -q '.comments[] | select(.body | contains("'"${marker}"'")) | .databaseId' || true)
+          if [ -n "${existing_comment_id}" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" \
+              --method PATCH \
+              --field "body=${body}"
+          else
+            gh pr comment "${PR_NUMBER}" --body "${body}"
+          fi
+
+  teardown:
+    name: Tear down preview stack
+    runs-on: ubuntu-latest
+    needs: preview-context
+    if: ${{ needs.preview-context.outputs.should_teardown == 'true' }}
+    env:
+      PR_NUMBER: ${{ needs.preview-context.outputs.pr_number }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Sync dependencies
+        run: uv sync --all-extras --all-groups --frozen
+
+      - name: Derive preview environment
+        env:
+          GITHUB_ENV: ${{ github.env }}
+        run: |
+          uv run python scripts/preview_env.py \
+            --pr "${PR_NUMBER}" \
+            --sha "00000000" >> "$GITHUB_ENV"
+
+      - name: Add SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+          log-public-key: false
+
+      - name: Tear down preview stack
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            "${SERVER_USER}@${SERVER_HOST}" \
+            "cd ${APP_DIR} && bash deploy-preview.sh down || true"
+
+      - name: Update sticky preview comment
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          marker="<!-- preview-deploy -->"
+          body=$(printf '%b' "⚪ Preview torn down (PR closed)\n\n${marker}")
+          existing_comment_id=$(gh pr view "${PR_NUMBER}" --json comments -q '.comments[] | select(.body | contains("'"${marker}"'")) | .databaseId' || true)
+          if [ -n "${existing_comment_id}" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${existing_comment_id}" \
+              --method PATCH \
+              --field "body=${body}"
+          else
+            gh pr comment "${PR_NUMBER}" --body "${body}"
+          fi

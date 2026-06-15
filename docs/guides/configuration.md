@@ -144,6 +144,38 @@ allow_execute_yes = true
 - `max_context_chars`：传入 planner 的上下文最大字符数。
 - `allow_execute_yes`：是否允许 `--yes` 非交互确认。
 
+## 预览部署配置
+
+`config.toml` 的 `[preview]` 段控制 PR 预览部署的非敏感结构。敏感值（服务器地址、SSH 密钥、镜像仓库密码、数据库密码）必须通过 GitHub Secrets 注入，不得写入仓库文件。
+
+```toml
+[preview]
+enabled = false
+base_domain = "preview.example.com"
+project_slug = "keda"
+app_dir_root = "/opt/preview"
+registry_host = "ghcr.io"
+registry_namespace = "zata-zhangtao"
+traefik_network = "traefik"
+url_scheme = "https"
+subdomain_template = "pr-{pr_number}.{base_domain}"
+compose_template = "{project_slug}-pr-{pr_number}"
+```
+
+字段说明：
+
+- `enabled`：是否启用预览部署工作流。设为 `true` 且配置 Secrets 后 PR 才会触发部署。
+- `base_domain`：预览入口的基础域名，通配证书应覆盖 `*.<base_domain>`。
+- `project_slug`：项目短标识，用于镜像名与 Compose project 名。
+- `app_dir_root`：预览服务器上存放各 PR 栈的父目录。
+- `registry_host` / `registry_namespace`：镜像仓库主机与命名空间。
+- `traefik_network`：服务器上已存在的外部 Traefik 网络名。
+- `url_scheme`：`https` 或 `http`，决定 sticky 评论中的 URL 协议。
+- `subdomain_template`：PR 子域名模板，可用变量 `{pr_number}`、`{base_domain}`。
+- `compose_template`：Compose project 名模板，可用变量 `{project_slug}`、`{pr_number}`。
+
+环境变量覆盖：所有字段均可通过 `PREVIEW_` 前缀的环境变量覆盖，例如 `PREVIEW_ENABLED=true`。
+
 ## 日志相关配置
 
 日志位于 `logs/` 目录，按日期命名，格式为 `app-YYYY-MM-DD.log`：

@@ -14,8 +14,27 @@
 # Application Settings
 # =============================================================================
 [app]
-name = "my-app"
+name = "keda"
 log_level = "INFO"
+
+# =============================================================================
+# Preview Deployment Settings
+# =============================================================================
+# Non-sensitive structure only. Sensitive values (server host, SSH key,
+# registry password, database password) must be provided via GitHub Secrets
+# or environment variables and are never committed to this file.
+# =============================================================================
+[preview]
+enabled = false
+base_domain = "preview.example.com"
+project_slug = "keda"
+app_dir_root = "/opt/preview"
+registry_host = "ghcr.io"
+registry_namespace = "zata-zhangtao"
+traefik_network = "traefik"
+url_scheme = "https"
+subdomain_template = "pr-{pr_number}.{base_domain}"
+compose_template = "{project_slug}-pr-{pr_number}"
 
 # =============================================================================
 # Template Sync Settings

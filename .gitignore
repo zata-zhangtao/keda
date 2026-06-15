@@ -38,6 +38,10 @@ site/
 .env*
 !.env*.example
 
+# Preview deployment runtime env files
+deploy/vps-traefik/*.env
+!deploy/vps-traefik/*.env.example
+
 # Testing
 coverage/
 

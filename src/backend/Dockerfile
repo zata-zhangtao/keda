@@ -7,7 +7,9 @@ FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH="/app/.venv/bin:$PATH"
+    PATH="/app/.venv/bin:$PATH" \
+    LOG_DIR="/app/backend/logs" \
+    LOG_FILE="/app/backend/logs/app.log"
 
 WORKDIR /app
 
@@ -18,8 +20,10 @@ RUN apt-get update \
     && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && mv /root/.local/bin/uv /usr/local/bin/uv
 
-# Copy dependency manifests first (maximises Docker layer caching)
-COPY pyproject.toml uv.lock ./
+# Copy dependency manifests and package source needed for the editable install.
+# README.md and the src tree are required by setuptools (see pyproject.toml).
+COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
 
 # Create a virtual environment and install production dependencies.
 RUN uv sync --frozen --no-dev
@@ -27,15 +31,16 @@ RUN uv sync --frozen --no-dev
 # Create a non-root user for security
 RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 
+# Preserve the src-based project layout expected by settings.py and expose
+# the startup script at the path used by the CMD.
+RUN ln -s /app/src/backend /app/backend
+
+# Pre-create runtime directories and ensure they are writable by the runtime user.
+RUN mkdir -p /app/backend/logs /app/backend/data && chown -R appuser:appgroup /app
+
 # Copy Alembic configuration and migrations
-COPY alembic.ini ./
-COPY alembic ./alembic
-
-# Copy application source code and startup script
-COPY src/backend ./backend
-
-# Set ownership
-RUN chown -R appuser:appgroup /app
+COPY --chown=appuser:appgroup alembic.ini ./
+COPY --chown=appuser:appgroup alembic ./alembic
 
 USER appuser
 
