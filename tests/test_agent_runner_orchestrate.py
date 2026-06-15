@@ -313,3 +313,208 @@ def test_acquire_blocked_claim_lock_atomic() -> None:
         assert "999999" not in lock_path.read_text(encoding="utf-8")
 
         _release_blocked_claim_lock(lock_path)
+
+
+def test_worktree_needs_rebase_recovery_detects_rebase_and_detached(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Mid-rebase or detached-HEAD running worktrees must be flagged recoverable."""
+    import backend.core.use_cases.agent_runner_orchestrate as orchestrate
+
+    issue = _make_ready_issue(85, "", ("agent/running",))
+    monkeypatch.setattr(
+        orchestrate, "_find_worktree_path_for_issue", lambda *a, **k: tmp_path
+    )
+
+    def _probe() -> bool:
+        return orchestrate._worktree_needs_rebase_recovery(
+            issue=issue,
+            repo_path=Path("."),
+            config=AppConfig(),
+            process_runner=FakeProcessRunner(),
+        )
+
+    # Active rebase metadata present → recoverable.
+    monkeypatch.setattr(orchestrate, "has_rebase_metadata", lambda *a, **k: True)
+    monkeypatch.setattr(orchestrate, "is_detached_head", lambda *a, **k: False)
+    assert _probe() is True
+
+    # Detached HEAD without rebase metadata → still recoverable.
+    monkeypatch.setattr(orchestrate, "has_rebase_metadata", lambda *a, **k: False)
+    monkeypatch.setattr(orchestrate, "is_detached_head", lambda *a, **k: True)
+    assert _probe() is True
+
+    # Healthy worktree on its branch → not a recovery candidate.
+    monkeypatch.setattr(orchestrate, "has_rebase_metadata", lambda *a, **k: False)
+    monkeypatch.setattr(orchestrate, "is_detached_head", lambda *a, **k: False)
+    assert _probe() is False
+
+
+def test_worktree_needs_rebase_recovery_missing_worktree_returns_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing worktree must not be treated as a rebase-recovery candidate."""
+    import backend.core.use_cases.agent_runner_orchestrate as orchestrate
+
+    issue = _make_ready_issue(85, "", ("agent/running",))
+
+    def _raise(*_args: object, **_kwargs: object) -> Path:
+        raise FileNotFoundError("worktree path does not exist")
+
+    monkeypatch.setattr(orchestrate, "_find_worktree_path_for_issue", _raise)
+
+    assert (
+        orchestrate._worktree_needs_rebase_recovery(
+            issue=issue,
+            repo_path=Path("."),
+            config=AppConfig(),
+            process_runner=FakeProcessRunner(),
+        )
+        is False
+    )
+
+
+def test_run_once_routes_mid_rebase_running_issue_to_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A running Issue stuck mid-rebase must enter publish-recovery, not be skipped.
+
+    Reproduces the daemon-died-mid-rebase bug: the clean-local-commit probe
+    fails for a half-finished rebase (HEAD detached on base, dirty worktree),
+    so without explicit rebase/detached detection the Issue would be skipped on
+    every poll and never re-claimed.
+    """
+    import backend.core.use_cases.agent_runner_orchestrate as orchestrate
+
+    running_label = AppConfig().labels.running
+    running_issue = _make_ready_issue(85, "PRD path: `tasks/x.md`", (running_label,))
+    fake_client = FakeGitHubClient()
+    fake_client.list_ready_issues = lambda ready_label, limit: []
+    fake_client.list_review_candidate_issues = (
+        lambda labels, limit: [running_issue] if running_label in labels else []
+    )
+
+    monkeypatch.setattr(
+        orchestrate,
+        "_has_existing_local_commit_ready_for_publish",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        orchestrate, "_worktree_needs_rebase_recovery", lambda **_kwargs: True
+    )
+    caplog.set_level(
+        logging.INFO, logger="backend.core.use_cases.agent_runner_orchestrate"
+    )
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=AppConfig(),
+        dry_run=True,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=FakeProcessRunner(),
+    )
+
+    assert exit_code == 0
+    assert "would process Issue #85 (running_publish_recovery)" in caplog.text
+    assert "Skipping Issue #85" not in caplog.text
+
+
+def test_run_once_skips_running_issue_without_recoverable_state(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A running Issue with no commit and no rebase/detached state stays skipped."""
+    import backend.core.use_cases.agent_runner_orchestrate as orchestrate
+
+    running_label = AppConfig().labels.running
+    running_issue = _make_ready_issue(85, "PRD path: `tasks/x.md`", (running_label,))
+    fake_client = FakeGitHubClient()
+    fake_client.list_ready_issues = lambda ready_label, limit: []
+    fake_client.list_review_candidate_issues = (
+        lambda labels, limit: [running_issue] if running_label in labels else []
+    )
+
+    monkeypatch.setattr(
+        orchestrate,
+        "_has_existing_local_commit_ready_for_publish",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        orchestrate, "_worktree_needs_rebase_recovery", lambda **_kwargs: False
+    )
+    caplog.set_level(
+        logging.INFO, logger="backend.core.use_cases.agent_runner_orchestrate"
+    )
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=AppConfig(),
+        dry_run=True,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=FakeProcessRunner(),
+    )
+
+    assert exit_code == 0
+    assert "Skipping Issue #85" in caplog.text
+    assert "would process Issue #85" not in caplog.text
+
+
+def test_running_publish_recovery_holds_worktree_lock_around_heal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Recovery must acquire the worktree lock before healing and release it after.
+
+    Guards against two runners concurrently rebasing/publishing the same
+    worktree once mid-rebase Issues become reachable by the recovery path.
+    """
+    import backend.core.use_cases.agent_runner_orchestrate as orchestrate
+
+    events: list[str] = []
+    issue = _make_ready_issue(85, "", (AppConfig().labels.running,))
+
+    monkeypatch.setattr(orchestrate, "choose_agent", lambda *a, **k: "claude")
+    monkeypatch.setattr(
+        orchestrate, "_find_worktree_path_for_issue", lambda *a, **k: tmp_path
+    )
+    monkeypatch.setattr(
+        orchestrate,
+        "_acquire_blocked_claim_lock",
+        lambda lock_path, number: events.append("acquire"),
+    )
+    monkeypatch.setattr(
+        orchestrate,
+        "_release_blocked_claim_lock",
+        lambda lock_path: events.append("release"),
+    )
+    monkeypatch.setattr(
+        orchestrate,
+        "_ensure_worktree_branch",
+        lambda *a, **k: events.append("heal"),
+    )
+    monkeypatch.setattr(
+        orchestrate, "_reuse_existing_local_commit", lambda *a, **k: object()
+    )
+    monkeypatch.setattr(
+        orchestrate,
+        "_finish_existing_commit_publication",
+        lambda **k: events.append("publish"),
+    )
+
+    orchestrate._process_running_publish_recovery(
+        issue=issue,
+        repo_path=Path("."),
+        config=AppConfig(),
+        agent="auto",
+        github_client=FakeGitHubClient(),
+        process_runner=FakeProcessRunner(),
+    )
+
+    # Heal and publish must happen strictly between acquire and release.
+    assert events == ["acquire", "heal", "publish", "release"]

@@ -46,8 +46,14 @@ from backend.core.use_cases.agent_runner_blocked_claim import (
     BlockedWorktreeClaimedError,
     _acquire_blocked_claim_lock,
     _release_blocked_claim_lock,
+    worktree_claim_lock_path,
 )
-from backend.core.use_cases.agent_runner_git import has_changes, get_current_branch
+from backend.core.use_cases.agent_runner_git import (
+    get_current_branch,
+    has_changes,
+    has_rebase_metadata,
+    is_detached_head,
+)
 from backend.core.use_cases.agent_runner_workflow import (
     claim_blocked_issue,
     find_latest_unconsumed_marker,
@@ -352,6 +358,50 @@ def _has_existing_local_commit_ready_for_publish(
         return False
 
 
+def _worktree_needs_rebase_recovery(
+    *,
+    issue: IssueSummary,
+    repo_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> bool:
+    """检查 running Issue 的 worktree 是否卡在中断的 rebase / detached HEAD。
+
+    runner 在 rebase 中途崩溃或被中断时，会把 Issue worktree 留在 detached HEAD
+    且带有 active rebase 元数据的状态。这种 worktree 的「领先 base 的干净 commit」
+    探测必然为假——HEAD 停在 base 上（领先数为 0），工作区又有暂存的冲突解决
+    （非干净），于是 :func:`_has_existing_local_commit_ready_for_publish` 不会把它
+    识别为可恢复，导致每轮轮询都静默跳过、永不自愈。此处显式识别该状态，交由
+    publish-recovery 路径里的 ``_ensure_worktree_branch`` 治愈（continue/abort
+    rebase 或把分支重新挂回 detached HEAD）。
+
+    Args:
+        issue: Issue 对象。
+        repo_path: 仓库根目录。
+        config: 应用配置。
+        process_runner: 进程运行器。
+
+    Returns:
+        worktree 是否处于需要恢复的 mid-rebase / detached HEAD 状态。
+    """
+    try:
+        worktree_path = _find_worktree_path_for_issue(
+            repo_path, issue, config, process_runner
+        )
+    except Exception as exc:  # noqa: BLE001 - 探测不得中断轮询。
+        _logger.info(
+            "Skipping rebase-recovery probe for Issue #%d: %s",
+            issue.number,
+            exc,
+        )
+        return False
+    if not worktree_path.exists():
+        return False
+    return has_rebase_metadata(worktree_path, process_runner) or is_detached_head(
+        worktree_path, process_runner
+    )
+
+
 _BLOCKED_RESOLUTION_COMPLETION_PHASES = {
     "implementation_complete",
     "draft_pr_created",
@@ -441,7 +491,7 @@ def _process_blocked_resolution(
     validate_safe_changes(worktree_path, config, process_runner)
 
     # 原子锁：防止多个 runner 同时处理同一个 blocked Issue 的 worktree
-    lock_path = worktree_path / ".agent-runner" / "blocked-claim.lock"
+    lock_path = worktree_claim_lock_path(worktree_path)
     _acquire_blocked_claim_lock(lock_path, issue.number)
     try:
         # 构建并发送 continuation prompt
@@ -677,6 +727,10 @@ def _process_running_rework(
         )
         return
 
+    # worktree 可能因上一次 runner 在 rebase 中途中断而停在 detached HEAD；
+    # 先治愈回目标分支再校验，避免对中断状态直接硬失败、把 Issue 打成 failed。
+    _ensure_worktree_branch(worktree_path, pr_branch, issue, config, process_runner)
+
     current_branch = get_current_branch(worktree_path, process_runner)
     if current_branch != pr_branch:
         raise RuntimeError(
@@ -813,31 +867,41 @@ def _process_running_publish_recovery(
         repo_path, issue, config, process_runner
     )
     expected_branch = f"issue-{issue.number}"
-    _ensure_worktree_branch(
-        worktree_path, expected_branch, issue, config, process_runner
-    )
 
-    # 检查是否有可复用的本地 commit
-    commit_result = _reuse_existing_local_commit(
-        issue, worktree_path, config, process_runner
-    )
-    if commit_result is None:
-        raise RuntimeError(
-            f"Issue #{issue.number} has no clean local commit ready for publication."
+    # 原子锁：恢复路径会对 worktree 做 rebase 治愈与发布等写操作，必须与其他
+    # runner（含 blocked 恢复）在同一 worktree 上互斥，否则并发 git 操作会互相
+    # 破坏一个本就脆弱的 mid-rebase 工作区。锁被活进程持有时抛
+    # BlockedWorktreeClaimedError，由 run_once 调度循环记日志后跳过。
+    lock_path = worktree_claim_lock_path(worktree_path)
+    _acquire_blocked_claim_lock(lock_path, issue.number)
+    try:
+        _ensure_worktree_branch(
+            worktree_path, expected_branch, issue, config, process_runner
         )
 
-    # 完成发布流程（恢复路径）
-    _finish_existing_commit_publication(
-        issue=issue,
-        worktree_path=worktree_path,
-        config=config,
-        selected_agent=selected_agent,
-        github_client=github_client,
-        process_runner=process_runner,
-        expected_branch=expected_branch,
-        commit_result=commit_result,
-        content_generator=content_generator,
-    )
+        # 检查是否有可复用的本地 commit
+        commit_result = _reuse_existing_local_commit(
+            issue, worktree_path, config, process_runner
+        )
+        if commit_result is None:
+            raise RuntimeError(
+                f"Issue #{issue.number} has no clean local commit ready for publication."
+            )
+
+        # 完成发布流程（恢复路径）
+        _finish_existing_commit_publication(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            selected_agent=selected_agent,
+            github_client=github_client,
+            process_runner=process_runner,
+            expected_branch=expected_branch,
+            commit_result=commit_result,
+            content_generator=content_generator,
+        )
+    finally:
+        _release_blocked_claim_lock(lock_path)
 
 
 def run_once(
@@ -966,11 +1030,18 @@ def run_once(
                 repo_path=repo_path,
                 config=config,
                 process_runner=process_runner,
+            ) or _worktree_needs_rebase_recovery(
+                issue=issue,
+                repo_path=repo_path,
+                config=config,
+                process_runner=process_runner,
             ):
                 issues_to_process.append((issue, "running_publish_recovery"))
             else:
                 _logger.info(
-                    "Skipping Issue #%d with label %s: no rework marker, open PR, or clean local commit.",
+                    "Skipping Issue #%d with label %s: no rework marker, no clean "
+                    "local commit ready to publish, and no recoverable "
+                    "rebase/detached worktree.",
                     issue.number,
                     config.labels.running,
                 )

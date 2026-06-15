@@ -83,3 +83,27 @@ def _release_blocked_claim_lock(lock_path: Path) -> None:
             lock_path.unlink()
     except (OSError, ValueError, IndexError):
         pass
+
+
+# Relative location of the per-worktree claim lock. Kept as a single source so
+# every recovery path guards the same file; the historical ``blocked-claim``
+# name is retained so locks held by live runners stay valid across upgrades.
+WORKTREE_CLAIM_LOCK_RELPATH = Path(".agent-runner") / "blocked-claim.lock"
+
+
+def worktree_claim_lock_path(worktree_path: Path) -> Path:
+    """Return the per-worktree claim-lock path shared by all recovery paths.
+
+    The claim lock is worktree-scoped rather than workflow-state-scoped:
+    blocked-resolution and running recovery both mutate the same worktree
+    directory, so they must serialize through one lock file rather than each
+    inventing its own. Centralizing the path here keeps the three call sites
+    from hardcoding the location independently.
+
+    Args:
+        worktree_path: Root of the issue worktree to guard.
+
+    Returns:
+        Absolute path to the claim-lock file under the worktree.
+    """
+    return worktree_path / WORKTREE_CLAIM_LOCK_RELPATH

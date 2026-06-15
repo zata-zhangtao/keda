@@ -209,6 +209,26 @@ agent/waiting              → 上游 closed → 自动放行
 
 依赖判定完全无状态：每次轮询现查现算，依据 GitHub 实时状态，不引入本地缓存。
 
+## 中断恢复（worktree rebase 卡死）
+
+runner 在 rebase 中途崩溃或被中断（例如 post-PR supervisor 正在把 PR 分支
+rebase 到最新 base 时进程退出），会把 Issue 的 worktree 留在 **detached HEAD +
+未完成 rebase** 的状态：分支 ref 仍指向原 tip，但 worktree HEAD 停在 base 上。
+
+- **自动重新认领**：下一轮轮询发现仍是 `agent/running` 的 Issue 时，除了「有可发布
+  的干净本地 commit」外，也会检测 worktree 是否处于 mid-rebase / detached 状态。命中
+  即进入恢复路径，由 `_ensure_worktree_branch` 治愈：优先 `git rebase --continue`；
+  有冲突则让 agent 解决并续跑；超过配置的修复次数才回退 `git rebase --abort` 并重挂
+  分支。治愈后照常复用已有 commit 完成发布。
+- **并发互斥**：恢复路径在动任何 git 之前先获取 **per-worktree 原子认领锁**
+  （`.agent-runner/blocked-claim.lock`，与 blocked 恢复共用同一把锁），确保不会有两个
+  runner 同时 rebase/发布同一个 worktree。抢锁失败的 runner 记一条日志后跳过本轮。
+- **死进程接管**：锁文件记录持有者 PID；若持有者已退出，下一个 runner 会自动夺锁，
+  从而接管被中断的工作。
+
+> 局限：认领锁基于 PID 存活判断，对「进程仍在但已放弃该任务」的情形无法自动接管；
+> 此类需要 operator 介入或后续引入心跳/时间戳过期机制。
+
 ## 仓库本地配置
 
 `iar` 默认以当前 Git 仓库作为目标仓库。**首次在目标仓库使用前必须先执行 `iar init`**，否则除 `iar init` 外的所有命令都会失败并提示初始化。
