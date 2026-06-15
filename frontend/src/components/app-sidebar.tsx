@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  IconBulb,
   IconChartBar,
   IconDashboard,
   IconFolders,
@@ -26,6 +27,7 @@ const navItems = [
   { title: "统计", url: "/stats", icon: IconChartBar },
   { title: "项目", url: "/repositories", icon: IconFolders },
   { title: "路线图", url: "/roadmap", icon: IconMap },
+  { title: "Idea Inbox", url: "/ideas", icon: IconBulb },
 ];
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {

@@ -33,11 +33,11 @@
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **Idea Inbox 页面真实验证**：启动后端与前端，访问 `/ideas`，选择 `keda-main`，确认页面读取真实 `tasks/inbox/ideas.md`、`summary.md` 和草稿目录。
-- [ ] **追加想法真实验证**：通过 `/ideas` 页面提交一条想法，确认 `tasks/inbox/ideas.md` 只追加新时间块，历史条目未被改写。
-- [ ] **草稿确认真实验证**：用 fake `IContentGenerator` 或 sandbox agent 生成 PRD 草稿，前端确认后检查 `tasks/pending/` 出现符合命名规则的新 PRD，草稿状态同步为 approved。
-- [ ] **外部入口真实验证**：用 `curl` 调用签名校验的 inbound endpoint，携带 `repo_id=keda-main`，确认消息进入该项目 inbox；缺少或非法 `repo_id` 时返回 4xx。
-- [ ] **为什么单元测试不够**：该能力横跨真实文件系统追加、仓库选择、AI 草稿文件生成、前端页面状态和外部 HTTP 入口；单元测试无法证明 append-only 约束和真实路径路由在实际仓库中成立。
+- [x] **Idea Inbox 页面真实验证**：启动后端与前端，访问 `/ideas`，选择 `keda-main`，确认页面读取真实 `tasks/inbox/ideas.md`、`summary.md` 和草稿目录。
+- [x] **追加想法真实验证**：通过 `/ideas` 页面提交一条想法，确认 `tasks/inbox/ideas.md` 只追加新时间块，历史条目未被改写。
+- [x] **草稿确认真实验证**：用 fake `IContentGenerator` 或 sandbox agent 生成 PRD 草稿，前端确认后检查 `tasks/pending/` 出现符合命名规则的新 PRD，草稿状态同步为 approved。
+- [x] **外部入口真实验证**：用 `curl` 调用签名校验的 inbound endpoint，携带 `repo_id=keda-main`，确认消息进入该项目 inbox；缺少或非法 `repo_id` 时返回 4xx。
+- [x] **为什么单元测试不够**：该能力横跨真实文件系统追加、仓库选择、AI 草稿文件生成、前端页面状态和外部 HTTP 入口；单元测试无法证明 append-only 约束和真实路径路由在实际仓库中成立。
 
 ### Delivery Dependencies
 
@@ -460,39 +460,39 @@ No interactive prototype file changes in this PRD.
 
 ### Architecture Acceptance
 
-- [ ] Idea Inbox 后端核心逻辑位于 `src/backend/core/use_cases/idea_inbox.py` / `idea_prd_drafts.py`，不直接 import `backend.infrastructure`。
-- [ ] Idea Inbox API 位于 `src/backend/api/routes/agent_runner_idea_inbox.py`，并在 `src/backend/api/app.py` 以 `/api/v1` prefix 注册。
-- [ ] API route 不直接读写 `tasks/inbox` 文件，而是调用 core use case。
-- [ ] 前端只通过 `/api/v1/agent-runner/idea-inbox/*` 调用后端，不直接读取本地文件。
-- [ ] 未新增数据库表；ideas 和 drafts 仍由仓库 Markdown 文件承载。
-- [ ] repository 选择复用现有 registry / `repo_id`，未新增第二套项目映射。
+- [x] Idea Inbox 后端核心逻辑位于 `src/backend/core/use_cases/idea_inbox.py` / `idea_prd_drafts.py`，不直接 import `backend.infrastructure`。
+- [x] Idea Inbox API 位于 `src/backend/api/routes/agent_runner_idea_inbox.py`，并在 `src/backend/api/app.py` 以 `/api/v1` prefix 注册。
+- [x] API route 不直接读写 `tasks/inbox` 文件，而是调用 core use case。
+- [x] 前端只通过 `/api/v1/agent-runner/idea-inbox/*` 调用后端，不直接读取本地文件。
+- [x] 未新增数据库表；ideas 和 drafts 仍由仓库 Markdown 文件承载。
+- [x] repository 选择复用现有 registry / `repo_id`，未新增第二套项目映射。
 
 ### Behavior Acceptance
 
-- [ ] `/ideas` 页面可以选择 registry 中的 enabled repo 并展示该 repo 的 inbox。
-- [ ] 追加想法只在 `tasks/inbox/ideas.md` 末尾新增条目，历史内容保持不变。
-- [ ] `summary.md` 可由前端触发刷新，并明确标记为 AI 派生。
-- [ ] 生成 PRD 草稿只写入 `tasks/inbox/prd-drafts/`，不会直接写入 `tasks/pending/`。
-- [ ] 确认草稿后创建符合命名规范的 pending PRD，并把 draft 标为 approved。
-- [ ] 重复确认同一草稿会 fail fast，不重复创建 pending PRD。
-- [ ] inbound endpoint 在签名非法时拒绝，在 `repo_id` 不存在或 disabled 时拒绝。
-- [ ] inbound 消息缺少明确项目绑定时不会写入默认项目。
+- [x] `/ideas` 页面可以选择 registry 中的 enabled repo 并展示该 repo 的 inbox。
+- [x] 追加想法只在 `tasks/inbox/ideas.md` 末尾新增条目，历史内容保持不变。
+- [x] `summary.md` 可由前端触发刷新，并明确标记为 AI 派生。
+- [x] 生成 PRD 草稿只写入 `tasks/inbox/prd-drafts/`，不会直接写入 `tasks/pending/`。
+- [x] 确认草稿后创建符合命名规范的 pending PRD，并把 draft 标为 approved。
+- [x] 重复确认同一草稿会 fail fast，不重复创建 pending PRD。
+- [x] inbound endpoint 在签名非法时拒绝，在 `repo_id` 不存在或 disabled 时拒绝。
+- [x] inbound 消息缺少明确项目绑定时不会写入默认项目。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 或新指南说明 Idea Inbox 页面、草稿流程和外部 inbound 配置。
-- [ ] 文档说明 `ideas.md` append-only、`summary.md` 可重写、草稿需人工确认。
-- [ ] 文档说明 Feishu 接入是 provider adapter，secrets 不写入 `config.toml` / `.iar.toml`。
-- [ ] 如新增文档页，`mkdocs.yml` 已更新导航。
+- [x] `docs/guides/agent-runner.md` 或新指南说明 Idea Inbox 页面、草稿流程和外部 inbound 配置。
+- [x] 文档说明 `ideas.md` append-only、`summary.md` 可重写、草稿需人工确认。
+- [x] 文档说明 Feishu 接入是 provider adapter，secrets 不写入 `config.toml` / `.iar.toml`。
+- [x] 如新增文档页，`mkdocs.yml` 已更新导航。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_idea_inbox.py -q` 通过。
-- [ ] `just frontend build` 通过。
-- [ ] `just e2e smoke` 中新增 `/ideas` Playwright smoke 通过。
-- [ ] `uv run mkdocs build --strict` 通过。
-- [ ] `just test` 全量通过。
-- [ ] 真实入口验证：本地后端 + 前端完成一次想法追加、一次草稿生成、一次草稿确认入 pending，并留存终端输出或截图。
+- [x] `uv run pytest tests/test_idea_inbox.py -q` 通过。
+- [x] `just frontend build` 通过。
+- [x] `just e2e smoke` 中新增 `/ideas` Playwright smoke 通过。
+- [x] `uv run mkdocs build --strict` 通过。
+- [x] `just test` 全量通过。
+- [x] 真实入口验证：本地后端 + 前端完成一次想法追加、一次草稿生成、一次草稿确认入 pending，并留存终端输出或截图。
 
 ## 8. Functional Requirements
 
