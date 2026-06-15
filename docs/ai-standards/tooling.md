@@ -36,18 +36,31 @@
 
 这条规则的目标是让“归档”代表交付完成，同时避免历史归档文档被新标准批量翻旧账。
 
-### Pre-commit Hook 与 Runner Gate 的职责边界
+### Pre-commit、Pre-push Hook 与 Runner Gate 的职责边界
 
-PRD 交付状态由三层机制共同维护，彼此不互相替代：
+PRD 交付状态由多层机制共同维护，彼此不互相替代：
 
 1. **Prompt 引导**：Agent Runner 的 `build_prompt()` 明确要求 Agent 在完成任务前更新 PRD 的 `Acceptance Checklist` 并归档 PRD。这是行为引导，依赖 Agent 自觉执行。
-2. **Runner PRD Delivery Gate**：在 `publish_changes()` 之前，runner 对 PRD-backed Issue 做机器级校验。若 pending PRD 的 checklist 已全部完成，runner 自动执行 `git mv` 将其归档；若仍有未完成项，则阻断发布并进入 recovery loop。这是成功路径的交付门禁。
-3. **Pre-commit Hook**：`hooks/check_prd_acceptance_checklist.py` 在本地提交时检查 root-level active PRD 和**新进入** `tasks/archive/` 的 PRD。hook 没有 Issue 上下文，因此不扫描 `tasks/pending/` 中尚未执行的 backlog PRD，避免误伤。
+2. **Runner PRD Delivery Gate**：在 Agent commit 之前，runner 对 PRD-backed Issue 做机器级校验。若 pending PRD 的 checklist 已全部完成，runner 自动执行 `git mv` 将其归档；若仍有未完成项，则阻断发布并进入 recovery loop。这是成功路径的交付门禁。
+3. **Runner Publish Gate**：在 `publish_changes()` 内部、`git push` 之前，runner 对 PRD-backed Issue 做最终的只读断言。它要求 canonical PRD 必须已经位于 `tasks/archive/` 且 Acceptance Checklist 全部完成；不移动文件，只阻断发布。
+4. **Pre-commit Hook**：`hooks/check_prd_acceptance_checklist.py` 在本地提交时检查 root-level active PRD 和**新进入** `tasks/archive/` 的 PRD。hook 没有 Issue 上下文，因此不扫描 `tasks/pending/` 中尚未执行的 backlog PRD，避免误伤。
+5. **Pre-push Hook**：`hooks/check_prd_archive_pre_push.py` 在 `git push` 前检查推送分支是否符合 agent-runner 分支命名（`issue-N` 或 `task/N-...`）。若是，通过 `gh issue view` 读取关联 Issue body 中的 `PRD path`，并验证该 PRD 在当前分支已归档且验收清单全部完成。无 PRD path 的 Issue、非 agent-runner 分支、删除操作均跳过。
 
 **关键区别**：
-- Runner gate 只在 Issue 执行成功路径时检查**该 Issue 对应的 canonical PRD**，并可在 checklist 完成时自动移动文件。
+- Runner gate 只在 Issue 执行成功路径时检查**该 Issue 对应的 canonical PRD**，并可在 checklist 完成时自动移动文件；Publish Gate 是 push 前的最终硬断言。
 - Pre-commit hook 是通用本地提交防线，检查所有 staged 的 active/archive PRD，但不处理 pending PRD。
+- Pre-push hook 是 push 阶段的物理防线，覆盖 agent-runner 生成的 PR；即使 runner 内部逻辑被绕过，push 时仍会被拦截。
 - `archive_tasks.py` 的 root-level active PRD 自动归档职责保持不变，不扩大到 `tasks/pending/`。
+
+**启用 pre-push hook**：
+
+首次配置或新增仓库克隆后需要显式安装：
+
+```bash
+uv run pre-commit install --hook-type pre-push
+```
+
+已安装的 `pre-commit` hook 不会自动包含 pre-push，因为 pre-push 需要通过网络读取 Issue body，不适合所有开发者的本地 push 场景；只在需要 enforce PRD 归档的环境安装即可。Agent Runner 的执行环境必须安装 pre-push hook，以保证生成的 PR 都经过归档门禁。
 
 ### Codex macOS 通知
 

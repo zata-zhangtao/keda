@@ -56,6 +56,7 @@ sync mode="": _check-completion
             ;;
         all)
             uv sync --all-extras
+            uv run pre-commit install --hook-type pre-commit --hook-type pre-push
             if [ -z "${CI:-}" ]; then
                 shell_name="$(basename "${SHELL:-}")"
                 case "$shell_name" in
@@ -97,7 +98,7 @@ sync mode="": _check-completion
             ;;
         dev)
             uv sync --all-extras
-            uv run pre-commit install
+            uv run pre-commit install --hook-type pre-commit --hook-type pre-push
             ;;
         "")
             uv sync

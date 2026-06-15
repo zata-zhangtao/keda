@@ -2245,6 +2245,11 @@ def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
                 "tasks/archive/example.md",
             ):
                 self.calls.append(list(command))
+                pending_path = Path(cwd) / "tasks" / "pending" / "example.md"
+                archive_path = Path(cwd) / "tasks" / "archive" / "example.md"
+                if pending_path.exists():
+                    archive_path.parent.mkdir(parents=True, exist_ok=True)
+                    pending_path.rename(archive_path)
                 return CommandResult(
                     command=command_tuple, return_code=0, stdout="", stderr=""
                 )
@@ -2346,6 +2351,11 @@ def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
                 "tasks/pending/example.md",
                 "tasks/archive/example.md",
             ):
+                pending_path = Path(cwd) / "tasks" / "pending" / "example.md"
+                archive_path = Path(cwd) / "tasks" / "archive" / "example.md"
+                if pending_path.exists():
+                    archive_path.parent.mkdir(parents=True, exist_ok=True)
+                    pending_path.rename(archive_path)
                 return CommandResult(command_tuple, 0, "", "")
             return CommandResult(command_tuple, 0, "", "")
 

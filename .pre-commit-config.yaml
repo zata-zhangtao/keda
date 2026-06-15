@@ -9,7 +9,7 @@
 
 
 # uv add --dev pre-commit        # 添加 pre-commit 为开发依赖
-# uv run pre-commit install      # 初始化 pre-commit 钩子
+# uv run pre-commit install --hook-type pre-commit --hook-type pre-push  # 初始化 pre-commit 与 pre-push 钩子
 # uv run pre-commit run --all-files  # 对所有文件执行预提交检测
 
 
@@ -102,3 +102,10 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
+      - id: check-prd-archive-pre-push
+        name: Check PRD archive before push
+        entry: uv run python hooks/check_prd_archive_pre_push.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

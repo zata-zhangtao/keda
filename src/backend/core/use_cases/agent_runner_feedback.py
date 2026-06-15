@@ -266,6 +266,79 @@ def ensure_prd_delivery_ready(
     raise PrdDeliveryError(f"Canonical PRD not found: {prd_relative_path}")
 
 
+def assert_prd_archived_for_publish(
+    issue: IssueSummary,
+    worktree_path: Path,
+) -> None:
+    """Read-only PRD archive gate used immediately before ``git push``.
+
+    Unlike :func:`ensure_prd_delivery_ready`, this helper does **not** move
+    files; it only asserts that a canonical PRD (if present) is already under
+    ``tasks/archive/`` and its Acceptance Checklist is complete. This is the
+    final hard gate inside the runner before creating a PR.
+
+    The Issue body may still reference the original ``tasks/pending/`` path,
+    because ``git mv`` only moves the file and does not rewrite the Issue.
+    This gate resolves the canonical archive path from the recorded path and
+    verifies the file is actually there.
+
+    Args:
+        issue: The Issue about to be published.
+        worktree_path: The agent worktree path.
+
+    Raises:
+        PrdDeliveryError: When the PRD exists but is not archived or still has
+            unchecked items.
+    """
+
+    prd_relative_path = extract_prd_path(issue.body)
+    if not prd_relative_path:
+        return
+
+    archive_relative_path = resolve_prd_archive_path(prd_relative_path)
+    if archive_relative_path is None:
+        path_parts = Path(prd_relative_path).parts
+        if (
+            len(path_parts) >= 2
+            and path_parts[0] == "tasks"
+            and path_parts[1] == "archive"
+        ):
+            archive_relative_path = prd_relative_path
+        else:
+            raise PrdDeliveryError(
+                f"Canonical PRD must be archived before publishing: {prd_relative_path}"
+            )
+
+    archive_path = worktree_path / archive_relative_path
+    if not archive_path.exists():
+        raise PrdDeliveryError(
+            f"Archived PRD not found in worktree: {archive_relative_path}"
+        )
+
+    # If the Issue still points at the pending path, ensure the pending file is
+    # gone so the archive copy is unambiguously the canonical one.
+    if prd_relative_path != archive_relative_path:
+        pending_path = worktree_path / prd_relative_path
+        if pending_path.exists():
+            raise PrdDeliveryError(
+                f"PRD is still present at pending path: {prd_relative_path}"
+            )
+
+    file_content = archive_path.read_text(encoding="utf-8")
+    checklist_result = parse_prd_checklist(file_content)
+    if not checklist_result.section_found:
+        raise PrdDeliveryError(
+            f"Acceptance Checklist section missing in {archive_relative_path}"
+        )
+
+    if checklist_result.unchecked_items:
+        unchecked_summary = _format_unchecked_items(checklist_result.unchecked_items)
+        raise PrdDeliveryError(
+            f"Acceptance Checklist has unchecked items in {archive_relative_path}:\n"
+            f"{unchecked_summary}"
+        )
+
+
 def format_prd_delivery_failure(message: str) -> str:
     """Build the failure section for a PRD delivery recovery prompt."""
     return "\n".join(

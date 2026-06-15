@@ -11,6 +11,9 @@ from backend.core.shared.interfaces.agent_runner import (
     IProcessRunner,
 )
 from backend.core.shared.models.agent_runner import AppConfig, IssueSummary
+from backend.core.use_cases.agent_runner_feedback import (
+    assert_prd_archived_for_publish,
+)
 from backend.core.use_cases.agent_runner_git import (
     get_current_branch,
     list_changed_paths,
@@ -132,6 +135,10 @@ def publish_changes(
             f"Refusing to publish from unexpected branch: {branch} "
             f"(expected {expected_branch})"
         )
+    # 发布前硬门禁：PRD-backed Issue 的 canonical PRD 必须已归档且验收完成。
+    # 该检查在 commit 阶段由 ensure_prd_delivery_ready 执行过一次，这里作为
+    # push 前的最终只读断言，防止任何绕过路径。
+    assert_prd_archived_for_publish(issue, worktree_path)
     # push 前再次检查 forbidden paths，防止 commit 后又被修改
     validate_safe_changes(worktree_path, config, process_runner)
     # 证据文件绝不允许进入代码 diff（info/exclude 之外的双保险）
