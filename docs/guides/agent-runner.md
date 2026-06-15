@@ -1998,3 +1998,55 @@ PRD 的 `Delivery Dependencies` 小节会解析为三种依赖边：
 - `Depends on groups: infra`：等待该 group 下所有 Issue 关闭。
 
 存在未满足依赖的 PRD 显示为「等待中」并给出阻塞原因；无法解析的 PRD 引用显示为「依赖未解析」；形成环的依赖会标红提示修正。
+
+## Idea Inbox（想法采集 + 草稿审阅）
+
+`/ideas` 页面把现有的 `tasks/inbox/ideas.md` 原话日志接入管理终端，作为 PRD 路线图的上游：用户先在 inbox 累积想法，AI 生成 PRD 草稿，人确认后才落入 `tasks/pending/`。该能力复用 `agent-runner` 命名空间下的仓库 registry 与 `IContentGenerator`，不引入第二个项目映射表。
+
+### 事实源与目录约定
+
+- `tasks/inbox/ideas.md` 是 append-only 原话日志，AI 永不重写已有条目（仅在末尾追加 `## YYYY-MM-DD HH:MM · <source> · <author> (idea-id)` 块）。
+- `tasks/inbox/summary.md` 是 AI 派生的可重写总结，刷新时整文覆盖并在文件头明确标注「事实以 `ideas.md` 为准」。
+- `tasks/inbox/prd-drafts/` 存放待审阅的 PRD 草稿；文件名 `<YYYYMMDD-HHMMSS>-<slug>.md`，草稿顶部 metadata 块（`Draft Status: pending-review|approved|rejected`、`Source Idea Refs:` 等）由 `core/use_cases/idea_prd_drafts.py` 注入。
+- 草稿经人在 `/ideas` 页面确认后复制到 `tasks/pending/`，命名为 `<PRIORITY>-<TYPE>-<YYYYMMDD-HHMMSS>-<slug>.md`；草稿状态同步改为 `approved`，并把目标 pending 路径写回 metadata。
+
+### API 端点（`/api/v1/agent-runner/idea-inbox/*`）
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| `GET` | `/repositories/{repo_id}` | 读取 inbox 快照（ideas / summary / drafts） |
+| `POST` | `/repositories/{repo_id}/ideas` | 前端追加想法到 `ideas.md` |
+| `POST` | `/repositories/{repo_id}/summary/refresh` | 重写 `summary.md` |
+| `POST` | `/repositories/{repo_id}/drafts` | 生成 PRD 草稿到 `prd-drafts/` |
+| `POST` | `/repositories/{repo_id}/drafts/{encoded}/approve` | 草稿确认入 pending |
+| `POST` | `/inbound` | 外部 IM / webhook 通用入站（签名校验） |
+| `GET` | `/metadata` | 列出可用 priority / type 与 inbound 配置 |
+
+### 跨平台接入（inbound）
+
+`POST /api/v1/agent-runner/idea-inbox/inbound` 接受 provider-neutral 负载：
+
+```json
+{
+  "provider": "feishu",
+  "repo_id": "keda-main",
+  "sender": "user-or-open-id",
+  "text": "想法原文",
+  "occurred_at": "2026-06-15T20:15:00+08:00"
+}
+```
+
+安全要求：
+
+1. 请求必须携带 `X-IAR-Signature` header，值为 `sha256=<HMAC_SHA256(secret, raw_body)>`。secret 来自环境变量 `IAR_IDEA_INBOX_INBOUND_SECRET`，**不写入** `config.toml` / `.iar.toml`。
+2. `repo_id` 必须显式给出并能在 registry 中解析；缺少或被禁用则返回 `400`。
+3. Feishu 等 provider adapter 只做 payload 转换：消息永远先写入 `ideas.md`（不会被猜项目路由到默认仓库，也不会直接创建 pending PRD）。如果消息只携带 `@项目名` 而没有 `repo_id`，adapter 应当返回明确错误或把消息放进 `unassigned` 队列；当前实现要求 `repo_id` 显式。
+
+签名计算的 body 必须是 HTTP 请求的原始字节（不要重新序列化后再 HMAC），以免空格 / 字段顺序差异导致签名失败。
+
+### 安全边界与已知限制
+
+- secrets 不进 `config.toml` / `.iar.toml`；inbound secret 走环境变量。
+- 草稿 AI 生成复用 `IContentGenerator` / `generated_content.py` 模式，不新增 LLM SDK；当 generator 不可用时草稿退化为带原话摘录的 fallback 模板，待人补全。
+- Idea → Draft → Pending 三段是单向流：草稿不会自动跑 runner，必须等人在 `/ideas` 确认才进入 pending。
+- 飞书自定义机器人 webhook 主要用于向群发送消息，不应被当作入站通道；事件订阅或自建通用 inbound 才是正确路径。

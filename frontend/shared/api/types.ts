@@ -309,3 +309,78 @@ export type RoadmapGlobalStartResult = {
   queued: string[];
   skipped: string[];
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Idea Inbox
+// Keep these aligned with the backend dataclasses under
+// `src/backend/core/shared/models/idea_inbox.py`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type IdeaInboxSource = "frontend" | "inbound" | "feishu" | "manual";
+
+export type PrdDraftStatus = "pending-review" | "approved" | "rejected";
+
+export type IdeaEntry = {
+  entry_id: string;
+  occurred_at: string;
+  source: IdeaInboxSource;
+  author: string;
+  text: string;
+};
+
+export type PrdDraftMetadata = {
+  draft_id: string;
+  status: PrdDraftStatus;
+  repo_id: string;
+  source_idea_refs: string[];
+  priority: string;
+  prd_type: string;
+  created_at: string;
+  approved_pending_path: string | null;
+};
+
+export type PrdDraftSummary = {
+  metadata: PrdDraftMetadata;
+  draft_path: string;
+  title: string;
+  body_excerpt: string;
+};
+
+export type IdeaInboxSnapshot = {
+  repo_id: string;
+  ideas_path: string;
+  summary_path: string;
+  drafts_dir: string;
+  ideas_raw: string;
+  summary_raw: string;
+  entries: IdeaEntry[];
+  drafts: PrdDraftSummary[];
+};
+
+export type AppendIdeaResponse = {
+  entry: IdeaEntry;
+  ideas_path: string;
+};
+
+export type RefreshSummaryResponse = {
+  summary_path: string;
+  summary_text: string;
+  source: string;
+};
+
+export type IdeaInboxMetadata = {
+  priorities: string[];
+  prd_types: string[];
+  inbound_signature_header: string;
+  inbound_secret_env: string;
+};
+
+export type CreateDraftResponse = {
+  draft: PrdDraftSummary;
+  draft_path: string;
+};
+
+export type ApproveDraftResponse = {
+  draft: PrdDraftSummary;
+  pending_path: string;
+};
