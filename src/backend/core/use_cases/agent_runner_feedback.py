@@ -30,8 +30,14 @@ class PrdDeliveryError(RuntimeError):
 
 
 def extract_prd_path(issue_body: str) -> str | None:
-    """Extract a PRD path from an Issue body."""
-    match = re.search(r"PRD path:\s*`([^`]+)`", issue_body)
+    """Extract a PRD path from an Issue body.
+
+    The canonical anchor is expected on its own line (optionally as a list
+    item), e.g. ``PRD path: `tasks/pending/example.md` ``. Inline mentions
+    such as `` `PRD path:` `` inside prose must be ignored so the regex does
+    not capture surrounding sentence text as a path.
+    """
+    match = re.search(r"(?:^|\n)\s*-?\s*PRD path:\s*`([^`]+)`", issue_body)
     return match.group(1) if match else None
 
 

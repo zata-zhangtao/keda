@@ -396,6 +396,20 @@ def test_extract_prd_path_returns_none_when_missing() -> None:
     assert extract_prd_path("No PRD here.") is None
 
 
+def test_extract_prd_path_ignores_inline_code_anchor() -> None:
+    """`PRD path:` inside prose must not be mistaken for the canonical anchor."""
+    body = (
+        "...an optional existing `PRD path:` anchor. The daemon or `run` path...\n"
+        "\n"
+        "## Canonical PRD\n"
+        "- PRD path: `tasks/archive/P2-FEAT-20260527-190923-prd-from-issue.md`\n"
+    )
+    assert (
+        extract_prd_path(body)
+        == "tasks/archive/P2-FEAT-20260527-190923-prd-from-issue.md"
+    )
+
+
 def test_build_prompt_includes_prd_closeout_for_pending_prd() -> None:
     """Prompt should instruct the agent to update checklist and archive pending PRDs."""
     issue = IssueSummary(
