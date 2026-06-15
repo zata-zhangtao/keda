@@ -31,7 +31,7 @@ path_command = "iar worktree path --branch issue-{issue_number}"
 # Runner 行为配置：每轮处理 Issue 数量、默认 agent、提交前验证命令
 [agent_runner.runner]
 # 每次轮询每个仓库最多处理多少个 Issue
-max_issues = 1
+max_issues = 5
 # 默认使用的 AI agent：auto / claude / codex / kimi
 default_agent = "auto"
 # Agent 失败后的最大重试次数
@@ -86,7 +86,7 @@ review_agent = "auto"
 # 是否允许实现 agent 与 reviewer 为同一个
 allow_same_agent = true
 # review 不通过时的最大修复轮数
-max_attempts = 2
+max_attempts = 5
 # review agent 最长运行秒数
 timeout_seconds = 900
 
@@ -97,7 +97,7 @@ enabled = true
 # 执行 supervisor 的 agent
 supervisor_agent = "auto"
 # supervisor 要求修复时的最大修复 / rebase 次数
-max_repair_attempts = 2
+max_repair_attempts = 5
 # supervisor agent 进程崩溃（API / 网络等基础设施错误）时同一 cycle 内的最大重试次数
 max_agent_crash_retries = 5
 # 崩溃重试的初始退避秒数，之后每次重试翻倍
@@ -131,7 +131,7 @@ body_template = ""
 # 执行生成的 agent
 agent = "auto"
 # 生成超时秒数
-timeout_seconds = 60
+timeout_seconds = 120
 # agent 模式使用的 prompt
 prompt = ""
 # PR 生成时是否包含 commit log
@@ -154,7 +154,7 @@ body_template = ""
 # 执行生成的 agent
 agent = "auto"
 # 生成超时秒数
-timeout_seconds = 60
+timeout_seconds = 120
 # agent 模式使用的 prompt
 prompt = ""
 # PR 生成时是否包含 commit log

@@ -323,3 +323,47 @@ def build_recovery_prompt(
             "- Finish with a concise summary, tests run, and remaining risk.",
         ]
     )
+
+
+def build_progress_continuation_prompt(
+    issue: IssueSummary,
+    worktree_path: Path,
+) -> str:
+    """构造"在已提交进度上继续"的 prompt，用于跨 claim 续作。
+
+    当上一次 claim 把部分进度提交成 checkpoint（或正常提交）后，下一次 claim
+    不应从零开始。本 prompt 告知 agent 工作树已有既有提交，要先检视现状再补齐
+    剩余工作，避免重复劳动或回退已完成内容。
+    """
+    prd_path = extract_prd_path(issue.body)
+    if prd_path:
+        prd_line = (
+            f"Read the canonical PRD at `{prd_path}` and its Acceptance Checklist "
+            "to see which items are already done and which remain. Update the "
+            "checklist as you complete items, and move the PRD from "
+            "`tasks/pending/` to `tasks/archive/` once every item is checked."
+        )
+    else:
+        prd_line = "If the Issue references a PRD, read it to see the remaining work."
+    return "\n".join(
+        [
+            f"Continue GitHub Issue #{issue.number}: {issue.title}",
+            "",
+            f"Issue URL: {issue.url}",
+            f"Worktree: {worktree_path}",
+            "",
+            "This worktree already contains committed progress from earlier runner "
+            "attempts. Do not restart from scratch and do not revert existing "
+            "commits. Inspect the current state first (`git log`, existing files, "
+            "and the PRD Acceptance Checklist), then implement only what remains.",
+            prd_line,
+            "",
+            "Execution rules:",
+            "- Only modify files inside the current worktree.",
+            "- Do not merge main, switch branches, push, or create PRs; "
+            "the runner handles publishing.",
+            "- Do not run `git add` or `git commit`; after finishing your changes, "
+            "write `.agent-runner/commit-request.json` as JSON with `commit_message`.",
+            "- Finish with a concise summary, tests run, and remaining risk.",
+        ]
+    )

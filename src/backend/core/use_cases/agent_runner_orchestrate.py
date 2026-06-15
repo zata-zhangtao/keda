@@ -64,6 +64,7 @@ from backend.core.use_cases.agent_runner_supervisor import (
     _run_supervisor_with_repair_loop,
 )
 from backend.core.use_cases.agent_runner_validation import (
+    ValidationEvidenceError,
     process_validation_gate,
     publish_validation_evidence,
 )
@@ -505,6 +506,11 @@ def _process_ready_issue(
         content_generator: 可选的 AI 内容生成器
     """
     from backend.core.use_cases.run_agent_once import (
+        MaxRetriesExceededError,
+        PrdDeliveryError,
+        VerificationFailedError,
+        build_progress_continuation_prompt,
+        checkpoint_uncommitted_progress,
         run_agent_until_committed,
     )
 
@@ -527,11 +533,29 @@ def _process_ready_issue(
     expected_branch = get_current_branch(worktree_path, process_runner)
 
     # 步骤 3: 检查恢复路径
-    commit_result = _reuse_existing_local_commit(
-        issue, worktree_path, config, process_runner
-    )
+    #
+    # 已有本地提交分三种情况：
+    # - 完全达到交付标准 → 直接发布，不调用 agent。
+    # - 存在提交但门禁未过（上一次 claim 的 WIP checkpoint / 部分进度）→ 不硬失败，
+    #   在已提交进度上重跑 agent 续作（continuation prompt）。
+    # - 无本地提交 → 全新实现。
+    continuation_prompt: str | None = None
+    try:
+        commit_result = _reuse_existing_local_commit(
+            issue, worktree_path, config, process_runner
+        )
+    except (VerificationFailedError, PrdDeliveryError, ValidationEvidenceError) as exc:
+        _logger.info(
+            "Issue #%d has partial local commits not yet delivery-ready (%s); "
+            "re-running agent to continue from committed progress.",
+            issue.number,
+            exc.__class__.__name__,
+        )
+        commit_result = None
+        continuation_prompt = build_progress_continuation_prompt(issue, worktree_path)
+
     if commit_result is not None:
-        # 有已存在的本地 commit → 恢复路径
+        # 有已存在的本地 commit 且已达交付标准 → 恢复路径
         _finish_existing_commit_publication(
             issue=issue,
             worktree_path=worktree_path,
@@ -545,16 +569,46 @@ def _process_ready_issue(
         )
         return
 
-    # 步骤 4: 无本地 commit → 完整 Agent 执行
-    new_commit_result = run_agent_until_committed(
-        selected_agent=selected_agent,
-        issue=issue,
-        worktree_path=worktree_path,
-        config=config,
-        process_runner=process_runner,
-        before_sha=before_sha,
-        expected_branch=expected_branch,
-    )
+    # 步骤 4: 无可发布的本地 commit → Agent 执行（首跑，或在 checkpoint 上续作）。
+    #
+    # 失败前把 agent 的在途进度提交成 WIP checkpoint，使其能被下一次 claim 复用、
+    # 继续推进；否则体量较大的 PRD 会在每次 claim 从零开始、永远收敛不了。
+    try:
+        new_commit_result = run_agent_until_committed(
+            selected_agent=selected_agent,
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            process_runner=process_runner,
+            before_sha=before_sha,
+            expected_branch=expected_branch,
+            prompt_override=continuation_prompt,
+        )
+    except MaxRetriesExceededError:
+        # best-effort：checkpoint 自身失败（如触碰禁改路径）不得掩盖原始失败。
+        try:
+            checkpoint_sha = checkpoint_uncommitted_progress(
+                issue,
+                worktree_path,
+                config,
+                process_runner,
+                expected_branch=expected_branch,
+            )
+        except Exception as checkpoint_exc:  # noqa: BLE001 - 不能掩盖原始失败
+            _logger.warning(
+                "Failed to checkpoint in-progress work for Issue #%d: %s",
+                issue.number,
+                checkpoint_exc,
+            )
+        else:
+            if checkpoint_sha is not None:
+                _logger.info(
+                    "Checkpointed in-progress work for Issue #%d at %s "
+                    "for the next claim to continue.",
+                    issue.number,
+                    checkpoint_sha,
+                )
+        raise
 
     # 步骤 5: 完成发布流程
     _finish_implementation_publication(

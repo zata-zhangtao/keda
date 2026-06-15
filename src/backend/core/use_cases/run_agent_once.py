@@ -37,6 +37,7 @@ from backend.core.shared.models.agent_runner import (
 )
 from backend.core.use_cases.agent_runner_commit import (
     EmptyCommitRequestError,
+    checkpoint_uncommitted_progress,
     commit_requested_changes,
     sanitize_commit_message,
     unstage_changes,
@@ -59,6 +60,7 @@ from backend.core.use_cases.agent_runner_failure import (
 from backend.core.use_cases.agent_runner_feedback import (
     PrdDeliveryError,
     VerificationFailedError,
+    build_progress_continuation_prompt,
     build_prompt,
     build_recovery_prompt,
     ensure_prd_delivery_ready,
@@ -113,8 +115,10 @@ __all__ = [
     "_ensure_worktree_branch",
     "_reconcile_worktree_with_remote_branch",
     "build_blocked_continuation_prompt",
+    "build_progress_continuation_prompt",
     "build_prompt",
     "build_recovery_prompt",
+    "checkpoint_uncommitted_progress",
     "choose_agent",
     "classify_failure",
     "commit_requested_changes",

@@ -19,6 +19,7 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_runner_feedback import ensure_verification_passed
 from backend.core.use_cases.agent_runner_git import (
     get_current_branch,
+    get_head_sha,
     has_changes,
     run_verification,
 )
@@ -34,6 +35,7 @@ EMPTY_COMMIT_REQUEST_MESSAGE = "Agent requested a commit but produced no file ch
 __all__ = [
     "EMPTY_COMMIT_REQUEST_MESSAGE",
     "EmptyCommitRequestError",
+    "checkpoint_uncommitted_progress",
     "commit_requested_changes",
     "default_commit_message",
     "read_commit_request",
@@ -175,3 +177,57 @@ def commit_requested_changes(
 def unstage_changes(worktree_path: Path, process_runner: IProcessRunner) -> None:
     """Reset the Git index after a staged verification failure."""
     process_runner.run(["git", "reset", "--mixed"], cwd=worktree_path)
+
+
+def checkpoint_uncommitted_progress(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    *,
+    expected_branch: str,
+) -> str | None:
+    """把 agent 的在途改动提交成 WIP checkpoint，使其能跨 claim 续作。
+
+    当交付门禁（verification / PRD / 证据）尚未全部满足、整轮尝试即将失败时，
+    agent 已经产出的改动仍然有价值。把它们提交成 checkpoint，让进度落在本地
+    分支上，被下一次 claim 在已提交基础上继续推进，而不是随失败被丢弃
+    （worktree 复用 / 重置只保留已提交内容）。
+
+    与正常 commit proxy（:func:`commit_requested_changes`）的区别：
+
+    - 不要求 ``.agent-runner/commit-request.json``：agent 可能在写入提交请求前
+      就耗尽预算，此处直接保存整个工作区（``git add -A``，含新增文件）。
+    - 跳过 pre-commit hooks（在途工作可能还不通过 lint），但仍执行
+      forbidden-path 安全校验，绝不提交敏感文件。
+
+    发布门禁（``_reuse_existing_local_commit`` / publication）仍会拦截未完成的
+    工作，因此 checkpoint 永远不会被推送或合入；它只让进度可续作。
+
+    Args:
+        issue: 当前处理的 Issue。
+        worktree_path: agent 工作的 git worktree 路径。
+        config: Agent Runner 配置（用于 forbidden-path 校验）。
+        process_runner: 命令执行器。
+        expected_branch: 期望的分支名；分支不匹配时拒绝提交。
+
+    Returns:
+        新 checkpoint commit 的 SHA；没有可提交内容或分支异常时返回 ``None``。
+    """
+    if not has_changes(worktree_path, process_runner):
+        return None
+    current_branch = get_current_branch(worktree_path, process_runner)
+    if not current_branch or current_branch != expected_branch:
+        return None
+    # 安全门：禁改路径校验必须先于 staging，避免把敏感文件 checkpoint 进历史。
+    validate_safe_changes(worktree_path, config, process_runner)
+    process_runner.run(["git", "add", "-A"], cwd=worktree_path)
+    checkpoint_message = (
+        f"[Agent][WIP] Issue #{issue.number} checkpoint "
+        "(delivery gates not yet satisfied; not for merge)"
+    )
+    process_runner.run(
+        ["git", "commit", "--no-verify", "-m", checkpoint_message],
+        cwd=worktree_path,
+    )
+    return get_head_sha(worktree_path, process_runner)

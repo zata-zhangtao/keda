@@ -1586,8 +1586,14 @@ def test_run_once_uncommitted_changes_missing_request_fails(tmp_path: Path) -> N
 
     assert exit_code == 1
     commands = [tuple(command) for command in fake_runner.calls]
-    assert ("git", "add", "-A") not in commands
-    assert ("git", "commit", "-m", "agent: implement example") not in commands
+    # 正常 commit proxy 仍拒绝在缺少 commit-request 时按 agent 的 message 提交；
+    # 失败前的 WIP checkpoint（--no-verify）是另一条路径，用于跨 claim 保留进度。
+    proxy_commits = [
+        command
+        for command in commands
+        if command[:2] == ("git", "commit") and "--no-verify" not in command
+    ]
+    assert proxy_commits == []
     comment_calls = [
         c
         for c in fake_client.calls
@@ -2945,6 +2951,266 @@ def test_run_once_reuses_existing_clean_local_commit(tmp_path: Path) -> None:
     assert "Reused 1 existing local commit" in implementation_comment[0]["body"]
 
 
+# ---------------------------------------------------------------------------
+# 进度落盘：失败时 checkpoint + 跨 claim 在已提交进度上续作
+# ---------------------------------------------------------------------------
+
+
+def _checkpoint_issue() -> IssueSummary:
+    return IssueSummary(
+        number=84,
+        title="Big feature",
+        url="https://github.com/example/repo/issues/84",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=("agent/running",),
+    )
+
+
+def test_checkpoint_uncommitted_progress_commits_and_returns_sha(
+    tmp_path: Path,
+) -> None:
+    """有未提交改动时应 git add -A + --no-verify commit，并返回新 SHA。"""
+    from backend.core.use_cases.run_agent_once import checkpoint_uncommitted_progress
+
+    runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): CommandResult(
+                ("git", "status", "--porcelain"), 0, " M src/feature.py\n", ""
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                ("git", "branch", "--show-current"), 0, "issue-84\n", ""
+            ),
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                ("git", "rev-parse", "HEAD"), 0, "checkpoint-sha\n", ""
+            ),
+        }
+    )
+
+    result_sha = checkpoint_uncommitted_progress(
+        _checkpoint_issue(),
+        tmp_path,
+        AppConfig(),
+        runner,
+        expected_branch="issue-84",
+    )
+
+    assert result_sha == "checkpoint-sha"
+    commands = [tuple(call) for call in runner.calls]
+    assert ("git", "add", "-A") in commands
+    commit_calls = [c for c in commands if c[:2] == ("git", "commit")]
+    assert len(commit_calls) == 1
+    assert "--no-verify" in commit_calls[0]
+    assert any(
+        "[Agent][WIP] Issue #84 checkpoint" in token for token in commit_calls[0]
+    )
+
+
+def test_checkpoint_uncommitted_progress_returns_none_when_clean(
+    tmp_path: Path,
+) -> None:
+    """工作区干净时不提交、返回 None。"""
+    from backend.core.use_cases.run_agent_once import checkpoint_uncommitted_progress
+
+    runner = FakeProcessRunner()  # git status --porcelain → 空 → 无改动
+
+    result_sha = checkpoint_uncommitted_progress(
+        _checkpoint_issue(),
+        tmp_path,
+        AppConfig(),
+        runner,
+        expected_branch="issue-84",
+    )
+
+    assert result_sha is None
+    assert not [c for c in runner.calls if tuple(c)[:2] == ("git", "commit")]
+
+
+def test_checkpoint_uncommitted_progress_returns_none_on_branch_mismatch(
+    tmp_path: Path,
+) -> None:
+    """分支与期望不符时拒绝提交（防止误提交到非 Issue 分支）。"""
+    from backend.core.use_cases.run_agent_once import checkpoint_uncommitted_progress
+
+    runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): CommandResult(
+                ("git", "status", "--porcelain"), 0, " M src/feature.py\n", ""
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                ("git", "branch", "--show-current"), 0, "main\n", ""
+            ),
+        }
+    )
+
+    result_sha = checkpoint_uncommitted_progress(
+        _checkpoint_issue(),
+        tmp_path,
+        AppConfig(),
+        runner,
+        expected_branch="issue-84",
+    )
+
+    assert result_sha is None
+    assert not [c for c in runner.calls if tuple(c)[:2] == ("git", "commit")]
+
+
+def test_checkpoint_uncommitted_progress_blocks_forbidden_paths(
+    tmp_path: Path,
+) -> None:
+    """触碰禁改路径时拒绝 checkpoint，绝不把敏感文件提交进历史。"""
+    from backend.core.use_cases.run_agent_once import checkpoint_uncommitted_progress
+
+    runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): CommandResult(
+                ("git", "status", "--porcelain"), 0, " M .env\n", ""
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                ("git", "branch", "--show-current"), 0, "issue-84\n", ""
+            ),
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                ("git", "status", "--porcelain", "-z"), 0, " M .env\0", ""
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="forbidden"):
+        checkpoint_uncommitted_progress(
+            _checkpoint_issue(),
+            tmp_path,
+            AppConfig(),
+            runner,
+            expected_branch="issue-84",
+        )
+
+    assert not [c for c in runner.calls if tuple(c)[:2] == ("git", "commit")]
+
+
+def test_build_progress_continuation_prompt_mentions_existing_progress() -> None:
+    """续作 prompt 要明确"已有提交、不要从零开始/回退"并引用 PRD 路径。"""
+    from backend.core.use_cases.run_agent_once import (
+        build_progress_continuation_prompt,
+    )
+
+    prompt = build_progress_continuation_prompt(
+        _make_prd_issue("tasks/pending/feature.md"),
+        Path("/tmp/wt/issue-123"),
+    )
+
+    assert "Continue GitHub Issue #123" in prompt
+    assert "already contains committed progress" in prompt
+    assert "do not revert existing" in prompt.lower()
+    assert "tasks/pending/feature.md" in prompt
+    assert "commit-request.json" in prompt
+
+
+def test_process_ready_issue_continues_from_partial_commit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """已有部分提交但门禁未过时，应重跑 agent 续作（带 continuation prompt），不硬失败。"""
+    from backend.core.shared.models.agent_runner import AgentCommitResult
+    from backend.core.use_cases import agent_runner_orchestrate as orch
+    from backend.core.use_cases import run_agent_once
+    from backend.core.use_cases.run_agent_once import PrdDeliveryError
+
+    issue = _make_prd_issue("tasks/pending/example.md")
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    def _raise_not_ready(*_args: object, **_kwargs: object) -> None:
+        raise PrdDeliveryError("Acceptance Checklist has unchecked items")
+
+    monkeypatch.setattr(orch, "_reuse_existing_local_commit", _raise_not_ready)
+    monkeypatch.setattr(orch, "create_or_reuse_worktree", lambda *a, **k: worktree_path)
+    monkeypatch.setattr(orch, "get_head_sha", lambda *a, **k: "partial-sha")
+    monkeypatch.setattr(orch, "get_current_branch", lambda *a, **k: "issue-123")
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_agent_until_committed(**kwargs: object) -> AgentCommitResult:
+        captured["called"] = True
+        captured["prompt_override"] = kwargs.get("prompt_override")
+        return AgentCommitResult(verification_results=[], attempt_results=[])
+
+    monkeypatch.setattr(
+        run_agent_once, "run_agent_until_committed", _fake_run_agent_until_committed
+    )
+
+    finish_called: dict[str, bool] = {}
+
+    def _fake_finish(**_kwargs: object) -> None:
+        finish_called["yes"] = True
+
+    monkeypatch.setattr(orch, "_finish_implementation_publication", _fake_finish)
+
+    orch._process_ready_issue(
+        issue=issue,
+        repo_path=Path("."),
+        config=_config_with_review_disabled(worktree_path),
+        agent="auto",
+        github_client=FakeGitHubClient(),
+        process_runner=FakeProcessRunner(),
+    )
+
+    assert captured.get("called") is True
+    continuation_prompt = captured.get("prompt_override")
+    assert isinstance(continuation_prompt, str)
+    assert "already contains committed progress" in continuation_prompt
+    assert finish_called.get("yes") is True
+
+
+def test_process_ready_issue_checkpoints_on_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """run_agent_until_committed 耗尽重试时，应 checkpoint 在途进度后再抛出。"""
+    from backend.core.use_cases import agent_runner_orchestrate as orch
+    from backend.core.use_cases import run_agent_once
+    from backend.core.use_cases.run_agent_once import MaxRetriesExceededError
+
+    issue = _make_prd_issue("tasks/pending/example.md")
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    monkeypatch.setattr(orch, "_reuse_existing_local_commit", lambda *a, **k: None)
+    monkeypatch.setattr(orch, "create_or_reuse_worktree", lambda *a, **k: worktree_path)
+    monkeypatch.setattr(orch, "get_head_sha", lambda *a, **k: "before-sha")
+    monkeypatch.setattr(orch, "get_current_branch", lambda *a, **k: "issue-123")
+
+    def _raise_max(**_kwargs: object) -> None:
+        raise MaxRetriesExceededError([])
+
+    monkeypatch.setattr(run_agent_once, "run_agent_until_committed", _raise_max)
+
+    checkpoint_called: dict[str, object] = {}
+
+    def _fake_checkpoint(
+        _issue: object,
+        _worktree: object,
+        _config: object,
+        _runner: object,
+        *,
+        expected_branch: str,
+    ) -> str:
+        checkpoint_called["branch"] = expected_branch
+        return "wip-sha"
+
+    monkeypatch.setattr(
+        run_agent_once, "checkpoint_uncommitted_progress", _fake_checkpoint
+    )
+
+    with pytest.raises(MaxRetriesExceededError):
+        orch._process_ready_issue(
+            issue=issue,
+            repo_path=Path("."),
+            config=_config_with_review_disabled(worktree_path),
+            agent="auto",
+            github_client=FakeGitHubClient(),
+            process_runner=FakeProcessRunner(),
+        )
+
+    assert checkpoint_called.get("branch") == "issue-123"
+
+
 def test_run_once_recovers_running_issue_with_existing_local_commit(
     tmp_path: Path,
 ) -> None:
@@ -3460,11 +3726,18 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
         if command == ("git", "reset", "--mixed")
     ]
 
-    # just lint always fails at pre-staging verification, so never reaches staged
-    # verification or commit_requested_changes.
+    # just lint 在 3 次尝试的预 staging 验证都失败，正常流程从不进入 commit proxy。
+    # 重试耗尽后，runner 把在途改动 checkpoint 成一个 WIP commit（git add -A +
+    # git commit --no-verify），供下次 claim 在已提交进度上续作。
     assert len(lint_indices) == 3
-    assert len(add_indices) == 0
+    assert len(add_indices) == 1
     assert len(reset_indices) == 0
+    checkpoint_commits = [
+        command
+        for command in commands
+        if command[:2] == ("git", "commit") and "--no-verify" in command
+    ]
+    assert len(checkpoint_commits) == 1
 
     failed_calls = [
         c
