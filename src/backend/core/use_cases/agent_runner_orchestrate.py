@@ -80,6 +80,10 @@ from backend.core.use_cases.pr_supervisor import (
 from backend.core.use_cases.agent_runner_worktree_branch import (
     _ensure_worktree_branch,
 )
+from backend.core.use_cases.create_prd_from_issue import (
+    CreatePrdFromIssueRequest,
+    create_prd_from_issue,
+)
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
@@ -100,6 +104,76 @@ _logger = logging.getLogger(__name__)
 # Scan past dependency-blocked ready Issues without letting them consume the
 # per-pass processing quota. ``max_issues`` still caps actual claims.
 _READY_DISCOVERY_LIMIT = 100
+
+
+def process_prd_rework_issues(
+    *,
+    repo_path: Path,
+    config: AppConfig,
+    github_client: IGitHubClient,
+    content_generator: IContentGenerator | None = None,
+    max_issues: int = 1,
+) -> None:
+    """处理标记为 PRD rework 的 Issue。
+
+    在正常的 ready Issue 执行之前调用，生成或重写 PRD，并更新 Issue
+    body/labels/comments。单个 Issue 失败时记录错误并继续处理后续 Issue，
+    不让 PRD 生成阶段污染 ready Issue 执行阶段。
+
+    Args:
+        repo_path: 目标仓库路径。
+        config: 应用配置。
+        github_client: GitHub 客户端。
+        content_generator: 可选的 AI 内容生成器。
+        max_issues: 本轮最多处理的 rework-prd Issue 数量。
+    """
+    issues = github_client.list_rework_prd_issues(
+        config.labels.rework_prd, limit=max_issues
+    )
+    for issue in issues:
+        _logger.info(
+            "Processing PRD rework for Issue #%d: %s", issue.number, issue.title
+        )
+        try:
+            create_prd_from_issue(
+                request=CreatePrdFromIssueRequest(
+                    repo_path=repo_path,
+                    issue=issue,
+                    config=config,
+                    generated_content_config=config.generated_content,
+                    content_generator=content_generator,
+                    queue_ready=True,
+                ),
+                github_client=github_client,
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate PRD rework failures.
+            _logger.exception("PRD rework failed for Issue #%d", issue.number)
+            try:
+                github_client.edit_issue_labels(
+                    issue.number,
+                    add=[config.labels.failed],
+                    remove=[config.labels.rework_prd],
+                )
+            except Exception as label_exc:  # noqa: BLE001 - best-effort label update.
+                _logger.error(
+                    "Failed to mark Issue #%d as %s: %s",
+                    issue.number,
+                    config.labels.failed,
+                    label_exc,
+                )
+            try:
+                github_client.comment_issue(
+                    issue.number,
+                    f"PRD generation failed: {exc}\n\n"
+                    "Please review the error and re-add the "
+                    f"`{config.labels.rework_prd}` label to retry.",
+                )
+            except Exception as comment_exc:  # noqa: BLE001 - best-effort comment.
+                _logger.error(
+                    "Failed to comment on Issue #%d PRD failure: %s",
+                    issue.number,
+                    comment_exc,
+                )
 
 
 def _has_rework_intent(

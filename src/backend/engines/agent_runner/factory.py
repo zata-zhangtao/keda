@@ -125,6 +125,9 @@ def _build_generated_content_config(
             gc_settings.issue_from_prd
         ),
         draft_pr=_build_generated_content_target_config(gc_settings.draft_pr),
+        prd_from_issue=_build_generated_content_target_config(
+            gc_settings.prd_from_issue
+        ),
     )
 
 
@@ -159,6 +162,7 @@ def build_app_config_from_settings(
             validation_pending=label_settings.validation_pending,
             validation_passed=label_settings.validation_passed,
             group_prefix=label_settings.group_prefix,
+            rework_prd=label_settings.rework_prd,
             agent_labels=label_settings.agent_labels,
         ),
         git=GitConfig(
@@ -350,6 +354,7 @@ def _merge_label_config(
             "validation_passed", base_config.validation_passed
         ),
         group_prefix=override_data.get("group_prefix", base_config.group_prefix),
+        rework_prd=override_data.get("rework_prd", base_config.rework_prd),
         agent_labels=agent_labels,
     )
 
@@ -420,6 +425,10 @@ def _merge_generated_content_config(
         draft_pr=_merge_generated_content_target_config(
             base_config.draft_pr,
             override.draft_pr if "draft_pr" in override_data else None,
+        ),
+        prd_from_issue=_merge_generated_content_target_config(
+            base_config.prd_from_issue,
+            override.prd_from_issue if "prd_from_issue" in override_data else None,
         ),
     )
 

@@ -37,6 +37,7 @@ from backend.core.shared.models.agent_runner import (
     GeneratedContentTargetConfig,
     GeneratedIssueContent,
     GeneratedPrContent,
+    IssueSummary,
 )
 
 _logger = logging.getLogger(__name__)
@@ -109,6 +110,123 @@ class PrContext:
     commit_messages: str
     diff_stat: str
     git_diff_stat: str
+
+
+@dataclass(frozen=True)
+class GeneratedPrdContent:
+    """PRD 内容生成结果。
+
+    Attributes:
+        text: 生成的 PRD 完整 markdown 文本。
+        source: 生成来源标识，如 ``"template"``、``"agent"`` 或 ``"fallback"``。
+    """
+
+    text: str
+    source: str = "fallback"
+
+
+@dataclass(frozen=True)
+class PrdContext:
+    """PRD 内容生成的上下文变量。
+
+    字段名称直接作为模板占位符使用，与 ``IssueContext`` / ``PrContext`` 一致。
+
+    Attributes:
+        issue_number: Issue 编号。
+        issue_title: Issue 标题。
+        issue_body: Issue 正文。
+        issue_comments: 所有评论拼接后的文本，每条评论前缀 ``Comment:\n``。
+        existing_prd_text: 现有 PRD 文本（如果 Issue 已关联 PRD）。
+        repo_structure_summary: 仓库顶层结构摘要，用于 agent 了解项目布局。
+    """
+
+    issue_number: int
+    issue_title: str
+    issue_body: str
+    issue_comments: str
+    existing_prd_text: str
+    repo_structure_summary: str
+
+
+_IGNORED_REPO_ENTRIES: frozenset[str] = frozenset(
+    {
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        ".iar",
+        ".agent-runner",
+        "dist",
+        "build",
+        ".DS_Store",
+    }
+)
+
+
+def _is_ignored_repo_entry(path: Path) -> bool:
+    """判断目录项是否应被排除在仓库结构摘要之外。"""
+    name = path.name
+    if name in _IGNORED_REPO_ENTRIES:
+        return True
+    if name.startswith(".") and name not in {".github", ".claude"}:
+        return True
+    return False
+
+
+def _build_repo_structure_summary(
+    repo_path: Path,
+    *,
+    max_depth: int = 3,
+    max_entries_per_dir: int = 30,
+) -> str:
+    """为 PRD prompt 构建仓库结构摘要。
+
+    遍历仓库根目录下有限深度的目录树，输出目录和文件列表。
+    用于给 agent 提供项目布局上下文，避免暴露大量无关细节。
+
+    Args:
+        repo_path: 仓库根目录。
+        max_depth: 最大遍历深度。
+        max_entries_per_dir: 每个目录最多列出的条目数。
+
+    Returns:
+        格式化的仓库结构摘要文本。
+    """
+    if not repo_path.exists():
+        return ""
+
+    summary_lines: list[str] = []
+
+    def _walk(current_path: Path, depth: int, prefix: str) -> None:
+        if depth > max_depth:
+            return
+        try:
+            entries = [
+                entry
+                for entry in current_path.iterdir()
+                if not _is_ignored_repo_entry(entry)
+            ]
+        except OSError:
+            return
+        entries.sort(key=lambda p: (p.is_file(), p.name.lower()))
+        visible_entries = entries[:max_entries_per_dir]
+        for entry in visible_entries:
+            suffix = "/" if entry.is_dir() else ""
+            summary_lines.append(f"{prefix}{entry.name}{suffix}")
+            if entry.is_dir():
+                _walk(entry, depth + 1, f"{prefix}  ")
+        if len(entries) > max_entries_per_dir:
+            summary_lines.append(
+                f"{prefix}... ({len(entries) - max_entries_per_dir} more)"
+            )
+
+    _walk(repo_path, 1, "")
+    return "\n".join(summary_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +365,37 @@ def build_issue_context(
 # ---------------------------------------------------------------------------
 
 
-def _render_template(template: str, context: IssueContext | PrContext) -> str:
+def build_prd_context(
+    *,
+    issue: IssueSummary,
+    comments: list[str],
+    existing_prd_text: str,
+    repo_path: Path,
+) -> PrdContext:
+    """为 PRD 内容生成构建上下文变量。
+
+    Args:
+        issue: 关联的 GitHub Issue。
+        comments: Issue 评论列表。
+        existing_prd_text: 现有 PRD 文本（如有）。
+        repo_path: 仓库根目录路径。
+
+    Returns:
+        供模板渲染或 agent prompt 使用的 ``PrdContext`` 实例。
+    """
+    return PrdContext(
+        issue_number=issue.number,
+        issue_title=issue.title,
+        issue_body=issue.body,
+        issue_comments="\n\n".join(f"Comment:\n{c}" for c in comments),
+        existing_prd_text=existing_prd_text,
+        repo_structure_summary=_build_repo_structure_summary(repo_path),
+    )
+
+
+def _render_template(
+    template: str, context: IssueContext | PrContext | PrdContext
+) -> str:
     """使用上下文变量渲染模板字符串。
 
     直接调用 ``str.format(**context.__dict__)``，因此模板中的占位符必须与
@@ -269,7 +417,7 @@ def _render_template(template: str, context: IssueContext | PrContext) -> str:
 
 def _try_render_templates(
     target: GeneratedContentTargetConfig,
-    context: IssueContext | PrContext,
+    context: IssueContext | PrContext | PrdContext,
 ) -> tuple[str, str]:
     """尝试渲染标题和正文模板。
 
@@ -453,6 +601,102 @@ def _parse_markdown_output(output_text: str) -> tuple[str, str]:
             body = output_text
             break
     return title, body
+
+
+def _validate_prd_output(text: str) -> bool:
+    """验证生成的 PRD 文本是否符合基本结构要求。
+
+    检查项：
+
+    1. 文本必须以 ``# PRD:`` 开头。
+    2. 必须包含至少一个 ``## `` 二级标题。
+    3. 必须包含 ``- GitHub Issue:`` 锚点行。
+
+    Args:
+        text: 待验证的 PRD 文本。
+
+    Returns:
+        符合基本要求时返回 ``True``，否则 ``False``。
+    """
+    if not text or not text.strip():
+        return False
+    stripped = text.strip()
+    if not stripped.startswith("# PRD:"):
+        return False
+    if "## " not in stripped:
+        return False
+    if "- GitHub Issue:" not in stripped:
+        return False
+    return True
+
+
+def generate_prd_content(
+    *,
+    config: GeneratedContentConfig,
+    context: PrdContext,
+    fallback_prd_text: str,
+    generator: IContentGenerator | None = None,
+    cwd: Path | None = None,
+) -> GeneratedPrdContent:
+    """生成 PRD markdown，支持多级回退。
+
+    执行流程：
+
+    1. 如果 ``generated_content`` 被禁用，直接返回 fallback。
+    2. 根据 ``target.mode`` 选择生成策略：
+       - ``"template"``：使用 ``_render_template`` 渲染正文模板。
+       - ``"agent"``：调用 AI agent 生成内容。
+    3. 验证输出是否满足 ``_validate_prd_output``。
+    4. 验证通过则返回生成结果，source 标记为 ``target.mode``。
+    5. 如果 agent 模式失败且 ``config.fallback == "template"``，尝试 template 兜底。
+    6. 最终仍失败则返回 ``fallback_prd_text``，source 标记为 ``"fallback"``。
+
+    Args:
+        config: 生成内容配置。
+        context: PRD 上下文。
+        fallback_prd_text: 当所有生成方式失败时使用的 PRD 文本。
+        generator: agent 模式所需的内容生成器。
+        cwd: agent 工作目录。
+
+    Returns:
+        包含 text 和 source 的 ``GeneratedPrdContent`` 实例。
+    """
+    target = config.prd_from_issue
+    if not config.enabled or not target.enabled:
+        return GeneratedPrdContent(text=fallback_prd_text, source="fallback")
+
+    generated_text = ""
+
+    if target.mode == "template" and target.body_template:
+        try:
+            generated_text = _render_template(target.body_template, context)
+        except (KeyError, ValueError):
+            pass
+    elif target.mode == "agent" and generator is not None and cwd is not None:
+        agent_name = target.agent if target.agent != "auto" else config.default_agent
+        prompt = _render_template(target.prompt, context)
+        prompt = _truncate_text(prompt, config.max_input_chars)
+        generated_text = _run_content_generator(
+            generator, agent_name, prompt, cwd, target.timeout_seconds
+        )
+
+    if generated_text and _validate_prd_output(generated_text):
+        return GeneratedPrdContent(text=generated_text, source=target.mode)
+
+    # Agent 失败：按配置尝试 template 中间兜底。
+    if (
+        target.mode == "agent"
+        and config.fallback == "template"
+        and target.body_template
+    ):
+        try:
+            generated_text = _render_template(target.body_template, context)
+        except (KeyError, ValueError):
+            pass
+        if generated_text and _validate_prd_output(generated_text):
+            return GeneratedPrdContent(text=generated_text, source="template")
+
+    return GeneratedPrdContent(text=fallback_prd_text, source="fallback")
 
 
 # ---------------------------------------------------------------------------

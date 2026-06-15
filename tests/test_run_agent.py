@@ -386,9 +386,23 @@ def test_build_recovery_prompt_includes_failure_context() -> None:
 
 
 def test_extract_prd_path_finds_backtick_path() -> None:
-    """PRD path should be extracted from Issue body backtick syntax."""
-    body = "Some text\nPRD path: `tasks/pending/example.md`\nMore text"
+    """PRD path should be extracted from a line-start anchor."""
+    body = "Some text\n- PRD path: `tasks/pending/example.md`\nMore text"
     assert extract_prd_path(body) == "tasks/pending/example.md"
+
+
+def test_extract_prd_path_ignores_inline_mention() -> None:
+    """Inline `PRD path:` in prose must not shadow the canonical anchor."""
+    body = (
+        "Add a core `create_prd_from_issue` workflow and an optional "
+        "`PRD path:` anchor. The daemon detects `agent/rework-prd`.\n\n"
+        "## Canonical PRD\n\n"
+        "- PRD path: `tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md`\n"
+    )
+    assert (
+        extract_prd_path(body)
+        == "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md"
+    )
 
 
 def test_extract_prd_path_returns_none_when_missing() -> None:
@@ -407,6 +421,18 @@ def test_extract_prd_path_ignores_inline_code_anchor() -> None:
     assert (
         extract_prd_path(body)
         == "tasks/archive/P2-FEAT-20260527-190923-prd-from-issue.md"
+    )
+
+
+def test_extract_prd_path_rejects_garbage_anchor() -> None:
+    """Malformed anchors that do not look like relative paths must be ignored."""
+    body = (
+        "- PRD path: ` anchor. The daemon or `run` path`\n"
+        "- PRD path: `tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md`\n"
+    )
+    assert (
+        extract_prd_path(body)
+        == "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md"
     )
 
 

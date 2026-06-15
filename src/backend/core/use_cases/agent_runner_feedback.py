@@ -35,15 +35,27 @@ class PrdDeliveryError(RuntimeError):
 
 
 def extract_prd_path(issue_body: str) -> str | None:
-    """Extract a PRD path from an Issue body.
+    """Extract a canonical PRD path from an Issue body.
 
-    The canonical anchor is expected on its own line (optionally as a list
-    item), e.g. ``PRD path: `tasks/pending/example.md` ``. Inline mentions
-    such as `` `PRD path:` `` inside prose must be ignored so the regex does
-    not capture surrounding sentence text as a path.
+    Only matches ``PRD path:`` anchors that start a line, optionally as a
+    Markdown list item. Inline occurrences (e.g. prose mentioning ``PRD path:``
+    in backticks) are ignored so that feature descriptions do not shadow the
+    canonical anchor. Captured paths that do not look like a relative file path
+    (e.g. contain whitespace or no directory separator) are rejected, allowing
+    a later well-formed anchor to be used instead.
     """
-    match = re.search(r"(?:^|\n)\s*-?\s*PRD path:\s*`([^`]+)`", issue_body)
-    return match.group(1) if match else None
+    for match in re.finditer(
+        r"(?:^|\n)\s*(?:[-*]\s+)?PRD path:\s*`([^`]+)`",
+        issue_body,
+    ):
+        prd_path = match.group(1).strip()
+        if (
+            prd_path
+            and "/" in prd_path
+            and not any(char.isspace() for char in prd_path)
+        ):
+            return prd_path
+    return None
 
 
 _DEFAULT_EXECUTION_TEMPLATE = "\n".join(

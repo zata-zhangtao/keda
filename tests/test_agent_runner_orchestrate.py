@@ -12,6 +12,7 @@ from backend.core.shared.models.agent_runner import (
     AttemptResult,
     FailureType,
     IssueSummary,
+    LabelConfig,
 )
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from backend.core.use_cases.agent_runner_failure import (
@@ -22,15 +23,18 @@ from backend.core.use_cases.agent_runner_orchestrate import (
     _guard_blocked_issue_has_resolution,
     _mark_issue_blocked,
     _mark_issue_failed,
+    process_prd_rework_issues,
     run_once,
 )
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
 
-def _make_ready_issue(number: int, body: str, labels: tuple[str, ...]) -> IssueSummary:
+def _make_ready_issue(
+    number: int, title: str, body: str, labels: tuple[str, ...]
+) -> IssueSummary:
     return IssueSummary(
         number=number,
-        title=f"Issue #{number}",
+        title=title,
         url=f"https://github.com/example/repo/issues/{number}",
         body=body,
         labels=labels,
@@ -38,13 +42,15 @@ def _make_ready_issue(number: int, body: str, labels: tuple[str, ...]) -> IssueS
 
 
 def _make_blocked_issue(number: int) -> IssueSummary:
-    return _make_ready_issue(number, "", ("agent/blocked",))
+    return _make_ready_issue(number, f"Issue #{number}", "", ("agent/blocked",))
 
 
 def test_mark_issue_failed_comment_includes_recovery_guidance() -> None:
     """The failure comment posted to GitHub must tell the operator how to recover."""
     fake_client = FakeGitHubClient()
-    issue = _make_ready_issue(53, "PRD path: `tasks/example.md`", ("agent/running",))
+    issue = _make_ready_issue(
+        53, "Issue #53", "PRD path: `tasks/example.md`", ("agent/running",)
+    )
 
     _mark_issue_failed(
         issue=issue,
@@ -86,7 +92,9 @@ def test_mark_issue_failed_falls_back_to_minimal_comment_on_rejection() -> None:
             super().comment_issue(issue_number, body)
 
     fake_client = _FirstCommentFailsClient()
-    issue = _make_ready_issue(84, "PRD path: `tasks/example.md`", ("agent/running",))
+    issue = _make_ready_issue(
+        84, "Issue #84", "PRD path: `tasks/example.md`", ("agent/running",)
+    )
 
     _mark_issue_failed(
         issue=issue,
@@ -116,6 +124,7 @@ def test_run_once_dry_run_skips_blocked_ready_issue() -> None:
     fake_client.list_ready_issues = lambda ready_label, limit: [
         _make_ready_issue(
             2,
+            "Issue #2",
             "<!-- iar:depends-on #1 -->",
             ("agent/ready",),
         )
@@ -150,11 +159,13 @@ def test_run_once_dry_run_continues_after_dependency_blocked_ready_issue(
         return [
             _make_ready_issue(
                 5,
+                "Issue #5",
                 "<!-- iar:depends-on #3 -->",
                 ("agent/ready",),
             ),
             _make_ready_issue(
                 4,
+                "Issue #4",
                 "PRD path: `tasks/example.md`",
                 ("agent/ready",),
             ),
@@ -190,6 +201,7 @@ def test_run_once_dry_run_processes_unblocked_ready_issue() -> None:
     fake_client.list_ready_issues = lambda ready_label, limit: [
         _make_ready_issue(
             2,
+            "Issue #2",
             "<!-- iar:depends-on #1 -->",
             ("agent/ready", "agent/waiting"),
         )
@@ -220,6 +232,7 @@ def test_run_once_no_marker_issue_unchanged() -> None:
     fake_client.list_ready_issues = lambda ready_label, limit: [
         _make_ready_issue(
             3,
+            "Issue #3",
             "PRD path: `tasks/example.md`",
             ("agent/ready",),
         )
@@ -244,7 +257,7 @@ def test_run_once_no_marker_issue_unchanged() -> None:
 def test_mark_issue_blocked_sets_blocked_label() -> None:
     """Forbidden path failures must mark the Issue as agent/blocked."""
     fake_client = FakeGitHubClient()
-    issue = _make_ready_issue(42, "", ("agent/running",))
+    issue = _make_ready_issue(42, "Issue #42", "", ("agent/running",))
     exc = ForbiddenBlockedError(
         "Refusing to publish forbidden paths: .env.example",
         [
@@ -367,7 +380,7 @@ def test_worktree_needs_rebase_recovery_detects_rebase_and_detached(
     import backend.core.use_cases.agent_runner_orchestrate as orchestrate
     from backend.core.use_cases import agent_runner_worktree_probe as probe
 
-    issue = _make_ready_issue(85, "", ("agent/running",))
+    issue = _make_ready_issue(85, "Issue #85", "", ("agent/running",))
     monkeypatch.setattr(
         probe, "_find_worktree_path_for_issue", lambda *a, **k: tmp_path
     )
@@ -403,7 +416,7 @@ def test_worktree_needs_rebase_recovery_missing_worktree_returns_false(
     import backend.core.use_cases.agent_runner_orchestrate as orchestrate
     from backend.core.use_cases import agent_runner_worktree_probe as probe
 
-    issue = _make_ready_issue(85, "", ("agent/running",))
+    issue = _make_ready_issue(85, "Issue #85", "", ("agent/running",))
 
     def _raise(*_args: object, **_kwargs: object) -> Path:
         raise FileNotFoundError("worktree path does not exist")
@@ -435,7 +448,9 @@ def test_run_once_routes_mid_rebase_running_issue_to_recovery(
     import backend.core.use_cases.agent_runner_orchestrate as orchestrate
 
     running_label = AppConfig().labels.running
-    running_issue = _make_ready_issue(85, "PRD path: `tasks/x.md`", (running_label,))
+    running_issue = _make_ready_issue(
+        85, "Issue #85", "PRD path: `tasks/x.md`", (running_label,)
+    )
     fake_client = FakeGitHubClient()
     fake_client.list_ready_issues = lambda ready_label, limit: []
     fake_client.list_review_candidate_issues = (
@@ -477,7 +492,9 @@ def test_run_once_skips_running_issue_without_recoverable_state(
     import backend.core.use_cases.agent_runner_orchestrate as orchestrate
 
     running_label = AppConfig().labels.running
-    running_issue = _make_ready_issue(85, "PRD path: `tasks/x.md`", (running_label,))
+    running_issue = _make_ready_issue(
+        85, "Issue #85", "PRD path: `tasks/x.md`", (running_label,)
+    )
     fake_client = FakeGitHubClient()
     fake_client.list_ready_issues = lambda ready_label, limit: []
     fake_client.list_review_candidate_issues = (
@@ -523,7 +540,7 @@ def test_running_publish_recovery_holds_worktree_lock_around_heal(
     import backend.core.use_cases.agent_runner_orchestrate as orchestrate
 
     events: list[str] = []
-    issue = _make_ready_issue(85, "", (AppConfig().labels.running,))
+    issue = _make_ready_issue(85, "Issue #85", "", (AppConfig().labels.running,))
 
     monkeypatch.setattr(orchestrate, "choose_agent", lambda *a, **k: "claude")
     monkeypatch.setattr(
@@ -564,3 +581,60 @@ def test_running_publish_recovery_holds_worktree_lock_around_heal(
 
     # Heal and publish must happen strictly between acquire and release.
     assert events == ["acquire", "heal", "publish", "release"]
+
+
+def test_process_prd_rework_issues_success(tmp_path: Path) -> None:
+    """PRD rework issues should generate PRD and update labels/comments."""
+    pending_dir = tmp_path / "tasks" / "pending"
+    pending_dir.mkdir(parents=True)
+    issue = _make_ready_issue(
+        87, "Generate PRD", "Need a feature.", ("agent/rework-prd",)
+    )
+    fake_client = FakeGitHubClient()
+    fake_client.set_rework_prd_issues([issue])
+
+    process_prd_rework_issues(
+        repo_path=tmp_path,
+        config=AppConfig(labels=LabelConfig(rework_prd="agent/rework-prd")),
+        github_client=fake_client,
+        content_generator=None,
+        max_issues=1,
+    )
+
+    prd_files = list(pending_dir.glob("*.md"))
+    assert len(prd_files) == 1
+    assert prd_files[0].read_text(encoding="utf-8").startswith("# PRD: Generate PRD")
+    label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
+    assert len(label_calls) == 1
+    assert "source/prd" in label_calls[0]["add"]
+    assert "agent/ready" in label_calls[0]["add"]
+    assert "agent/rework-prd" in label_calls[0]["remove"]
+
+
+def test_process_prd_rework_issues_failure_rollback(tmp_path: Path) -> None:
+    """PRD rework failure should mark issue as failed and comment error details."""
+    issue = _make_ready_issue(88, "Issue #88", "", ("agent/rework-prd",))
+
+    class BrokenClient(FakeGitHubClient):
+        def edit_issue_body(self, issue_number: int, body: str) -> None:
+            raise RuntimeError("body update failed")
+
+    broken_client = BrokenClient()
+    broken_client.set_rework_prd_issues([issue])
+
+    process_prd_rework_issues(
+        repo_path=tmp_path,
+        config=AppConfig(labels=LabelConfig(rework_prd="agent/rework-prd")),
+        github_client=broken_client,
+        content_generator=None,
+        max_issues=1,
+    )
+
+    label_calls = [c for c in broken_client.calls if c["method"] == "edit_issue_labels"]
+    failed_label_calls = [c for c in label_calls if "agent/failed" in c["add"]]
+    assert len(failed_label_calls) == 1
+    assert "agent/rework-prd" in failed_label_calls[0]["remove"]
+    comment_calls = [c for c in broken_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "PRD generation failed" in comment_calls[0]["body"]
+    assert "agent/rework-prd" in comment_calls[0]["body"]

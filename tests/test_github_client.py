@@ -419,13 +419,18 @@ def test_list_review_candidate_issues_uses_or_label_semantics(
     assert fake_runner.calls == [list(supervising_command), list(review_command)]
 
 
-def test_get_issue_requests_state(tmp_path: Path) -> None:
-    """Issue lookup should include state so cleanup can require closed Issues."""
+def test_list_rework_prd_issues_filters_label(tmp_path: Path) -> None:
+    """list_rework_prd_issues should query gh with the given label and limit."""
     command = (
         "gh",
         "issue",
-        "view",
-        "42",
+        "list",
+        "--state",
+        "open",
+        "--label",
+        "agent/rework-prd",
+        "--limit",
+        "5",
         "--json",
         "number,title,url,labels,body,state",
     )
@@ -435,14 +440,16 @@ def test_get_issue_requests_state(tmp_path: Path) -> None:
                 command=command,
                 return_code=0,
                 stdout=json.dumps(
-                    {
-                        "number": 42,
-                        "title": "cleanup",
-                        "url": "https://example/42",
-                        "labels": [{"name": "agent/review"}],
-                        "body": "",
-                        "state": "CLOSED",
-                    }
+                    [
+                        {
+                            "number": 7,
+                            "title": "Rework PRD",
+                            "url": "https://example/7",
+                            "labels": [{"name": "agent/rework-prd"}],
+                            "body": "",
+                            "state": "OPEN",
+                        }
+                    ]
                 ),
                 stderr="",
             )
@@ -450,8 +457,45 @@ def test_get_issue_requests_state(tmp_path: Path) -> None:
     )
     github_client = GitHubCliClient(tmp_path, fake_runner)
 
-    issue = github_client.get_issue(42)
+    issues = github_client.list_rework_prd_issues("agent/rework-prd", 5)
 
-    assert issue.state == "CLOSED"
-    assert issue.labels == ("agent/review",)
+    assert len(issues) == 1
+    assert issues[0].number == 7
     assert fake_runner.calls == [list(command)]
+
+
+def test_edit_issue_body_writes_via_file(tmp_path: Path) -> None:
+    """edit_issue_body should use gh issue edit --body-file."""
+
+    class CapturingRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.captured_body: str | None = None
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            input_text=None,
+        ):
+            self.calls.append(list(command))
+            if "--body-file" in command:
+                body_file_path = Path(command[command.index("--body-file") + 1])
+                self.captured_body = body_file_path.read_text(encoding="utf-8")
+            return CommandResult(
+                command=tuple(command), return_code=0, stdout="", stderr=""
+            )
+
+    runner = CapturingRunner()
+    github_client = GitHubCliClient(tmp_path, runner)
+
+    github_client.edit_issue_body(9, "New body text.")
+
+    assert len(runner.calls) == 1
+    assert runner.calls[0][:4] == ["gh", "issue", "edit", "9"]
+    assert runner.calls[0][4] == "--body-file"
+    assert runner.captured_body == "New body text."

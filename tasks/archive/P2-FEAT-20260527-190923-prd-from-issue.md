@@ -36,10 +36,10 @@ Add a core `create_prd_from_issue` workflow that runs before normal ready-Issue 
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 helper 中通过。
 
-- [ ] **新 Issue 生成 PRD 真实验证**：通过 `uv run iar run --max-issues 1` 处理带 `agent/rework-prd` 的测试 Issue，验证本地生成 PRD、Issue body 写入 `PRD path:`、label 切换为 `source/prd`/可选 `agent/ready`。
-- [ ] **已有 PRD 重写真实验证**：通过同一入口处理已有 `PRD path:` 的 Issue，验证原路径文件被重写且新 comment 需求进入 PRD。
-- [ ] **失败回退真实验证**：通过只读 `tasks/pending/` 或 fake write failure 验证 Issue 进入 `agent/failed` 并写入可操作错误评论。
-- [ ] **为什么单元测试不够**：该功能连接 CLI/daemon polling、GitHub Issue labels/body/comments、AI content generation、文件写入和 label 回写；必须通过真实入口证明组合路径收敛。
+- [x] **新 Issue 生成 PRD 真实验证**：通过 `uv run iar run --max-issues 1` 处理带 `agent/rework-prd` 的测试 Issue，验证本地生成 PRD、Issue body 写入 `PRD path:`、label 切换为 `source/prd`/可选 `agent/ready`。证据见 `.iar/evidence/rv-1-new-issue-generates-prd.txt`。
+- [x] **已有 PRD 重写真实验证**：通过同一入口处理已有 `PRD path:` 的 Issue，验证原路径文件被重写且新 comment 需求进入 PRD。证据见 `.iar/evidence/rv-2-existing-prd-rewrite.txt`。
+- [x] **失败回退真实验证**：通过只读 `tasks/pending/` 验证 Issue 进入 `agent/failed` 并写入可操作错误评论。证据见 `.iar/evidence/rv-3-failure-rollback.txt`。
+- [x] **为什么单元测试不够**：该功能连接 CLI/daemon polling、GitHub Issue labels/body/comments、AI content generation、文件写入和 label 回写；必须通过真实入口证明组合路径收敛。证据见 `.iar/evidence/rv-4-why-unit-tests-not-enough.txt`。
 
 ### Delivery Dependencies
 
@@ -831,40 +831,40 @@ No external validation required; repository evidence and optional sandbox GitHub
 
 ### Configuration Acceptance
 
-- [ ] `LabelConfig` 和 `AgentRunnerLabelSettings` 新增 `rework_prd` 字段，默认值为 `"agent/rework-prd"`。
-- [ ] `GeneratedContentConfig` 和 `AgentRunnerGeneratedContentSettings` 新增 `prd_from_issue` 字段。
+- [x] `LabelConfig` 和 `AgentRunnerLabelSettings` 新增 `rework_prd` 字段，默认值为 `"agent/rework-prd"`。
+- [x] `GeneratedContentConfig` 和 `AgentRunnerGeneratedContentSettings` 新增 `prd_from_issue` 字段。
 
 ### GitHub Integration Acceptance
 
-- [ ] `GitHubCliClient` 新增 `list_rework_prd_issues()` 方法，返回类型与 `list_ready_issues` 一致。
-- [ ] `GitHubCliClient` 新增 `edit_issue_body()` 方法（或复用现有能力更新 issue body）。
+- [x] `GitHubCliClient` 新增 `list_rework_prd_issues()` 方法，返回类型与 `list_ready_issues` 一致。
+- [x] `GitHubCliClient` 新增 `edit_issue_body()` 方法（或复用现有能力更新 issue body）。
 
 ### Generation Acceptance
 
-- [ ] `generated_content.py` 新增 `PrdContext`、`build_prd_context()`、`generate_prd_content()` 和 `GeneratedPrdContent`。
-- [ ] 新增 `src/backend/core/use_cases/create_prd_from_issue.py`，包含完整的 "新建 PRD" 和 "重写 PRD" 逻辑。
+- [x] `generated_content.py` 新增 `PrdContext`、`build_prd_context()`、`generate_prd_content()` 和 `GeneratedPrdContent`。
+- [x] 新增 `src/backend/core/use_cases/create_prd_from_issue.py`，包含完整的 "新建 PRD" 和 "重写 PRD" 逻辑。
 
 ### Workflow Acceptance
 
-- [ ] `agent_runner_orchestrate.py` 新增 `process_prd_rework_issues()` 函数，失败时切 label 到 `agent/failed` 并 comment 错误详情。
-- [ ] `run_agent_daemon.py` 每个 repository pass 先执行 PRD rework 阶段，再执行 ready issue 阶段；两个阶段错误隔离。
-- [ ] `factory.py` 更新配置转换逻辑，把 `rework_prd` 和 `prd_from_issue` 纳入 `AppConfig` 构建。
+- [x] `agent_runner_orchestrate.py` 新增 `process_prd_rework_issues()` 函数，失败时切 label 到 `agent/failed` 并 comment 错误详情。
+- [x] `run_agent_daemon.py` 每个 repository pass 先执行 PRD rework 阶段，再执行 ready issue 阶段；两个阶段错误隔离。
+- [x] `factory.py` 更新配置转换逻辑，把 `rework_prd` 和 `prd_from_issue` 纳入 `AppConfig` 构建。
 
 ### Validation Acceptance
 
-- [ ] `tests/` 覆盖：
+- [x] `tests/` 覆盖：
   - `list_rework_prd_issues` 正确筛选 label
   - `create_prd_from_issue` 新建场景（无现有 PRD）
   - `create_prd_from_issue` 重写场景（有现有 PRD，复用原路径）
   - `_generate_slug` 边界情况（特殊字符、超长标题）
   - `_update_issue_body_with_prd_path` 插入和更新逻辑
   - `process_prd_rework_issues` 失败时的 label 和 comment 回退
-- [ ] `uv run iar run --max-issues 1` 通过 fake `gh` / fake content generator fixture 证明新建、重写和失败回退真实入口路径。
-- [ ] `just test` 全量通过。
+- [x] `uv run iar run --max-issues 1` 通过 fake `gh` / fake content generator fixture 证明新建、重写和失败回退真实入口路径。
+- [x] `just test` 全量通过。
 
 ### Documentation Acceptance
 
-- [ ] `docs/` 中同步更新相关文档（如 `docs/architecture/system-design.md` 中涉及 Agent Runner 流程的章节）。
+- [x] `docs/` 中同步更新相关文档（如 `docs/architecture/system-design.md` 中涉及 Agent Runner 流程的章节）。
 
 ## 8. Functional Requirements
 

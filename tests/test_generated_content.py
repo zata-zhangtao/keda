@@ -576,35 +576,244 @@ def test_build_pr_context_collects_git_info() -> None:
     assert context.git_diff_stat == "1 file changed, 10 insertions"
 
 
-def test_generate_issue_content_empty_title_fallback() -> None:
-    """Empty generated title should trigger fallback."""
-    config = GeneratedContentConfig(
-        enabled=True,
-        issue_from_prd=GeneratedContentTargetConfig(
-            enabled=True,
-            mode="template",
-            title_template="",
-            body_template="- PRD path: `{relative_prd_path}`",
-        ),
+def test_build_prd_context_collects_issue_and_comments() -> None:
+    """PRD context should include issue fields and formatted comments."""
+    from backend.core.use_cases.generated_content import build_prd_context
+    from backend.core.shared.models.agent_runner import IssueSummary
+
+    issue = IssueSummary(
+        number=42, title="Test", url="https://example.com", body="Body", labels=()
     )
-    context = IssueContext(
-        issue_type="feature",
-        title="Title",
-        prd_title="PRD Title",
-        relative_prd_path="tasks/example.md",
-        acceptance_items="",
-        prd_text="",
-        prd_introduction="",
-        prd_goals="",
-        prd_requirement_shape="",
-        prd_change_impact_tree="",
+    context = build_prd_context(
+        issue=issue,
+        comments=["first", "second"],
+        existing_prd_text="old prd",
+        repo_path=Path("."),
     )
-    result = generate_issue_content(
+    assert context.issue_number == 42
+    assert context.issue_title == "Test"
+    assert context.issue_body == "Body"
+    assert "Comment:\nfirst" in context.issue_comments
+    assert "Comment:\nsecond" in context.issue_comments
+    assert context.existing_prd_text == "old prd"
+
+
+def test_generate_prd_content_disabled_uses_fallback() -> None:
+    """When generated content is disabled, fallback PRD should be returned."""
+    from backend.core.use_cases.generated_content import (
+        PrdContext,
+        generate_prd_content,
+    )
+
+    config = GeneratedContentConfig(enabled=False)
+    context = PrdContext(
+        issue_number=1,
+        issue_title="T",
+        issue_body="B",
+        issue_comments="",
+        existing_prd_text="",
+        repo_structure_summary="",
+    )
+    result = generate_prd_content(
         config=config,
         context=context,
-        fallback_title="Fallback Title",
-        fallback_body="Fallback Body",
+        fallback_prd_text="fallback",
     )
-    assert result.title == "Fallback Title"
-    assert result.body == "Fallback Body"
+    assert result.text == "fallback"
     assert result.source == "fallback"
+
+
+def test_generate_prd_content_template_mode() -> None:
+    """Template mode should render body_template as PRD."""
+    from backend.core.use_cases.generated_content import (
+        PrdContext,
+        generate_prd_content,
+    )
+
+    config = GeneratedContentConfig(
+        enabled=True,
+        prd_from_issue=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="template",
+            body_template=(
+                "# PRD: {issue_title}\n\n"
+                "- GitHub Issue: #{issue_number}\n\n"
+                "## Acceptance Checklist\n\n"
+                "- [ ] item"
+            ),
+        ),
+    )
+    context = PrdContext(
+        issue_number=3,
+        issue_title="Feature",
+        issue_body="",
+        issue_comments="",
+        existing_prd_text="",
+        repo_structure_summary="",
+    )
+    result = generate_prd_content(
+        config=config,
+        context=context,
+        fallback_prd_text="fallback",
+    )
+    assert result.text == (
+        "# PRD: Feature\n\n"
+        "- GitHub Issue: #3\n\n"
+        "## Acceptance Checklist\n\n"
+        "- [ ] item"
+    )
+    assert result.source == "template"
+
+
+def test_generate_prd_content_invalid_output_fallback() -> None:
+    """Template output missing required PRD structure should fallback."""
+    from backend.core.use_cases.generated_content import (
+        PrdContext,
+        generate_prd_content,
+    )
+
+    config = GeneratedContentConfig(
+        enabled=True,
+        prd_from_issue=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="template",
+            body_template="No structure here.",
+        ),
+    )
+    context = PrdContext(
+        issue_number=1,
+        issue_title="T",
+        issue_body="",
+        issue_comments="",
+        existing_prd_text="",
+        repo_structure_summary="",
+    )
+    result = generate_prd_content(
+        config=config,
+        context=context,
+        fallback_prd_text="fallback",
+    )
+    assert result.text == "fallback"
+    assert result.source == "fallback"
+
+
+def test_generate_prd_content_agent_mode() -> None:
+    """Agent mode should use generator output when valid."""
+    from backend.core.use_cases.generated_content import (
+        PrdContext,
+        generate_prd_content,
+    )
+
+    generator = FakeContentGenerator(
+        response=(
+            "# PRD: AI Title\n\n"
+            "- GitHub Issue: #1\n\n"
+            "## Acceptance Checklist\n\n"
+            "- [ ] AI item\n"
+        )
+    )
+    config = GeneratedContentConfig(
+        enabled=True,
+        prd_from_issue=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="agent",
+            output="markdown",
+            prompt="Generate PRD for {issue_title}",
+        ),
+    )
+    context = PrdContext(
+        issue_number=1,
+        issue_title="Title",
+        issue_body="Body",
+        issue_comments="",
+        existing_prd_text="",
+        repo_structure_summary="",
+    )
+    result = generate_prd_content(
+        config=config,
+        context=context,
+        fallback_prd_text="fallback",
+        generator=generator,
+        cwd=Path("."),
+    )
+    assert "# PRD: AI Title" in result.text
+    assert result.source == "agent"
+
+
+def test_generate_prd_content_agent_invalid_uses_fallback() -> None:
+    """Invalid agent output should fall back."""
+    from backend.core.use_cases.generated_content import (
+        PrdContext,
+        generate_prd_content,
+    )
+
+    generator = FakeContentGenerator(response="not a prd")
+    config = GeneratedContentConfig(
+        enabled=True,
+        prd_from_issue=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="agent",
+            output="markdown",
+            prompt="Generate",
+        ),
+    )
+    context = PrdContext(
+        issue_number=1,
+        issue_title="Title",
+        issue_body="Body",
+        issue_comments="",
+        existing_prd_text="",
+        repo_structure_summary="",
+    )
+    result = generate_prd_content(
+        config=config,
+        context=context,
+        fallback_prd_text="fallback",
+        generator=generator,
+        cwd=Path("."),
+    )
+    assert result.text == "fallback"
+    assert result.source == "fallback"
+
+
+def test_generate_prd_content_agent_fallback_to_template() -> None:
+    """Agent failure with fallback=template should render template before hard fallback."""
+    from backend.core.use_cases.generated_content import (
+        PrdContext,
+        generate_prd_content,
+    )
+
+    generator = FakeContentGenerator(response="invalid")
+    config = GeneratedContentConfig(
+        enabled=True,
+        fallback="template",
+        prd_from_issue=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="agent",
+            output="markdown",
+            body_template=(
+                "# PRD: {issue_title}\n\n"
+                "- GitHub Issue: #{issue_number}\n\n"
+                "## Acceptance Checklist\n\n"
+                "- [ ] template item"
+            ),
+            prompt="Generate",
+        ),
+    )
+    context = PrdContext(
+        issue_number=1,
+        issue_title="Title",
+        issue_body="Body",
+        issue_comments="",
+        existing_prd_text="",
+        repo_structure_summary="",
+    )
+    result = generate_prd_content(
+        config=config,
+        context=context,
+        fallback_prd_text="fallback",
+        generator=generator,
+        cwd=Path("."),
+    )
+    assert "- [ ] template item" in result.text
+    assert result.source == "template"

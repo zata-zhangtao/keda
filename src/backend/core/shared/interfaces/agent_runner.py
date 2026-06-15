@@ -218,6 +218,21 @@ class IGitHubClient(ABC):
         ...
 
     @abstractmethod
+    def list_rework_prd_issues(
+        self, rework_prd_label: str, limit: int
+    ) -> list[IssueSummary]:
+        """列出带有 rework-prd 标签的开放 Issue。
+
+        Args:
+            rework_prd_label: 表示「需要重新生成 PRD」的标签名。
+            limit: 返回结果的最大数量上限。
+
+        Returns:
+            list[IssueSummary]: 满足条件的开放 Issue 摘要列表。
+        """
+        ...
+
+    @abstractmethod
     def edit_issue_labels(
         self,
         issue_number: int,
@@ -241,6 +256,16 @@ class IGitHubClient(ABC):
         Args:
             issue_number: 目标 Issue 编号。
             body: 评论正文，支持 Markdown。
+        """
+        ...
+
+    @abstractmethod
+    def edit_issue_body(self, issue_number: int, body: str) -> None:
+        """整体替换某个 Issue 的描述正文。
+
+        Args:
+            issue_number: 目标 Issue 编号。
+            body: 新的 Issue 描述正文，支持 Markdown。
         """
         ...
 
