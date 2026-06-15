@@ -66,6 +66,50 @@ def test_mark_issue_failed_comment_includes_recovery_guidance() -> None:
     )
 
 
+def test_mark_issue_failed_falls_back_to_minimal_comment_on_rejection() -> None:
+    """When GitHub rejects the full report, a minimal comment must still post.
+
+    Regression for Issue #84: the full failure comment was rejected with a
+    400, the best-effort handler swallowed it, and the failure reason never
+    reached the Issue.
+    """
+
+    class _FirstCommentFailsClient(FakeGitHubClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.comment_attempts = 0
+
+        def comment_issue(self, issue_number: int, body: str) -> None:
+            self.comment_attempts += 1
+            if self.comment_attempts == 1:
+                raise RuntimeError("non-200 OK status code: 400 Bad Request")
+            super().comment_issue(issue_number, body)
+
+    fake_client = _FirstCommentFailsClient()
+    issue = _make_ready_issue(84, "PRD path: `tasks/example.md`", ("agent/running",))
+
+    _mark_issue_failed(
+        issue=issue,
+        config=AppConfig(),
+        github_client=fake_client,
+        exc=RuntimeError("Failed after 6 attempts."),
+    )
+
+    # Two attempts: the rejected full report, then the minimal fallback.
+    assert fake_client.comment_attempts == 2
+    posted = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(posted) == 1
+    body = posted[0]["body"]
+    assert "## Agent Runner Failed" in body
+    assert "Failed after 6 attempts." in body
+    assert (
+        "gh issue edit 84 --add-label agent/ready --remove-label agent/failed" in body
+    )
+    # The Issue is still transitioned to the failed state.
+    label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
+    assert any("agent/failed" in c["add"] for c in label_calls)
+
+
 def test_run_once_dry_run_skips_blocked_ready_issue() -> None:
     """Blocked ready Issues should be skipped and reported in dry-run mode."""
     fake_client = FakeGitHubClient()

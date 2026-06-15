@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,47 @@ from typing import Sequence
 from backend.infrastructure.process_runner import SubprocessRunner
 
 _logger = logging.getLogger(__name__)
+
+# GitHub rejects POST bodies above ~65,536 characters; stay well below it.
+_MAX_GITHUB_BODY_LENGTH = 60000
+
+# C0 control characters (except tab/newline/carriage-return) and DEL trip
+# GitHub's request validation, which rejects the POST with a generic
+# ``400 Bad Request`` ("Whoa there!") page. Agent CLI output forwarded into
+# failure comments (e.g. ``claude --output-format stream-json --verbose``) can
+# embed these raw bytes, so every body is scrubbed before it reaches ``gh``.
+_CONTROL_CHARACTER_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+_BODY_TRUNCATION_MARKER = "\n\n... (truncated to fit GitHub's size limit) ...\n\n"
+
+
+def sanitize_github_body(
+    body: str, *, max_length: int = _MAX_GITHUB_BODY_LENGTH
+) -> str:
+    """Strip request-breaking control characters and bound the body length.
+
+    GitHub returns a generic ``400 Bad Request`` page for POST bodies that
+    contain raw control characters or exceed its size limit. Both can occur
+    when agent command output is embedded in a failure comment, so callers
+    route every Markdown body through this guard before handing it to ``gh``.
+
+    Args:
+        body: The raw Markdown body to post.
+        max_length: Maximum characters to keep; longer bodies are
+            middle-truncated with a marker so both the start and the tail of
+            the original content survive.
+
+    Returns:
+        A sanitized body safe to send to the GitHub CLI.
+    """
+    cleaned_body = _CONTROL_CHARACTER_PATTERN.sub("", body)
+    if len(cleaned_body) <= max_length:
+        return cleaned_body
+    keep_length = max(0, max_length - len(_BODY_TRUNCATION_MARKER))
+    head_length = keep_length * 2 // 3
+    tail_length = keep_length - head_length
+    tail = cleaned_body[-tail_length:] if tail_length else ""
+    return cleaned_body[:head_length] + _BODY_TRUNCATION_MARKER + tail
 
 
 @dataclass(frozen=True)
@@ -218,6 +260,17 @@ class GitHubCliClient:
         self.repo_path = repo_path
         self._runner = process_runner or SubprocessRunner()
 
+    def _write_body_file(self, temp_dir: str, filename: str, body: str) -> Path:
+        """Sanitize a Markdown body and write it for a ``--body-file`` flag.
+
+        Routing every body through :func:`sanitize_github_body` keeps raw
+        control characters and oversized payloads from triggering GitHub's
+        ``400 Bad Request`` rejection.
+        """
+        body_path = Path(temp_dir) / filename
+        body_path.write_text(sanitize_github_body(body), encoding="utf-8")
+        return body_path
+
     def check_auth_status(self) -> GhAuthStatus:
         """Run ``gh auth status`` and parse the result.
 
@@ -419,8 +472,7 @@ class GitHubCliClient:
     def comment_issue(self, issue_number: int, body: str) -> None:
         """Post a Markdown comment to an Issue."""
         with tempfile.TemporaryDirectory(prefix="iar-comment-") as temp_dir:
-            comment_path = Path(temp_dir) / "comment.md"
-            comment_path.write_text(body, encoding="utf-8")
+            comment_path = self._write_body_file(temp_dir, "comment.md", body)
             self._runner.run(
                 [
                     "gh",
@@ -442,8 +494,7 @@ class GitHubCliClient:
     ) -> str:
         """Create a GitHub Issue and return its URL."""
         with tempfile.TemporaryDirectory(prefix="iar-issue-") as temp_dir:
-            body_path = Path(temp_dir) / "issue.md"
-            body_path.write_text(body, encoding="utf-8")
+            body_path = self._write_body_file(temp_dir, "issue.md", body)
             command = [
                 "gh",
                 "issue",
@@ -463,8 +514,7 @@ class GitHubCliClient:
     ) -> str:
         """Create a draft pull request from the current branch."""
         with tempfile.TemporaryDirectory(prefix="iar-pr-") as temp_dir:
-            body_path = Path(temp_dir) / "pr.md"
-            body_path.write_text(body, encoding="utf-8")
+            body_path = self._write_body_file(temp_dir, "pr.md", body)
             result = self._runner.run(
                 [
                     "gh",
@@ -595,8 +645,7 @@ class GitHubCliClient:
     def comment_pr(self, pr_number: int, body: str) -> None:
         """Post a Markdown comment to a Pull Request."""
         with tempfile.TemporaryDirectory(prefix="iar-pr-comment-") as temp_dir:
-            comment_path = Path(temp_dir) / "comment.md"
-            comment_path.write_text(body, encoding="utf-8")
+            comment_path = self._write_body_file(temp_dir, "comment.md", body)
             self._runner.run(
                 [
                     "gh",
@@ -612,8 +661,7 @@ class GitHubCliClient:
     def update_pull_request_body(self, pr_number: int, body: str) -> None:
         """Replace the description body of a Pull Request."""
         with tempfile.TemporaryDirectory(prefix="iar-pr-body-") as temp_dir:
-            body_path = Path(temp_dir) / "body.md"
-            body_path.write_text(body, encoding="utf-8")
+            body_path = self._write_body_file(temp_dir, "body.md", body)
             self._runner.run(
                 [
                     "gh",

@@ -6,8 +6,68 @@ import json
 from pathlib import Path
 
 from backend.core.shared.models.agent_runner import CommandResult
-from backend.infrastructure.github_client import GitHubCliClient
+from backend.infrastructure.github_client import (
+    GitHubCliClient,
+    sanitize_github_body,
+)
 from tests.conftest import FakeProcessRunner
+
+
+class _BodyCapturingRunner(FakeProcessRunner):
+    """Process runner that records the body passed via ``--body-file``."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.body_files: list[str] = []
+
+    def run(self, command, *, cwd, **kwargs):  # type: ignore[override]
+        command_list = list(command)
+        if "--body-file" in command_list:
+            body_path = command_list[command_list.index("--body-file") + 1]
+            self.body_files.append(Path(body_path).read_text(encoding="utf-8"))
+        return super().run(command, cwd=cwd, **kwargs)
+
+
+def test_sanitize_github_body_strips_request_breaking_control_characters() -> None:
+    """Control characters that trigger GitHub's 400 must be removed."""
+    raw_body = "ok\x00 line\x1b[31m colored\x07 bell\x7f del\ttab\nnewline\r"
+
+    sanitized = sanitize_github_body(raw_body)
+
+    assert "\x00" not in sanitized
+    assert "\x1b" not in sanitized
+    assert "\x07" not in sanitized
+    assert "\x7f" not in sanitized
+    # Tabs, newlines and carriage returns are valid Markdown and preserved.
+    assert "\ttab" in sanitized
+    assert "\nnewline" in sanitized
+    assert sanitized.endswith("\r")
+
+
+def test_sanitize_github_body_truncates_oversized_body_keeping_head_and_tail() -> None:
+    """Oversized bodies are middle-truncated below GitHub's size limit."""
+    raw_body = "H" * 50 + "M" * 100_000 + "T" * 50
+
+    sanitized = sanitize_github_body(raw_body, max_length=2000)
+
+    assert len(sanitized) <= 2000
+    assert sanitized.startswith("H" * 50)
+    assert sanitized.endswith("T" * 50)
+    assert "truncated to fit GitHub's size limit" in sanitized
+
+
+def test_comment_issue_sanitizes_body_before_posting(tmp_path: Path) -> None:
+    """A failure comment with raw control characters must be scrubbed.
+
+    Regression for Issue #84: agent CLI output embedded raw control bytes,
+    so ``gh issue comment`` got a 400 and the failure reason was never posted.
+    """
+    capturing_runner = _BodyCapturingRunner()
+    github_client = GitHubCliClient(tmp_path, capturing_runner)
+
+    github_client.comment_issue(84, "## Agent Runner Failed\x00\x1b bad bytes")
+
+    assert capturing_runner.body_files == ["## Agent Runner Failed bad bytes"]
 
 
 def test_list_issue_comments_requests_comments_field(tmp_path: Path) -> None:

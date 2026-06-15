@@ -30,6 +30,7 @@ __all__ = [
     "format_attempt_history",
     "format_blocked_failure_comment",
     "format_failure_comment",
+    "format_minimal_failure_comment",
     "format_publish_failure_comment",
     "format_recovery_failure_summary",
     "is_recoverable_commit_request_error",
@@ -310,6 +311,49 @@ def format_failure_comment(
                 "See the 失败重跑 section in `docs/guides/agent-runner.md` "
                 "for the full procedure.",
                 "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def format_minimal_failure_comment(
+    exc: BaseException, *, issue_number: int | None = None
+) -> str:
+    """Build a compact failure comment used as a posting fallback.
+
+    The full failure report embeds agent command output, which GitHub can
+    reject (oversized or control characters). When that happens the caller
+    falls back to this short, structured summary so the operator still learns
+    that the run failed and how to recover, instead of the reason being lost.
+
+    Args:
+        exc: The exception that caused the failure.
+        issue_number: When provided, a copy-pastable relabel command is
+            appended so the operator can re-queue the Issue.
+    """
+    exc_message = str(exc).strip()
+    failure_summary = exc_message.splitlines()[0] if exc_message else type(exc).__name__
+    lines = [
+        "## Agent Runner Failed",
+        "",
+        "The full failure report could not be posted to GitHub; "
+        "showing a summary instead. See the runner logs for full details.",
+        "",
+        f"- Failure: `{failure_summary}`",
+    ]
+    if issue_number is not None:
+        lines.extend(
+            [
+                "",
+                "### How To Recover",
+                "",
+                "After fixing the root cause, relabel the Issue so the "
+                "runner picks it up on its next poll:",
+                "",
+                "```bash",
+                f"gh issue edit {issue_number} "
+                "--add-label agent/ready --remove-label agent/failed",
+                "```",
             ]
         )
     return "\n".join(lines)

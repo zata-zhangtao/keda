@@ -235,6 +235,7 @@ def _mark_issue_failed(
     from backend.core.use_cases.run_agent_once import (
         PublishFailureError,
         format_failure_comment,
+        format_minimal_failure_comment,
         format_publish_failure_comment,
     )
 
@@ -261,6 +262,20 @@ def _mark_issue_failed(
             issue.number,
             comment_exc,
         )
+        # The full report can be rejected by GitHub (oversized or control
+        # characters from agent output). Fall back to a minimal comment so the
+        # failure reason still reaches the Issue instead of being lost.
+        try:
+            github_client.comment_issue(
+                issue.number,
+                format_minimal_failure_comment(exc, issue_number=issue.number),
+            )
+        except Exception as fallback_exc:  # noqa: BLE001 - preserve original failure.
+            _logger.error(
+                "Failed to post fallback failure comment on Issue #%d: %s",
+                issue.number,
+                fallback_exc,
+            )
 
 
 def _mark_issue_blocked(
