@@ -24,6 +24,17 @@ from backend.core.use_cases.agent_runner_commit import (
     read_commit_request,
     remove_commit_request,
 )
+from backend.core.use_cases.agent_runner_feedback import (
+    VerificationFailedError,
+    build_recovery_prompt,
+    failed_verification_results,
+)
+from backend.core.use_cases.agent_runner_failure import (
+    format_recovery_failure_summary,
+)
+from backend.core.use_cases.agent_runner_verification_recovery import (
+    ensure_verification_passed_with_recovery,
+)
 from backend.core.use_cases.run_agent_once import (
     commit_requested_changes,
     ensure_verification_passed,
@@ -607,8 +618,7 @@ def execute_rebase(
     Returns:
         Verification results after rebase.
     """
-    # 在执行任何变更前校验 HEAD 与分支，防止因并发操作或其他流程
-    # 已修改工作树而导致 rebase 在错误状态上执行
+    # 校验 HEAD 与分支，防止在错误状态上执行 rebase
     current_head = get_head_sha(worktree_path, process_runner)
     if current_head != expected_head:
         raise RuntimeError(
@@ -620,13 +630,13 @@ def execute_rebase(
     remote = config.git.remote
     base_branch = config.git.base_branch
 
-    # 拉取远程最新 base，确保 rebase 目标是最新的，减少后续再次冲突的概率
+    # 拉取最新 base，减少再次冲突概率
     process_runner.run(
         ["git", "fetch", remote, base_branch],
         cwd=worktree_path,
     )
 
-    # 执行 rebase；不设置 check=True，因为冲突是预期内的正常分支情况
+    # 执行 rebase；冲突是预期情况，所以不设置 check=True
     rebase_result = process_runner.run(
         ["git", "rebase", f"{remote}/{base_branch}"],
         cwd=worktree_path,
@@ -634,10 +644,8 @@ def execute_rebase(
     )
 
     if rebase_result.return_code != 0:
-        # 使用配置中的最大修复次数，避免在复杂冲突上无限循环消耗资源
         max_attempts = max(0, config.post_pr_supervisor.max_repair_attempts)
         for attempt in range(1, max_attempts + 1):
-            # 获取当前存在冲突的文件列表，仅让 Agent 聚焦这些文件
             diff_names_result = process_runner.run(
                 ["git", "diff", "--name-only", "--diff-filter=U"],
                 cwd=worktree_path,
@@ -648,20 +656,54 @@ def execute_rebase(
                 for line in diff_names_result.stdout.splitlines()
                 if line.strip()
             ]
-            prompt = build_conflict_resolution_prompt(
-                issue, pr_branch, expected_head, conflicted_files
-            )
+
+            if not conflicted_files and not has_changes(worktree_path, process_runner):
+                continue_result = process_runner.run(
+                    ["git", "-c", "core.editor=true", "rebase", "--continue"],
+                    cwd=worktree_path,
+                    check=False,
+                )
+                if continue_result.return_code == 0:
+                    verification_results = ensure_verification_passed_with_recovery(
+                        issue=issue,
+                        worktree_path=worktree_path,
+                        config=config,
+                        process_runner=process_runner,
+                        supervisor_agent=supervisor_agent,
+                        pr_branch=pr_branch,
+                    )
+                    process_runner.run(
+                        ["git", "push", "--force-with-lease", remote, pr_branch],
+                        cwd=worktree_path,
+                    )
+                    return verification_results
+                # continue 失败说明仍有未解决冲突，进入下一轮让 agent 处理
+                continue
+
+            if conflicted_files:
+                prompt = build_conflict_resolution_prompt(
+                    issue, pr_branch, expected_head, conflicted_files
+                )
+            else:
+                failure_summary = format_recovery_failure_summary(
+                    "Verification failed during rebase; continue fixing the issue.",
+                    [],
+                )
+                prompt = build_recovery_prompt(
+                    issue,
+                    worktree_path,
+                    recovery_attempt=attempt,
+                    max_recovery_attempts=max_attempts,
+                    failure_summary=failure_summary,
+                )
             run_agent_with_prompt(
                 supervisor_agent, prompt, worktree_path, process_runner
             )
 
-            # Agent 通过写入 commit-request.json 显式表达提交意图，
-            # 避免无意的文件修改被自动提交
+            # Agent 通过 commit-request.json 显式表达提交意图
             request_path = worktree_path / ".agent-runner" / "commit-request.json"
             if request_path.is_file():
-                # 在提交前再次确认分支上下文，防止 Agent 中途切换了分支。
-                # 此守卫接受 detached HEAD 状态，但仅当活跃 rebase 元数据
-                # 确认目标分支就是 PR 分支时才放行。
+                # 再次确认分支上下文，防止 Agent 中途切换分支
                 _ensure_rebase_context_matches_pr_branch(
                     worktree_path, process_runner, pr_branch
                 )
@@ -673,54 +715,67 @@ def execute_rebase(
                     )
                 validate_safe_changes(worktree_path, config, process_runner)
                 process_runner.run(["git", "add", "-A"], cwd=worktree_path)
-                # rebase --continue 前先做验证，确保冲突解决后的代码仍然健康
+                # continue 前验证冲突解决结果
                 verification_results = run_verification(
                     worktree_path, config, process_runner
                 )
-                ensure_verification_passed(verification_results)
+                if failed_verification_results(verification_results):
+                    # 验证失败则取消 staging，让 agent 下一轮继续修
+                    process_runner.run(
+                        ["git", "reset", "--mixed"],
+                        cwd=worktree_path,
+                        check=False,
+                    )
+                    continue
                 continue_result = process_runner.run(
                     ["git", "-c", "core.editor=true", "rebase", "--continue"],
                     cwd=worktree_path,
                     check=False,
                 )
                 if continue_result.return_code == 0:
-                    # rebase 成功后再验证并推送，保证推送到远程的代码一定通过校验
-                    verification_results = run_verification(
-                        worktree_path, config, process_runner
+                    # rebase 成功后再验证并推送
+                    verification_results = ensure_verification_passed_with_recovery(
+                        issue=issue,
+                        worktree_path=worktree_path,
+                        config=config,
+                        process_runner=process_runner,
+                        supervisor_agent=supervisor_agent,
+                        pr_branch=pr_branch,
                     )
-                    ensure_verification_passed(verification_results)
-                    # force-with-lease 比 force 安全：若远程分支在 fetch 后被他人
-                    # 更新，则推送会失败，避免覆盖他人的并行工作
                     process_runner.run(
                         ["git", "push", "--force-with-lease", remote, pr_branch],
                         cwd=worktree_path,
                     )
                     return verification_results
             else:
-                # Agent 没有写 commit-request 却改了文件，属于未授权修改，必须拒绝
+                # Agent 未写 commit-request 却改文件，拒绝
                 if has_changes(worktree_path, process_runner):
                     raise RuntimeError(
                         "Rebase conflict agent changed files without writing "
                         ".agent-runner/commit-request.json."
                     )
-                # Agent 未修改文件，尝试继续 rebase，可能冲突已被外部解决
+                # Agent 未改文件，尝试继续 rebase
                 continue_result = process_runner.run(
                     ["git", "-c", "core.editor=true", "rebase", "--continue"],
                     cwd=worktree_path,
                     check=False,
                 )
                 if continue_result.return_code == 0:
-                    verification_results = run_verification(
-                        worktree_path, config, process_runner
+                    verification_results = ensure_verification_passed_with_recovery(
+                        issue=issue,
+                        worktree_path=worktree_path,
+                        config=config,
+                        process_runner=process_runner,
+                        supervisor_agent=supervisor_agent,
+                        pr_branch=pr_branch,
                     )
-                    ensure_verification_passed(verification_results)
                     process_runner.run(
                         ["git", "push", "--force-with-lease", remote, pr_branch],
                         cwd=worktree_path,
                     )
                     return verification_results
 
-        # 所有重试次数用尽后回退 rebase，保持工作树干净并抛出异常让上层决策
+        # 重试用尽后回退 rebase
         process_runner.run(
             ["git", "rebase", "--abort"],
             cwd=worktree_path,
@@ -728,11 +783,17 @@ def execute_rebase(
         )
         raise RuntimeError("Rebase conflict resolution exhausted")
 
-    # rebase 未遇到冲突时，仍需验证代码健康度再推送
-    verification_results = run_verification(worktree_path, config, process_runner)
-    ensure_verification_passed(verification_results)
+    # 无冲突 rebase 后验证再推送
+    verification_results = ensure_verification_passed_with_recovery(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=process_runner,
+        supervisor_agent=supervisor_agent,
+        pr_branch=pr_branch,
+    )
 
-    # 仅在 PR 分支上使用 force-with-lease 推送，避免误操作其他分支
+    # 用 force-with-lease 推送到 PR 分支
     process_runner.run(
         ["git", "push", "--force-with-lease", remote, pr_branch],
         cwd=worktree_path,
@@ -765,7 +826,7 @@ def execute_repair(
     Returns:
         Verification results after repair commit.
     """
-    # 与 rebase 同理：在让 Agent 介入前先锁定工作树状态，防止竞态
+    # 先锁定工作树状态，防止竞态
     current_head = get_head_sha(worktree_path, process_runner)
     if current_head != expected_head:
         raise RuntimeError(
@@ -794,29 +855,69 @@ def execute_repair(
         ]
     )
 
-    run_agent_with_prompt(
-        supervisor_agent, repair_prompt, worktree_path, process_runner
-    )
-
-    # Agent 必须通过 commit-request.json 显式请求提交；直接检测文件变更不可靠，
-    # 因为 Agent 可能仅做探索性查看或临时文件修改，不应被误提交
-    request_path = worktree_path / ".agent-runner" / "commit-request.json"
-    if request_path.is_file():
-        verification_results = commit_requested_changes(
-            issue,
-            worktree_path,
-            config,
-            process_runner,
-            expected_branch=pr_branch,
+    max_attempts = max(1, config.post_pr_supervisor.max_repair_attempts)
+    verification_results: list[CommandResult] = []
+    for attempt in range(1, max_attempts + 1):
+        run_agent_with_prompt(
+            supervisor_agent, repair_prompt, worktree_path, process_runner
         )
-    else:
-        if has_changes(worktree_path, process_runner):
-            raise RuntimeError(
-                "Repair agent changed files without writing "
-                ".agent-runner/commit-request.json."
+
+        request_path = worktree_path / ".agent-runner" / "commit-request.json"
+        if request_path.is_file():
+            try:
+                verification_results = commit_requested_changes(
+                    issue,
+                    worktree_path,
+                    config,
+                    process_runner,
+                    expected_branch=pr_branch,
+                )
+            except VerificationFailedError as exc:
+                if attempt >= max_attempts:
+                    raise
+                # 取消 staging，让 agent 继续修
+                process_runner.run(
+                    ["git", "reset", "--mixed"],
+                    cwd=worktree_path,
+                    check=False,
+                )
+                repair_prompt = build_recovery_prompt(
+                    issue,
+                    worktree_path,
+                    recovery_attempt=attempt,
+                    max_recovery_attempts=max_attempts,
+                    failure_summary=format_recovery_failure_summary(
+                        "Verification failed before repair commit.",
+                        exc.verification_results,
+                    ),
+                )
+                continue
+        else:
+            if has_changes(worktree_path, process_runner):
+                raise RuntimeError(
+                    "Repair agent changed files without writing "
+                    ".agent-runner/commit-request.json."
+                )
+            # Agent 未修改时仍需验证当前代码
+            verification_results = run_verification(
+                worktree_path, config, process_runner
             )
-        # Agent 未做修改时仍需确认当前代码通过验证，避免空转后留下隐患
-        verification_results = run_verification(worktree_path, config, process_runner)
+            if failed_verification_results(verification_results):
+                if attempt >= max_attempts:
+                    ensure_verification_passed(verification_results)
+                repair_prompt = build_recovery_prompt(
+                    issue,
+                    worktree_path,
+                    recovery_attempt=attempt,
+                    max_recovery_attempts=max_attempts,
+                    failure_summary=format_recovery_failure_summary(
+                        "Verification failed before repair commit.",
+                        verification_results,
+                    ),
+                )
+                continue
+        break
+    else:
         ensure_verification_passed(verification_results)
 
     remote = config.git.remote
