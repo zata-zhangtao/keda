@@ -17,7 +17,9 @@ __all__ = [
     "is_detached_head",
     "list_changed_paths",
     "list_git_remotes",
+    "pop_worktree_stash",
     "run_verification",
+    "stash_worktree_changes",
 ]
 
 
@@ -119,6 +121,61 @@ def has_changes(worktree_path: Path, process_runner: IProcessRunner) -> bool:
     """Return whether the worktree has uncommitted changes."""
     result = process_runner.run(["git", "status", "--porcelain"], cwd=worktree_path)
     return bool(result.stdout.strip())
+
+
+def stash_worktree_changes(
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+    cycle: int,
+) -> bool:
+    """Auto-stash uncommitted changes before a read-only supervisor cycle.
+
+    Stashes both tracked modifications and untracked files so the supervisor
+    can review the current PR branch without losing work left by earlier
+    stages. Returns True only when the stash command succeeded and the
+    worktree is clean afterwards.
+
+    Args:
+        worktree_path: worktree 目录
+        process_runner: 进程运行器
+        cycle: supervisor cycle 编号
+
+    Returns:
+        True if changes were stashed and the worktree is now clean.
+    """
+    stash_message = f"iar: auto-stash before supervisor cycle {cycle}"
+    stash_result = process_runner.run(
+        ["git", "stash", "push", "-u", "-m", stash_message],
+        cwd=worktree_path,
+        check=False,
+    )
+    if stash_result.return_code != 0:
+        return False
+    return not has_changes(worktree_path, process_runner)
+
+
+def pop_worktree_stash(
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+) -> None:
+    """Restore auto-stashed changes after a supervisor cycle.
+
+    Args:
+        worktree_path: worktree 目录
+        process_runner: 进程运行器
+
+    Raises:
+        RuntimeError: stash pop failed.
+    """
+    pop_result = process_runner.run(
+        ["git", "stash", "pop"],
+        cwd=worktree_path,
+        check=False,
+    )
+    if pop_result.return_code != 0:
+        raise RuntimeError(
+            f"Failed to restore auto-stashed changes: {pop_result.stderr.strip()}"
+        )
 
 
 def list_changed_paths(

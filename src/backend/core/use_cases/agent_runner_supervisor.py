@@ -29,7 +29,11 @@ from backend.core.use_cases.pr_supervisor import (
     execute_repair,
     run_post_pr_supervisor_cycle,
 )
-from backend.core.use_cases.agent_runner_git import has_changes
+from backend.core.use_cases.agent_runner_git import (
+    has_changes,
+    pop_worktree_stash,
+    stash_worktree_changes,
+)
 from backend.core.use_cases.agent_runner_workflow import (
     transition_issue_workflow_state,
 )
@@ -77,39 +81,71 @@ def _run_supervisor_with_repair_loop(
 
     # 循环：最多 max_repair + 1 次修复尝试
     for cycle in range(1, max_repair + 2):
-        # 只读 supervisor cycle 前必须确认 worktree 干净；
-        # 若不干净，视为协议违规并阻止继续。
+        stashed = False
         if has_changes(worktree_path, process_runner):
+            stashed = stash_worktree_changes(worktree_path, process_runner, cycle)
+            if not stashed:
+                github_client.comment_issue(
+                    issue.number,
+                    build_supervisor_result_comment(
+                        action="dirty_worktree_before_supervisor",
+                        supervisor=supervisor_agent,
+                        summary=(
+                            "Worktree has uncommitted changes before read-only "
+                            "supervisor cycle. Could not auto-stash; moving to blocked."
+                        ),
+                        findings_counts={},
+                        verification_status="",
+                        head_sha=current_pr_context.head_sha,
+                        cycle=cycle,
+                    ),
+                )
+                transition_issue_workflow_state(
+                    github_client, issue.number, config, config.labels.blocked
+                )
+                return
             github_client.comment_issue(
                 issue.number,
                 build_supervisor_result_comment(
-                    action="dirty_worktree_before_supervisor",
+                    action="dirty_worktree_auto_stashed",
                     supervisor=supervisor_agent,
-                    summary="Worktree has uncommitted changes before read-only supervisor cycle. Moving to blocked.",
+                    summary=(
+                        f"Worktree had uncommitted changes before read-only "
+                        f"supervisor cycle. Auto-stashed them to continue "
+                        f"cycle {cycle}."
+                    ),
                     findings_counts={},
                     verification_status="",
                     head_sha=current_pr_context.head_sha,
                     cycle=cycle,
                 ),
             )
-            transition_issue_workflow_state(
-                github_client, issue.number, config, config.labels.blocked
-            )
-            return
 
-        action_result = run_post_pr_supervisor_cycle(
-            issue=issue,
-            worktree_path=worktree_path,
-            config=config,
-            github_client=github_client,
-            process_runner=process_runner,
-            pr_context=current_pr_context,
-            supervisor_agent=supervisor_agent,
-            cycle=cycle,
-        )
+        try:
+            action_result = run_post_pr_supervisor_cycle(
+                issue=issue,
+                worktree_path=worktree_path,
+                config=config,
+                github_client=github_client,
+                process_runner=process_runner,
+                pr_context=current_pr_context,
+                supervisor_agent=supervisor_agent,
+                cycle=cycle,
+            )
+        except Exception:
+            # Supervisor cycle 异常时先恢复 stash，避免变更丢失在 worktree 里。
+            if stashed:
+                process_runner.run(
+                    ["git", "stash", "pop"],
+                    cwd=worktree_path,
+                    check=False,
+                )
+            raise
 
         # 分支：根据监督者动作决定后续行为
         if action_result.action == "approve_for_human_review":
+            if stashed:
+                pop_worktree_stash(worktree_path, process_runner)
             # 只读 supervisor cycle 后若留下未提交变更，不能 approve 进入 human review。
             if has_changes(worktree_path, process_runner):
                 github_client.comment_issue(
@@ -137,15 +173,20 @@ def _run_supervisor_with_repair_loop(
             # run_post_pr_supervisor_cycle already wrote the audit comment.
             # Keep the Issue in supervising and wait for a later checks-state
             # change without consuming a repair attempt.
+            # Stashed changes stay on the stash so the next cycle starts clean.
             return
 
         if action_result.action in ("request_human_input",):
+            if stashed:
+                pop_worktree_stash(worktree_path, process_runner)
             transition_issue_workflow_state(
                 github_client, issue.number, config, config.labels.blocked
             )
             return
 
         if action_result.action == "mark_failed":
+            if stashed:
+                pop_worktree_stash(worktree_path, process_runner)
             transition_issue_workflow_state(
                 github_client, issue.number, config, config.labels.failed
             )
@@ -155,6 +196,8 @@ def _run_supervisor_with_repair_loop(
         if action_result.action in ("repair_pr_branch", "resolve_conflict"):
             if cycle > max_repair:
                 # 超过最大修复次数，标记为 blocked
+                if stashed:
+                    pop_worktree_stash(worktree_path, process_runner)
                 github_client.comment_issue(
                     issue.number,
                     build_supervisor_result_comment(
@@ -183,6 +226,8 @@ def _run_supervisor_with_repair_loop(
             transition_issue_workflow_state(
                 github_client, issue.number, config, config.labels.running
             )
+            if stashed:
+                pop_worktree_stash(worktree_path, process_runner)
             verification_results = execute_repair(
                 issue=issue,
                 worktree_path=worktree_path,
@@ -224,6 +269,8 @@ def _run_supervisor_with_repair_loop(
         # Rebase
         if action_result.action == "rebase_pr_branch":
             if cycle > max_repair:
+                if stashed:
+                    pop_worktree_stash(worktree_path, process_runner)
                 github_client.comment_issue(
                     issue.number,
                     build_supervisor_result_comment(
@@ -252,6 +299,8 @@ def _run_supervisor_with_repair_loop(
             transition_issue_workflow_state(
                 github_client, issue.number, config, config.labels.running
             )
+            if stashed:
+                pop_worktree_stash(worktree_path, process_runner)
             verification_results = execute_rebase(
                 issue=issue,
                 worktree_path=worktree_path,
@@ -290,6 +339,8 @@ def _run_supervisor_with_repair_loop(
             continue
 
         # 未知动作：标记为 blocked
+        if stashed:
+            pop_worktree_stash(worktree_path, process_runner)
         transition_issue_workflow_state(
             github_client, issue.number, config, config.labels.blocked
         )

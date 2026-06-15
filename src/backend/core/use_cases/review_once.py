@@ -24,7 +24,11 @@ from backend.core.use_cases.agent_runner_workflow import (
     find_latest_unconsumed_marker,
     transition_issue_workflow_state,
 )
-from backend.core.use_cases.agent_runner_git import has_changes
+from backend.core.use_cases.agent_runner_git import (
+    has_changes,
+    pop_worktree_stash,
+    stash_worktree_changes,
+)
 from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
@@ -188,33 +192,48 @@ def _process_review_candidate(
 
     worktree_path = create_or_reuse_worktree(repo_path, issue, config, process_runner)
     supervisor_agent = choose_agent(issue, config, agent)
+    cycle = (last_marker.cycle + 1) if last_marker else 1
 
-    # 只读 supervisor cycle 前必须确认 worktree 干净。
+    stashed = False
     if has_changes(worktree_path, process_runner):
-        github_client.comment_issue(
-            issue.number,
-            "## Agent Runner Review Blocked\n\n"
-            "Worktree has uncommitted changes before supervisor cycle. "
-            "Moving to blocked.",
-        )
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.blocked
-        )
-        return "blocked_dirty_worktree_before_supervisor"
+        stashed = stash_worktree_changes(worktree_path, process_runner, cycle)
+        if not stashed:
+            github_client.comment_issue(
+                issue.number,
+                "## Agent Runner Review Blocked\n\n"
+                "Worktree has uncommitted changes before read-only supervisor cycle. "
+                "Could not auto-stash; moving to blocked.",
+            )
+            transition_issue_workflow_state(
+                github_client, issue.number, config, config.labels.blocked
+            )
+            return "blocked_dirty_worktree_before_supervisor"
 
-    action_result = run_post_pr_supervisor_cycle(
-        issue=issue,
-        worktree_path=worktree_path,
-        config=config,
-        github_client=github_client,
-        process_runner=process_runner,
-        pr_context=pr_context,
-        supervisor_agent=supervisor_agent,
-        cycle=(last_marker.cycle + 1) if last_marker else 1,
-    )
+    try:
+        action_result = run_post_pr_supervisor_cycle(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            github_client=github_client,
+            process_runner=process_runner,
+            pr_context=pr_context,
+            supervisor_agent=supervisor_agent,
+            cycle=cycle,
+        )
+    except Exception:
+        # Supervisor cycle 异常时先恢复 stash，避免变更丢失在 worktree 里。
+        if stashed:
+            process_runner.run(
+                ["git", "stash", "pop"],
+                cwd=worktree_path,
+                check=False,
+            )
+        raise
     action_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
 
     if action_result.action == "approve_for_human_review":
+        if stashed:
+            pop_worktree_stash(worktree_path, process_runner)
         # 只读 supervisor cycle 后若留下未提交变更，不能 approve 进入 human review。
         if has_changes(worktree_path, process_runner):
             github_client.comment_issue(
@@ -235,6 +254,7 @@ def _process_review_candidate(
     if action_result.action == "wait_for_checks":
         # PR checks are still pending; keep supervising and wait for a later
         # state change without consuming a repair attempt.
+        # Stashed changes stay on the stash so the next cycle starts clean.
         _logger.info(
             "Issue #%d checks still pending; staying in %s.",
             issue.number,
@@ -243,12 +263,16 @@ def _process_review_candidate(
         return "waiting_for_checks"
 
     if action_result.action in ("request_human_input",):
+        if stashed:
+            pop_worktree_stash(worktree_path, process_runner)
         transition_issue_workflow_state(
             github_client, issue.number, config, config.labels.blocked
         )
         return "blocked_human_input"
 
     if action_result.action == "mark_failed":
+        if stashed:
+            pop_worktree_stash(worktree_path, process_runner)
         transition_issue_workflow_state(
             github_client, issue.number, config, config.labels.failed
         )
@@ -259,6 +283,8 @@ def _process_review_candidate(
         "rebase_pr_branch",
         "resolve_conflict",
     ):
+        if stashed:
+            pop_worktree_stash(worktree_path, process_runner)
         head_sha = get_head_sha(worktree_path, process_runner)
         github_client.comment_issue(
             issue.number,
@@ -274,6 +300,8 @@ def _process_review_candidate(
         return f"queued_{action_result.action}"
 
     # Unknown action: block
+    if stashed:
+        pop_worktree_stash(worktree_path, process_runner)
     transition_issue_workflow_state(
         github_client, issue.number, config, config.labels.blocked
     )

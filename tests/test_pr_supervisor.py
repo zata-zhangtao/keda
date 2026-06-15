@@ -1256,8 +1256,8 @@ def test_execute_rebase_conflict_agent_no_commit_request(tmp_path: Path) -> None
     assert ("git", "-c", "core.editor=true", "rebase", "--continue") not in commands
 
 
-def test_dirty_worktree_before_supervisor_blocks_approval(tmp_path: Path) -> None:
-    """Read-only supervisor must not approve when worktree is dirty before cycle."""
+def test_dirty_worktree_before_supervisor_stash_fails_blocked(tmp_path: Path) -> None:
+    """When auto-stash fails, dirty worktree still moves the Issue to blocked."""
     from backend.core.use_cases.agent_runner_supervisor import (
         _run_supervisor_with_repair_loop,
     )
@@ -1273,6 +1273,26 @@ def test_dirty_worktree_before_supervisor_blocks_approval(tmp_path: Path) -> Non
                 return_code=0,
                 stdout=" M file.py\n",
                 stderr="",
+            ),
+            (
+                "git",
+                "stash",
+                "push",
+                "-u",
+                "-m",
+                "iar: auto-stash before supervisor cycle 1",
+            ): CommandResult(
+                command=(
+                    "git",
+                    "stash",
+                    "push",
+                    "-u",
+                    "-m",
+                    "iar: auto-stash before supervisor cycle 1",
+                ),
+                return_code=1,
+                stdout="",
+                stderr="stash failed",
             ),
         }
     )
@@ -1309,6 +1329,95 @@ def test_dirty_worktree_before_supervisor_blocks_approval(tmp_path: Path) -> Non
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     assert len(comment_calls) == 1
     assert "dirty_worktree_before_supervisor" in comment_calls[0]["body"]
+
+
+def test_dirty_worktree_before_supervisor_auto_stash_and_approve(
+    tmp_path: Path,
+) -> None:
+    """Dirty worktree is auto-stashed, supervisor approves, and changes are restored."""
+    from backend.core.use_cases.agent_runner_supervisor import (
+        _run_supervisor_with_repair_loop,
+    )
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    worktree_path = tmp_path / "wt"
+    worktree_path.mkdir()
+
+    class _StashThenApproveRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._status_calls = 0
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple == ("git", "status", "--porcelain"):
+                self._status_calls += 1
+                # Before stash: dirty; after stash (and after pop): clean
+                stdout = " M file.py\n" if self._status_calls == 1 else ""
+                return CommandResult(command_tuple, 0, stdout, "")
+            if command_tuple == ("git", "stash", "pop"):
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple[:1] == ("codex",):
+                return CommandResult(
+                    command_tuple,
+                    0,
+                    '{"action": "approve_for_human_review", "summary": "LGTM"}',
+                    "",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _StashThenApproveRunner()
+    fake_client = FakeGitHubClient()
+    pr_context = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/1",
+        branch="issue-1",
+        head_sha="abc123",
+        base_sha="def456",
+    )
+    config = AppConfig()
+    fake_client._issue_labels[issue.number] = ("agent/supervising",)
+
+    _run_supervisor_with_repair_loop(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=fake_runner,
+        pr_context=pr_context,
+        supervisor_agent="codex",
+    )
+
+    review_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "edit_issue_labels"
+        and config.labels.review in c.get("add", [])
+    ]
+    assert len(review_calls) == 1
+    assert config.labels.supervising in review_calls[0]["remove"]
+
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert any("dirty_worktree_auto_stashed" in c["body"] for c in comment_calls)
+    assert any("approve_for_human_review" in c["body"] for c in comment_calls)
+
+    # Stash and pop should both have been invoked
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert (
+        "git",
+        "stash",
+        "push",
+        "-u",
+        "-m",
+        "iar: auto-stash before supervisor cycle 1",
+    ) in commands
+    assert ("git", "stash", "pop") in commands
 
 
 def test_dirty_worktree_after_approve_blocks_review(tmp_path: Path) -> None:

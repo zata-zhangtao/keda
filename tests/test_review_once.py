@@ -870,3 +870,167 @@ def test_review_once_skips_running_issue_with_pending_rework() -> None:
     assert outcome == "skipped_pending_rework"
     assert mock_cycle.called is False
     assert not any(call["method"] == "edit_issue_labels" for call in client.calls)
+
+
+def test_review_once_auto_stashes_dirty_worktree_and_approves() -> None:
+    """Dirty worktree is auto-stashed before review supervisor and restored on approve."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="B",
+        labels=("agent/supervising",),
+    )
+    client = FakeGitHubClient()
+    client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
+    client._issue_comments[1] = [
+        _marker_comment(issue_comments_count=1, pr_comments_count=0),
+        "another comment",
+    ]
+    client._pr_contexts["issue-1"] = _make_pr_context(checks_state="SUCCESS")
+
+    class _StashThenApproveRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._status_calls = 0
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple == ("git", "status", "--porcelain"):
+                self._status_calls += 1
+                # Before stash: dirty; after stash (and after pop): clean
+                stdout = " M file.py\n" if self._status_calls == 1 else ""
+                return CommandResult(command_tuple, 0, stdout, "")
+            if command_tuple == ("git", "stash", "pop"):
+                return CommandResult(command_tuple, 0, "", "")
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _StashThenApproveRunner()
+
+    with (
+        patch(
+            "backend.core.use_cases.review_once.create_or_reuse_worktree",
+            return_value=Path("."),
+        ),
+        patch(
+            "backend.core.use_cases.review_once.choose_agent",
+            return_value="codex",
+        ),
+        patch(
+            "backend.core.use_cases.review_once.run_post_pr_supervisor_cycle",
+            return_value=_supervisor_approve(),
+        ) as mock_cycle,
+    ):
+        outcome = _process_review_candidate(
+            issue=issue,
+            repo_path=Path("."),
+            config=AppConfig(),
+            agent="auto",
+            github_client=client,
+            process_runner=fake_runner,
+        )
+
+    assert outcome == "approved_for_human_review"
+    assert mock_cycle.called is True
+    commands = [tuple(c) for c in fake_runner.calls]
+    assert (
+        "git",
+        "stash",
+        "push",
+        "-u",
+        "-m",
+        "iar: auto-stash before supervisor cycle 2",
+    ) in commands
+    assert ("git", "stash", "pop") in commands
+    label_calls = [c for c in client.calls if c["method"] == "edit_issue_labels"]
+    assert len(label_calls) == 1
+    assert label_calls[0]["add"] == ["agent/review"]
+
+
+def test_review_once_dirty_worktree_stash_fails_blocked() -> None:
+    """When auto-stash fails, review still blocks the Issue."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="B",
+        labels=("agent/supervising",),
+    )
+    client = FakeGitHubClient()
+    client._remote_base_sha = "def456"
+    client._issue_labels[issue.number] = issue.labels
+    client._issue_comments[1] = [
+        _marker_comment(issue_comments_count=1, pr_comments_count=0),
+        "another comment",
+    ]
+    client._pr_contexts["issue-1"] = _make_pr_context(checks_state="SUCCESS")
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M file.py\n",
+                stderr="",
+            ),
+            (
+                "git",
+                "stash",
+                "push",
+                "-u",
+                "-m",
+                "iar: auto-stash before supervisor cycle 2",
+            ): CommandResult(
+                command=(
+                    "git",
+                    "stash",
+                    "push",
+                    "-u",
+                    "-m",
+                    "iar: auto-stash before supervisor cycle 2",
+                ),
+                return_code=1,
+                stdout="",
+                stderr="stash failed",
+            ),
+        }
+    )
+
+    with (
+        patch(
+            "backend.core.use_cases.review_once.create_or_reuse_worktree",
+            return_value=Path("."),
+        ),
+        patch(
+            "backend.core.use_cases.review_once.choose_agent",
+            return_value="codex",
+        ),
+        patch(
+            "backend.core.use_cases.review_once.run_post_pr_supervisor_cycle",
+            return_value=_supervisor_approve(),
+        ) as mock_cycle,
+    ):
+        outcome = _process_review_candidate(
+            issue=issue,
+            repo_path=Path("."),
+            config=AppConfig(),
+            agent="auto",
+            github_client=client,
+            process_runner=fake_runner,
+        )
+
+    assert outcome == "blocked_dirty_worktree_before_supervisor"
+    assert mock_cycle.called is False
+    label_calls = [c for c in client.calls if c["method"] == "edit_issue_labels"]
+    assert len(label_calls) == 1
+    assert label_calls[0]["add"] == ["agent/blocked"]
+    comment_calls = [c for c in client.calls if c["method"] == "comment_issue"]
+    assert any("Could not auto-stash" in c["body"] for c in comment_calls)

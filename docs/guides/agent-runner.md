@@ -601,17 +601,18 @@ Draft PR 创建后，Issue 先进入 `agent/supervising`，并立即运行至少
 
 1. Runner 写 Issue comment `Draft PR Created`
 2. Supervisor 收集 PR context、Issue comments、PR comments、base branch 状态、CI/check 状态、diff、verification results
-3. Supervisor 输出结构化 action：
-   - `approve_for_human_review` → 进入 `agent/review`
-   - `repair_pr_branch` / `resolve_conflict` → 进入 `agent/running` 做现有 PR branch 修复
-   - `rebase_pr_branch` → 进入 `agent/running` 做 rebase
-   - `wait_for_checks` → 保持 `agent/supervising`，等待 PR checks 完成
-   - `request_human_input` → 进入 `agent/blocked`，但必须带有可操作 summary
-   - `mark_failed` → 进入 `agent/failed`
+3. 如果 worktree 在只读 supervisor cycle 开始前仍有未提交变更，runner 会自动 `git stash push -u` 把它们临时存起来，cycle 结束后再根据 supervisor 决策恢复（pop）或继续保留（`wait_for_checks`）
+4. Supervisor 输出结构化 action：
+   - `approve_for_human_review` → 恢复 stash 后若 worktree 干净则进入 `agent/review`，仍有未提交变更则进入 `agent/blocked`
+   - `repair_pr_branch` / `resolve_conflict` → 恢复 stash 后进入 `agent/running` 做现有 PR branch 修复
+   - `rebase_pr_branch` → 恢复 stash 后进入 `agent/running` 做 rebase
+   - `wait_for_checks` → 保持 stash 与 `agent/supervising`，等待 PR checks 完成
+   - `request_human_input` → 恢复 stash 后进入 `agent/blocked`，但必须带有可操作 summary
+   - `mark_failed` → 恢复 stash 后进入 `agent/failed`
 
-4. 需要代码修改时，runner 先写 `post_pr_rework_requested` event marker，再切到 `agent/running`
-5. 后续 `iar run` 检测到该 pending marker 和 open PR 后，在现有 PR branch 上执行 rework
-6. rework 成功后写 `rebase_repair_complete` marker，再进入后续 supervision/review 流程
+5. 需要代码修改时，runner 先写 `post_pr_rework_requested` event marker，再切到 `agent/running`
+6. 后续 `iar run` 检测到该 pending marker 和 open PR 后，在现有 PR branch 上执行 rework
+7. rework 成功后写 `rebase_repair_complete` marker，再进入后续 supervision/review 流程
 
 #### Rebase Conflict Recovery Branch Guard
 
