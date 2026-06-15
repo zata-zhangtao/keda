@@ -39,11 +39,11 @@
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **结构化 manifest 真实验证**：通过包含 `iar:structured-evidence` marker 的真实 runner 路径，提交完整 `.iar/evidence/evidence.json` 与 `rv-<n>-*` 文件，确认 `ensure_validation_evidence_ready()` 通过。
-- [ ] **缺失字段拒绝真实验证**：通过真实临时 worktree 文件系统构造缺少解释/命令/文件的 manifest，运行 runner commit 前门禁，确认进入 recovery 且错误信息指出具体 item。
-- [ ] **中文证据 comment 真实验证**：运行 `publish_validation_evidence()` 或包含发布阶段的 fake GitHub sandbox，确认 PR comment 按 `RV-1` 分组、中文文案、包含命令、摘要、解释、风险和 SHA-256。
-- [ ] **兼容路径真实验证**：对无 `iar:structured-evidence` marker 的 Issue 运行现有 evidence 文件路径，确认 legacy evidence comment 仍可生成，不要求 manifest。
-- [ ] **为什么单元测试不够**：该能力横跨 Issue body marker、worktree 真实文件系统、文件哈希、agent recovery prompt、PR comment 渲染与 publish 阶段；只有纯函数测试无法证明真实证据目录和发布注入路径协同生效。
+- [x] **结构化 manifest 真实验证**：通过包含 `iar:structured-evidence` marker 的真实 runner 路径，提交完整 `.iar/evidence/evidence.json` 与 `rv-<n>-*` 文件，确认 `ensure_validation_evidence_ready()` 通过。
+- [x] **缺失字段拒绝真实验证**：通过真实临时 worktree 文件系统构造缺少解释/命令/文件的 manifest，运行 runner commit 前门禁，确认进入 recovery 且错误信息指出具体 item。
+- [x] **中文证据 comment 真实验证**：运行 `publish_validation_evidence()` 或包含发布阶段的 fake GitHub sandbox，确认 PR comment 按 `RV-1` 分组、中文文案、包含命令、摘要、解释、风险和 SHA-256。
+- [x] **兼容路径真实验证**：对无 `iar:structured-evidence` marker 的 Issue 运行现有 evidence 文件路径，确认 legacy evidence comment 仍可生成，不要求 manifest。
+- [x] **为什么单元测试不够**：该能力横跨 Issue body marker、worktree 真实文件系统、文件哈希、agent recovery prompt、PR comment 渲染与 publish 阶段；只有纯函数测试无法证明真实证据目录和发布注入路径协同生效。
 
 ### Delivery Dependencies
 
@@ -422,40 +422,40 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] Structured evidence parsing/rendering is implemented in a new core module, not by adding large blocks to `agent_runner_validation.py`.
-- [ ] `core/` code does not import `backend.infrastructure`.
-- [ ] Manifest validation uses standard library `json` / `hashlib`; no new runtime dependency is added.
-- [ ] Config fields are represented in `ValidationConfig`, `AgentRunnerValidationSettings`, factory mapping and `.iar.toml` generation.
-- [ ] Existing evidence-format module remains responsible for format suffix matching; no duplicate suffix rules are introduced.
+- [x] Structured evidence parsing/rendering is implemented in a new core module, not by adding large blocks to `agent_runner_validation.py`.
+- [x] `core/` code does not import `backend.infrastructure`.
+- [x] Manifest validation uses standard library `json` / `hashlib`; no new runtime dependency is added.
+- [x] Config fields are represented in `ValidationConfig`, `AgentRunnerValidationSettings`, factory mapping and `.iar.toml` generation.
+- [x] Existing evidence-format module remains responsible for format suffix matching; no duplicate suffix rules are introduced.
 
 ### Behavior Acceptance
 
-- [ ] `iar issue create` materializes `iar:structured-evidence version=1 language="<configured-language>"` for PRDs with Realistic Validation when enabled.
-- [ ] Valid `evidence.json` with all checklist items and referenced files passes `ensure_validation_evidence_ready()`.
-- [ ] Missing `evidence.json` for a structured Issue fails with a clear error.
-- [ ] Missing required field (`command`, `output_summary`, `explanation`, `risks`, or `evidence_files`) fails and identifies the item number.
-- [ ] Evidence file listed under item N must exist and match `rv-N-*` / `rv-N.*`.
-- [ ] One item can list multiple evidence files, and all are rendered in the PR comment.
-- [ ] PR comment renders grouped sections `RV-1`, `RV-2`, etc., not a flat file list.
-- [ ] PR comment includes runner-computed SHA-256 for each evidence file.
-- [ ] `language = "zh-CN"` renders Chinese fixed labels; `language = "en-US"` renders English fixed labels.
-- [ ] Issue without structured marker still uses legacy rendering and is not forced to provide manifest.
+- [x] `iar issue create` materializes `iar:structured-evidence version=1 language="<configured-language>"` for PRDs with Realistic Validation when enabled.
+- [x] Valid `evidence.json` with all checklist items and referenced files passes `ensure_validation_evidence_ready()`.
+- [x] Missing `evidence.json` for a structured Issue fails with a clear error.
+- [x] Missing required field (`command`, `output_summary`, `explanation`, `risks`, or `evidence_files`) fails and identifies the item number.
+- [x] Evidence file listed under item N must exist and match `rv-N-*` / `rv-N.*`.
+- [x] One item can list multiple evidence files, and all are rendered in the PR comment.
+- [x] PR comment renders grouped sections `RV-1`, `RV-2`, etc., not a flat file list.
+- [x] PR comment includes runner-computed SHA-256 for each evidence file.
+- [x] `language = "zh-CN"` renders Chinese fixed labels; `language = "en-US"` renders English fixed labels.
+- [x] Issue without structured marker still uses legacy rendering and is not forced to provide manifest.
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` documents `evidence.json` schema and example.
-- [ ] Docs explain `[agent_runner.validation].language` and why it lives in `.iar.toml` / `config.toml`, not `.iar/config`.
-- [ ] Docs explain reviewer workflow: verify command, output summary, explanation, risks and SHA-256 before ticking PR body checklist.
-- [ ] Config comments in `config.toml` and generated `.iar.toml` mention structured evidence.
+- [x] `docs/guides/agent-runner.md` documents `evidence.json` schema and example.
+- [x] Docs explain `[agent_runner.validation].language` and why it lives in `.iar.toml` / `config.toml`, not `.iar/config`.
+- [x] Docs explain reviewer workflow: verify command, output summary, explanation, risks and SHA-256 before ticking PR body checklist.
+- [x] Config comments in `config.toml` and generated `.iar.toml` mention structured evidence.
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_agent_runner_validation.py -k "structured_evidence" -q` passes.
-- [ ] `uv run pytest tests/test_create_issue_from_prd.py -k "structured_evidence" -q` passes.
-- [ ] `uv run pytest tests/test_agent_runner_config.py -k "validation_language" -q` passes.
-- [ ] `uv run mkdocs build --strict` passes.
-- [ ] `just test` passes.
-- [ ] Real entry validation: run a sandbox runner path with a structured Issue and evidence manifest, then capture the generated PR evidence comment showing grouped Chinese evidence blocks and SHA-256.
+- [x] `uv run pytest tests/test_agent_runner_validation.py -k "structured_evidence" -q` passes.
+- [x] `uv run pytest tests/test_create_issue_from_prd.py -k "structured_evidence" -q` passes.
+- [x] `uv run pytest tests/test_agent_runner_config.py -k "validation_language" -q` passes.
+- [x] `uv run mkdocs build --strict` passes.
+- [x] `just test` passes.
+- [x] Real entry validation: run a sandbox runner path with a structured Issue and evidence manifest, then capture the generated PR evidence comment showing grouped Chinese evidence blocks and SHA-256.
 
 ## 8. Functional Requirements
 

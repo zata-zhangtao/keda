@@ -13,6 +13,11 @@ from backend.core.shared.models.agent_runner import (
     PromptConfig,
 )
 from backend.core.shared.prd_checklist import parse_prd_checklist
+from backend.core.use_cases.agent_runner_structured_evidence import (
+    build_structured_evidence_prompt_suffix,
+    has_structured_evidence_marker,
+    parse_structured_evidence_marker,
+)
 
 _MAX_RECOVERY_OUTPUT_LENGTH = 12000
 
@@ -380,6 +385,17 @@ def build_recovery_prompt(
         )
     else:
         prd_line = "If the Issue references a PRD, re-check it if it affects the fix."
+
+    structured_evidence_line = ""
+    if has_structured_evidence_marker(issue.body):
+        marker = parse_structured_evidence_marker(issue.body)
+        language = marker.language if marker is not None else "zh-CN"
+        structured_evidence_line = (
+            "This Issue requires a structured evidence manifest. "
+            f"{build_structured_evidence_prompt_suffix(language).format(evidence_dir='.iar/evidence')} "
+            "Fix the manifest and the referenced evidence files before requesting a commit."
+        )
+
     return "\n".join(
         [
             f"Repair GitHub Issue #{issue.number}: {issue.title}",
@@ -392,6 +408,7 @@ def build_recovery_prompt(
             "The runner could not finish the previous attempt:",
             failure_summary,
             "",
+            structured_evidence_line,
             "Recovery rules:",
             "- Inspect the current worktree and fix the failure.",
             "- Only modify files inside the current worktree.",

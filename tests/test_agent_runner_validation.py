@@ -47,6 +47,12 @@ from backend.core.use_cases.agent_runner_validation import (
     upload_evidence_branch,
     validation_required,
 )
+from backend.core.use_cases.agent_runner_structured_evidence import (
+    format_structured_evidence_marker,
+    parse_structured_evidence_marker,
+    render_structured_evidence_comment,
+    validate_evidence_manifest,
+)
 from backend.core.use_cases.create_issue_from_prd import (
     IssueFromPrdRequest,
     create_issue_from_prd,
@@ -1079,3 +1085,398 @@ def test_create_issue_materializes_waiver_marker(tmp_path: Path) -> None:
     assert "## Realistic Validation" in create_call["body"]
     body_validation_state = parse_validation_checklist_state(create_call["body"])
     assert body_validation_state is None
+
+
+# ---------------------------------------------------------------------------
+# Structured evidence manifest
+# ---------------------------------------------------------------------------
+
+
+_STRUCTURED_ISSUE_BODY = """## Summary
+
+Tracked task.
+
+<!-- iar:structured-evidence version=1 language="zh-CN" -->
+
+## Realistic Validation
+
+The executing agent MUST run each item.
+
+- [ ] **行为 A 真实验证**：通过 `demo run` 验证输出。
+- [ ] **行为 B 真实验证**：通过 `demo serve` 验证页面。
+"""
+
+
+def _structured_issue(number: int = 42) -> IssueSummary:
+    return IssueSummary(
+        number=number,
+        title="Demo",
+        url=f"https://github.com/example/repo/issues/{number}",
+        body=_STRUCTURED_ISSUE_BODY,
+        labels=("agent/review",),
+    )
+
+
+def _write_manifest(evidence_dir: Path, **overrides: object) -> None:
+    manifest = {
+        "version": 1,
+        "language": "zh-CN",
+        "items": [
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "demo run",
+                "evidence_files": ["rv-1-run.txt"],
+                "output_summary": "demo run 输出匹配预期。",
+                "explanation": "真实运行了 demo run 命令。",
+                "risks": "无",
+            },
+            {
+                "item_number": 2,
+                "item_name": "行为 B 真实验证",
+                "command": "demo serve",
+                "evidence_files": ["rv-2-serve.txt"],
+                "output_summary": "demo serve 启动成功。",
+                "explanation": "真实启动了 demo serve。",
+                "risks": "仅本地验证",
+            },
+        ],
+    }
+    manifest.update(overrides)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    import json
+
+    (evidence_dir / "evidence.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def test_parse_structured_evidence_marker() -> None:
+    """The structured evidence marker is parsed from an Issue body."""
+    marker = parse_structured_evidence_marker(_STRUCTURED_ISSUE_BODY)
+    assert marker is not None
+    assert marker.version == 1
+    assert marker.language == "zh-CN"
+
+
+def test_format_structured_evidence_marker() -> None:
+    """The marker formatter uses the configured language."""
+    assert (
+        format_structured_evidence_marker("en-US")
+        == '<!-- iar:structured-evidence version=1 language="en-US" -->'
+    )
+
+
+def test_build_issue_validation_section_adds_structured_marker() -> None:
+    """When structured evidence is enabled, the validation section carries the marker."""
+    section = build_issue_validation_section(
+        checklist_items=["- [ ] item A"],
+        waiver_reason=None,
+        language="zh-CN",
+        structured_evidence=True,
+    )
+    assert 'iar:structured-evidence version=1 language="zh-CN"' in section
+
+
+def test_build_issue_validation_section_skips_marker_when_disabled() -> None:
+    """Legacy mode omits the structured evidence marker."""
+    section = build_issue_validation_section(
+        checklist_items=["- [ ] item A"],
+        waiver_reason=None,
+        language="zh-CN",
+        structured_evidence=False,
+    )
+    assert "iar:structured-evidence" not in section
+
+
+def test_ensure_validation_evidence_ready_passes_with_complete_manifest(
+    tmp_path: Path,
+) -> None:
+    """A complete manifest and matching evidence files satisfy the gate."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(evidence_dir)
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+    (evidence_dir / "rv-2-serve.txt").write_text("serve output", encoding="utf-8")
+
+    ensure_validation_evidence_ready(_structured_issue(), tmp_path, AppConfig())
+
+
+def test_ensure_validation_evidence_ready_rejects_missing_manifest(
+    tmp_path: Path,
+) -> None:
+    """A structured Issue without evidence.json fails the gate."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_evidence_ready(_structured_issue(), tmp_path, AppConfig())
+    assert "evidence.json" in str(exc_info.value)
+
+
+def test_ensure_validation_evidence_ready_rejects_missing_required_field(
+    tmp_path: Path,
+) -> None:
+    """A manifest with an empty required field identifies the item."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(
+        evidence_dir,
+        items=[
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "demo run",
+                "evidence_files": ["rv-1-run.txt"],
+                "output_summary": "demo run 输出匹配预期。",
+                "explanation": "",
+                "risks": "无",
+            }
+        ],
+    )
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_evidence_ready(
+            IssueSummary(
+                number=42,
+                title="Demo",
+                url="https://github.com/example/repo/issues/42",
+                body=_STRUCTURED_ISSUE_BODY.replace(
+                    "- [ ] **行为 B 真实验证**：通过 `demo serve` 验证页面。",
+                    "",
+                ),
+                labels=("agent/review",),
+            ),
+            tmp_path,
+            AppConfig(),
+        )
+    assert "Item 1" in str(exc_info.value)
+    assert "explanation" in str(exc_info.value)
+
+
+def test_ensure_validation_evidence_ready_rejects_mismatched_file_number(
+    tmp_path: Path,
+) -> None:
+    """Evidence files must match the item number they are listed under."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(
+        evidence_dir,
+        items=[
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "demo run",
+                "evidence_files": ["rv-2-run.txt"],
+                "output_summary": "demo run 输出匹配预期。",
+                "explanation": "真实运行了 demo run 命令。",
+                "risks": "无",
+            }
+        ],
+    )
+    (evidence_dir / "rv-2-run.txt").write_text("run output", encoding="utf-8")
+
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_evidence_ready(
+            IssueSummary(
+                number=42,
+                title="Demo",
+                url="https://github.com/example/repo/issues/42",
+                body=_STRUCTURED_ISSUE_BODY.replace(
+                    "- [ ] **行为 B 真实验证**：通过 `demo serve` 验证页面。",
+                    "",
+                ),
+                labels=("agent/review",),
+            ),
+            tmp_path,
+            AppConfig(),
+        )
+    assert "rv-2-run.txt" in str(exc_info.value)
+    assert "item 1" in str(exc_info.value).lower()
+
+
+def test_validate_evidence_manifest_computes_sha256(
+    tmp_path: Path,
+) -> None:
+    """The runner computes SHA-256 hashes for each evidence file."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(evidence_dir)
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+    (evidence_dir / "rv-2-serve.txt").write_text("serve output", encoding="utf-8")
+
+    report = validate_evidence_manifest(
+        issue_body=_STRUCTURED_ISSUE_BODY,
+        checklist_items=extract_realistic_validation_items(_STRUCTURED_ISSUE_BODY),
+        worktree_path=tmp_path,
+        config=AppConfig(),
+    )
+    assert len(report.items) == 2
+    assert all(len(item.files) == 1 for item in report.items)
+    assert all(
+        len(file_info.sha256) == 64 for item in report.items for file_info in item.files
+    )
+
+
+def test_render_structured_evidence_comment_groups_by_item(
+    tmp_path: Path,
+) -> None:
+    """The PR comment groups evidence by checklist item and includes hashes."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(
+        evidence_dir,
+        items=[
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "demo run",
+                "evidence_files": ["rv-1-run.txt"],
+                "output_summary": "输出匹配。",
+                "explanation": "真实运行。",
+                "risks": "无",
+            }
+        ],
+    )
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+    report = validate_evidence_manifest(
+        issue_body=_STRUCTURED_ISSUE_BODY.replace(
+            "- [ ] **行为 B 真实验证**：通过 `demo serve` 验证页面。",
+            "",
+        ),
+        checklist_items=["- [ ] **行为 A 真实验证**：通过 `demo run` 验证输出。"],
+        worktree_path=tmp_path,
+        config=AppConfig(),
+    )
+
+    comment = render_structured_evidence_comment(
+        report=report,
+        upload=EvidenceUpload(
+            branch="iar-evidence/issue-42",
+            commit_sha="commit1",
+            file_names=("rv-1-run.txt",),
+        ),
+        worktree_path=tmp_path,
+        config=AppConfig(),
+        pr_url="https://github.com/example/repo/pull/7",
+        head_sha="abc1234",
+    )
+
+    assert "### RV-1 行为 A 真实验证" in comment
+    assert "可复现命令" in comment
+    assert "demo run" in comment
+    assert "证据文件" in comment
+    assert "rv-1-run.txt" in comment
+    assert "SHA-256" in comment
+    assert "为什么能证明该检查点成立" in comment
+    assert "真实运行" in comment
+    assert "潜在风险" in comment
+    assert "语言" in comment
+    assert "`zh-CN`" in comment
+
+
+def test_build_evidence_comment_uses_structured_rendering(
+    tmp_path: Path,
+) -> None:
+    """build_evidence_comment delegates to the structured renderer for marked Issues."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(evidence_dir)
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+    (evidence_dir / "rv-2-serve.txt").write_text("serve output", encoding="utf-8")
+
+    comment = build_evidence_comment(
+        upload=EvidenceUpload(
+            branch="iar-evidence/issue-42",
+            commit_sha="commit1",
+            file_names=("rv-1-run.txt", "rv-2-serve.txt"),
+        ),
+        worktree_path=tmp_path,
+        config=AppConfig(),
+        pr_url="https://github.com/example/repo/pull/7",
+        head_sha="abc1234",
+        issue_body=_STRUCTURED_ISSUE_BODY,
+    )
+
+    assert "### RV-1" in comment
+    assert "### RV-2" in comment
+    assert "语言" in comment
+
+
+def test_build_evidence_comment_uses_legacy_rendering_without_marker(
+    tmp_path: Path,
+) -> None:
+    """Issues without the structured marker still use the legacy flat file list."""
+    worktree_path, evidence_dir = _evidence_worktree(tmp_path)
+    comment = build_evidence_comment(
+        upload=EvidenceUpload(
+            branch="iar-evidence/issue-42",
+            commit_sha="commit1",
+            file_names=("rv-1-shot.png", "rv-2-cli.txt"),
+        ),
+        worktree_path=worktree_path,
+        config=AppConfig(),
+        pr_url="https://github.com/example/repo/pull/7",
+        head_sha="abc1234",
+    )
+
+    assert "### rv-1-shot.png" in comment
+    assert "### rv-2-cli.txt" in comment
+    assert "RV-1" not in comment
+
+
+def test_build_validation_prompt_line_includes_structured_suffix(
+    tmp_path: Path,
+) -> None:
+    """The execution prompt asks for a structured manifest when the marker is present."""
+    prompt_line = build_validation_prompt_line(_structured_issue(), AppConfig())
+    assert "evidence.json" in prompt_line
+    assert "item_number" in prompt_line
+    assert "explanation" in prompt_line
+
+
+def test_create_issue_materializes_structured_evidence_marker(
+    tmp_path: Path,
+) -> None:
+    """`iar issue create` injects the structured evidence marker when enabled."""
+    prd_path = tmp_path / "tasks" / "pending" / "20260101-000000-prd-demo.md"
+    prd_path.parent.mkdir(parents=True)
+    prd_path.write_text(_PRD_WITH_VALIDATION, encoding="utf-8")
+    fake_client = FakeGitHubClient()
+
+    create_issue_from_prd(
+        request=IssueFromPrdRequest(
+            repo_path=tmp_path,
+            prd_path=prd_path,
+            issue_type="feature",
+            validation_language="zh-CN",
+            structured_evidence=True,
+        ),
+        github_client=fake_client,
+    )
+
+    create_call = next(
+        call for call in fake_client.calls if call["method"] == "create_issue"
+    )
+    assert 'iar:structured-evidence version=1 language="zh-CN"' in create_call["body"]
+
+
+def test_create_issue_omits_structured_marker_when_disabled(
+    tmp_path: Path,
+) -> None:
+    """`iar issue create` can disable the structured evidence marker."""
+    prd_path = tmp_path / "tasks" / "pending" / "20260101-000000-prd-demo.md"
+    prd_path.parent.mkdir(parents=True)
+    prd_path.write_text(_PRD_WITH_VALIDATION, encoding="utf-8")
+    fake_client = FakeGitHubClient()
+
+    create_issue_from_prd(
+        request=IssueFromPrdRequest(
+            repo_path=tmp_path,
+            prd_path=prd_path,
+            issue_type="feature",
+            structured_evidence=False,
+        ),
+        github_client=fake_client,
+    )
+
+    create_call = next(
+        call for call in fake_client.calls if call["method"] == "create_issue"
+    )
+    assert "iar:structured-evidence" not in create_call["body"]

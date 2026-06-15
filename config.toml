@@ -174,6 +174,10 @@ evidence_format_check = true
 # 使用 agent 解析 checklist item 的格式要求（claude/codex/kimi），
 # 物化为 iar:evidence-format marker。agent 不可用时回退到正则匹配。
 parse_evidence_format_with_agent = true
+# 证据 prompt 与 PR 评论固定标签语言，默认中文；可改为 "en-US"。
+language = "zh-CN"
+# 是否为带 iar:structured-evidence marker 的新 Issue 要求 evidence.json manifest。
+structured_evidence = true
 
 [agent_runner.pre_push_review]
 enabled = true

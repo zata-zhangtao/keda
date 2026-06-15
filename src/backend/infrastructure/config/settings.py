@@ -361,6 +361,8 @@ class AgentRunnerValidationSettings(BaseModel):
     branch_prefix: str = "iar-evidence/"
     evidence_format_check: bool = True
     parse_evidence_format_with_agent: bool = True
+    language: str = "zh-CN"
+    structured_evidence: bool = True
 
 
 class AgentRunnerConsoleSettings(BaseModel):

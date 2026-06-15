@@ -162,6 +162,10 @@ class ValidationConfig:
     names); switching it off keeps only the non-empty evidence requirement.
     Individual PRDs can opt out via an ``Evidence Format Waiver: <reason>``
     line in their Realistic Validation section.
+
+    ``language`` controls the fixed labels in prompts and PR evidence comments.
+    ``structured_evidence`` enables the ``evidence.json`` manifest requirement
+    for new Issues that carry the ``iar:structured-evidence`` marker.
     """
 
     enabled: bool = True
@@ -169,6 +173,8 @@ class ValidationConfig:
     branch_prefix: str = "iar-evidence/"
     evidence_format_check: bool = True
     parse_evidence_format_with_agent: bool = True
+    language: str = "zh-CN"
+    structured_evidence: bool = True
 
 
 @dataclass(frozen=True)
