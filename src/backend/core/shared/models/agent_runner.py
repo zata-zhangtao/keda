@@ -75,6 +75,7 @@ class LabelConfig:
     validation_pending: str = "validation/pending"
     validation_passed: str = "validation/passed"
     group_prefix: str = "task-group/"
+    rework_prd: str = "agent/rework-prd"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",
@@ -272,6 +273,9 @@ class GeneratedContentConfig:
         default_factory=GeneratedContentTargetConfig
     )
     draft_pr: GeneratedContentTargetConfig = field(
+        default_factory=GeneratedContentTargetConfig
+    )
+    prd_from_issue: GeneratedContentTargetConfig = field(
         default_factory=GeneratedContentTargetConfig
     )
 

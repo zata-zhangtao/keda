@@ -29,6 +29,7 @@ def run_agent_repositories_once(
     content_generator: IContentGenerator | None = None,
     run_history_store: IRunHistoryStore | None = None,
     run_trigger: str = "cli_run",
+    max_prd_issues: int = 1,
 ) -> int:
     """Run one polling pass across all target repositories.
 
@@ -42,10 +43,15 @@ def run_agent_repositories_once(
         content_generator: Optional content generator for AI-generated PR content.
         run_history_store: Optional side-channel run history store.
         run_trigger: Trigger source recorded with each run record.
+        max_prd_issues: Maximum rework-prd issues to process per repository.
 
     Returns:
         Exit code (0 on success, 1 if any repository failed).
     """
+    from backend.core.use_cases.agent_runner_orchestrate import (
+        process_prd_rework_issues,
+    )
+
     aggregated_exit_code = 0
     for context in contexts:
         _logger.info(
@@ -54,6 +60,21 @@ def run_agent_repositories_once(
             context.display_name,
         )
         github_client = github_client_factory(context.repo_path)
+        if not dry_run:
+            try:
+                process_prd_rework_issues(
+                    repo_path=context.repo_path,
+                    config=context.config,
+                    github_client=github_client,
+                    content_generator=content_generator,
+                    max_issues=max_prd_issues,
+                )
+            except Exception as exc:  # noqa: BLE001 - isolate PRD rework failures.
+                _logger.error(
+                    "PRD rework phase failed for repository '%s': %s",
+                    context.repo_id,
+                    exc,
+                )
         try:
             repo_exit_code = run_once(
                 repo_path=context.repo_path,

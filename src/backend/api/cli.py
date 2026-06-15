@@ -521,6 +521,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 content_generator=content_generator,
                 run_history_store=_create_run_history_store_or_none(),
                 run_trigger=_resolve_run_trigger("run"),
+                max_prd_issues=1,
             )
 
         if parsed.command == "daemon":
@@ -539,6 +540,10 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 if parsed.interval is not None
                 else runner_settings.daemon.run_interval_seconds
             )
+
+            def content_generator_factory(repo_path: Path):
+                return create_content_generator(process_runner)
+
             run_agent_daemon(
                 contexts=contexts,
                 interval=interval,
@@ -546,8 +551,10 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                 process_runner=process_runner,
                 github_client_factory=github_client_factory,
+                content_generator_factory=content_generator_factory,
                 run_history_store=_create_run_history_store_or_none(),
                 run_trigger=_resolve_run_trigger("daemon"),
+                max_prd_issues=1,
             )
             return 0
 

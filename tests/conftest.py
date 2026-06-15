@@ -37,6 +37,7 @@ class FakeGitHubClient(IGitHubClient):
         self._issue_url = issue_url
         self.calls: list[dict] = []
         self._issue_comments: dict[int, list[str]] = {}
+        self._issue_bodies: dict[int, str] = {}
         self._pr_comments: dict[int, list[str]] = {}
         self._pr_contexts: dict[str, object | None] = {}
         self._open_prs: dict[str, str | None] = {}
@@ -45,6 +46,7 @@ class FakeGitHubClient(IGitHubClient):
         self._issue_states: dict[int, str] = {}
         self._issue_title: str | None = None
         self._issue_labels: dict[int, tuple[str, ...]] = {}
+        self._rework_prd_issues: list[IssueSummary] = []
 
     def sync_labels(self, labels: LabelConfig) -> None:
         self.calls.append({"method": "sync_labels", "labels": labels})
@@ -54,6 +56,21 @@ class FakeGitHubClient(IGitHubClient):
             {"method": "list_ready_issues", "ready_label": ready_label, "limit": limit}
         )
         return []
+
+    def list_rework_prd_issues(
+        self, rework_prd_label: str, limit: int
+    ) -> list[IssueSummary]:
+        self.calls.append(
+            {
+                "method": "list_rework_prd_issues",
+                "rework_prd_label": rework_prd_label,
+                "limit": limit,
+            }
+        )
+        return self._rework_prd_issues[:limit]
+
+    def set_rework_prd_issues(self, issues: list[IssueSummary]) -> None:
+        self._rework_prd_issues = issues
 
     def edit_issue_labels(
         self, issue_number: int, *, add: Sequence[str] = (), remove: Sequence[str] = ()
@@ -76,6 +93,15 @@ class FakeGitHubClient(IGitHubClient):
             {"method": "comment_issue", "issue_number": issue_number, "body": body}
         )
         self._issue_comments.setdefault(issue_number, []).append(body)
+
+    def edit_issue_body(self, issue_number: int, body: str) -> None:
+        self.calls.append(
+            {"method": "edit_issue_body", "issue_number": issue_number, "body": body}
+        )
+        self._issue_bodies[issue_number] = body
+
+    def get_issue_body(self, issue_number: int) -> str | None:
+        return self._issue_bodies.get(issue_number)
 
     def comment_pr(self, pr_number: int, body: str) -> None:
         self.calls.append(

@@ -485,6 +485,60 @@ class GitHubCliClient:
                 cwd=self.repo_path,
             )
 
+    def list_rework_prd_issues(
+        self, rework_prd_label: str, limit: int
+    ) -> list[IssueSummary]:
+        """List open Issues with the rework-prd label."""
+        result = self._runner.run(
+            [
+                "gh",
+                "issue",
+                "list",
+                "--state",
+                "open",
+                "--label",
+                rework_prd_label,
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,url,labels,body,state",
+            ],
+            cwd=self.repo_path,
+        )
+        raw_issues = json.loads(result.stdout or "[]")
+        return [
+            IssueSummary(
+                number=int(raw_issue["number"]),
+                title=str(raw_issue.get("title", "")),
+                url=str(raw_issue.get("url", "")),
+                body=str(raw_issue.get("body", "") or ""),
+                labels=tuple(
+                    raw_label.get("name", "")
+                    for raw_label in raw_issue.get("labels", [])
+                    if raw_label.get("name")
+                ),
+                state=str(raw_issue.get("state", "OPEN") or "OPEN"),
+            )
+            for raw_issue in raw_issues
+        ]
+
+    def edit_issue_body(self, issue_number: int, body: str) -> None:
+        """Replace the body of an Issue."""
+        with tempfile.TemporaryDirectory(prefix="iar-issue-body-") as temp_dir:
+            body_path = Path(temp_dir) / "issue_body.md"
+            body_path.write_text(body, encoding="utf-8")
+            self._runner.run(
+                [
+                    "gh",
+                    "issue",
+                    "edit",
+                    str(issue_number),
+                    "--body-file",
+                    str(body_path),
+                ],
+                cwd=self.repo_path,
+            )
+
     def create_issue(
         self,
         *,

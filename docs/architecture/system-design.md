@@ -47,6 +47,10 @@
 - `src/backend/engines/`：承接项目特定的平台能力（如 RAG、爬虫、OCR 等）。
 - `tests/`：用于验证边界、用例和适配器行为。
 
+## core/use_cases 说明
+
+`src/backend/core/use_cases/` 包含业务编排用例。`create_issue_from_prd` 将 PRD 文件转为 GitHub Issue，而 `create_prd_from_issue` 是其对称反向流程：根据 Issue 标题、正文和评论生成或重写 PRD。两者共享 `IGitHubClient` 和 `IContentGenerator` 边界，并通过 `generated_content.py` 统一处理 template/agent/fallback 三级生成策略。`agent_runner_orchestrate.py` 在每次 runner pass 中先调用 `process_prd_rework_issues` 消费 `agent/rework-prd` 标签的 Issue，再执行正常的 ready-issue 处理，两个阶段错误隔离。
+
 ## 模块关系图
 
 ```mermaid

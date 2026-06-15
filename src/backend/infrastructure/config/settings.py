@@ -290,6 +290,7 @@ class AgentRunnerLabelSettings(BaseModel):
     codex: str = "agent/codex"
     claude: str = "agent/claude"
     kimi: str = "agent/kimi"
+    rework_prd: str = "agent/rework-prd"
 
     @property
     def agent_labels(self) -> dict[str, str]:
@@ -511,6 +512,9 @@ class AgentRunnerGeneratedContentSettings(BaseModel):
         default_factory=AgentRunnerGeneratedContentTargetSettings
     )
     draft_pr: AgentRunnerGeneratedContentTargetSettings = Field(
+        default_factory=AgentRunnerGeneratedContentTargetSettings
+    )
+    prd_from_issue: AgentRunnerGeneratedContentTargetSettings = Field(
         default_factory=AgentRunnerGeneratedContentTargetSettings
     )
 

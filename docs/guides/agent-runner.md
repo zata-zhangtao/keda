@@ -732,6 +732,76 @@ iar recover --issue 5
 iar recover --issue 5 --branch issue-5
 ```
 
+## PRD Rework Workflow
+
+`iar` supports the reverse of `iar issue create`: automatically generating or rewriting a PRD from an existing GitHub Issue. This is useful when an Issue is created directly on GitHub and later needs a canonical PRD, or when an existing Issue receives new comments that require updating its PRD.
+
+### Triggering PRD Rework
+
+To trigger the workflow, add the `agent/rework-prd` label to an open Issue:
+
+```bash
+gh issue edit <issue-number> --add-label agent/rework-prd
+```
+
+The next daemon pass or `iar run` will detect the label and process the Issue before normal ready-issue execution.
+
+### What Happens During PRD Rework
+
+1. **List**: The runner queries open Issues labeled `agent/rework-prd` (default limit 1 per pass).
+2. **Collect**: It loads the Issue body and all comments.
+3. **Resolve Path**:
+   - If the Issue body already contains a `- PRD path: \`...\`` anchor, the runner rewrites that same file.
+   - If no anchor exists, the runner generates a new filename under `tasks/pending/` using the pattern `P<priority>-<TYPE>-YYYYMMDD-HHMMSS-prd-<slug>.md` (priority/type are inferred from `priority/<p>` and `type/<t>` labels, or the `[Type]` title prefix).
+4. **Generate**: It calls the configured content generator (template, agent, or fallback) to produce the PRD markdown.
+5. **Write**: The PRD file is written (overwriting existing or creating new).
+6. **Update Issue**:
+   - If new PRD: inserts the `PRD path:` anchor at the top of the Issue body.
+   - Removes `agent/rework-prd`.
+   - Adds `source/prd`.
+   - Optionally adds `agent/ready` (so the runner can immediately proceed to implementation).
+7. **Comment**: Posts a success comment with the PRD path and generation source.
+
+### Label Transitions
+
+```text
+agent/rework-prd  →  source/prd (+ agent/ready optional)
+```
+
+On failure:
+
+```text
+agent/rework-prd  →  agent/failed
+```
+
+A failure comment is posted with the error and instructions to re-add `agent/rework-prd` to retry.
+
+### Configuration
+
+The PRD-from-Issue generation target is configured under `[agent_runner.generated_content.prd_from_issue]`:
+
+```toml
+[agent_runner.generated_content.prd_from_issue]
+enabled = true
+mode = "agent"
+agent = "auto"
+timeout_seconds = 120
+body_template = "..."
+prompt = "..."
+```
+
+See the "Generated Content 配置" section above for the full template variable list and example.
+
+### Failure Recovery
+
+If PRD generation fails (e.g., AI agent error, write permission issue, or invalid output), the runner:
+
+- Removes `agent/rework-prd`.
+- Adds `agent/failed`.
+- Comments on the Issue with the error and retry instructions.
+
+After fixing the root cause, manually re-add `agent/rework-prd` to retry.
+
 ## 失败重跑
 
 Issue 执行失败后会被标记为 `agent/failed`，runner 不会再自动处理。以下是将失败 Issue 重新置为可执行状态的完整流程。
@@ -1438,6 +1508,71 @@ body_template = [
 ]
 agent = "auto"
 timeout_seconds = 60
+```
+
+### PRD-from-Issue 生成变量
+
+| 变量 | 说明 |
+|---|---|
+| `{issue_number}` | GitHub Issue 编号 |
+| `{issue_title}` | GitHub Issue 标题 |
+| `{issue_body}` | Issue 完整正文 |
+| `{issue_comments}` | Issue 所有评论按时间顺序拼接 |
+| `{existing_prd_text}` | 已有关联 PRD 时的现有 PRD 全文（无则为空字符串） |
+| `{repo_structure_summary}` | 仓库结构摘要 |
+
+### PRD-from-Issue 配置示例
+
+```toml
+[agent_runner.generated_content.prd_from_issue]
+enabled = true
+mode = "agent"
+output = "markdown"
+agent = "auto"
+timeout_seconds = 120
+include_commit_log = false
+include_diff_stat = false
+body_template = [
+  "# PRD: {issue_title}",
+  "",
+  "- GitHub Issue: #{issue_number}",
+  "",
+  "## 1. Introduction & Goals",
+  "",
+  "{issue_body}",
+  "",
+  "## 2. Requirement Shape",
+  "",
+  "- **Actor**: User",
+  "- **Trigger**: TBD",
+  "- **Expected Behavior**: TBD",
+  "- **Scope Boundary**: TBD",
+  "",
+  "## 3. Acceptance Checklist",
+  "",
+  "- [ ] Define requirements",
+  "- [ ] Implement the feature",
+  "- [ ] Run verification",
+]
+prompt = [
+  "You are a technical product manager. Write a comprehensive PRD in Markdown format.",
+  "",
+  "GitHub Issue #{issue_number}: {issue_title}",
+  "",
+  "Issue Body:",
+  "{issue_body}",
+  "",
+  "Issue Comments (chronological):",
+  "{issue_comments}",
+  "",
+  "Existing PRD (to be rewritten if present):",
+  "{existing_prd_text}",
+  "",
+  "Repository Structure Summary:",
+  "{repo_structure_summary}",
+  "",
+  "Output only the PRD markdown, no extra commentary.",
+]
 ```
 
 ## Issue Comment Event Markers

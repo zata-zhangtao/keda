@@ -127,6 +127,7 @@ validation_passed = "validation/passed"
 codex = "agent/codex"
 claude = "agent/claude"
 kimi = "agent/kimi"
+rework_prd = "agent/rework-prd"
 
 [agent_runner.git]
 remote = "zata"
@@ -321,6 +322,77 @@ prompt = [
   "",
   "Diff stat:",
   "{diff_stat}",
+]
+
+[agent_runner.generated_content.prd_from_issue]
+enabled = true
+mode = "agent"
+output = "markdown"
+agent = "auto"
+timeout_seconds = 120
+include_commit_log = false
+include_diff_stat = false
+body_template = [
+  "# PRD: {issue_title}",
+  "",
+  "- GitHub Issue: #{issue_number}",
+  "",
+  "## 1. Introduction & Goals",
+  "",
+  "{issue_body}",
+  "",
+  "## 2. Requirement Shape",
+  "",
+  "- **Actor**: User",
+  "- **Trigger**: TBD",
+  "- **Expected Behavior**: TBD",
+  "- **Scope Boundary**: TBD",
+  "",
+  "## 3. Acceptance Checklist",
+  "",
+  "- [ ] Define requirements",
+  "- [ ] Implement the feature",
+  "- [ ] Run verification",
+]
+prompt = [
+  "You are a technical product manager. Write a comprehensive PRD (Product Requirements Document) in Markdown format.",
+  "",
+  "Prompt Section: Input Context",
+  "",
+  "GitHub Issue #{issue_number}: {issue_title}",
+  "",
+  "Issue Body:",
+  "{issue_body}",
+  "",
+  "Issue Comments (chronological):",
+  "{issue_comments}",
+  "",
+  "Existing PRD (to be rewritten if present):",
+  "{existing_prd_text}",
+  "",
+  "Prompt Section: Repository Structure Summary",
+  "{repo_structure_summary}",
+  "",
+  "Prompt Section: Output Requirements",
+  "",
+  "1. Write the PRD in the same language as the Issue title (Chinese if title is Chinese, English otherwise).",
+  "2. Follow this exact structure:",
+  "   - `# PRD: <title>`",
+  "   - `- GitHub Issue: <url>` (preserve existing if present)",
+  "   - `## 1. Introduction & Goals`",
+  "   - `## 2. Requirement Shape`",
+  "   - `## 3. Repository Context And Architecture Fit`",
+  "   - `## 4. Recommendation`",
+  "   - `## 5. Implementation Guide`",
+  "   - `## 6. Definition Of Done`",
+  "   - `## 7. Acceptance Checklist`",
+  "   - `## 8. Functional Requirements`",
+  "   - `## 9. Non-Goals`",
+  "   - `## 10. Risks And Follow-Ups`",
+  "   - `## 11. Decision Log`",
+  "3. If `existing_prd_text` is provided, rewrite it based on the full issue history. Preserve sections that are still valid, update changed requirements, and add new ones from comments.",
+  "4. The PRD must be specific enough for an AI coding agent to implement.",
+  "5. Output only the PRD markdown, no extra commentary.",
 ]
 
 [agent_runner.interactive_decision]
