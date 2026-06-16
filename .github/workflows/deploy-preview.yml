@@ -210,7 +210,7 @@ jobs:
             "${SERVER_USER}@${SERVER_HOST}:${APP_DIR}/"
           ssh -o StrictHostKeyChecking=no \
             "${SERVER_USER}@${SERVER_HOST}" \
-            "cd ${APP_DIR} && POSTGRES_PASSWORD='${POSTGRES_PASSWORD}' bash deploy-preview.sh up"
+            "cd ${APP_DIR} && APP_DIR='${APP_DIR}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' POSTGRES_PASSWORD='${POSTGRES_PASSWORD}' bash deploy-preview.sh up"
 
       - name: Upsert sticky preview comment
         if: ${{ always() }}
@@ -277,7 +277,7 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no \
             "${SERVER_USER}@${SERVER_HOST}" \
-            "cd ${APP_DIR} && bash deploy-preview.sh down || true"
+            "cd ${APP_DIR} && APP_DIR='${APP_DIR}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' bash deploy-preview.sh down || true"
 
       - name: Update sticky preview comment
         if: ${{ always() }}
