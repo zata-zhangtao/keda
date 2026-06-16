@@ -1493,3 +1493,96 @@ def test_main_registry_sync_registers_new_repo(
     assert exit_code == 0
     config_text = config_path.read_text(encoding="utf-8")
     assert "[agent_runner.repositories.baz]" in config_text
+
+
+def test_cli_parser_workflow_install() -> None:
+    """workflow install should expose name + force + dry-run + common flags."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        [
+            "workflow",
+            "install",
+            "preview",
+            "--force",
+            "--dry-run",
+            "--repo",
+            "/tmp/skip",
+        ]
+    )
+    assert parsed.command == "workflow install"
+    assert parsed.workflow_command == "install"
+    assert parsed.name == "preview"
+    assert parsed.force is True
+    assert parsed.dry_run is True
+    assert parsed.repo == "/tmp/skip"
+
+
+def test_cli_parser_workflow_install_minimal() -> None:
+    """workflow install without flags should default force/dry-run to False."""
+    parser = build_parser()
+    parsed = parser.parse_args(["workflow", "install", "preview"])
+    assert parsed.command == "workflow install"
+    assert parsed.name == "preview"
+    assert parsed.force is False
+    assert parsed.dry_run is False
+    assert getattr(parsed, "repo", None) is None
+
+
+def test_main_workflow_install_unknown_name_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Unknown workflow names must exit non-zero without writing files."""
+    monkeypatch.chdir(tmp_path)
+    _write_iar_toml(tmp_path, "demo")
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    with patch(
+        "backend.api.cli.detect_git_repository_root", return_value=tmp_path
+    ), patch("backend.api.cli.require_iar_repository_initialized"):
+        exit_code = main(["workflow", "install", "missing"])
+
+    assert exit_code == 1
+    assert not (tmp_path / "deploy").exists()
+
+
+def test_main_workflow_install_rejects_global_repo_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Receiving --repo must reject and not write any template file."""
+    monkeypatch.chdir(tmp_path)
+    _write_iar_toml(tmp_path, "demo")
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    exit_code = main(["workflow", "install", "preview", "--repo", str(tmp_path)])
+
+    assert exit_code == 1
+    assert not (tmp_path / "deploy").exists()
+    assert not (tmp_path / "scripts").exists()
+
+
+def test_main_workflow_install_rejects_global_config_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Receiving --config must reject and not write any template file."""
+    monkeypatch.chdir(tmp_path)
+    _write_iar_toml(tmp_path, "demo")
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    exit_code = main(["workflow", "install", "preview", "--config", "/tmp/cfg"])
+
+    assert exit_code == 1
+    assert not (tmp_path / "deploy").exists()
+
+
+def test_main_workflow_install_rejects_global_repo_id_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Receiving --repo-id must reject and not write any template file."""
+    monkeypatch.chdir(tmp_path)
+    _write_iar_toml(tmp_path, "demo")
+    (tmp_path / "config.toml").write_text("", encoding="utf-8")
+
+    exit_code = main(["workflow", "install", "preview", "--repo-id", "demo"])
+
+    assert exit_code == 1
+    assert not (tmp_path / "deploy").exists()

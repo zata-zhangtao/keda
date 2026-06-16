@@ -73,11 +73,16 @@ registry_app = typer.Typer(
     help="Manage the repository registry in config.toml.",
     no_args_is_help=True,
 )
+workflow_app = typer.Typer(
+    help="Install and manage bundled workflow templates.",
+    no_args_is_help=True,
+)
 app.add_typer(labels_app, name="labels")
 app.add_typer(issue_app, name="issue")
 app.add_typer(completion_app, name="completion")
 app.add_typer(worktree_app, name="worktree")
 app.add_typer(registry_app, name="registry")
+app.add_typer(workflow_app, name="workflow")
 
 RepoOption = Annotated[
     str | None, typer.Option("--repo", help="Target repository path.")
@@ -731,6 +736,43 @@ def worktree_create_command(
         worktree_command="create",
         branch=branch,
         base_branch=base_branch,
+    )
+
+
+@workflow_app.command("install")
+def workflow_install_command(
+    ctx: typer.Context,
+    name: Annotated[
+        str, typer.Argument(help="Workflow template name (e.g. 'preview').")
+    ],
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Overwrite existing template files and the [preview] section.",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Print the install plan without writing anything.",
+        ),
+    ] = False,
+    repo: RepoOption = None,
+    repo_id: RepoIdOption = None,
+    config: ConfigOption = None,
+) -> int:
+    """Install a bundled workflow template into the current repository."""
+    selector_options = _typer_selector_options(
+        ctx, repo=repo, repo_id=repo_id, config=config
+    )
+    return _run_typer_command(
+        "workflow install",
+        **selector_options,
+        name=name,
+        force=force,
+        dry_run=dry_run,
     )
 
 

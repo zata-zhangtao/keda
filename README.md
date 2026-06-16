@@ -89,6 +89,9 @@ iar init
 # 或未安装全局命令时
 uv run iar init
 
+# 把 preview workflow 模板（GitHub Actions + deploy/vps-traefik + scripts/）复制到当前仓库
+iar workflow install preview
+
 # 同步当前仓库的 GitHub Labels
 iar labels sync
 

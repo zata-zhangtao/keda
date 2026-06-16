@@ -17,6 +17,9 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "provision_preview_server.py"
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+import _apply  # noqa: E402
+import _remote  # noqa: E402
 
 
 def _load_module():
@@ -36,7 +39,7 @@ pps = _load_module()
 def _captured_cmd_print(cmd: list[str]) -> str:
     buf = io.StringIO()
     with redirect_stdout(buf):
-        pps._print_cmd(cmd)
+        _remote._print_cmd(cmd)
     return buf.getvalue().strip()
 
 
@@ -115,7 +118,7 @@ def test_merge_preview_section_replaces_existing():
         "[trailing]\nx = 1\n"
     )
     new_section = '[preview]\nenabled = true\nbase_domain = "new.example.com"\n'
-    merged = pps._merge_preview_section(original, new_section)
+    merged = _apply._merge_preview_section(original, new_section)
     assert merged.count("[preview]") == 1
     assert "new.example.com" in merged
     assert "old.example.com" not in merged
@@ -125,7 +128,7 @@ def test_merge_preview_section_replaces_existing():
 def test_merge_preview_section_appends_when_missing():
     original = "[other]\nkey = 1\n"
     new_section = "[preview]\nenabled = true\n"
-    merged = pps._merge_preview_section(original, new_section)
+    merged = _apply._merge_preview_section(original, new_section)
     assert merged.endswith("[preview]\nenabled = true\n")
     assert "[other]" in merged
 
@@ -687,12 +690,14 @@ def test_set_github_secrets_uses_deploy_key_when_set(monkeypatch, tmp_path, caps
     operator_key.write_text("OPERATOR-PRIVATE-KEY-CONTENT", encoding="utf-8")
 
     monkeypatch.setenv("PREVIEW_DEPLOY_KEY_PATH", str(deploy_key))
-    monkeypatch.setattr(pps, "_gh_auth_ok", lambda: True)
-    monkeypatch.setattr(pps, "_gh_repo_slug", lambda: "owner/repo")
-    monkeypatch.setattr(pps, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY")
-    monkeypatch.setattr(pps, "_confirm", lambda *a, **kw: True)
+    monkeypatch.setattr(_apply, "_gh_auth_ok", lambda: True)
+    monkeypatch.setattr(_apply, "_gh_repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(
+        _apply, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY"
+    )
+    monkeypatch.setattr(_remote, "_confirm", lambda *a, **kw: True)
     monkeypatch.setattr("builtins.input", lambda *a, **kw: "x")
-    monkeypatch.setattr(pps.getpass, "getpass", lambda *a, **kw: "x")
+    monkeypatch.setattr(_apply.getpass, "getpass", lambda *a, **kw: "x")
     captured: list[tuple[list[str], str]] = []
 
     def fake_run(argv, *args, **kwargs):  # noqa: A002
@@ -719,12 +724,14 @@ def test_set_github_secrets_falls_back_to_args_key(monkeypatch, tmp_path):
     monkeypatch.delenv("PREVIEW_DEPLOY_KEY_PATH", raising=False)
     operator_key = tmp_path / "operator_key"
     operator_key.write_text("OPERATOR-PRIVATE-KEY-CONTENT", encoding="utf-8")
-    monkeypatch.setattr(pps, "_gh_auth_ok", lambda: True)
-    monkeypatch.setattr(pps, "_gh_repo_slug", lambda: "owner/repo")
-    monkeypatch.setattr(pps, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY")
-    monkeypatch.setattr(pps, "_confirm", lambda *a, **kw: True)
+    monkeypatch.setattr(_apply, "_gh_auth_ok", lambda: True)
+    monkeypatch.setattr(_apply, "_gh_repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(
+        _apply, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY"
+    )
+    monkeypatch.setattr(_remote, "_confirm", lambda *a, **kw: True)
     monkeypatch.setattr("builtins.input", lambda *a, **kw: "x")
-    monkeypatch.setattr(pps.getpass, "getpass", lambda *a, **kw: "x")
+    monkeypatch.setattr(_apply.getpass, "getpass", lambda *a, **kw: "x")
     captured: list[tuple[list[str], str]] = []
 
     def fake_run(argv, *args, **kwargs):  # noqa: A002
@@ -748,12 +755,14 @@ def test_set_github_secrets_skips_ssh_key_when_neither_set(monkeypatch, tmp_path
     """With neither --key nor --generate-deploy-key, no SERVER_SSH_KEY
     spec is appended (the script prompts the user to fix the gap)."""
     monkeypatch.delenv("PREVIEW_DEPLOY_KEY_PATH", raising=False)
-    monkeypatch.setattr(pps, "_gh_auth_ok", lambda: True)
-    monkeypatch.setattr(pps, "_gh_repo_slug", lambda: "owner/repo")
-    monkeypatch.setattr(pps, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY")
-    monkeypatch.setattr(pps, "_confirm", lambda *a, **kw: True)
+    monkeypatch.setattr(_apply, "_gh_auth_ok", lambda: True)
+    monkeypatch.setattr(_apply, "_gh_repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(
+        _apply, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY"
+    )
+    monkeypatch.setattr(_remote, "_confirm", lambda *a, **kw: True)
     monkeypatch.setattr("builtins.input", lambda *a, **kw: "x")
-    monkeypatch.setattr(pps.getpass, "getpass", lambda *a, **kw: "x")
+    monkeypatch.setattr(_apply.getpass, "getpass", lambda *a, **kw: "x")
     captured: list[tuple[list[str], str]] = []
 
     def fake_run(argv, *args, **kwargs):  # noqa: A002

@@ -37,6 +37,9 @@ llm = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"backend.engines.agent_runner.templates" = ["**/*"]
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.5.1",
