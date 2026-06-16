@@ -1,5 +1,7 @@
 # PRD: IAR `iar workflow install` 子命令
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/92
+
 ## 1. Introduction & Goals
 
 ### Problem Statement
