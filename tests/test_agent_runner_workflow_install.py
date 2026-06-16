@@ -25,7 +25,7 @@ from backend.infrastructure.process_runner import CommandResult
 from tests.conftest import FakeProcessRunner
 
 
-_EXPECTED_FILES = (
+_EXPECTED_SOURCE_FILES = (
     ".github/workflows/deploy-preview.yml",
     "deploy/vps-traefik/README.md",
     "deploy/vps-traefik/deploy-preview.sh",
@@ -33,6 +33,11 @@ _EXPECTED_FILES = (
     "deploy/vps-traefik/preview.env.example",
     "scripts/preview_env.py",
     "scripts/provision_preview_server.py",
+)
+
+_EXPECTED_FILES = _EXPECTED_SOURCE_FILES + (
+    "scripts/_apply.py",
+    "scripts/_remote.py",
 )
 
 
@@ -70,7 +75,7 @@ def test_template_files_byte_match_source() -> None:
     """Bundled template files must be byte-identical to the source files."""
     repo_root = Path(__file__).resolve().parents[1]
     template_root = files(TEMPLATE_PACKAGE_NAME) / "preview"
-    for relative_posix_path in _EXPECTED_FILES:
+    for relative_posix_path in _EXPECTED_SOURCE_FILES:
         bundled_bytes = (template_root / relative_posix_path).read_bytes()
         source_bytes = (repo_root / relative_posix_path).read_bytes()
         assert bundled_bytes == source_bytes, relative_posix_path
@@ -100,8 +105,8 @@ def test_preview_placeholder_section_keeps_bool_default() -> None:
     assert 'enabled = "<set-me>"' not in rendered_text
 
 
-def test_install_workflow_writes_seven_files(tmp_path: Path) -> None:
-    """``install_workflow`` must write all seven template files byte-identically."""
+def test_install_workflow_writes_all_template_files(tmp_path: Path) -> None:
+    """``install_workflow`` must write all template files byte-identically."""
     _init_iar(tmp_path)
     fake_runner = _make_fake_runner(tmp_path)
 
@@ -241,7 +246,7 @@ def test_install_workflow_requires_iar_init(tmp_path: Path) -> None:
 def test_install_workflow_toml_parse_failure_does_not_block_files(
     tmp_path: Path, caplog
 ) -> None:
-    """A broken config.toml must not prevent the seven files from being written."""
+    """A broken config.toml must not prevent the template files from being written."""
     _init_iar(tmp_path)
     fake_runner = _make_fake_runner(tmp_path)
     (tmp_path / "config.toml").write_text("this is not [valid\n", encoding="utf-8")
