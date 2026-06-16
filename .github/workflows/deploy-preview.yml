@@ -201,6 +201,8 @@ jobs:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set +x
           {
@@ -229,7 +231,7 @@ jobs:
           rm -f .env.generated
           ssh -o StrictHostKeyChecking=no \
             "${SERVER_USER}@${SERVER_HOST}" \
-            "cd ${APP_DIR} && mv -f .env.generated .env && APP_DIR='${APP_DIR}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' bash deploy-preview.sh up"
+            "cd ${APP_DIR} && mv -f .env.generated .env && APP_DIR='${APP_DIR}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' REGISTRY_HOST='${REGISTRY_HOST}' REGISTRY_USERNAME='${REGISTRY_USERNAME}' REGISTRY_PASSWORD='${REGISTRY_PASSWORD}' bash deploy-preview.sh up"
 
       - name: Upsert sticky preview comment
         if: ${{ always() }}

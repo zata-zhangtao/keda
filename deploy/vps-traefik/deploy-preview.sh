@@ -54,6 +54,11 @@ up() {
     } > "${APP_DIR}/.env"
   fi
 
+  if [ -n "${REGISTRY_USERNAME:-}" ] && [ -n "${REGISTRY_PASSWORD:-}" ] && [ -n "${REGISTRY_HOST:-}" ]; then
+    echo "Logging in to ${REGISTRY_HOST}..."
+    echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${REGISTRY_USERNAME}" --password-stdin
+  fi
+
   docker compose "${compose_args[@]}" --env-file "${APP_DIR}/.env" pull
   docker compose "${compose_args[@]}" --env-file "${APP_DIR}/.env" up -d --remove-orphans
 
