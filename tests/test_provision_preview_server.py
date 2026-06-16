@@ -661,6 +661,114 @@ def test_print_secrets_instructions_falls_back_to_args_key(monkeypatch, capsys):
     assert "Delete the local private key" not in out
 
 
+def _make_args(key=None, deploy_user="d", create_deploy_user=False):
+    return type(
+        "A",
+        (),
+        {
+            "host": "h",
+            "user": "root",
+            "deploy_user": deploy_user,
+            "key": key,
+            "create_deploy_user": create_deploy_user,
+            "app_dir": "/opt/preview",
+        },
+    )()
+
+
+def test_set_github_secrets_uses_deploy_key_when_set(monkeypatch, tmp_path, capsys):
+    """When --generate-deploy-key ran, apply_secrets must pipe the
+    scp'd deploy key into `gh secret set`, not the operator's --key.
+    Regression: previously it ignored PREVIEW_DEPLOY_KEY_PATH and used
+    args.key, leaving the deploy user with no matching authorized_keys."""
+    deploy_key = tmp_path / "deploy_key"
+    deploy_key.write_text("DEPLOY-PRIVATE-KEY-CONTENT", encoding="utf-8")
+    operator_key = tmp_path / "operator_key"
+    operator_key.write_text("OPERATOR-PRIVATE-KEY-CONTENT", encoding="utf-8")
+
+    monkeypatch.setenv("PREVIEW_DEPLOY_KEY_PATH", str(deploy_key))
+    monkeypatch.setattr(pps, "_gh_auth_ok", lambda: True)
+    monkeypatch.setattr(pps, "_gh_repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(pps, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY")
+    monkeypatch.setattr(pps, "_confirm", lambda *a, **kw: True)
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: "x")
+    monkeypatch.setattr(pps.getpass, "getpass", lambda *a, **kw: "x")
+    captured: list[tuple[list[str], str]] = []
+
+    def fake_run(argv, *args, **kwargs):  # noqa: A002
+        if isinstance(argv, list) and len(argv) >= 2 and argv[0:2] == ["gh", "secret"]:
+            captured.append((list(argv), kwargs.get("input", "")))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(pps.subprocess, "run", fake_run)
+
+    pps.apply_secrets(_make_args(key=str(operator_key)))
+
+    secret_calls = [
+        (argv, payload) for argv, payload in captured if "SERVER_SSH_KEY" in argv
+    ]
+    assert len(secret_calls) == 1
+    argv, payload = secret_calls[0]
+    assert payload == "DEPLOY-PRIVATE-KEY-CONTENT"
+    assert "OPERATOR-PRIVATE-KEY-CONTENT" not in payload
+
+
+def test_set_github_secrets_falls_back_to_args_key(monkeypatch, tmp_path):
+    """Without --generate-deploy-key but with --key, fall back to the
+    operator's local private key path (existing behaviour)."""
+    monkeypatch.delenv("PREVIEW_DEPLOY_KEY_PATH", raising=False)
+    operator_key = tmp_path / "operator_key"
+    operator_key.write_text("OPERATOR-PRIVATE-KEY-CONTENT", encoding="utf-8")
+    monkeypatch.setattr(pps, "_gh_auth_ok", lambda: True)
+    monkeypatch.setattr(pps, "_gh_repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(pps, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY")
+    monkeypatch.setattr(pps, "_confirm", lambda *a, **kw: True)
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: "x")
+    monkeypatch.setattr(pps.getpass, "getpass", lambda *a, **kw: "x")
+    captured: list[tuple[list[str], str]] = []
+
+    def fake_run(argv, *args, **kwargs):  # noqa: A002
+        if isinstance(argv, list) and len(argv) >= 2 and argv[0:2] == ["gh", "secret"]:
+            captured.append((list(argv), kwargs.get("input", "")))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(pps.subprocess, "run", fake_run)
+
+    pps.apply_secrets(_make_args(key=str(operator_key)))
+
+    secret_calls = [
+        (argv, payload) for argv, payload in captured if "SERVER_SSH_KEY" in argv
+    ]
+    assert len(secret_calls) == 1
+    _, payload = secret_calls[0]
+    assert payload == "OPERATOR-PRIVATE-KEY-CONTENT"
+
+
+def test_set_github_secrets_skips_ssh_key_when_neither_set(monkeypatch, tmp_path):
+    """With neither --key nor --generate-deploy-key, no SERVER_SSH_KEY
+    spec is appended (the script prompts the user to fix the gap)."""
+    monkeypatch.delenv("PREVIEW_DEPLOY_KEY_PATH", raising=False)
+    monkeypatch.setattr(pps, "_gh_auth_ok", lambda: True)
+    monkeypatch.setattr(pps, "_gh_repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(pps, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY")
+    monkeypatch.setattr(pps, "_confirm", lambda *a, **kw: True)
+    monkeypatch.setattr("builtins.input", lambda *a, **kw: "x")
+    monkeypatch.setattr(pps.getpass, "getpass", lambda *a, **kw: "x")
+    captured: list[tuple[list[str], str]] = []
+
+    def fake_run(argv, *args, **kwargs):  # noqa: A002
+        if isinstance(argv, list) and len(argv) >= 2 and argv[0:2] == ["gh", "secret"]:
+            captured.append((list(argv), kwargs.get("input", "")))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(pps.subprocess, "run", fake_run)
+
+    pps.apply_secrets(_make_args(key=None))
+
+    ssh_key_calls = [argv for argv, _ in captured if "SERVER_SSH_KEY" in argv]
+    assert ssh_key_calls == []
+
+
 def test_create_deploy_user_refuses_for_root_deploy():
     args = type(
         "A", (), {"user": "root", "deploy_user": "root", "app_dir": "/opt/preview"}

@@ -1078,11 +1078,14 @@ def apply_secrets(args: argparse.Namespace) -> bool:
         print("  ✓ preview env created")
 
     server_user = args.deploy_user if args.create_deploy_user else args.user
+    deploy_key_path = os.environ.get("PREVIEW_DEPLOY_KEY_PATH")
     specs: list[tuple[str, str, str | None]] = [
         ("SERVER_HOST", "literal", args.host),
         ("SERVER_USER", "literal", server_user),
     ]
-    if args.key:
+    if deploy_key_path:
+        specs.append(("SERVER_SSH_KEY", "file", deploy_key_path))
+    elif args.key:
         specs.append(("SERVER_SSH_KEY", "file", args.key))
     specs += [
         ("REGISTRY_USERNAME", "prompt", "GitHub username (ghcr.io namespace)"),
