@@ -25,20 +25,14 @@ log_level = "INFO"
 # or environment variables and are never committed to this file.
 # =============================================================================
 [preview]
-enabled = false
-base_domain = "preview.example.com"
-project_slug = "keda"
+enabled = true
+base_domain = "preview.yewmoon.fun"
 app_dir_root = "/opt/preview"
+url_scheme = "https"
 registry_host = "ghcr.io"
 registry_namespace = "zata-zhangtao"
 traefik_network = "traefik"
-url_scheme = "https"
-subdomain_template = "pr-{pr_number}.{base_domain}"
-compose_template = "{project_slug}-pr-{pr_number}"
 
-# =============================================================================
-# Template Sync Settings
-# =============================================================================
 [template_sync]
 # Project-specific paths skipped by default by `just sync-template`.
 # Use `just sync-template --all` to include these paths for a one-off sync.

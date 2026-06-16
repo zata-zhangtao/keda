@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import textwrap
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from backend.infrastructure.config import settings as settings_module
 from backend.infrastructure.config.settings import PreviewSettings
 
 
@@ -27,16 +30,67 @@ def clean_preview_env():
     os.environ.update(original)
 
 
-def test_preview_settings_defaults():
-    """Defaults must match the documented placeholder values."""
-    settings = PreviewSettings()
+def test_preview_settings_loads_from_toml(tmp_path: Path):
+    """PreviewSettings must read every field from [preview] in config.toml."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        textwrap.dedent(
+            """\
+            [preview]
+            enabled = true
+            base_domain = "preview.example.com"
+            project_slug = "keda"
+            app_dir_root = "/opt/preview"
+            registry_host = "ghcr.io"
+            registry_namespace = "zata-zhangtao"
+            traefik_network = "traefik"
+            url_scheme = "https"
+            subdomain_template = "pr-{pr_number}.{base_domain}"
+            compose_template = "{project_slug}-pr-{pr_number}"
+            """
+        ),
+        encoding="utf-8",
+    )
 
-    assert settings.enabled is False
+    with patch.object(settings_module, "_find_config_toml", return_value=config_path):
+        settings = PreviewSettings()
+
+    assert settings.enabled is True
     assert settings.base_domain == "preview.example.com"
     assert settings.project_slug == "keda"
     assert settings.app_dir_root == "/opt/preview"
     assert settings.registry_host == "ghcr.io"
     assert settings.registry_namespace == "zata-zhangtao"
+    assert settings.traefik_network == "traefik"
+    assert settings.url_scheme == "https"
+    assert settings.subdomain_template == "pr-{pr_number}.{base_domain}"
+    assert settings.compose_template == "{project_slug}-pr-{pr_number}"
+
+
+def test_preview_settings_partial_toml_keeps_remaining_defaults(tmp_path: Path):
+    """Fields absent from [preview] must fall back to pydantic defaults."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        textwrap.dedent(
+            """\
+            [preview]
+            base_domain = "staging.example.com"
+            project_slug = "demo"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    with patch.object(settings_module, "_find_config_toml", return_value=config_path):
+        settings = PreviewSettings()
+
+    # From TOML
+    assert settings.base_domain == "staging.example.com"
+    assert settings.project_slug == "demo"
+    # Defaults (no [preview] entry for these)
+    assert settings.enabled is False
+    assert settings.app_dir_root == "/opt/preview"
+    assert settings.registry_host == "ghcr.io"
     assert settings.traefik_network == "traefik"
     assert settings.url_scheme == "https"
     assert settings.subdomain_template == "pr-{pr_number}.{base_domain}"
