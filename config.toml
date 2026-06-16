@@ -14,12 +14,25 @@
 # Application Settings
 # =============================================================================
 [app]
-name = "my-app"
+name = "keda"
 log_level = "INFO"
 
 # =============================================================================
-# Template Sync Settings
+# Preview Deployment Settings
 # =============================================================================
+# Non-sensitive structure only. Sensitive values (server host, SSH key,
+# registry password, database password) must be provided via GitHub Secrets
+# or environment variables and are never committed to this file.
+# =============================================================================
+[preview]
+enabled = true
+base_domain = "preview.yewmoon.fun"
+app_dir_root = "/opt/preview"
+url_scheme = "https"
+registry_host = "ghcr.io"
+registry_namespace = "zata-zhangtao"
+traefik_network = "traefik"
+
 [template_sync]
 # Project-specific paths skipped by default by `just sync-template`.
 # Use `just sync-template --all` to include these paths for a one-off sync.

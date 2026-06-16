@@ -30,10 +30,10 @@
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **预览环境派生真实验证**：通过 `uv run python scripts/preview_env.py --pr 123 --sha deadbeefcafe` 验证标准输出含正确的 `PREVIEW_DOMAIN` / `COMPOSE_PROJECT_NAME` / `BACKEND_IMAGE` / `FRONTEND_IMAGE`（基于 `config.toml [preview]`）。
-- [ ] **预览栈本地真实验证**：通过 `docker compose -p keda-pr-0 -f deploy/vps-traefik/docker-compose.preview.yml --env-file <tmp.env> up -d` 拉起 backend+frontend+db，`curl` 命中 `http://localhost:<published>/api/v1/agent-runner/health`，证明 alembic 迁移与 nginx→backend 代理在预览栈内可用。
-- [ ] **Compose 模板真实验证**：通过 `docker compose -f deploy/vps-traefik/docker-compose.preview.yml --env-file <tmp.env> config` 验证 Traefik router/service/volume 名按 PR 维度唯一化、无变量缺失。
-- [ ] **回归真实验证**：通过 `just test` 验证新增配置模型与派生逻辑不破坏现有配置加载与测试集。
+- [x] **预览环境派生真实验证**：通过 `uv run python scripts/preview_env.py --pr 123 --sha deadbeefcafe` 验证标准输出含正确的 `PREVIEW_DOMAIN` / `COMPOSE_PROJECT_NAME` / `BACKEND_IMAGE` / `FRONTEND_IMAGE`（基于 `config.toml [preview]`）。证据：`.iar/evidence/rv-1-preview-env-cli.txt`。
+- [x] **预览栈本地真实验证**：通过 `docker compose -p keda-pr-0 -f deploy/vps-traefik/docker-compose.preview.yml --env-file <tmp.env> up -d` 拉起 backend+frontend+db，`curl` 命中 `http://localhost:<published>/api/v1/agent-runner/health`，证明 alembic 迁移与 nginx→backend 代理在预览栈内可用。证据：`.iar/evidence/rv-3-preview-up-health.txt` + `.iar/evidence/rv-3-preview-up-health.png`。
+- [x] **Compose 模板真实验证**：通过 `docker compose -f deploy/vps-traefik/docker-compose.preview.yml --env-file <tmp.env> config` 验证 Traefik router/service/volume 名按 PR 维度唯一化、无变量缺失。证据：`.iar/evidence/rv-2-compose-config.txt`。
+- [x] **回归真实验证**：通过 `just test` 验证新增配置模型与派生逻辑不破坏现有配置加载与测试集。证据：`.iar/evidence/rv-4-just-test.txt`。
 
 **为什么单元测试不够**：单测只能证明字符串派生正确，无法证明「镜像能构建、迁移能在容器内 `alembic upgrade head`、nginx 能代理到 `backend:8000`、Traefik 标签能被网关接收」这些跨容器/跨服务行为；这些只有真实拉起预览栈才能暴露。
 
@@ -388,33 +388,33 @@ No interactive prototype file changes in this PRD.
 ## 7. Acceptance Checklist
 
 ### Architecture Acceptance
-- [ ] 预览模板落在 `deploy/vps-traefik/`（非新建 `deploy/preview/docker-traefik/`）；`rg -n "deploy/preview/docker-traefik" .` 无命中。
-- [ ] `PreviewSettings` 定义于 `src/backend/infrastructure/config/settings.py` 并聚合进 `AppSettings.preview`，且写入 `__all__`；`rg -n "PreviewSettings" src/backend/infrastructure/config/settings.py` 命中类定义、聚合与导出三处。
-- [ ] 派生逻辑 `render_preview_env` 位于 `src/backend/core/use_cases/preview_deployment.py`，不 import `engines/`、`infrastructure/`（纯函数仅依赖传入 settings）。
-- [ ] 新增文件均 < 1000 非空行：`uv run python hooks/check_max_file_lines.py --max-lines 1000 $(rg -l "" deploy/vps-traefik scripts/preview_env.py src/backend/core/use_cases/preview_deployment.py)`。
+- [x] 预览模板落在 `deploy/vps-traefik/`（非新建 `deploy/preview/docker-traefik/`）；`rg -n "deploy/preview/docker-traefik" .` 无命中。
+- [x] `PreviewSettings` 定义于 `src/backend/infrastructure/config/settings.py` 并聚合进 `AppSettings.preview`，且写入 `__all__`；`rg -n "PreviewSettings" src/backend/infrastructure/config/settings.py` 命中类定义、聚合与导出三处。
+- [x] 派生逻辑 `render_preview_env` 位于 `src/backend/core/use_cases/preview_deployment.py`，不 import `engines/`、`infrastructure/`（纯函数仅依赖传入 settings）。
+- [x] 新增文件均 < 1000 非空行：`uv run python hooks/check_max_file_lines.py --max-lines 1000 $(rg -l "" deploy/vps-traefik scripts/preview_env.py src/backend/core/use_cases/preview_deployment.py)`。
 
 ### Dependency Acceptance
-- [ ] `[preview]` 仅含非敏感结构；`config.toml`、`deploy/vps-traefik/*` 不含任何真实密钥/host：`rg -n "SSH|PRIVATE KEY|password|secret" config.toml deploy/vps-traefik` 仅命中占位/变量名而非真实值。
-- [ ] 敏感值仅在 GitHub Secrets/环境引用：`rg -n "secrets\.|vars\." .github/workflows/deploy-preview.yml` 覆盖 `SERVER_HOST`/`SERVER_SSH_KEY`/`SERVER_USER`/`REGISTRY_*`/`POSTGRES_PASSWORD`。
-- [ ] 预览 `.env` 不进受管 diff：`.gitignore` 覆盖 `deploy/vps-traefik/*.env`（保留 `*.example`）。
+- [x] `[preview]` 仅含非敏感结构；`config.toml`、`deploy/vps-traefik/*` 不含任何真实密钥/host：`rg -n "SSH|PRIVATE KEY|password|secret" config.toml deploy/vps-traefik` 仅命中占位/变量名而非真实值。
+- [x] 敏感值仅在 GitHub Secrets/环境引用：`rg -n "secrets\.|vars\." .github/workflows/deploy-preview.yml` 覆盖 `SERVER_HOST`/`SERVER_SSH_KEY`/`SERVER_USER`/`REGISTRY_*`/`POSTGRES_PASSWORD`。
+- [x] 预览 `.env` 不进受管 diff：`.gitignore` 覆盖 `deploy/vps-traefik/*.env`（保留 `*.example`）。
 
 ### Behavior Acceptance
-- [ ] `docker-compose.preview.yml` 中 backend 服务名为 `backend`、healthcheck 为 `/api/v1/agent-runner/health`、`DATABASE_URL` 指向同栈 `db`；frontend 同时在默认网络与外部 `${TRAEFIK_NETWORK}`，router/service 名按 `${COMPOSE_PROJECT_NAME}` 唯一。
-- [ ] `deploy-preview.yml` 触发含 `opened/synchronize/reopened/closed` + `issue_comment(/deploy)` + `workflow_dispatch`；`closed` 走 teardown；`concurrency` 按 PR 分组。
-- [ ] sticky 评论用隐藏标记 `<!-- preview-deploy -->` 实现 upsert（同一条评论更新，不刷屏）。
-- [ ] 失败不阻塞：`deploy-preview` 未被加入任何分支保护必需检查（在 README/部署文档中显式说明不要将其设为 required）。
+- [x] `docker-compose.preview.yml` 中 backend 服务名为 `backend`、healthcheck 为 `/api/v1/agent-runner/health`、`DATABASE_URL` 指向同栈 `db`；frontend 同时在默认网络与外部 `${TRAEFIK_NETWORK}`，router/service 名按 `${COMPOSE_PROJECT_NAME}` 唯一。
+- [x] `deploy-preview.yml` 触发含 `opened/synchronize/reopened/closed` + `issue_comment(/deploy)` + `workflow_dispatch`；`closed` 走 teardown；`concurrency` 按 PR 分组。
+- [x] sticky 评论用隐藏标记 `<!-- preview-deploy -->` 实现 upsert（同一条评论更新，不刷屏）。
+- [x] 失败不阻塞：`deploy-preview` 未被加入任何分支保护必需检查（在 README/部署文档中显式说明不要将其设为 required）。
 
 ### Documentation Acceptance
-- [ ] `docs/guides/deployment.md` 不再含 `TODO: 补充容器化部署模板`，且新增预览部署章节；`rg -n "补充容器化部署模板" docs/guides/deployment.md` 无命中。
-- [ ] `docs/guides/configuration.md` 记录 `[preview]` 全部字段；`deploy/vps-traefik/README.md` 含 Preview 章节。
-- [ ] `uv run mkdocs build --strict` 通过。
+- [x] `docs/guides/deployment.md` 不再含 `TODO: 补充容器化部署模板`，且新增预览部署章节；`rg -n "补充容器化部署模板" docs/guides/deployment.md` 无命中。
+- [x] `docs/guides/configuration.md` 记录 `[preview]` 全部字段；`deploy/vps-traefik/README.md` 含 Preview 章节。
+- [x] `uv run mkdocs build --strict` 通过。
 
 ### Validation Acceptance
-- [ ] **真实 CLI**：`uv run python scripts/preview_env.py --pr 123 --sha deadbeefcafe` 输出含正确 `PREVIEW_DOMAIN`/`COMPOSE_PROJECT_NAME`/`BACKEND_IMAGE`/`FRONTEND_IMAGE`（证据 `rv-1-*`）。
-- [ ] **真实 Compose 渲染**：`docker compose -f deploy/vps-traefik/docker-compose.preview.yml --env-file /tmp/preview.env config` 成功且名称按 PR 唯一（证据 `rv-2-*`）。
-- [ ] **真实运行栈**：本地 `docker compose -p keda-pr-0 ... up -d` 后 `curl -f .../api/v1/agent-runner/health` 返回成功（证据 `rv-3-*`）。
-- [ ] **回归**：`just test` 通过（证据 `rv-4-*`）。
-- [ ] **（opt-in）远程端到端**：凭据可用时，真实 PR 产出可访问预览 URL、关闭后拆栈；凭据不可用时记录为跳过，不阻塞验收。
+- [x] **真实 CLI**：`uv run python scripts/preview_env.py --pr 123 --sha deadbeefcafe` 输出含正确 `PREVIEW_DOMAIN`/`COMPOSE_PROJECT_NAME`/`BACKEND_IMAGE`/`FRONTEND_IMAGE`（证据 `rv-1-*`）。
+- [x] **真实 Compose 渲染**：`docker compose -f deploy/vps-traefik/docker-compose.preview.yml --env-file /tmp/preview.env config` 成功且名称按 PR 唯一（证据 `rv-2-*`）。
+- [x] **真实运行栈**：本地 `docker compose -p keda-pr-0 ... up -d` 后 `curl -f .../api/v1/agent-runner/health` 返回成功（证据 `rv-3-*`）。
+- [x] **回归**：`just test` 通过（证据 `rv-4-*`）。
+- [x] **（opt-in）远程端到端**：凭据可用时，真实 PR 产出可访问预览 URL、关闭后拆栈；凭据不可用时记录为跳过，不阻塞验收。本机环境无 GitHub Secrets/预览服务器凭据，已以本地 `docker compose up` 冒烟替代。
 
 ## 8. Functional Requirements
 
