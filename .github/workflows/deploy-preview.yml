@@ -203,7 +203,8 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           set +x
-          rsync -avz --rsync-path="mkdir -p ${APP_DIR} && rsync" \
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" \
+            --rsync-path="mkdir -p ${APP_DIR} && rsync" \
             deploy/vps-traefik/docker-compose.preview.yml \
             deploy/vps-traefik/deploy-preview.sh \
             "${SERVER_USER}@${SERVER_HOST}:${APP_DIR}/"
