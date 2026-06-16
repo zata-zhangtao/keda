@@ -182,12 +182,16 @@ jobs:
         env:
           GITHUB_ENV: ${{ github.env }}
         run: |
-          uv run python scripts/preview_env.py \
+          # Capture the env lines, eval them into the current shell so that
+          # PREVIEW_DOMAIN/PREVIEW_URL_SCHEME are available immediately, then
+          # also persist them via >> $GITHUB_ENV for downstream steps.
+          preview_env_output=$(uv run python scripts/preview_env.py \
             --pr "${PR_NUMBER}" \
-            --sha "${COMMIT_SHA}" >> "$GITHUB_ENV"
-          scheme="${PREVIEW_URL_SCHEME:-https}"
-          echo "PREVIEW_URL=${scheme}://${PREVIEW_DOMAIN}" >> "$GITHUB_ENV"
-          echo "PREVIEW_URL=${scheme}://${PREVIEW_DOMAIN}" >> "$GITHUB_OUTPUT"
+            --sha "${COMMIT_SHA}")
+          printf '%s\n' "$preview_env_output" >> "$GITHUB_ENV"
+          eval "$preview_env_output"
+          echo "PREVIEW_URL=${PREVIEW_URL_SCHEME:-https}://${PREVIEW_DOMAIN}" >> "$GITHUB_ENV"
+          echo "PREVIEW_URL=${PREVIEW_URL_SCHEME:-https}://${PREVIEW_DOMAIN}" >> "$GITHUB_OUTPUT"
 
       - name: Add SSH key
         uses: webfactory/ssh-agent@v0.9.0
