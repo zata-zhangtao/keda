@@ -195,6 +195,19 @@ jobs:
           ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
           log-public-key: false
 
+      - name: Debug SSH agent and probe server
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          echo "=== ssh-add -l ==="
+          ssh-add -l || echo "ssh-add -l failed"
+          echo "=== ssh -vvv (probe) ==="
+          ssh -vvv -o StrictHostKeyChecking=no -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            "${SERVER_USER}@${SERVER_HOST}" true 2>&1 | grep -E \
+            "Offering|Authentications|Authenticated|fatal|Connection|Permission|publickey|signing" || true
+
       - name: Deploy to preview server
         id: deploy
         env:
