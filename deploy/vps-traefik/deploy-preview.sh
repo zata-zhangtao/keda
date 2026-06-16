@@ -34,23 +34,25 @@ compose_args=(
 up() {
   mkdir -p "${APP_DIR}"
 
-  {
-    echo "PREVIEW_DOMAIN=${PREVIEW_DOMAIN}"
-    echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}"
-    echo "APP_DIR=${APP_DIR}"
-    echo "PREVIEW_URL_SCHEME=${PREVIEW_URL_SCHEME}"
-    echo "BACKEND_IMAGE=${BACKEND_IMAGE}"
-    echo "FRONTEND_IMAGE=${FRONTEND_IMAGE}"
-    echo "REGISTRY_HOST=${REGISTRY_HOST}"
-    echo "REGISTRY_NAMESPACE=${REGISTRY_NAMESPACE}"
-    echo "TRAEFIK_NETWORK=${TRAEFIK_NETWORK}"
-    echo "TRAEFIK_ROUTER_NAME=${TRAEFIK_ROUTER_NAME}"
-    echo "TRAEFIK_SERVICE_NAME=${TRAEFIK_SERVICE_NAME}"
-    echo "POSTGRES_USER=${POSTGRES_USER}"
-    echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
-    echo "POSTGRES_DB=${POSTGRES_DB}"
-    echo "DATABASE_URL=${DATABASE_URL}"
-  } > "${APP_DIR}/.env"
+  if [ ! -f "${APP_DIR}/.env" ]; then
+    {
+      echo "PREVIEW_DOMAIN=${PREVIEW_DOMAIN}"
+      echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}"
+      echo "APP_DIR=${APP_DIR}"
+      echo "PREVIEW_URL_SCHEME=${PREVIEW_URL_SCHEME}"
+      echo "BACKEND_IMAGE=${BACKEND_IMAGE}"
+      echo "FRONTEND_IMAGE=${FRONTEND_IMAGE}"
+      echo "REGISTRY_HOST=${REGISTRY_HOST}"
+      echo "REGISTRY_NAMESPACE=${REGISTRY_NAMESPACE}"
+      echo "TRAEFIK_NETWORK=${TRAEFIK_NETWORK}"
+      echo "TRAEFIK_ROUTER_NAME=${TRAEFIK_ROUTER_NAME}"
+      echo "TRAEFIK_SERVICE_NAME=${TRAEFIK_SERVICE_NAME}"
+      echo "POSTGRES_USER=${POSTGRES_USER}"
+      echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
+      echo "POSTGRES_DB=${POSTGRES_DB}"
+      echo "DATABASE_URL=${DATABASE_URL}"
+    } > "${APP_DIR}/.env"
+  fi
 
   docker compose "${compose_args[@]}" --env-file "${APP_DIR}/.env" pull
   docker compose "${compose_args[@]}" --env-file "${APP_DIR}/.env" up -d --remove-orphans

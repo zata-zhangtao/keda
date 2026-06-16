@@ -203,14 +203,33 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
         run: |
           set +x
+          {
+            echo "PREVIEW_DOMAIN=${PREVIEW_DOMAIN}"
+            echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}"
+            echo "APP_DIR=${APP_DIR}"
+            echo "PREVIEW_URL_SCHEME=${PREVIEW_URL_SCHEME}"
+            echo "BACKEND_IMAGE=${BACKEND_IMAGE}"
+            echo "FRONTEND_IMAGE=${FRONTEND_IMAGE}"
+            echo "REGISTRY_HOST=${REGISTRY_HOST}"
+            echo "REGISTRY_NAMESPACE=${REGISTRY_NAMESPACE}"
+            echo "TRAEFIK_NETWORK=${TRAEFIK_NETWORK}"
+            echo "TRAEFIK_ROUTER_NAME=${TRAEFIK_ROUTER_NAME}"
+            echo "TRAEFIK_SERVICE_NAME=${TRAEFIK_SERVICE_NAME}"
+            echo "POSTGRES_USER=keda"
+            echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
+            echo "POSTGRES_DB=keda_preview"
+            echo "DATABASE_URL=postgresql+psycopg2://keda:${POSTGRES_PASSWORD}@db:5432/keda_preview"
+          } > .env.generated
           rsync -avz -e "ssh -o StrictHostKeyChecking=no" \
             --rsync-path="mkdir -p ${APP_DIR} && rsync" \
+            .env.generated \
             deploy/vps-traefik/docker-compose.preview.yml \
             deploy/vps-traefik/deploy-preview.sh \
             "${SERVER_USER}@${SERVER_HOST}:${APP_DIR}/"
+          rm -f .env.generated
           ssh -o StrictHostKeyChecking=no \
             "${SERVER_USER}@${SERVER_HOST}" \
-            "cd ${APP_DIR} && APP_DIR='${APP_DIR}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' POSTGRES_PASSWORD='${POSTGRES_PASSWORD}' bash deploy-preview.sh up"
+            "cd ${APP_DIR} && mv -f .env.generated .env && APP_DIR='${APP_DIR}' COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' bash deploy-preview.sh up"
 
       - name: Upsert sticky preview comment
         if: ${{ always() }}
