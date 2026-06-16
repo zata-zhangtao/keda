@@ -329,4 +329,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print candidates without writing to config.toml.",
     )
 
+    workflow_parser = subparsers.add_parser(
+        "workflow",
+        help="Install and manage bundled workflow templates.",
+    )
+    workflow_subparsers = workflow_parser.add_subparsers(
+        dest="workflow_command", required=True
+    )
+    workflow_install_parser = workflow_subparsers.add_parser(
+        "install",
+        help="Install a bundled workflow template into the current repository.",
+    )
+    workflow_install_parser.set_defaults(command="workflow install")
+    workflow_install_parser.add_argument(
+        "name", help="Workflow template name (e.g. 'preview')."
+    )
+    workflow_install_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing template files and [preview] section.",
+    )
+    workflow_install_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the install plan without writing anything.",
+    )
+    add_common_options(workflow_install_parser)
+
     return parser

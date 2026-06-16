@@ -76,6 +76,12 @@ from backend.engines.agent_runner.repository_local import (
 from backend.engines.agent_runner.worktree_cli import (
     build_worktree_manager,
 )
+from backend.engines.agent_runner.workflow_install import (
+    ExistingFileRefusedError,
+    UnknownWorkflowError,
+    WorkflowInstallOptions,
+    install_workflow,
+)
 
 console = Console()
 error_console = Console(stderr=True)
@@ -341,6 +347,122 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Label sync failed (labels may already exist): %s", exc)
             error_console.print(f"[yellow]Label sync failed:[/] {exc}")
+        return 0
+
+    if parsed.command == "workflow install":
+        if (
+            repo_id is not None
+            or repo_override is not None
+            or parsed.config is not None
+        ):
+            logger.error(
+                "iar workflow install uses the current Git repository; "
+                "omit --repo/--repo-id/--config."
+            )
+            return 1
+        try:
+            install_result = install_workflow(
+                WorkflowInstallOptions(
+                    cwd=Path.cwd(),
+                    name=parsed.name,
+                    force=parsed.force,
+                    dry_run=parsed.dry_run,
+                ),
+                process_runner,
+            )
+        except UnknownWorkflowError as exc:
+            logger.error("%s", exc)
+            return 1
+        except ExistingFileRefusedError as exc:
+            logger.error("%s", exc)
+            return 1
+        except IARRepositoryNotInitializedError as exc:
+            return _handle_not_initialized_error(exc)
+        except ValueError as exc:
+            logger.error("iar workflow install failed: %s", exc)
+            return 1
+        if parsed.dry_run:
+            console.print("[cyan]Would install workflow:[/] %s" % install_result.name)
+            for plan in install_result.template_file_plans:
+                marker = (
+                    "[yellow]would overwrite[/]"
+                    if plan.exists_on_disk
+                    else "[green]would write[/]"
+                )
+                console.print(
+                    "  %s %s (%d bytes)"
+                    % (marker, plan.target_path, plan.bytes_to_write)
+                )
+            if install_result.config_toml_plan is None:
+                console.print(
+                    "config.toml not found at repo root; skipping [preview] section write",
+                    markup=False,
+                    style="dim",
+                )
+            elif install_result.config_toml_plan.parse_failed:
+                console.print(
+                    "config.toml 解析失败，跳过 [preview] 段写入",
+                    markup=False,
+                    style="yellow",
+                )
+            elif install_result.config_toml_plan.will_overwrite_preview_section:
+                console.print(
+                    "Would overwrite existing [preview] section",
+                    markup=False,
+                    style="yellow",
+                )
+            elif install_result.config_toml_plan.will_write_new_section:
+                console.print(
+                    "Would append [preview] section",
+                    markup=False,
+                    style="green",
+                )
+            else:
+                console.print(
+                    "[preview] section already exists; use --force to overwrite",
+                    markup=False,
+                    style="dim",
+                )
+            return 0
+
+        for plan in install_result.template_file_plans:
+            if plan.exists_on_disk and install_result.refused_template_paths:
+                continue
+            marker = (
+                "[green]Wrote[/]" if not plan.exists_on_disk else "[yellow]Overwrote[/]"
+            )
+            console.print("%s %s" % (marker, plan.target_path))
+        config_plan = install_result.config_toml_plan
+        if config_plan is None:
+            console.print(
+                "config.toml not found at repo root; skipping [preview] section write",
+                markup=False,
+                style="dim",
+            )
+        elif config_plan.parse_failed:
+            console.print(
+                "config.toml 解析失败，跳过 [preview] 段写入",
+                markup=False,
+                style="yellow",
+            )
+        elif config_plan.will_overwrite_preview_section:
+            console.print(
+                "Overwrote existing [preview] section",
+                markup=False,
+                style="yellow",
+            )
+        elif config_plan.will_write_new_section:
+            console.print(
+                "Appended [preview] section",
+                markup=False,
+                style="green",
+            )
+        else:
+            console.print(
+                "[preview] section already exists; pass --force to overwrite",
+                markup=False,
+                style="dim",
+            )
         return 0
 
     if parsed.command == "registry scan":

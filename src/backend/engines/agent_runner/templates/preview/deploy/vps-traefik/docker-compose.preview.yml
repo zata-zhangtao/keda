@@ -1,0 +1,122 @@
+# -----------------------------------------------------------------------------
+# Docker Compose — Per-PR Preview Deployment (Docker + Traefik)
+# -----------------------------------------------------------------------------
+# This stack is deployed by .github/workflows/deploy-preview.yml for each open
+# pull request. Each PR gets an isolated project name so multiple previews can
+# coexist on the same Docker host.
+#
+# Required environment (see preview.env.example):
+#   - PREVIEW_DOMAIN          e.g. pr-123.preview.example.com
+#   - COMPOSE_PROJECT_NAME    e.g. keda-pr-123
+#   - BACKEND_IMAGE           full image reference for backend :<sha>
+#   - FRONTEND_IMAGE          full image reference for frontend :<sha>
+#   - TRAEFIK_NETWORK         external Traefik network name
+#   - DATABASE_URL            points at the ephemeral postgres service below
+#   - POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+#
+# The frontend image proxies /api/* to the backend service name "backend:8000",
+# so the backend service name must remain exactly "backend".
+# -----------------------------------------------------------------------------
+
+services:
+  backend:
+    image: ${BACKEND_IMAGE}
+    container_name: ${COMPOSE_PROJECT_NAME}-backend
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DATABASE_URL=${DATABASE_URL}
+      - API_SECRET_KEY
+      - ADMIN_IDENTIFIER
+      - ADMIN_PASSWORD_HASH
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/agent-runner/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - backend-logs:/app/backend/logs
+      - backend-data:/app/backend/data
+    networks:
+      - default
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  frontend:
+    image: ${FRONTEND_IMAGE}
+    container_name: ${COMPOSE_PROJECT_NAME}-frontend
+    expose:
+      - "80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - default
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.rule=Host(`${PREVIEW_DOMAIN}`)"
+      - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.entrypoints=websecure"
+      - "traefik.http.routers.${TRAEFIK_ROUTER_NAME}.tls.certResolver=letsencrypt"
+      - "traefik.http.services.${TRAEFIK_SERVICE_NAME}.loadbalancer.server.port=80"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.125"
+          memory: 64M
+
+  db:
+    image: postgres:17-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-db
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - default
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.125"
+          memory: 128M
+
+volumes:
+  backend-logs:
+  backend-data:
+  postgres-data:
+
+networks:
+  default:
+    name: ${COMPOSE_PROJECT_NAME}
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK}

@@ -433,6 +433,44 @@ include_diff_stat = true
 
 历史命令 `iar run-once`、`iar review-once`、`iar issue-from-prd` 和 `iar recover-publish` 已被删除；请改用 `iar run` / `iar review` / `iar issue create` / `iar recover`。
 
+## Workflow Templates（`iar workflow install`）
+
+`iar workflow install <name>` 把 IAR 内嵌的 workflow 模板复制到当前 Git 仓库，并写入最小的 `[preview]` 占位段。当前 v1 只支持 `preview` 工作流，会复制下列 7 个文件（相对仓库根）：
+
+- `.github/workflows/deploy-preview.yml`
+- `deploy/vps-traefik/README.md`
+- `deploy/vps-traefik/deploy-preview.sh`（保持 `0755` 权限）
+- `deploy/vps-traefik/docker-compose.preview.yml`
+- `deploy/vps-traefik/preview.env.example`
+- `scripts/preview_env.py`
+- `scripts/provision_preview_server.py`
+
+典型用法：
+
+```bash
+# 在目标仓库里（必须先 `iar init`）：
+uv run iar workflow install preview
+
+# 只看将要写哪些路径与字节数，不实际落盘：
+uv run iar workflow install preview --dry-run
+
+# 已存在同名文件会被拒绝（非零退出），需要重建时显式加 --force。
+uv run iar workflow install preview --force
+```
+
+行为约定：
+
+- 目标文件已存在 → 默认拒绝并以非零退出；`--force` 同时覆盖 7 个模板文件和 `config.toml [preview]` 段
+- `--dry-run` 全程不写盘，只打印 `would write` / `would overwrite` 清单
+- `config.toml` 末尾追加最小 `[preview]` 段；已存在时默认跳过，`--force` 用占位段整体替换
+- 占位段字段名直接派生自 `backend.infrastructure.config.settings.PreviewSettings.model_fields`，避免硬编码字段清单；字段值统一为 `<set-me>`（`enabled` 保留 schema 默认值以保证 pydantic-settings 可解析）
+- 缺 `.iar.toml` 时拒绝并提示 `iar init`
+- 接收 `--repo` / `--repo-id` / `--config` 时拒绝并不落盘（与 `iar init` 行为一致）
+
+模板维护说明：模板文件随 IAR Python 包一起发布，路径在 `src/backend/engines/agent_runner/templates/<name>/`。
+源仓库改动（`deploy/`、`scripts/`、`.github/workflows/deploy-preview.yml`）后，需要同步把变更复制到 `templates/preview/`。
+`just check-template-drift` 会在 CI 拒绝这两边不一致的情况；`deploy/vps-traefik/README.md` 第 35-45 行的字段表也必须与 `PreviewSettings.model_fields` 对齐，否则 drift 门禁会失败。
+
 ## worktree 中的本地 env 文件
 
 `git worktree add` 只会物化被 Git 跟踪的文件，gitignored 的 `.env*`（密钥、本地配置）不会自动出现在新 worktree 里。为此 runner 在 worktree 创建/复用后会自动补齐缺失的 env 文件：

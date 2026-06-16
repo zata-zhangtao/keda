@@ -544,6 +544,58 @@ lint mode="": _check-completion
             ;;
     esac
 
+# Check that bundled workflow templates are byte-identical to their source
+# files, and that the README field table matches PreviewSettings.model_fields.
+# Exits non-zero on any drift.
+check-template-drift:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    template_root="src/backend/engines/agent_runner/templates/preview"
+
+    # 1. Byte-level diff between template copies and source files.
+    diff_pairs=(
+        ".github/workflows/deploy-preview.yml|.github/workflows/deploy-preview.yml"
+        "deploy/vps-traefik/README.md|deploy/vps-traefik/README.md"
+        "deploy/vps-traefik/docker-compose.preview.yml|deploy/vps-traefik/docker-compose.preview.yml"
+        "deploy/vps-traefik/deploy-preview.sh|deploy/vps-traefik/deploy-preview.sh"
+        "deploy/vps-traefik/preview.env.example|deploy/vps-traefik/preview.env.example"
+        "scripts/preview_env.py|scripts/preview_env.py"
+        "scripts/provision_preview_server.py|scripts/provision_preview_server.py"
+    )
+
+    drift_detected=0
+    for pair in "${diff_pairs[@]}"; do
+        template_rel="${pair%%|*}"
+        source_rel="${pair##*|}"
+        if ! diff -q "${template_root}/${template_rel}" "${source_rel}" > /dev/null; then
+            echo "❌ Template drift: ${template_root}/${template_rel} != ${source_rel}"
+            drift_detected=1
+        fi
+    done
+
+    # 2. README field table must match PreviewSettings.model_fields.
+    if command -v uv > /dev/null 2>&1; then
+        preview_field_names="$(uv run python -c "from backend.infrastructure.config.settings import PreviewSettings; import sys; [sys.stdout.write(name + \"\n\") for name in PreviewSettings.model_fields.keys()]")"
+        readme_field_names="$(awk '/^Non-sensitive structure is configured in `config.toml \[preview\]`:/{flag=1; next} flag && /^- `/ {gsub(/^- `/, ""); gsub(/`$/, ""); print}' deploy/vps-traefik/README.md)"
+        if [ -n "$readme_field_names" ]; then
+            if [ "$(printf '%s\n' "$preview_field_names" | sort)" != "$(printf '%s\n' "$readme_field_names" | sort)" ]; then
+                echo "❌ deploy/vps-traefik/README.md field table does not match PreviewSettings.model_fields"
+                echo "  Expected: $(printf '%s ' $preview_field_names)"
+                echo "  Found:    $(printf '%s ' $readme_field_names)"
+                drift_detected=1
+            fi
+        else
+            echo "⚠️  Could not extract README field table; skipping field check."
+        fi
+    fi
+
+    if [ "$drift_detected" -ne 0 ]; then
+        echo "❌ Template drift detected; sync source files into ${template_root}."
+        exit 1
+    fi
+    echo "✅ Templates in sync."
+
 # Serve MkDocs site locally with live reload (configurable port, default 8000)
 docs-serve port="8000": _check-completion
     WATCHDOG_USE_POLLING=1 uv run mkdocs serve -a 127.0.0.1:{{port}}
