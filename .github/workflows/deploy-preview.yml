@@ -99,7 +99,7 @@ jobs:
             image_var: BACKEND_IMAGE
           - name: frontend
             context: ./frontend
-            dockerfile: Dockerfile
+            dockerfile: frontend/Dockerfile
             image_var: FRONTEND_IMAGE
     steps:
       - name: Checkout repository
