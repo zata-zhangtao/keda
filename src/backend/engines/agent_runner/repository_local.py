@@ -386,6 +386,29 @@ def _uv_dependency_flag(
     return None
 
 
+_JUST_TEST_RECIPE_PATTERN = re.compile(r"^test\b[^\n]*:(?!=)", re.MULTILINE)
+
+
+def _has_just_test_recipe(repo_root_path: Path) -> bool:
+    """Return whether a justfile in the repo defines a ``test`` recipe.
+
+    Matches a recipe header line such as ``test:`` or ``test *args:`` at column
+    zero while ignoring ``test := ...`` variable assignments. Used to align the
+    generated verification command with the project's own aggregate gate.
+    """
+    for filename in ("justfile", "Justfile", ".justfile"):
+        justfile_path = repo_root_path / filename
+        if not justfile_path.is_file():
+            continue
+        try:
+            justfile_text = justfile_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        if _JUST_TEST_RECIPE_PATTERN.search(justfile_text):
+            return True
+    return False
+
+
 def detect_verification_commands(repo_root_path: Path) -> list[str]:
     """Detect verification commands that actually run in the target repository.
 
@@ -413,9 +436,18 @@ def detect_verification_commands(repo_root_path: Path) -> list[str]:
             verification_commands.append(f"uv run{mkdocs_flag} mkdocs build")
 
     if (repo_root_path / "tests").is_dir():
-        pytest_flag = _uv_dependency_flag(pyproject_data, "pytest")
-        if pytest_flag is not None:
-            verification_commands.append(f"uv run{pytest_flag} pytest -q")
+        if _has_just_test_recipe(repo_root_path):
+            # Prefer the project's own ``just test`` aggregate gate when present:
+            # it runs the same lint/format/test hooks that pre-commit enforces at
+            # ``git commit`` (and refreshes any just-test marker), so a commit
+            # cannot fail pre-commit after the runner's verification already
+            # passed. A bare ``pytest -q`` misses ruff/format/test-flag, letting
+            # those failures surface only at commit time and hard-fail the run.
+            verification_commands.append("just test")
+        else:
+            pytest_flag = _uv_dependency_flag(pyproject_data, "pytest")
+            if pytest_flag is not None:
+                verification_commands.append(f"uv run{pytest_flag} pytest -q")
 
     return verification_commands
 

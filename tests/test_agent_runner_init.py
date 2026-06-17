@@ -176,6 +176,83 @@ def test_detect_verification_commands_main_dep_and_named_group(
     ]
 
 
+def test_detect_verification_commands_prefers_just_test_recipe(
+    tmp_path: Path,
+) -> None:
+    """A justfile ``test`` recipe is preferred over a bare ``pytest -q``.
+
+    ``just test`` runs the same lint/format/test gate that pre-commit enforces
+    at ``git commit``, keeping the runner's verification aligned with the commit
+    gate so a commit cannot fail pre-commit after verification already passed.
+    """
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "target"',
+                'version = "0.1.0"',
+                'dependencies = ["mkdocs>=1.6.1"]',
+                "",
+                "[dependency-groups]",
+                'qa = ["pytest>=8.3.0"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_path / "mkdocs.yml").write_text("site_name: target\n", encoding="utf-8")
+    (repo_path / "tests").mkdir()
+    # ``test_setup :=`` and the ``test_`` prefix must not be mistaken for a
+    # ``test`` recipe header.
+    (repo_path / "justfile").write_text(
+        "\n".join(
+            [
+                'test_setup := "x"',
+                "",
+                "test:",
+                "    uv run pytest -q",
+                "",
+                "lint:",
+                "    uv run ruff check .",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert detect_verification_commands(repo_path) == [
+        "git diff --check",
+        "uv run mkdocs build",
+        "just test",
+    ]
+
+
+def test_detect_verification_commands_justfile_without_test_recipe_uses_pytest(
+    tmp_path: Path,
+) -> None:
+    """A justfile lacking a ``test`` recipe falls back to ``pytest -q``."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "target"',
+                'version = "0.1.0"',
+                'dependencies = ["pytest>=8.3.0"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_path / "tests").mkdir()
+    (repo_path / "justfile").write_text(
+        "lint:\n    uv run ruff check .\n", encoding="utf-8"
+    )
+
+    assert detect_verification_commands(repo_path) == [
+        "git diff --check",
+        "uv run pytest -q",
+    ]
+
+
 def test_detect_verification_commands_skips_undeclared_tools(
     tmp_path: Path,
 ) -> None:

@@ -570,12 +570,19 @@ def test_ensure_prd_delivery_ready_git_mv_when_pending_complete(
     )
     fake_runner = FakeProcessRunner()
     ensure_prd_delivery_ready(issue, tmp_path, fake_runner)
-    assert [
+    # The on-disk PRD is staged before the move so ``git mv`` cannot abort with
+    # "not under version control" when the file is untracked (e.g. left behind
+    # by a PRD rewrite that overwrote it without re-staging).
+    add_call = ["git", "add", "--", "tasks/pending/example.md"]
+    mv_call = [
         "git",
         "mv",
         "tasks/pending/example.md",
         "tasks/archive/example.md",
-    ] in fake_runner.calls
+    ]
+    assert add_call in fake_runner.calls
+    assert mv_call in fake_runner.calls
+    assert fake_runner.calls.index(add_call) < fake_runner.calls.index(mv_call)
 
 
 def test_ensure_prd_delivery_ready_passes_when_archive_complete(
@@ -1844,6 +1851,143 @@ def test_commit_requested_changes_restages_tracked_verification_edits(
         < tracked_restage_index
         < commit_index
     )
+
+
+class _PrecommitCommitRunner(FakeProcessRunner):
+    """Fake runner that drives the proxy commit's pre-commit recovery path.
+
+    Returns the configured return codes for successive proxy ``git commit``
+    invocations so a test can simulate a hook rewriting files (fail then pass)
+    or a hard lint error (fail then fail). All other commands fall back to the
+    configured ``responses``/defaults.
+    """
+
+    def __init__(self, *, commit_return_codes: list[int], **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._commit_return_codes = commit_return_codes
+        self._commit_attempts = 0
+
+    def run(
+        self,
+        command,
+        *,
+        cwd,
+        check=True,
+        timeout=None,
+        capture_output=True,
+        input_text=None,
+    ):
+        command_tuple = tuple(command)
+        is_proxy_commit = command_tuple[:2] == ("git", "commit")
+        if is_proxy_commit:
+            from backend.infrastructure.process_runner import CommandFailedError
+
+            self.calls.append(list(command))
+            self.input_texts.append(input_text)
+            index = min(self._commit_attempts, len(self._commit_return_codes) - 1)
+            return_code = self._commit_return_codes[index]
+            self._commit_attempts += 1
+            if check and return_code != 0:
+                raise CommandFailedError(
+                    return_code,
+                    list(command),
+                    output="",
+                    stderr="pre-commit hook failed",
+                )
+            return CommandResult(
+                command=command_tuple,
+                return_code=return_code,
+                stdout="",
+                stderr="pre-commit hook failed" if return_code != 0 else "",
+            )
+        return super().run(
+            command,
+            cwd=cwd,
+            check=check,
+            timeout=timeout,
+            capture_output=capture_output,
+            input_text=input_text,
+        )
+
+
+def _precommit_runner(*, commit_return_codes: list[int], diff_quiet_rc: int):
+    return _PrecommitCommitRunner(
+        commit_return_codes=commit_return_codes,
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-123\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M src/example.py\n",
+                stderr="",
+            ),
+            ("git", "diff", "--quiet"): CommandResult(
+                command=("git", "diff", "--quiet"),
+                return_code=diff_quiet_rc,
+                stdout="",
+                stderr="",
+            ),
+        },
+    )
+
+
+def test_commit_requested_changes_retries_after_precommit_autofix(
+    tmp_path: Path,
+) -> None:
+    """A hook that rewrites files (ruff-format) should not fail the commit."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: implement example")
+    # First proxy commit fails (files modified by hook); diff --quiet reports
+    # tracked changes, so the runner re-stages and the retry succeeds.
+    fake_runner = _precommit_runner(commit_return_codes=[1, 0], diff_quiet_rc=1)
+    config = AppConfig(runner=RunnerConfig(verification_commands=("git diff --check",)))
+
+    commit_requested_changes(
+        _make_ready_issue(),
+        worktree_path,
+        config,
+        fake_runner,
+        expected_branch="issue-123",
+    )
+
+    proxy_commits = [
+        command
+        for command in fake_runner.calls
+        if tuple(command)[:2] == ("git", "commit")
+    ]
+    assert len(proxy_commits) == 2
+    assert proxy_commits[0] == ["git", "commit", "-m", "agent: implement example"]
+    assert ["git", "add", "-u"] in fake_runner.calls
+
+
+def test_commit_requested_changes_raises_on_persistent_precommit_failure(
+    tmp_path: Path,
+) -> None:
+    """A real lint error (no hook auto-fix) must still fail the commit."""
+    from backend.infrastructure.process_runner import CommandFailedError
+
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: implement example")
+    # Commit keeps failing and no tracked files were rewritten (diff --quiet
+    # reports clean), so there is nothing to re-stage and the error propagates.
+    fake_runner = _precommit_runner(commit_return_codes=[1, 1], diff_quiet_rc=0)
+    config = AppConfig(runner=RunnerConfig(verification_commands=("git diff --check",)))
+
+    with pytest.raises(CommandFailedError):
+        commit_requested_changes(
+            _make_ready_issue(),
+            worktree_path,
+            config,
+            fake_runner,
+            expected_branch="issue-123",
+        )
 
 
 def test_run_once_no_new_commits_fails() -> None:
@@ -4544,6 +4688,66 @@ def _git_commit(path: Path, message: str) -> str:
         text=True,
     )
     return sha_result.stdout.strip()
+
+
+def test_ensure_prd_delivery_ready_archives_untracked_prd_real_git(
+    tmp_path: Path,
+) -> None:
+    """A complete PRD present on disk but missing from the index is archived.
+
+    Reproduces the runner failure where a PRD rewrite left the pending file
+    untracked with its deletion staged: ``git mv`` alone aborts with "not under
+    version control" (exit 128). The archive step must stage the on-disk file
+    first so the move succeeds and the rewritten content is preserved.
+    """
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    repo = _git_init(tmp_path)
+    pending_path = tmp_path / "tasks" / "pending" / "example.md"
+    archive_dir = tmp_path / "tasks" / "archive"
+    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    (archive_dir / ".gitkeep").write_text("", encoding="utf-8")
+    prd_body = "\n".join(["# PRD", "", "## Acceptance Checklist", "", "- [x] done", ""])
+    pending_path.write_text(prd_body, encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "-A"],
+        check=True,
+        capture_output=True,
+    )
+    _git_commit(repo, "publish prd")
+
+    # Reproduce the broken worktree state: drop the PRD from the index and
+    # overwrite it on disk, leaving it untracked with its deletion staged.
+    subprocess.run(
+        ["git", "-C", str(repo), "rm", "--cached", "tasks/pending/example.md"],
+        check=True,
+        capture_output=True,
+    )
+    rewritten_body = prd_body + "<!-- rewritten -->\n"
+    pending_path.write_text(rewritten_body, encoding="utf-8")
+
+    issue = IssueSummary(
+        number=7,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+
+    ensure_prd_delivery_ready(issue, tmp_path, SubprocessRunner())
+
+    archived_path = archive_dir / "example.md"
+    assert not pending_path.exists()
+    assert archived_path.exists()
+    assert archived_path.read_text(encoding="utf-8") == rewritten_body
+    tracked = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "tasks/archive/example.md"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert tracked == "tasks/archive/example.md"
 
 
 def test_worktree_reconcile_remote_ahead_real_git_fast_forwards(tmp_path: Path) -> None:

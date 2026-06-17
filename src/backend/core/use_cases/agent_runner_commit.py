@@ -120,6 +120,36 @@ def _verification_left_tracked_worktree_changes(
     )
 
 
+def _commit_with_autofix_recovery(
+    worktree_path: Path,
+    commit_message: str,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> None:
+    """提交 staged 改动，并从「自动修复型」pre-commit 钩子失败中恢复。
+
+    某些 pre-commit 钩子（ruff-format、trailing-whitespace、end-of-file-fixer）
+    会重写文件而非仅报告，导致首次 ``git commit`` 以 "files were modified by
+    this hook" 失败。此处把这些钩子改写后的内容重新 stage 并重试一次；若第二次
+    仍失败（例如补丁里有 ruff 报出的真实 lint 错误），底层抛出
+    CommandFailedError，交由调用方上抛。
+
+    根因层面的门禁一致性（验证命令应覆盖 ``git commit`` 的 pre-commit 钩子）
+    由各仓库的 ``verification_commands`` 配置保证；本函数只负责对「自动改写型」
+    钩子做一次幂等重试，避免纯格式化导致的偶发提交失败。
+    """
+    commit_command = ["git", "commit", "-m", commit_message]
+    first_attempt = process_runner.run(commit_command, cwd=worktree_path, check=False)
+    if first_attempt.return_code == 0:
+        return
+    if _verification_left_tracked_worktree_changes(worktree_path, process_runner):
+        validate_safe_changes(worktree_path, config, process_runner)
+        process_runner.run(["git", "add", "-u"], cwd=worktree_path)
+    # 用 check=True 重试：重新 stage 解决格式问题则提交成功；否则由底层抛出
+    # 带 pre-commit 输出的 CommandFailedError。
+    process_runner.run(commit_command, cwd=worktree_path, check=True)
+
+
 def commit_requested_changes(
     issue: IssueSummary,
     worktree_path: Path,
@@ -170,7 +200,7 @@ def commit_requested_changes(
     if _verification_left_tracked_worktree_changes(worktree_path, process_runner):
         validate_safe_changes(worktree_path, config, process_runner)
         process_runner.run(["git", "add", "-u"], cwd=worktree_path)
-    process_runner.run(["git", "commit", "-m", commit_message], cwd=worktree_path)
+    _commit_with_autofix_recovery(worktree_path, commit_message, config, process_runner)
     return verification_results
 
 
