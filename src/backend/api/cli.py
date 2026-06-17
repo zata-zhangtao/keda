@@ -105,7 +105,6 @@ if TYPE_CHECKING:
         LabelConfig,
         RepositoryRunContext,
     )
-    from backend.infrastructure.process_runner import SubprocessRunner
 
 
 def _format_command_for_cli(command: object) -> str:
@@ -302,7 +301,7 @@ def _handle_not_initialized_error(exc: IARRepositoryNotInitializedError) -> int:
 
 
 def _run_init_command(
-    parsed: argparse.Namespace, process_runner: SubprocessRunner
+    parsed: argparse.Namespace, process_runner: IProcessRunner
 ) -> int:
     """Render / write the local config, copy bundled skills, sync labels."""
     try:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from importlib.resources import files
 from pathlib import Path
 
@@ -58,9 +57,7 @@ def test_plan_skill_copy_lists_all_files() -> None:
     expected_files = {
         relative_path
         for relative_path in sorted(
-            str(p.relative_to(files(SKILL_PACKAGE_NAME) / "prd")).replace(
-                "\\", "/"
-            )
+            str(p.relative_to(files(SKILL_PACKAGE_NAME) / "prd")).replace("\\", "/")
             for p in (files(SKILL_PACKAGE_NAME) / "prd").rglob("*")
             if p.is_file()
         )
@@ -71,7 +68,9 @@ def test_plan_skill_copy_lists_all_files() -> None:
     assert "SKILL.md" in actual_files
 
 
-def test_compute_target_skill_directory_hash_missing_returns_none(tmp_path: Path) -> None:
+def test_compute_target_skill_directory_hash_missing_returns_none(
+    tmp_path: Path,
+) -> None:
     """A non-existent target directory must yield ``None``."""
     assert compute_target_skill_directory_hash(tmp_path / "missing") is None
 
@@ -89,9 +88,7 @@ def test_plan_skill_copy_unknown_skill_raises() -> None:
 
 def test_copy_bundled_skills_writes_new_files(tmp_path: Path) -> None:
     """First run on a fresh repo must write every bundled file."""
-    result = copy_bundled_skills(
-        BundledSkillCopyOptions(repo_root_path=tmp_path)
-    )
+    result = copy_bundled_skills(BundledSkillCopyOptions(repo_root_path=tmp_path))
 
     assert not result.skipped
     assert set(result.copied_skills) == {"prd", "code-reviewer"}
@@ -115,9 +112,7 @@ def test_copy_bundled_skills_writes_new_files(tmp_path: Path) -> None:
 def test_copy_bundled_skills_skips_identical_second_run(tmp_path: Path) -> None:
     """A second run on the same repo must report all skills identical."""
     copy_bundled_skills(BundledSkillCopyOptions(repo_root_path=tmp_path))
-    second = copy_bundled_skills(
-        BundledSkillCopyOptions(repo_root_path=tmp_path)
-    )
+    second = copy_bundled_skills(BundledSkillCopyOptions(repo_root_path=tmp_path))
     assert not second.copied_skills
     assert set(second.skipped_identical_skills) == {"prd", "code-reviewer"}
     assert not second.overwritten_skills

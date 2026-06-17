@@ -251,8 +251,7 @@ def copy_bundled_skills(
     for skill_name in requested_names:
         if skill_name not in bundled_names:
             raise UnknownBundledSkillError(
-                f"Bundled skill '{skill_name}' not found in "
-                f"{SKILL_PACKAGE_NAME}"
+                f"Bundled skill '{skill_name}' not found in " f"{SKILL_PACKAGE_NAME}"
             )
 
     effective_names = tuple(requested_names)
