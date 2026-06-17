@@ -214,14 +214,14 @@ Checks before merge:
   - If [base_branch] is already checked out in another worktree, that worktree is reused.
 
 Examples:
-  ./scripts/worktree/merge.sh feature-login
-  ./scripts/worktree/merge.sh feature-login main --cleanup
-  ./scripts/worktree/merge.sh feature-login -d
-  ./scripts/worktree/merge.sh feature-login --delete
-  ./scripts/worktree/merge.sh feature-login main --remote zata --cleanup
-  ./scripts/worktree/merge.sh feature-login main --cleanup --delete-remote
-  ./scripts/worktree/merge.sh --doctor
-  ./scripts/worktree/merge.sh --doctor feature-login
+  ./scripts/shared/worktree/merge.sh feature-login
+  ./scripts/shared/worktree/merge.sh feature-login main --cleanup
+  ./scripts/shared/worktree/merge.sh feature-login -d
+  ./scripts/shared/worktree/merge.sh feature-login --delete
+  ./scripts/shared/worktree/merge.sh feature-login main --remote zata --cleanup
+  ./scripts/shared/worktree/merge.sh feature-login main --cleanup --delete-remote
+  ./scripts/shared/worktree/merge.sh --doctor
+  ./scripts/shared/worktree/merge.sh --doctor feature-login
 EOF
 }
 

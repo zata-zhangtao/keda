@@ -102,6 +102,10 @@ from backend.core.use_cases.agent_runner_worktree_branch import (
     _reconcile_worktree_with_remote_branch,
 )
 from backend.core.use_cases.worktree_env import copy_missing_env_files
+from backend.core.use_cases.worktree_frontend import (
+    exclude_frontend_node_modules_from_git,
+    link_frontend_node_modules,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -230,11 +234,13 @@ def create_or_reuse_worktree(
     carries the three commands' return codes and stdout excerpts so the
     next engineer can see exactly which step went wrong.
 
-    Finally, gitignored ``.env*`` files missing from the worktree are
-    copied over from the main checkout (``git worktree add`` never
-    materializes them), so agent commands that read worktree-local env
-    files see the same configuration as the main checkout. Reused
-    worktrees are healed the same way; existing files are not touched.
+    Finally, gitignored artifacts that ``git worktree add`` never
+    materializes are restored from the main checkout: missing ``.env*``
+    files are copied (so agent commands see the same configuration), and
+    each frontend project's ``node_modules`` is symlinked from the main
+    checkout (so worktree builds like ``vite`` work without a per-worktree
+    install). Reused worktrees are healed the same way; existing files and
+    ``node_modules`` are not touched.
     """
     create_result = process_runner.run(
         format_command(
@@ -286,6 +292,21 @@ def create_or_reuse_worktree(
             len(copied_env_paths),
             worktree_path,
             ", ".join(str(env_path) for env_path in copied_env_paths),
+        )
+    # node_modules is gitignored, so `git worktree add` never materializes it;
+    # symlink each frontend project's deps from the main checkout so worktree
+    # builds (vite, etc.) work without a per-worktree install. Reused worktrees
+    # are healed the same way; existing node_modules are left untouched.
+    linked_frontend_paths = link_frontend_node_modules(repo_path, worktree_path)
+    if linked_frontend_paths:
+        exclude_frontend_node_modules_from_git(
+            worktree_path, linked_frontend_paths, process_runner
+        )
+        _logger.info(
+            "Linked node_modules for %d frontend project(s) into worktree %s: %s",
+            len(linked_frontend_paths),
+            worktree_path,
+            ", ".join(str(frontend_path) for frontend_path in linked_frontend_paths),
         )
     expected_branch = f"issue-{issue.number}"
     _ensure_worktree_branch(

@@ -25,7 +25,7 @@
 
 ## Worktree 相关环境变量
 
-`just worktree`（底层实现位于 `scripts/worktree/create.sh`）支持以下环境变量来控制新 worktree 的依赖准备行为：
+`just worktree`（底层实现位于 `scripts/shared/worktree/create.sh`）支持以下环境变量来控制新 worktree 的依赖准备行为：
 
 - `KODA_WORKTREE_BASE_BRANCH`
   - 新 worktree 默认使用的 base branch 名称，默认值为 `main`。

@@ -536,9 +536,85 @@ def build_waiting_comment(
             ]
         )
 
+    resolution_lines = _build_resolution_guidance(verdict, labels_config)
+    if resolution_lines:
+        lines.append("")
+        lines.append("**How to resolve**")
+        lines.append("")
+        lines.extend(resolution_lines)
+
     lines.append("")
     lines.append(format_dependency_wait_marker(verdict.blockers))
     return "\n".join(lines)
+
+
+def _build_resolution_guidance(
+    verdict: DependencyVerdict,
+    labels_config: LabelConfig,
+) -> list[str]:
+    """Build actionable remediation bullets for a waiting verdict.
+
+    Each blocker category (empty group, still-open upstream, failed/blocked
+    upstream, unknown state) maps to a concrete fix so an operator reading the
+    comment knows what to do instead of only seeing the symptom.
+
+    Args:
+        verdict: Dependency evaluation result.
+        labels_config: Label configuration (for label-prefix references).
+
+    Returns:
+        Markdown bullet lines, or an empty list when no guidance applies.
+    """
+    group_prefix = labels_config.group_prefix
+    has_empty_group = any(
+        blocker.blocker_type == "group" and blocker.current_state == "empty"
+        for blocker in verdict.blockers
+    )
+    has_open_blocker = any(
+        (
+            blocker.blocker_type == "issue"
+            and blocker.current_state.upper() not in ("CLOSED", "UNKNOWN")
+        )
+        or (
+            blocker.blocker_type == "group"
+            and blocker.current_state not in ("empty", "unknown")
+        )
+        for blocker in verdict.blockers
+    )
+    has_unknown_blocker = any(
+        blocker.current_state == "unknown" for blocker in verdict.blockers
+    )
+
+    guidance: list[str] = []
+    if has_empty_group:
+        guidance.append(
+            f"- **Empty group**: no Issue carries the ``{group_prefix}<group>`` label, "
+            "so the group can never be satisfied. Fix it one of three ways — "
+            f"(1) label the upstream Issues with ``{group_prefix}<group>`` and close "
+            "them; (2) correct the group name to match an existing "
+            f"``{group_prefix}*`` label if it is a typo; or (3) drop the group from "
+            "the Issue body ``<!-- iar:depends-on ... -->`` marker (and the PRD "
+            "``Depends on groups`` section) if the dependency is no longer needed."
+        )
+    if has_open_blocker:
+        guidance.append(
+            "- **Open upstream**: wait for the listed Issues/groups to close, or remove "
+            "them from the ``<!-- iar:depends-on ... -->`` marker if they are no longer "
+            "required."
+        )
+    if verdict.has_failed_or_blocked_upstream:
+        guidance.append(
+            f"- **Upstream failure**: remove the ``{labels_config.failed}`` / "
+            f"``{labels_config.blocked}`` label from the upstream Issue once it has "
+            "recovered, or have an operator intervene before this Issue can proceed."
+        )
+    if has_unknown_blocker:
+        guidance.append(
+            "- **Unknown state**: a dependency could not be queried (API or permission "
+            "error). Confirm the referenced Issue exists and is accessible, then re-run "
+            "the gate."
+        )
+    return guidance
 
 
 def mark_dependency_waiting(

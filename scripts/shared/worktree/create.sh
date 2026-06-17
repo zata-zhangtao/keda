@@ -2,9 +2,9 @@
 
 # 将此函数放入 .zshrc 或 .bashrc
 # 用法:
-#   source ./scripts/worktree/create.sh && ai_worktree <新分支名> [--base <base_branch>] [--cmd [code_cmd]]
+#   source ./scripts/shared/worktree/create.sh && ai_worktree <新分支名> [--base <base_branch>] [--cmd [code_cmd]]
 #   或直接执行:
-#   ./scripts/worktree/create.sh <新分支名> [--base <base_branch>] [--cmd [code_cmd]]
+#   ./scripts/shared/worktree/create.sh <新分支名> [--base <base_branch>] [--cmd [code_cmd]]
 
 ai_worktree_usage() {
     cat <<'EOF'
@@ -56,8 +56,8 @@ Examples:
   ai_worktree issue-15 --checkout
   ai_worktree feature-x --new
   KEDA_WORKTREE_SYNC_BASE=false ai_worktree feature-login
-  ./scripts/worktree/create.sh feature-login
-  ./scripts/worktree/create.sh issue-15 --checkout zata/issue-15
+  ./scripts/shared/worktree/create.sh feature-login
+  ./scripts/shared/worktree/create.sh issue-15 --checkout zata/issue-15
 EOF
 }
 

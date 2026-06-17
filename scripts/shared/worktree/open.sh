@@ -2,9 +2,9 @@
 
 # 将此函数放入 .zshrc 或 .bashrc
 # 用法:
-#   source ./scripts/worktree/open.sh && ai_open <分支名> [--cmd [code_cmd]]
+#   source ./scripts/shared/worktree/open.sh && ai_open <分支名> [--cmd [code_cmd]]
 #   或直接执行:
-#   ./scripts/worktree/open.sh <分支名> [--cmd [code_cmd]]
+#   ./scripts/shared/worktree/open.sh <分支名> [--cmd [code_cmd]]
 
 ai_open_usage() {
     cat <<'EOF'
@@ -20,8 +20,8 @@ Examples:
   ai_open feature-login
   ai_open feature-login --cmd
   ai_open feature-login --cmd code
-  ./scripts/worktree/open.sh feature-login
-  ./scripts/worktree/open.sh feature-login --cmd code
+  ./scripts/shared/worktree/open.sh feature-login
+  ./scripts/shared/worktree/open.sh feature-login --cmd code
 EOF
 }
 

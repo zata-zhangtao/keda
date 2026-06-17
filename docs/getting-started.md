@@ -113,7 +113,7 @@ just worktree feature-x --new
 
 可通过环境变量 `KEDA_WORKTREE_SYNC_BASE=false` 关闭远程同步，`KEDA_WORKTREE_BASE_REMOTE` 覆盖默认 remote 名。
 
-`just worktree`（底层实现位于 `scripts/worktree/create.sh`）在创建 worktree 后会自动执行两类依赖准备：
+`just worktree`（底层实现位于 `scripts/shared/worktree/create.sh`）在创建 worktree 后会自动执行两类依赖准备：
 
 - Python：如果仓库根目录存在 `pyproject.toml`，则运行 `uv sync --all-extras`。
 - Frontend：扫描 worktree 根目录及其子目录中的 `package.json`，并在每个前端项目目录内按锁文件选择对应安装命令，例如 `npm ci`、`pnpm install`、`yarn install` 或 `bun install`。

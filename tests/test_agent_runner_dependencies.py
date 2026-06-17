@@ -504,6 +504,19 @@ class TestBuildWaitingComment:
         assert "empty group" in comment
         assert "possible typo" in comment
 
+    def test_empty_group_includes_resolution_guidance(self) -> None:
+        verdict = DependencyVerdict(
+            satisfied=False,
+            blockers=(DependencyBlocker("group", "g1", "empty"),),
+            empty_group_names=("g1",),
+        )
+        comment = build_waiting_comment(verdict, 1, LabelConfig())
+        assert "How to resolve" in comment
+        assert "Empty group" in comment
+        # Names all three concrete fixes.
+        assert "iar:depends-on" in comment
+        assert "Depends on groups" in comment
+
     def test_upstream_failure_warning(self) -> None:
         verdict = DependencyVerdict(
             satisfied=False,
@@ -512,6 +525,24 @@ class TestBuildWaitingComment:
         )
         comment = build_waiting_comment(verdict, 1, LabelConfig())
         assert "Upstream failure detected" in comment
+
+    def test_upstream_failure_includes_resolution_guidance(self) -> None:
+        verdict = DependencyVerdict(
+            satisfied=False,
+            blockers=(DependencyBlocker("issue", "42", "OPEN"),),
+            has_failed_or_blocked_upstream=True,
+        )
+        comment = build_waiting_comment(verdict, 1, LabelConfig())
+        assert "How to resolve" in comment
+        assert "Upstream failure" in comment
+        assert "agent/failed" in comment
+        # Open-issue blocker also produces guidance.
+        assert "Open upstream" in comment
+
+    def test_no_resolution_section_when_no_blockers(self) -> None:
+        verdict = DependencyVerdict(satisfied=True, blockers=())
+        comment = build_waiting_comment(verdict, 1, LabelConfig())
+        assert "How to resolve" not in comment
 
 
 # ---------------------------------------------------------------------------

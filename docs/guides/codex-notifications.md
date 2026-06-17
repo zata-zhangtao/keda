@@ -23,7 +23,7 @@ just codex-notify install codex通知
 该命令会更新 `~/.codex/config.toml` 顶层配置：
 
 ```toml
-notify = ["env", "CODEX_NOTIFY_SHORTCUT_NAME=codex通知", "bash", "/absolute/path/to/scripts/codex/notify_shortcut.sh"]
+notify = ["env", "CODEX_NOTIFY_SHORTCUT_NAME=codex通知", "bash", "/absolute/path/to/scripts/shared/codex/notify_shortcut.sh"]
 ```
 
 安装脚本会在修改前备份已有配置，备份文件形如：
@@ -43,7 +43,7 @@ just codex-notify test codex通知
 也可以安装后立即测试：
 
 ```bash
-./scripts/codex/install_macos_notify.sh codex通知 --test
+./scripts/shared/codex/install_macos_notify.sh codex通知 --test
 ```
 
 如果命令成功退出但没有看到通知，优先检查：
@@ -55,8 +55,8 @@ just codex-notify test codex通知
 
 ## 行为说明
 
-- 脚本路径：`scripts/codex/notify_shortcut.sh`
-- 安装脚本：`scripts/codex/install_macos_notify.sh`
+- 脚本路径：`scripts/shared/codex/notify_shortcut.sh`
+- 安装脚本：`scripts/shared/codex/install_macos_notify.sh`
 - 默认快捷指令名：`codex通知`
 - 处理事件：`agent-turn-complete`
 - 非 macOS 系统会直接退出，不阻塞 Codex。

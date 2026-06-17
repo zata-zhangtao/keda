@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/hooks/quality_flag.sh
+# shellcheck source=scripts/shared/hooks/quality_flag.sh
 source "$script_dir/quality_flag.sh"
 
 # 如果所有变更均为非代码文件，直接跳过 just test 检查

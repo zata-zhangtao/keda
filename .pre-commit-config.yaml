@@ -97,7 +97,7 @@ repos:
         stages: [manual]
       - id: check-test-flag
         name: Check just test flag
-        entry: bash scripts/hooks/check_test_flag.sh
+        entry: bash scripts/shared/hooks/check_test_flag.sh
         language: system
         pass_filenames: false
         always_run: true

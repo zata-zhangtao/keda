@@ -1,4 +1,4 @@
-"""Tests for scripts/worktree/create.sh remote sync behavior."""
+"""Tests for scripts/shared/worktree/create.sh remote sync behavior."""
 
 from __future__ import annotations
 
@@ -15,7 +15,11 @@ def _run_create_script(
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     script_path = (
-        Path(__file__).resolve().parents[1] / "scripts" / "worktree" / "create.sh"
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "shared"
+        / "worktree"
+        / "create.sh"
     )
     env = os.environ.copy()
     env.update(extra_env or {})

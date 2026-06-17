@@ -7,7 +7,7 @@
 # - Uses AES-256 if the local zip binary supports it, otherwise ZipCrypto.
 #
 # Usage:
-#   ./scripts/secrets/export_env_encrypted.sh
+#   ./scripts/shared/secrets/export_env_encrypted.sh
 
 set -euo pipefail
 

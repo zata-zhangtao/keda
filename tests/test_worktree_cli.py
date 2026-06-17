@@ -232,6 +232,60 @@ def test_create_or_reuse_worktree_heals_env_files_on_reuse(
     assert (worktree_path / ".env").read_text(encoding="utf-8") == "SECRET=1\n"
 
 
+def test_create_or_reuse_worktree_links_frontend_node_modules(
+    tmp_path: Path,
+) -> None:
+    """Reusing a worktree symlinks frontend ``node_modules`` from main.
+
+    ``git worktree add`` never materializes the gitignored ``node_modules``,
+    so without this step a worktree build fails with ``vite: command not
+    found`` even though the main checkout has dependencies installed.
+    """
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    (repo_path / "frontend").mkdir()
+    (repo_path / "frontend" / "package.json").write_text("{}\n", encoding="utf-8")
+    _run_git(repo_path, "add", ".gitignore", "frontend/package.json")
+    _run_git(repo_path, "commit", "-m", "track frontend manifest")
+    # Installed dependencies live only in the (gitignored) main checkout.
+    main_vite_path = repo_path / "frontend" / "node_modules" / ".bin" / "vite"
+    main_vite_path.parent.mkdir(parents=True)
+    main_vite_path.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    manager = WorktreeManager(repo_path, SubprocessRunner())
+    worktree_path = manager.create(branch="issue-43", base_branch="main")
+    assert not (worktree_path / "frontend" / "node_modules").exists()
+
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="false",
+            reuse_command="true",
+            path_command=f"echo {worktree_path}",
+            base_branch="main",
+        )
+    )
+    issue = IssueSummary(
+        number=43,
+        title="demo",
+        url="https://example/issues/43",
+        body="",
+        labels=(),
+    )
+
+    resolved_worktree_path = create_or_reuse_worktree(
+        repo_path, issue, config, SubprocessRunner()
+    )
+
+    assert resolved_worktree_path == worktree_path.resolve()
+    worktree_node_modules = worktree_path / "frontend" / "node_modules"
+    assert worktree_node_modules.is_symlink()
+    assert (worktree_node_modules / ".bin" / "vite").exists()
+    # The symlink keeps the worktree git-clean (node_modules is gitignored),
+    # so `iar worktree cleanup` can still remove it later.
+    status_result = _run_git(worktree_path, "status", "--porcelain")
+    assert status_result.stdout.strip() == ""
+
+
 def test_create_or_reuse_worktree_anchors_relative_path_output_to_repo(
     tmp_path: Path,
 ) -> None:

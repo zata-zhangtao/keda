@@ -6,7 +6,7 @@ set -euo pipefail
 show_usage() {
     cat <<'EOF'
 Usage:
-  scripts/codex/install_macos_notify.sh [shortcut-name] [--test]
+  scripts/shared/codex/install_macos_notify.sh [shortcut-name] [--test]
 
 Defaults:
   shortcut-name: codex通知
@@ -22,7 +22,7 @@ if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-NOTIFY_SCRIPT_PATH="${REPO_ROOT}/scripts/codex/notify_shortcut.sh"
+NOTIFY_SCRIPT_PATH="${REPO_ROOT}/scripts/shared/codex/notify_shortcut.sh"
 SHORTCUT_NAME="${1:-codex通知}"
 RUN_TEST_AFTER_INSTALL="${2:-}"
 CODEX_HOME_DIR="${CODEX_HOME:-${HOME}/.codex}"

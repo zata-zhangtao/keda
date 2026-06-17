@@ -10,7 +10,9 @@ from types import ModuleType
 def _load_release_module() -> ModuleType:
     """Load the release script module from its file path."""
 
-    release_script_path = Path(__file__).resolve().parents[1] / "scripts" / "release.py"
+    release_script_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "shared" / "release.py"
+    )
     release_module_spec = importlib.util.spec_from_file_location(
         "release_script_module",
         release_script_path,
