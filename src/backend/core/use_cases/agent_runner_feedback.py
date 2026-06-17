@@ -255,6 +255,17 @@ def ensure_prd_delivery_ready(
                     "Archive directory does not exist: "
                     f"{archive_dir.relative_to(worktree_path).as_posix()}"
                 )
+            # The PRD may exist on disk but be absent from the git index — for
+            # example when a PRD rewrite/regeneration step overwrote it without
+            # re-staging, leaving it untracked or with its deletion staged.
+            # ``git mv`` resolves its source through the index (not the
+            # filesystem), so it aborts with "not under version control" in that
+            # state. Stage the on-disk PRD first so the archive move succeeds
+            # regardless of how the file reached the worktree.
+            process_runner.run(
+                ["git", "add", "--", str(prd_relative_path)],
+                cwd=worktree_path,
+            )
             process_runner.run(
                 [
                     "git",
