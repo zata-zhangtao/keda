@@ -2,10 +2,24 @@
 
 > 面向 AI Agent 与通用 Python 工程实践的模块化单体项目模板。基于 Clean Architecture 四层架构，内置 `iar`（issue-agent-runner）CLI，支持将 GitHub Issues 转为本地 AI Agent 队列并自动管理 Worktree 生命周期。
 
+## 一键安装
+
+无需克隆仓库，直接在新机器上安装 `iar` CLI：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zata-zhangtao/keda/main/install.sh | bash
+iar --version
+iar init   # 在任意 Git 仓库内运行，会自动写入 .iar.toml 并复制 prd / code-reviewer 两个 Skill
+```
+
+安装器会自动选择 `uv` / `pipx` / `pip --user` 中可用的那个，零 sudo，失败有明确提示。详见 `docs/getting-started/installation.md`。
+
+> 想从 PyPI 安装？设置 `KEDA_PYPI=1` 走占位钩子（PyPI 发布留待后续 PRD）。
+
 ## 前置要求
 
 - Python >= 3.11
-- [uv](https://docs.astral.sh/uv/) — Python 包管理器
+- [uv](https://docs.astral.sh/uv/) — Python 包管理器（安装器会自动 bootstrap）
 - [just](https://github.com/casey/just) — 命令运行器
 - Node.js（如需运行前端）
 

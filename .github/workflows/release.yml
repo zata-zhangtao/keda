@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (defaults to the trigger ref)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build & upload sdist + wheel
+    runs-on: ubuntu-latest
+    env:
+      PYTHON_VERSION: "3.12"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Sync dependencies from lock file
+        run: uv sync --all-extras --all-groups --frozen
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Verify wheel contains bundled skills
+        run: |
+          python -m zipfile -l dist/*.whl | grep -E "agent_runner/skills/(prd|code-reviewer)/SKILL.md" \
+            || (echo "wheel is missing bundled skills; check pyproject.toml [tool.setuptools.package-data]" && exit 1)
+
+      - name: Compute SHA256SUMS
+        working-directory: dist
+        run: |
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum keda-*.tar.gz keda-*.whl > SHA256SUMS
+          else
+            shasum -a 256 keda-*.tar.gz keda-*.whl > SHA256SUMS
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: true
+          files: |
+            dist/keda-*.tar.gz
+            dist/keda-*.whl
+            dist/SHA256SUMS

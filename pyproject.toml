@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "keda"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Issue Agent Runner (iar) — turn GitHub Issues into a local AI agent queue."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -39,6 +39,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "backend.engines.agent_runner.templates" = ["**/*"]
+"backend.engines.agent_runner.skills" = ["**/*"]
 
 [dependency-groups]
 dev = [
