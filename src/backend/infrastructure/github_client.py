@@ -82,6 +82,7 @@ class LabelConfig:
     validation_pending: str = "validation/pending"
     validation_passed: str = "validation/passed"
     group_prefix: str = "task-group/"
+    rework_prd: str = "agent/rework-prd"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",
@@ -329,6 +330,11 @@ class GitHubCliClient:
                 "Issue has unmet dependencies and is waiting for upstream closure.",
             ),
             (
+                "agent/rework-prd",
+                "D93F0B",
+                "Request the AI runner to generate or rewrite this Issue's PRD.",
+            ),
+            (
                 "validation/pending",
                 "FBCA04",
                 "Realistic Validation evidence awaits human sign-off on the PR.",
@@ -366,6 +372,7 @@ class GitHubCliClient:
             "agent/failed": labels.failed,
             "agent/blocked": labels.blocked,
             "agent/waiting": labels.waiting,
+            "agent/rework-prd": labels.rework_prd,
             "validation/pending": labels.validation_pending,
             "validation/passed": labels.validation_passed,
         }

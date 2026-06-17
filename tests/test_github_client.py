@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from backend.core.shared.models.agent_runner import CommandResult
+from backend.core.shared.models.agent_runner import CommandResult, LabelConfig
 from backend.infrastructure.github_client import (
     GitHubCliClient,
     sanitize_github_body,
@@ -417,6 +417,26 @@ def test_list_review_candidate_issues_uses_or_label_semantics(
     # 92 must appear exactly once even though it matches both labels.
     assert len(candidates) == 3
     assert fake_runner.calls == [list(supervising_command), list(review_command)]
+
+
+def test_sync_labels_creates_rework_prd_label(tmp_path: Path) -> None:
+    """sync_labels must register agent/rework-prd, the Issue->PRD trigger label.
+
+    Regression: agent/rework-prd drives create_prd_from_issue, but it was
+    missing from sync_labels' specs, so ``iar init`` / ``iar labels sync`` never
+    created it and the Issue-driven PRD workflow could not be triggered.
+    """
+    fake_runner = FakeProcessRunner()
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    github_client.sync_labels(LabelConfig())
+
+    created_labels = [
+        call[call.index("create") + 1]
+        for call in fake_runner.calls
+        if call[:3] == ["gh", "label", "create"]
+    ]
+    assert "agent/rework-prd" in created_labels
 
 
 def test_list_rework_prd_issues_filters_label(tmp_path: Path) -> None:

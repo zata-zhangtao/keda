@@ -796,6 +796,8 @@ To trigger the workflow, add the `agent/rework-prd` label to an open Issue:
 gh issue edit <issue-number> --add-label agent/rework-prd
 ```
 
+> **Note:** The `agent/rework-prd` label is provisioned automatically by `iar init` and `iar labels sync`. If your repository was initialized before this label was added, run `iar labels sync` once so the label exists before you apply it.
+
 The next daemon pass or `iar run` will detect the label and process the Issue before normal ready-issue execution.
 
 ### What Happens During PRD Rework

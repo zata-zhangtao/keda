@@ -22,3 +22,9 @@ def test_sync_labels_includes_supervising() -> None:
     """LabelConfig must include the supervising label."""
     labels_config = LabelConfig()
     assert labels_config.supervising == "agent/supervising"
+
+
+def test_sync_labels_includes_rework_prd() -> None:
+    """LabelConfig must expose the rework-prd trigger label for Issue->PRD."""
+    labels_config = LabelConfig()
+    assert labels_config.rework_prd == "agent/rework-prd"
