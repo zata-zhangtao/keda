@@ -193,7 +193,8 @@ language = "zh-CN"
 # 是否为带 iar:structured-evidence marker 的新 Issue 要求 evidence.json manifest。
 structured_evidence = true
 
-[agent_runner.pre_push_review]
+[agent_runner.pre_pr_review]
+# Draft PR 创建前的 AI review 门禁（push 之后、PR 之前）
 enabled = true
 review_agent = "auto"
 allow_same_agent = true

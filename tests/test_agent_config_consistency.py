@@ -8,7 +8,7 @@ from backend.core.shared.models.agent_runner import (
     AppConfig as CoreAppConfig,
     LabelConfig as CoreLabelConfig,
     PostPrSupervisorConfig,
-    PrePushReviewConfig,
+    PrePrReviewConfig,
 )
 from backend.core.use_cases.run_agent_once import _AGENT_COMMAND_BUILDERS
 from backend.engines.agent_runner.factory import build_app_config
@@ -17,7 +17,7 @@ from backend.infrastructure.config.settings import (
     AgentRunnerDeliberationSettings,
     AgentRunnerLabelSettings,
     AgentRunnerPostPrSupervisorSettings,
-    AgentRunnerPrePushReviewSettings,
+    AgentRunnerPrePrReviewSettings,
     AgentRunnerSettings,
 )
 from backend.infrastructure.github_client import LabelConfig as InfraLabelConfig
@@ -86,17 +86,17 @@ def test_factory_build_app_config_maps_waiting_and_group_prefix() -> None:
 
 
 def test_app_config_has_review_and_supervisor_settings() -> None:
-    """AppConfig must aggregate pre-push review and post-PR supervisor configs."""
+    """AppConfig must aggregate pre-PR review and post-PR supervisor configs."""
     app_config = CoreAppConfig()
-    assert isinstance(app_config.pre_push_review, PrePushReviewConfig)
+    assert isinstance(app_config.pre_pr_review, PrePrReviewConfig)
     assert isinstance(app_config.post_pr_supervisor, PostPrSupervisorConfig)
 
 
 def test_settings_review_and_supervisor_match_core() -> None:
     """Infrastructure settings must map to core review/supervisor configs."""
-    pre_push = AgentRunnerPrePushReviewSettings()
+    pre_push = AgentRunnerPrePrReviewSettings()
     post_sup = AgentRunnerPostPrSupervisorSettings()
-    core_pre = PrePushReviewConfig()
+    core_pre = PrePrReviewConfig()
     core_post = PostPrSupervisorConfig()
 
     assert pre_push.enabled == core_pre.enabled
@@ -113,16 +113,16 @@ def test_settings_review_and_supervisor_match_core() -> None:
     assert post_sup.max_repair_attempts == core_post.max_repair_attempts
 
 
-def test_pre_push_review_prompt_template_normalizes_string() -> None:
+def test_pre_pr_review_prompt_template_normalizes_string() -> None:
     """Settings layer must coerce a string override into a list."""
     from backend.infrastructure.config.settings import (
-        AgentRunnerPrePushReviewSettings,
+        AgentRunnerPrePrReviewSettings,
     )
 
-    settings = AgentRunnerPrePushReviewSettings(review_prompt_template="just one line")
+    settings = AgentRunnerPrePrReviewSettings(review_prompt_template="just one line")
     assert settings.review_prompt_template == ["just one line"]
 
-    settings_empty = AgentRunnerPrePushReviewSettings(review_prompt_template="")
+    settings_empty = AgentRunnerPrePrReviewSettings(review_prompt_template="")
     assert settings_empty.review_prompt_template == []
 
 
@@ -130,8 +130,8 @@ def test_factory_build_app_config_maps_supervising() -> None:
     """Factory must map the supervising label through to AppConfig."""
     app_config = build_app_config()
     assert app_config.labels.supervising == "agent/supervising"
-    assert app_config.pre_push_review.enabled is True
-    assert app_config.pre_push_review.timeout_seconds == 900
+    assert app_config.pre_pr_review.enabled is True
+    assert app_config.pre_pr_review.timeout_seconds == 900
     assert app_config.post_pr_supervisor.enabled is True
 
 

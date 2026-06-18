@@ -192,8 +192,14 @@ class ReviewFinding:
 
 
 @dataclass(frozen=True)
-class PrePushReviewConfig:
-    """Pre-push AI review gate configuration."""
+class PrePrReviewConfig:
+    """Pre-PR AI review gate configuration.
+
+    The review runs **after** the implementation commit has been pushed to the
+    remote but **before** the Draft PR is created, so reviewer patches are
+    pushed to the feature branch while the PR creation gate waits for the
+    review to converge.
+    """
 
     enabled: bool = True
     review_agent: str = "auto"
@@ -328,7 +334,7 @@ class AppConfig:
     safety: SafetyConfig = SafetyConfig()
     validation: ValidationConfig = ValidationConfig()
     prompts: PromptConfig = field(default_factory=PromptConfig)
-    pre_push_review: PrePushReviewConfig = PrePushReviewConfig()
+    pre_pr_review: PrePrReviewConfig = PrePrReviewConfig()
     post_pr_supervisor: PostPrSupervisorConfig = PostPrSupervisorConfig()
     generated_content: GeneratedContentConfig = field(
         default_factory=GeneratedContentConfig

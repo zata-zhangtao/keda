@@ -436,7 +436,7 @@ def _phase_implies_label(phase: str) -> str | None:
         return "agent/running"
     if phase == "implementation_complete":
         return "agent/running"
-    if phase == "pre_push_review":
+    if phase == "pre_pr_review":
         return "agent/running"
     if phase == "draft_pr_created":
         return "agent/supervising"

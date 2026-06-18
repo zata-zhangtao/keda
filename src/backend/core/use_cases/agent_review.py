@@ -1,4 +1,4 @@
-"""Pre-push AI review gate for the agent runner."""
+"""Pre-PR AI review gate for the agent runner."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,7 +70,7 @@ DEFAULT_REVIEW_PROMPT_TEMPLATE: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class ReviewerDecision:
-    """Parsed pre-push reviewer decision."""
+    """Parsed pre-PR reviewer decision."""
 
     verdict: str
     summary: str = ""
@@ -103,7 +104,7 @@ class ReviewerDecision:
 
 def _resolve_review_prompt_template(config: AppConfig) -> tuple[str, ...]:
     """Return the configured review rules template, falling back to default."""
-    override = getattr(config.pre_push_review, "review_prompt_template", ()) or ()
+    override = getattr(config.pre_pr_review, "review_prompt_template", ()) or ()
     if override:
         return tuple(str(line) for line in override)
     return DEFAULT_REVIEW_PROMPT_TEMPLATE
@@ -117,7 +118,7 @@ def build_review_packet(
     verification_results: list[CommandResult],
     head_sha: str,
 ) -> str:
-    """Build the context packet sent to the pre-push reviewer."""
+    """Build the context packet sent to the pre-PR reviewer."""
     prd_path = extract_prd_path(issue.body)
     prd_line = (
         f"Canonical PRD: `{prd_path}`"
@@ -150,7 +151,7 @@ def build_review_packet(
 
     return "\n".join(
         [
-            f"Pre-Push Review for Issue #{issue.number}: {issue.title}",
+            f"Pre-PR Review for Issue #{issue.number}: {issue.title}",
             "",
             f"Issue URL: {issue.url}",
             prd_line,
@@ -459,7 +460,7 @@ def _int_field(payload: dict[str, object], key: str) -> int:
         return 0
 
 
-def build_pre_push_review_result_comment(
+def build_pre_pr_review_result_comment(
     *,
     verdict: str,
     reviewer: str,
@@ -474,9 +475,9 @@ def build_pre_push_review_result_comment(
     findings: tuple[ReviewFinding, ...] = (),
     findings_critical: int = 0,
 ) -> str:
-    """Build the human-readable comment for a pre-push review result."""
+    """Build the human-readable comment for a pre-PR review result."""
     marker = format_event_marker(
-        phase="pre_push_review",
+        phase="pre_pr_review",
         cycle=cycle,
         head_sha=head_after,
     )
@@ -488,7 +489,7 @@ def build_pre_push_review_result_comment(
     sections = [
         marker,
         "",
-        "## Agent Runner Pre-Push Review",
+        "## Agent Runner Pre-PR Review",
         "",
         f"- Verdict: {verdict}",
         f"- Reviewer: {reviewer}",
@@ -525,7 +526,7 @@ def _escape_cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ").strip() or "-"
 
 
-def run_pre_push_review(
+def run_pre_pr_review(
     *,
     issue: IssueSummary,
     worktree_path: Path,
@@ -536,8 +537,14 @@ def run_pre_push_review(
     head_sha_before: str,
     expected_branch: str,
     verification_results: list[CommandResult],
+    push_callback: Callable[[], None] | None = None,
 ) -> tuple[str, list[CommandResult]]:
-    """Run the pre-push review gate and return the final head SHA and verification results.
+    """Run the pre-PR review gate and return the final head SHA and verification results.
+
+    The review runs **after** the implementation commit has been pushed to the
+    remote. Each successful reviewer patch is itself pushed via ``push_callback``
+    so the remote branch always reflects the latest committed state when the
+    Draft PR is created.
 
     Args:
         issue: The Issue being processed.
@@ -549,13 +556,19 @@ def run_pre_push_review(
         head_sha_before: SHA before review starts.
         expected_branch: Branch the worktree should be on.
         verification_results: Existing verification results from implementation.
+        push_callback: Optional callable invoked after each reviewer patch is
+            committed locally. Implementations should run the standard push
+            safety checks and ``git push`` for ``expected_branch``.
 
     Returns:
         Tuple of (final_head_sha, final_verification_results).
+
+    Raises:
+        RuntimeError: If review does not converge within ``max_attempts``.
     """
-    review_config = config.pre_push_review
+    review_config = config.pre_pr_review
     if not review_config.enabled:
-        _logger.info("Pre-push review disabled for Issue #%d.", issue.number)
+        _logger.info("Pre-PR review disabled for Issue #%d.", issue.number)
         return head_sha_before, verification_results
 
     reviewer_agent = selected_agent if review_config.allow_same_agent else "codex"
@@ -566,13 +579,13 @@ def run_pre_push_review(
     timeout_seconds = max(1, review_config.timeout_seconds)
     current_head = head_sha_before
     current_verification = list(verification_results)
-    last_failure_summary = "Pre-push review did not approve the changes."
+    last_failure_summary = "Pre-PR review did not approve the changes."
     last_decision: ReviewerDecision | None = None
     last_action_summary = last_failure_summary
     last_cycle_verdict = "changes_requested"
     last_cycle_applied_patch = False
     _logger.info(
-        "Starting pre-push review for Issue #%d with reviewer '%s' "
+        "Starting pre-PR review for Issue #%d with reviewer '%s' "
         "(max_attempts=%d, timeout=%ds, head=%s).",
         issue.number,
         reviewer_agent,
@@ -585,7 +598,7 @@ def run_pre_push_review(
         cycle = attempt_index + 1
         attempt_started_at = time.monotonic()
         _logger.info(
-            "Pre-push review cycle %d/%d for Issue #%d: building review packet.",
+            "Pre-PR review cycle %d/%d for Issue #%d: building review packet.",
             cycle,
             max_attempts,
             issue.number,
@@ -599,7 +612,7 @@ def run_pre_push_review(
             head_sha=current_head,
         )
         _logger.info(
-            "Pre-push review cycle %d/%d for Issue #%d: running reviewer '%s'.",
+            "Pre-PR review cycle %d/%d for Issue #%d: running reviewer '%s'.",
             cycle,
             max_attempts,
             issue.number,
@@ -615,7 +628,7 @@ def run_pre_push_review(
         )
         elapsed_seconds = time.monotonic() - attempt_started_at
         _logger.info(
-            "Pre-push review cycle %d/%d for Issue #%d: reviewer exited "
+            "Pre-PR review cycle %d/%d for Issue #%d: reviewer exited "
             "with code %d after %.1fs.",
             cycle,
             max_attempts,
@@ -638,7 +651,7 @@ def run_pre_push_review(
             commit_request_decision,
         )
         _logger.info(
-            "Pre-push review cycle %d/%d for Issue #%d: parsed verdict=%s "
+            "Pre-PR review cycle %d/%d for Issue #%d: parsed verdict=%s "
             "(stdout_parseable=%s, commit_request_verdict=%s, findings=%d).",
             cycle,
             max_attempts,
@@ -652,7 +665,7 @@ def run_pre_push_review(
         request_path_was_present = request_path.is_file()
         if request_path_was_present:
             _logger.info(
-                "Pre-push review cycle %d/%d for Issue #%d: reviewer wrote "
+                "Pre-PR review cycle %d/%d for Issue #%d: reviewer wrote "
                 "commit request; processing through commit proxy.",
                 cycle,
                 max_attempts,
@@ -668,6 +681,16 @@ def run_pre_push_review(
                     expected_branch=expected_branch,
                 )
                 current_head = get_head_sha(worktree_path, process_runner)
+                if push_callback is not None:
+                    _logger.info(
+                        "Pre-PR review cycle %d/%d for Issue #%d: pushing "
+                        "reviewer patch from %s to remote.",
+                        cycle,
+                        max_attempts,
+                        issue.number,
+                        current_head,
+                    )
+                    push_callback()
                 # commit_requested_changes 正常返回意味着补丁已通过 staging 后
                 # 的 verification 重跑（失败会抛 VerificationFailedError）。
                 # 因此 approved + 补丁提交成功应当轮收敛，而不是被强制降级为
@@ -684,7 +707,7 @@ def run_pre_push_review(
                 last_failure_summary = action_summary
                 last_cycle_applied_patch = True
                 _logger.info(
-                    "Pre-push review cycle %d/%d for Issue #%d: reviewer "
+                    "Pre-PR review cycle %d/%d for Issue #%d: reviewer "
                     "changes committed at head %s.",
                     cycle,
                     max_attempts,
@@ -707,7 +730,7 @@ def run_pre_push_review(
                     )
                 last_failure_summary = action_summary
                 _logger.info(
-                    "Pre-push review cycle %d/%d for Issue #%d: empty commit "
+                    "Pre-PR review cycle %d/%d for Issue #%d: empty commit "
                     "request handled as verdict=%s.",
                     cycle,
                     max_attempts,
@@ -718,7 +741,7 @@ def run_pre_push_review(
                 action_summary = f"reviewer patch failed to commit: {exc}"
                 last_failure_summary = action_summary
                 _logger.exception(
-                    "Pre-push review cycle %d/%d for Issue #%d: reviewer "
+                    "Pre-PR review cycle %d/%d for Issue #%d: reviewer "
                     "commit request failed.",
                     cycle,
                     max_attempts,
@@ -726,7 +749,7 @@ def run_pre_push_review(
                 )
                 github_client.comment_issue(
                     issue.number,
-                    build_pre_push_review_result_comment(
+                    build_pre_pr_review_result_comment(
                         verdict="changes requested",
                         reviewer=reviewer_agent,
                         head_before=head_sha_before,
@@ -740,7 +763,7 @@ def run_pre_push_review(
                     ),
                 )
                 if cycle >= max_attempts:
-                    raise RuntimeError(f"Pre-push review repair failed: {exc}") from exc
+                    raise RuntimeError(f"Pre-PR review repair failed: {exc}") from exc
                 continue
         else:
             if reviewer_decision.verdict == "approved":
@@ -758,7 +781,7 @@ def run_pre_push_review(
                 action_summary = "reviewer returned no parseable verdict"
             last_failure_summary = action_summary
 
-        comment_body = build_pre_push_review_result_comment(
+        comment_body = build_pre_pr_review_result_comment(
             verdict="approved" if cycle_verdict == "approved" else "changes requested",
             reviewer=reviewer_agent,
             head_before=head_sha_before,
@@ -774,7 +797,7 @@ def run_pre_push_review(
         )
         github_client.comment_issue(issue.number, comment_body)
         _logger.info(
-            "Pre-push review cycle %d/%d for Issue #%d: wrote result comment "
+            "Pre-PR review cycle %d/%d for Issue #%d: wrote result comment "
             "with verdict=%s and action=%s.",
             cycle,
             max_attempts,
@@ -790,7 +813,7 @@ def run_pre_push_review(
             result.return_code == 0 for result in current_verification
         ):
             _logger.info(
-                "Pre-push review approved Issue #%d after %d cycle(s).",
+                "Pre-PR review approved Issue #%d after %d cycle(s).",
                 issue.number,
                 cycle,
             )
@@ -802,7 +825,7 @@ def run_pre_push_review(
     if final_decision is None:
         final_decision = ReviewerDecision(
             verdict="changes_requested",
-            summary="Pre-push review produced no parseable decision.",
+            summary="Pre-PR review produced no parseable decision.",
         )
     # 收敛兜底：最后一轮 reviewer 写出了 commit request 且 verification 全部通过，
     # 即便 verdict 不是 "approved"，runner 也必须接受该最终修复并继续发布流程。
@@ -813,7 +836,7 @@ def run_pre_push_review(
         and all(result.return_code == 0 for result in current_verification)
     ):
         _logger.info(
-            "Pre-push review accepted final commit-request fixes for "
+            "Pre-PR review accepted final commit-request fixes for "
             "Issue #%d after exhausting %d cycle(s).",
             issue.number,
             max_attempts,
@@ -826,7 +849,7 @@ def run_pre_push_review(
     if max_attempts == 0:
         github_client.comment_issue(
             issue.number,
-            build_pre_push_review_result_comment(
+            build_pre_pr_review_result_comment(
                 verdict="changes requested",
                 reviewer=reviewer_agent,
                 head_before=head_sha_before,
@@ -845,19 +868,18 @@ def run_pre_push_review(
         )
     if last_cycle_verdict == "approved":
         _logger.info(
-            "Pre-push review accepted final approval for Issue #%d on the "
-            "last cycle.",
+            "Pre-PR review accepted final approval for Issue #%d on the " "last cycle.",
             issue.number,
         )
         return current_head, current_verification
 
     _logger.warning(
-        "Pre-push review did not approve Issue #%d after %d attempt(s): %s",
+        "Pre-PR review did not approve Issue #%d after %d attempt(s): %s",
         issue.number,
         max_attempts,
         last_failure_summary,
     )
     raise RuntimeError(
-        "Pre-push review did not approve after "
+        "Pre-PR review did not approve after "
         f"{max_attempts} attempt(s): {last_failure_summary}"
     )

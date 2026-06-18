@@ -60,7 +60,7 @@ def test_mark_issue_failed_comment_includes_recovery_guidance() -> None:
         issue=issue,
         config=AppConfig(),
         github_client=fake_client,
-        exc=RuntimeError("Pre-push review did not approve after 2 attempt(s)"),
+        exc=RuntimeError("Pre-PR review did not approve after 2 attempt(s)"),
     )
 
     label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]

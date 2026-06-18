@@ -48,12 +48,17 @@ def test_publication_defers_supervisor_without_full_pr_context(
     with (
         patch.object(
             agent_runner_publication,
-            "run_pre_push_review",
+            "run_pre_pr_review",
             return_value=("publish-sha", []),
         ),
         patch.object(
             agent_runner_publication,
-            "publish_changes",
+            "push_changes",
+            return_value="issue-1",
+        ),
+        patch.object(
+            agent_runner_publication,
+            "create_draft_pr",
             return_value=("issue-1", "https://github.com/example/repo/pull/1"),
         ),
         patch.object(

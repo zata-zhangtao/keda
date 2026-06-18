@@ -10,13 +10,13 @@ from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
     IssueSummary,
-    PrePushReviewConfig,
+    PrePrReviewConfig,
 )
 from backend.core.use_cases.agent_review import (
-    build_pre_push_review_result_comment,
+    build_pre_pr_review_result_comment,
     build_review_packet,
     parse_reviewer_decision,
-    run_pre_push_review,
+    run_pre_pr_review,
 )
 from backend.core.use_cases.agent_runner_events import (
     format_event_marker,
@@ -37,7 +37,7 @@ def test_format_event_marker_basic() -> None:
 def test_format_event_marker_with_optional_fields() -> None:
     """Marker should include optional fields when provided."""
     marker = format_event_marker(
-        phase="pre_push_review",
+        phase="pre_pr_review",
         cycle=2,
         head_sha="abc123",
         base_sha="def456",
@@ -288,7 +288,7 @@ def test_build_review_packet_includes_diff_and_verification() -> None:
         verification_results=verification_results,
         head_sha="abc123",
     )
-    assert "Pre-Push Review for Issue #1" in packet
+    assert "Pre-PR Review for Issue #1" in packet
     assert "tasks/test.md" in packet
     assert "+added line" in packet
     assert "M file.py" in packet
@@ -323,7 +323,7 @@ def test_build_review_packet_uses_configured_template() -> None:
         }
     )
     config = AppConfig(
-        pre_push_review=PrePushReviewConfig(
+        pre_pr_review=PrePrReviewConfig(
             review_prompt_template=("Custom rule A", "Custom rule B"),
         )
     )
@@ -341,9 +341,9 @@ def test_build_review_packet_uses_configured_template() -> None:
     assert "call the `code-reviewer` skill" not in packet
 
 
-def test_build_pre_push_review_result_comment_structure() -> None:
+def test_build_pre_pr_review_result_comment_structure() -> None:
     """Result comment should contain marker and human-readable fields."""
-    body = build_pre_push_review_result_comment(
+    body = build_pre_pr_review_result_comment(
         verdict="approved",
         reviewer="codex",
         head_before="abc123",
@@ -357,7 +357,7 @@ def test_build_pre_push_review_result_comment_structure() -> None:
         findings_critical=0,
     )
     assert "<!-- iar:event" in body
-    assert "phase=pre_push_review" in body
+    assert "phase=pre_pr_review" in body
     assert "Verdict: approved" in body
     assert "Reviewer: codex" in body
     assert "Head Before: `abc123`" in body
@@ -366,11 +366,11 @@ def test_build_pre_push_review_result_comment_structure() -> None:
     assert "Findings: 0 critical, 1 high, 2 medium, 3 low" in body
 
 
-def test_build_pre_push_review_result_comment_renders_findings_table() -> None:
+def test_build_pre_pr_review_result_comment_renders_findings_table() -> None:
     """The findings markdown table must render every captured finding."""
     from backend.core.shared.models.agent_runner import ReviewFinding
 
-    body = build_pre_push_review_result_comment(
+    body = build_pre_pr_review_result_comment(
         verdict="changes requested",
         reviewer="codex",
         head_before="abc123",
@@ -520,14 +520,15 @@ def test_parse_reviewer_decision_counts_critical_findings() -> None:
     assert result.findings_high == 0
 
 
-def test_run_pre_push_review_skips_when_disabled() -> None:
-    """If pre-push review is disabled, return immediately."""
+def test_run_pre_pr_review_skips_when_disabled() -> None:
+    """If pre-PR review is disabled, return immediately."""
+
     issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     fake_client = FakeGitHubClient()
     fake_runner = FakeProcessRunner()
-    config = AppConfig(pre_push_review=PrePushReviewConfig(enabled=False))
+    config = AppConfig(pre_pr_review=PrePrReviewConfig(enabled=False))
 
-    final_sha, verification = run_pre_push_review(
+    final_sha, verification = run_pre_pr_review(
         issue=issue,
         worktree_path=Path("."),
         config=config,
@@ -544,10 +545,10 @@ def test_run_pre_push_review_skips_when_disabled() -> None:
     assert len(comment_calls) == 0
 
 
-def test_run_pre_push_review_runs_agent_and_approves_when_no_changes(
+def test_run_pre_pr_review_runs_agent_and_approves_when_no_changes(
     tmp_path: Path,
 ) -> None:
-    """Pre-push reviewer that makes no changes should write an approved comment."""
+    """Pre-PR reviewer that makes no changes should write an approved comment."""
     issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     fake_client = FakeGitHubClient()
 
@@ -571,13 +572,11 @@ def test_run_pre_push_review_runs_agent_and_approves_when_no_changes(
             )
 
     fake_runner = _ApprovingRunner()
-    config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
-    )
+    config = AppConfig(pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1))
     worktree_path = tmp_path / "issue-1"
     worktree_path.mkdir()
 
-    final_sha, verification = run_pre_push_review(
+    final_sha, verification = run_pre_pr_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -594,7 +593,7 @@ def test_run_pre_push_review_runs_agent_and_approves_when_no_changes(
     assert "Verdict: approved" in comment_calls[0]["body"]
 
 
-def test_run_pre_push_review_commits_reviewer_changes(tmp_path: Path) -> None:
+def test_run_pre_pr_review_commits_reviewer_changes(tmp_path: Path) -> None:
     """If reviewer writes a commit request, runner should commit and verify."""
     import json
 
@@ -659,11 +658,11 @@ def test_run_pre_push_review_commits_reviewer_changes(tmp_path: Path) -> None:
     from backend.core.shared.models.agent_runner import RunnerConfig
 
     config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=2),
+        pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=2),
         runner=RunnerConfig(verification_commands=("just test",)),
     )
 
-    final_sha, verification = run_pre_push_review(
+    final_sha, verification = run_pre_pr_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -739,7 +738,7 @@ def _write_commit_request(worktree_path: Path) -> None:
     )
 
 
-def test_run_pre_push_review_approved_with_patch_converges(tmp_path: Path) -> None:
+def test_run_pre_pr_review_approved_with_patch_converges(tmp_path: Path) -> None:
     """Approved verdict plus a committed patch must converge in the same cycle."""
     issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     fake_client = FakeGitHubClient()
@@ -751,11 +750,11 @@ def test_run_pre_push_review_approved_with_patch_converges(tmp_path: Path) -> No
     from backend.core.shared.models.agent_runner import RunnerConfig
 
     config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1),
+        pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1),
         runner=RunnerConfig(verification_commands=("just test",)),
     )
 
-    final_sha, _verification = run_pre_push_review(
+    final_sha, _verification = run_pre_pr_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -776,7 +775,7 @@ def test_run_pre_push_review_approved_with_patch_converges(tmp_path: Path) -> No
     )
 
 
-def test_run_pre_push_review_patched_soft_fail_reports_last_cycle_summary(
+def test_run_pre_pr_review_patched_soft_fail_reports_last_cycle_summary(
     tmp_path: Path,
 ) -> None:
     """Last cycle with a successful patch must commit and continue publish."""
@@ -790,11 +789,11 @@ def test_run_pre_push_review_patched_soft_fail_reports_last_cycle_summary(
     from backend.core.shared.models.agent_runner import RunnerConfig
 
     config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1),
+        pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1),
         runner=RunnerConfig(verification_commands=("just test",)),
     )
 
-    final_sha, _verification = run_pre_push_review(
+    final_sha, _verification = run_pre_pr_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -816,7 +815,7 @@ def test_run_pre_push_review_patched_soft_fail_reports_last_cycle_summary(
     )
 
 
-def test_run_pre_push_review_empty_commit_request_with_approval_converges(
+def test_run_pre_pr_review_empty_commit_request_with_approval_converges(
     tmp_path: Path,
 ) -> None:
     """Reviewer writing a commit request with no diff must not hard-fail.
@@ -824,7 +823,7 @@ def test_run_pre_push_review_empty_commit_request_with_approval_converges(
     A reviewer that signals a commit but produces no actual file changes is a
     benign no-op (e.g. the suggested change matches the current state). When the
     reviewer's real verdict is ``approved`` the gate should converge instead of
-    raising ``Pre-push review repair failed``.
+    raising ``Pre-PR review repair failed``.
     """
     import json
 
@@ -877,11 +876,9 @@ def test_run_pre_push_review_empty_commit_request_with_approval_converges(
                 capture_output=capture_output,
             )
 
-    config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
-    )
+    config = AppConfig(pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1))
 
-    final_sha, _verification = run_pre_push_review(
+    final_sha, _verification = run_pre_pr_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -903,7 +900,7 @@ def test_run_pre_push_review_empty_commit_request_with_approval_converges(
     assert "empty commit request" in comment_calls[0]["body"]
 
 
-def test_run_pre_push_review_uses_commit_request_verdict_when_stdout_unparseable(
+def test_run_pre_pr_review_uses_commit_request_verdict_when_stdout_unparseable(
     tmp_path: Path,
 ) -> None:
     """Commit-request verdict metadata should recover unparseable reviewer stdout."""
@@ -963,11 +960,9 @@ def test_run_pre_push_review_uses_commit_request_verdict_when_stdout_unparseable
                 capture_output=capture_output,
             )
 
-    config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
-    )
+    config = AppConfig(pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1))
 
-    final_sha, _verification = run_pre_push_review(
+    final_sha, _verification = run_pre_pr_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -987,12 +982,12 @@ def test_run_pre_push_review_uses_commit_request_verdict_when_stdout_unparseable
     assert "empty commit request" in comment_calls[0]["body"]
 
 
-def test_run_pre_push_review_empty_commit_request_changes_requested_soft_fails(
+def test_run_pre_pr_review_empty_commit_request_changes_requested_soft_fails(
     tmp_path: Path,
 ) -> None:
     """An empty commit request with a changes_requested verdict soft-fails.
 
-    The runner must NOT raise the hard ``Pre-push review repair failed`` error
+    The runner must NOT raise the hard ``Pre-PR review repair failed`` error
     (the bug seen on Issue #5); it should fall through to the regular
     "did not approve after N attempts" path with an accurate action summary.
     """
@@ -1046,12 +1041,10 @@ def test_run_pre_push_review_empty_commit_request_changes_requested_soft_fails(
                 capture_output=capture_output,
             )
 
-    config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
-    )
+    config = AppConfig(pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1))
 
     with pytest.raises(RuntimeError, match="did not approve") as exc_info:
-        run_pre_push_review(
+        run_pre_pr_review(
             issue=issue,
             worktree_path=worktree_path,
             config=config,
@@ -1071,7 +1064,7 @@ def test_run_pre_push_review_empty_commit_request_changes_requested_soft_fails(
     assert "produced no committable diff" in comment_calls[0]["body"]
 
 
-def test_run_pre_push_review_rejects_changes_requested_without_commit_request(
+def test_run_pre_pr_review_rejects_changes_requested_without_commit_request(
     tmp_path: Path,
 ) -> None:
     """Changes requested in stdout without a commit request should not pass review."""
@@ -1100,12 +1093,10 @@ def test_run_pre_push_review_rejects_changes_requested_without_commit_request(
                 capture_output=capture_output,
             )
 
-    config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
-    )
+    config = AppConfig(pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1))
 
     with pytest.raises(RuntimeError, match="did not approve"):
-        run_pre_push_review(
+        run_pre_pr_review(
             issue=issue,
             worktree_path=tmp_path,
             config=config,
@@ -1126,8 +1117,8 @@ def test_run_pre_push_review_rejects_changes_requested_without_commit_request(
     )
 
 
-def test_run_pre_push_review_passes_configured_timeout(tmp_path: Path) -> None:
-    """Pre-push review should pass its configured timeout to the reviewer agent."""
+def test_run_pre_pr_review_passes_configured_timeout(tmp_path: Path) -> None:
+    """Pre-PR review should pass its configured timeout to the reviewer agent."""
     issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     fake_client = FakeGitHubClient()
 
@@ -1157,14 +1148,14 @@ def test_run_pre_push_review_passes_configured_timeout(tmp_path: Path) -> None:
 
     fake_runner = _RecordingTimeoutRunner()
     config = AppConfig(
-        pre_push_review=PrePushReviewConfig(
+        pre_pr_review=PrePrReviewConfig(
             enabled=True,
             max_attempts=1,
             timeout_seconds=42,
         )
     )
 
-    final_sha, _verification = run_pre_push_review(
+    final_sha, _verification = run_pre_pr_review(
         issue=issue,
         worktree_path=tmp_path,
         config=config,
@@ -1180,7 +1171,7 @@ def test_run_pre_push_review_passes_configured_timeout(tmp_path: Path) -> None:
     assert fake_runner.agent_timeouts == [42]
 
 
-def test_run_pre_push_review_soft_fails_with_findings_on_last_cycle(
+def test_run_pre_pr_review_soft_fails_with_findings_on_last_cycle(
     tmp_path: Path,
 ) -> None:
     """Final cycle with findings and no commit request soft-fails with findings rendered."""
@@ -1218,12 +1209,10 @@ def test_run_pre_push_review_soft_fails_with_findings_on_last_cycle(
                 capture_output=capture_output,
             )
 
-    config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
-    )
+    config = AppConfig(pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1))
 
     with pytest.raises(RuntimeError, match="did not approve"):
-        run_pre_push_review(
+        run_pre_pr_review(
             issue=issue,
             worktree_path=tmp_path,
             config=config,
@@ -1243,7 +1232,7 @@ def test_run_pre_push_review_soft_fails_with_findings_on_last_cycle(
     assert "reviewer reported findings but produced no commit request" in body
 
 
-def test_run_pre_push_review_last_cycle_final_patch_is_accepted(
+def test_run_pre_pr_review_last_cycle_final_patch_is_accepted(
     tmp_path: Path,
 ) -> None:
     """Final cycle with findings + commit request must commit and continue publish."""
@@ -1306,11 +1295,9 @@ def test_run_pre_push_review_last_cycle_final_patch_is_accepted(
                 capture_output=capture_output,
             )
 
-    config = AppConfig(
-        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
-    )
+    config = AppConfig(pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1))
 
-    final_sha, _verification = run_pre_push_review(
+    final_sha, _verification = run_pre_pr_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,

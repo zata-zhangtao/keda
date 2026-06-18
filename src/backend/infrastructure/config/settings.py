@@ -465,8 +465,14 @@ class AgentRunnerPromptSettings(BaseModel):
         return self
 
 
-class AgentRunnerPrePushReviewSettings(BaseModel):
-    """Pre-push AI review gate configuration."""
+class AgentRunnerPrePrReviewSettings(BaseModel):
+    """Pre-PR AI review gate configuration.
+
+    The review runs **after** the implementation commit has been pushed to the
+    remote branch and **before** the Draft PR is created. Reviewer patches are
+    themselves pushed so the remote branch always reflects the latest committed
+    state when the PR is opened.
+    """
 
     enabled: bool = True
     review_agent: str = "auto"
@@ -480,7 +486,7 @@ class AgentRunnerPrePushReviewSettings(BaseModel):
     review_prompt_template: str | list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _normalize_review_prompt_template(self) -> "AgentRunnerPrePushReviewSettings":
+    def _normalize_review_prompt_template(self) -> "AgentRunnerPrePrReviewSettings":
         """Collapse empty / scalar values to a stable list representation."""
         if isinstance(self.review_prompt_template, str):
             normalized = (
@@ -623,7 +629,7 @@ class _AgentRunnerRepositoryOverrideSettings(BaseModel):
     safety: AgentRunnerSafetySettings | None = None
     validation: AgentRunnerValidationSettings | None = None
     prompts: AgentRunnerPromptSettings | None = None
-    pre_push_review: AgentRunnerPrePushReviewSettings | None = None
+    pre_pr_review: AgentRunnerPrePrReviewSettings | None = None
     post_pr_supervisor: AgentRunnerPostPrSupervisorSettings | None = None
     generated_content: AgentRunnerGeneratedContentSettings | None = None
     interactive_decision: AgentRunnerInteractiveDecisionSettings | None = None
@@ -700,7 +706,7 @@ def load_agent_runner_local_settings(
         safety=local_settings.safety,
         validation=local_settings.validation,
         prompts=local_settings.prompts,
-        pre_push_review=local_settings.pre_push_review,
+        pre_pr_review=local_settings.pre_pr_review,
         post_pr_supervisor=local_settings.post_pr_supervisor,
         generated_content=local_settings.generated_content,
         interactive_decision=local_settings.interactive_decision,
@@ -731,8 +737,8 @@ class AgentRunnerSettings(BaseSettings):
     prompts: AgentRunnerPromptSettings = Field(
         default_factory=AgentRunnerPromptSettings
     )
-    pre_push_review: AgentRunnerPrePushReviewSettings = Field(
-        default_factory=AgentRunnerPrePushReviewSettings
+    pre_pr_review: AgentRunnerPrePrReviewSettings = Field(
+        default_factory=AgentRunnerPrePrReviewSettings
     )
     post_pr_supervisor: AgentRunnerPostPrSupervisorSettings = Field(
         default_factory=AgentRunnerPostPrSupervisorSettings

@@ -5,7 +5,7 @@
 1. **轮询发现** — 从 GitHub 发现 ready/running 状态的 Issue
 2. **工作树准备** — 为每个 Issue 创建或复用 git worktree
 3. **Agent 执行** — 调用 AI Agent 实现 Issue（可选，视恢复路径而定）
-4. **代码评审** — 在 push 前运行 pre-push review
+4. **代码评审** — push 之后、PR 之前运行 pre-PR review
 5. **发布** — 将代码推送到远程并创建 Draft PR
 6. **事后监督** — 可选的 PR 后监督循环（修复冲突、重新构建等）
 

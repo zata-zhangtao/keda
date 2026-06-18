@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
@@ -33,10 +34,14 @@ from backend.core.shared.models.agent_runner import (
     IssueSummary,
     PublishFailureCategory,
 )
-from backend.core.use_cases.agent_review import run_pre_push_review
+from backend.core.use_cases.agent_review import run_pre_pr_review
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from backend.core.use_cases.agent_runner_failure import PublishFailureError
-from backend.core.use_cases.agent_runner_publish import DraftPRCreationError
+from backend.core.use_cases.agent_runner_publish import (
+    DraftPRCreationError,
+    create_draft_pr,
+    push_changes,
+)
 from backend.core.use_cases.agent_runner_validation import (
     ensure_validation_evidence_ready,
     publish_validation_evidence,
@@ -48,7 +53,6 @@ from backend.core.use_cases.run_agent_once import (
     format_attempt_history,
     get_head_sha,
     has_changes,
-    publish_changes,
     run_verification,
 )
 
@@ -138,7 +142,37 @@ def build_draft_pr_created_comment(
     )
 
 
-def _publish_changes_with_recovery_context(
+def _push_changes_with_recovery_context(
+    *,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    expected_branch: str,
+) -> str:
+    """Push the branch and preserve recovery context on push failures.
+
+    Used both for the initial post-implementation push and for reviewer
+    patches during the pre-PR review loop. Reviewer patches call this via a
+    closure that pins the same ``expected_branch`` and configuration.
+    """
+    try:
+        return push_changes(
+            issue,
+            worktree_path,
+            config,
+            process_runner,
+            expected_branch=expected_branch,
+        )
+    except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+        raise PublishFailureError(
+            str(exc),
+            worktree_path=worktree_path,
+            failure_category=PublishFailureCategory.PUSH,
+        ) from exc
+
+
+def _create_draft_pr_with_recovery_context(
     *,
     issue: IssueSummary,
     worktree_path: Path,
@@ -148,9 +182,13 @@ def _publish_changes_with_recovery_context(
     expected_branch: str,
     content_generator: IContentGenerator | None,
 ) -> tuple[str, str]:
-    """Publish changes and preserve recovery context on publish failures."""
+    """Create the draft PR (or reuse an existing one) and preserve context.
+
+    Only invoked once the pre-PR review gate has converged, so any failure
+    here is a PR-creation problem and is reported as ``PR_CREATE``.
+    """
     try:
-        return publish_changes(
+        return create_draft_pr(
             issue,
             worktree_path,
             config,
@@ -169,8 +207,36 @@ def _publish_changes_with_recovery_context(
         raise PublishFailureError(
             str(exc),
             worktree_path=worktree_path,
-            failure_category=PublishFailureCategory.PUSH,
+            failure_category=PublishFailureCategory.PR_CREATE,
         ) from exc
+
+
+def _make_push_callback(
+    *,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    expected_branch: str,
+) -> Callable[[], None]:
+    """Build the push callback used by :func:`run_pre_pr_review`.
+
+    The closure is intentionally parameterless so the review loop can call it
+    after every successful reviewer commit without exposing publication
+    internals. On push failure the callback raises :class:`PublishFailureError`
+    so the runner exits the review cycle with a recoverable context.
+    """
+
+    def _push() -> None:
+        _push_changes_with_recovery_context(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            process_runner=process_runner,
+            expected_branch=expected_branch,
+        )
+
+    return _push
 
 
 def _edit_issue_labels_after_publish(
@@ -359,9 +425,10 @@ def _finish_implementation_publication(
 
     处理流程：
     1. 评论实现完成信息和验证结果
-    2. 运行 pre-push code review（可修改代码）
-    3. 发布 changes 到远程并创建 Draft PR
-    4. 启动 PR 后监督循环（或直接进入 review 标签）
+    2. 立即 push 实现 commit 到远程（不再被 review 阻塞）
+    3. 运行 pre-PR code review（reviewer 修复会即时 push）
+    4. review 收敛后才创建 Draft PR
+    5. 启动 PR 后监督循环（或直接进入 review 标签）
 
     Args:
         issue: Issue 对象
@@ -394,8 +461,26 @@ def _finish_implementation_publication(
         ),
     )
 
-    # 步骤 2: 运行 pre-push code review（可能修改代码并产生新 commit）
-    final_sha, _final_verification_results = run_pre_push_review(
+    # 步骤 2: 实现 commit 完成后立即 push，使 feature branch 可见。
+    # 后续 reviewer 修复也通过 push_callback 走同一条 push 路径。
+    _push_changes_with_recovery_context(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=process_runner,
+        expected_branch=expected_branch,
+    )
+
+    push_callback = _make_push_callback(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=process_runner,
+        expected_branch=expected_branch,
+    )
+
+    # 步骤 3: 运行 pre-PR code review（reviewer 修复会即时 push）
+    final_sha, _final_verification_results = run_pre_pr_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -405,10 +490,11 @@ def _finish_implementation_publication(
         head_sha_before=after_sha,
         expected_branch=expected_branch,
         verification_results=verification_results,
+        push_callback=push_callback,
     )
 
-    # 步骤 3: 发布到远程并创建 Draft PR
-    branch, pr_url = _publish_changes_with_recovery_context(
+    # 步骤 4: review 收敛后才创建 Draft PR
+    branch, pr_url = _create_draft_pr_with_recovery_context(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -523,9 +609,10 @@ def _finish_existing_commit_publication(
 
     处理流程：
     1. 评论实现完成信息（标记为 recovered）
-    2. 运行 pre-push code review（确保代码质量）
-    3. 发布 changes 到远程并创建 Draft PR
-    4. 启动 PR 后监督循环（或直接进入 review 标签）
+    2. 立即 push 本地 commit 到远程
+    3. 运行 pre-PR code review（reviewer 修复会即时 push）
+    4. review 收敛后才创建 Draft PR
+    5. 启动 PR 后监督循环（或直接进入 review 标签）
 
     Args:
         issue: Issue 对象
@@ -558,8 +645,25 @@ def _finish_existing_commit_publication(
         ),
     )
 
-    # 步骤 2: 运行 pre-push code review（重要：确保复用的代码也经过评审）
-    final_sha, _final_verification_results = run_pre_push_review(
+    # 步骤 2: 立即 push 已存在 commit 到远程（不再被 review 阻塞）
+    _push_changes_with_recovery_context(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=process_runner,
+        expected_branch=expected_branch,
+    )
+
+    push_callback = _make_push_callback(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=process_runner,
+        expected_branch=expected_branch,
+    )
+
+    # 步骤 3: 运行 pre-PR code review（重要：确保复用的代码也经过评审；reviewer 修复会即时 push）
+    final_sha, _final_verification_results = run_pre_pr_review(
         issue=issue,
         worktree_path=worktree_path,
         config=config,
@@ -569,10 +673,11 @@ def _finish_existing_commit_publication(
         head_sha_before=head_sha,
         expected_branch=expected_branch,
         verification_results=verification_results,
+        push_callback=push_callback,
     )
 
-    # 步骤 3: 发布到远程并创建 Draft PR
-    branch, pr_url = _publish_changes_with_recovery_context(
+    # 步骤 4: review 收敛后才创建 Draft PR
+    branch, pr_url = _create_draft_pr_with_recovery_context(
         issue=issue,
         worktree_path=worktree_path,
         config=config,

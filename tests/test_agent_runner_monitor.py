@@ -95,7 +95,7 @@ def test_parse_event_timeline_orders_markers_oldest_first() -> None:
         _marker(phase="claimed"),
         "non-marker comment",
         _marker(phase="implementation_complete", cycle=2),
-        _marker(phase="pre_push_review", cycle=3, checks_state="SUCCESS"),
+        _marker(phase="pre_pr_review", cycle=3, checks_state="SUCCESS"),
         _marker(phase="draft_pr_created", cycle=4),
         _marker(phase="post_pr_supervisor", cycle=5, action="approve"),
     ]
@@ -104,7 +104,7 @@ def test_parse_event_timeline_orders_markers_oldest_first() -> None:
     assert [entry.phase for entry in timeline] == [
         "claimed",
         "implementation_complete",
-        "pre_push_review",
+        "pre_pr_review",
         "draft_pr_created",
         "post_pr_supervisor",
     ]
@@ -277,7 +277,7 @@ def test_build_issue_snapshot_collects_timeline_pr_and_worktree() -> None:
             _marker(phase="claimed", cycle=1, pr_branch="issue-19"),
             _marker(phase="implementation_complete", cycle=2, pr_branch="issue-19"),
             _marker(
-                phase="pre_push_review",
+                phase="pre_pr_review",
                 cycle=3,
                 pr_branch="issue-19",
                 checks_state="SUCCESS",
@@ -341,7 +341,7 @@ def test_build_issue_snapshot_collects_timeline_pr_and_worktree() -> None:
     assert [entry.phase for entry in snapshot.timeline] == [
         "claimed",
         "implementation_complete",
-        "pre_push_review",
+        "pre_pr_review",
         "draft_pr_created",
         "post_pr_supervisor",
         "post_pr_rework_requested",

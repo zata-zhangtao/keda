@@ -18,7 +18,7 @@ from backend.core.shared.models.agent_runner import (
     GitConfig,
     IssueSummary,
     PostPrSupervisorConfig,
-    PrePushReviewConfig,
+    PrePrReviewConfig,
     PromptConfig,
     PullRequestContext,
     ReviewEventMarker,
@@ -196,7 +196,7 @@ def test_extract_agent_response_text_keeps_rendered_stream_output() -> None:
 
     Process runner 会把 Claude stream-json 渲染成纯文本后返回；若再按事件流
     逐行重解析，数组末尾不带逗号的字符串元素恰好是合法 JSON 标量，会被静默
-    丢弃并破坏 reviewer verdict JSON（回归自 Issue #53 pre-push review 失败）。
+    丢弃并破坏 reviewer verdict JSON（回归自 Issue #53 pre-PR review 失败）。
     """
     rendered_stdout = (
         "```json\n"
@@ -922,10 +922,11 @@ def test_publish_changes_rejects_branch_change() -> None:
 
 
 def test_publish_failure_category_push_vs_pr_create() -> None:
-    """publish_changes wrapper should report push vs pr_create accurately."""
+    """Pre-PR flow: push and PR create are gated separately and report accurately."""
     from backend.core.use_cases.agent_runner_failure import PublishFailureError
     from backend.core.use_cases.agent_runner_publication import (
-        _publish_changes_with_recovery_context,
+        _create_draft_pr_with_recovery_context,
+        _push_changes_with_recovery_context,
     )
     from backend.core.shared.models.agent_runner import PublishFailureCategory
 
@@ -967,14 +968,12 @@ def test_publish_failure_category_push_vs_pr_create() -> None:
         }
     )
     with pytest.raises(PublishFailureError) as exc_info:
-        _publish_changes_with_recovery_context(
+        _push_changes_with_recovery_context(
             issue=issue,
             worktree_path=Path("."),
             config=AppConfig(),
-            github_client=FakeGitHubClient(),
             process_runner=fake_runner_push_fail,
             expected_branch="issue-1",
-            content_generator=None,
         )
     assert exc_info.value.failure_category == PublishFailureCategory.PUSH
 
@@ -997,22 +996,10 @@ def test_publish_failure_category_push_vs_pr_create() -> None:
                 stdout="",
                 stderr="",
             ),
-            ("git", "remote"): CommandResult(
-                command=("git", "remote"),
-                return_code=0,
-                stdout="origin\n",
-                stderr="",
-            ),
-            ("git", "push", "-u", "origin", "issue-1"): CommandResult(
-                command=("git", "push", "-u", "origin", "issue-1"),
-                return_code=0,
-                stdout="",
-                stderr="",
-            ),
         }
     )
     with pytest.raises(PublishFailureError) as exc_info:
-        _publish_changes_with_recovery_context(
+        _create_draft_pr_with_recovery_context(
             issue=issue,
             worktree_path=Path("."),
             config=AppConfig(),
@@ -1093,7 +1080,7 @@ def _config_with_review_disabled(
     max_recovery_attempts: int = 2,
     recovery_retry_delay_seconds: int = 0,
 ) -> AppConfig:
-    """Return a config with pre-push review and post-PR supervisor disabled."""
+    """Return a config with pre-PR review and post-PR supervisor disabled."""
     commands = verification_commands or ("just test",)
     worktree_cfg = (
         WorktreeConfig(path_command=f"echo {worktree_path}")
@@ -1107,7 +1094,7 @@ def _config_with_review_disabled(
             verification_commands=commands,
         ),
         worktree=worktree_cfg,
-        pre_push_review=PrePushReviewConfig(enabled=False),
+        pre_pr_review=PrePrReviewConfig(enabled=False),
         post_pr_supervisor=PostPrSupervisorConfig(enabled=False),
     )
 
@@ -2044,7 +2031,7 @@ def test_run_once_no_new_commits_fails() -> None:
 
 
 def test_run_once_success(tmp_path: Path) -> None:
-    """run_once should succeed through pre-push review and supervisor approval."""
+    """run_once should succeed through pre-PR review and supervisor approval."""
     fake_client = FakeGitHubClient()
     issue = _make_ready_issue()
     fake_client.list_ready_issues = lambda ready_label, limit: [issue]
@@ -2074,7 +2061,7 @@ def test_run_once_success(tmp_path: Path) -> None:
                 )
             if command_tuple[:1] == ("codex",):
                 self._agent_calls += 1
-                # Agent 1: implementation, Agent 2: pre-push review, Agent 3: supervisor
+                # Agent 1: implementation, Agent 2: pre-PR review, Agent 3: supervisor
                 if self._agent_calls == 2:
                     return CommandResult(
                         command=command_tuple,
@@ -2150,7 +2137,7 @@ def test_run_once_success(tmp_path: Path) -> None:
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     bodies = [c["body"] for c in comment_calls]
     assert any("Implementation Complete" in b for b in bodies)
-    assert any("Pre-Push Review" in b for b in bodies)
+    assert any("Pre-PR Review" in b for b in bodies)
     assert any("Draft PR Created" in b for b in bodies)
     assert any("Post-PR Supervisor" in b for b in bodies)
 
@@ -4141,7 +4128,7 @@ def test_run_once_rebase_conflict_detached_head(
     config = AppConfig(
         runner=RunnerConfig(verification_commands=()),
         worktree=WorktreeConfig(path_command=f"echo {worktree_path}"),
-        pre_push_review=PrePushReviewConfig(enabled=False),
+        pre_pr_review=PrePrReviewConfig(enabled=False),
         post_pr_supervisor=PostPrSupervisorConfig(enabled=False),
     )
 

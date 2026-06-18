@@ -37,9 +37,18 @@ class DraftPRCreationError(RuntimeError):
     pass
 
 
+class PushChangesError(RuntimeError):
+    """Raised when pushing the branch to remote fails."""
+
+    pass
+
+
 __all__ = [
     "DraftPRCreationError",
+    "PushChangesError",
+    "create_draft_pr",
     "publish_changes",
+    "push_changes",
     "run_preflight_checks",
     "validate_publish_remote",
     "validate_safe_changes",
@@ -96,40 +105,18 @@ def run_preflight_checks(
     validate_publish_remote(repo_path, config, process_runner)
 
 
-def publish_changes(
-    issue: IssueSummary,
+def _validate_branch_for_publish(
     worktree_path: Path,
-    config: AppConfig,
-    github_client: IGitHubClient,
     process_runner: IProcessRunner,
     *,
-    expected_branch: str | None = None,
-    content_generator: IContentGenerator | None = None,
-    require_prd_archived: bool = True,
-) -> tuple[str, str]:
-    """Push and create a draft PR. Assumes the caller has already committed.
+    expected_branch: str | None,
+    issue: IssueSummary,
+) -> str:
+    """Resolve the current branch and verify it matches ``expected_branch``.
 
-    在 push 前再次执行安全检查（validate_safe_changes），
-    防止 agent 在 commit 后、push 前的间隙修改了 forbidden paths。
-    若分支上已存在开放 PR（例如 Issue 被重新领取），则复用该 PR 而不重复创建。
-
-    Args:
-        issue: 当前处理的 Issue。
-        worktree_path: agent 工作的 git worktree 路径。
-        config: Agent Runner 配置。
-        github_client: GitHub 客户端。
-        process_runner: 命令执行器。
-        expected_branch: 期望的分支名，用于防止分支漂移。
-        content_generator: 可选的 AI 内容生成器，用于生成 PR 标题和描述。
-        require_prd_archived: 是否在 push 前断言 canonical PRD 已归档。实现交付
-            路径默认 ``True``；PRD rework 发布的是 ``tasks/pending/`` 下尚未实现的
-            新 PRD（提案而非成品），此时传 ``False`` 跳过该交付门禁。
-
-    Returns:
-        (分支名, PR URL) 元组。
-
-    Raises:
-        RuntimeError: 分支不匹配或远程不存在。
+    Shared by :func:`push_changes` and :func:`create_draft_pr` to keep the
+    branch drift guard consistent with the legacy :func:`publish_changes`
+    behavior.
     """
     branch = get_current_branch(worktree_path, process_runner)
     if not branch:
@@ -139,23 +126,102 @@ def publish_changes(
             f"Refusing to publish from unexpected branch: {branch} "
             f"(expected {expected_branch})"
         )
-    # 发布前硬门禁：PRD-backed Issue 的 canonical PRD 必须已归档且验收完成。
-    # 该检查在 commit 阶段由 ensure_prd_delivery_ready 执行过一次，这里作为
-    # push 前的最终只读断言，防止任何绕过路径。PRD rework 发布的是 pending 提案
-    # PRD（按定义尚未归档），因此显式以 require_prd_archived=False 跳过。
+    return branch
+
+
+def push_changes(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    *,
+    expected_branch: str | None = None,
+    require_prd_archived: bool = True,
+) -> str:
+    """Push the current branch to the configured remote.
+
+    Pre-push safety checks (PRD archive assertion, forbidden path scan, evidence
+    path exclusion, remote validation) are run in the same order as the legacy
+    :func:`publish_changes` so the on-disk guarantees are unchanged.
+
+    Args:
+        issue: Issue being published (used for PRD archive assertions).
+        worktree_path: Agent worktree path.
+        config: Agent Runner configuration.
+        process_runner: Command runner.
+        expected_branch: Optional explicit branch to publish from. When set, the
+            worktree's current branch must match or the call is rejected.
+        require_prd_archived: When ``True`` (default), assert that the canonical
+            PRD has been archived before pushing. PRD rework publishes new
+            proposal PRDs in ``tasks/pending/`` (not yet archived) and must opt
+            out by passing ``False``.
+
+    Returns:
+        The branch that was pushed.
+
+    Raises:
+        RuntimeError: If a safety check fails or ``git push`` exits non-zero.
+    """
+    branch = _validate_branch_for_publish(
+        worktree_path,
+        process_runner,
+        expected_branch=expected_branch,
+        issue=issue,
+    )
     if require_prd_archived:
         assert_prd_archived_for_publish(issue, worktree_path)
-    # push 前再次检查 forbidden paths，防止 commit 后又被修改
     validate_safe_changes(worktree_path, config, process_runner)
-    # 证据文件绝不允许进入代码 diff（info/exclude 之外的双保险）
     ensure_no_evidence_paths_in_changes(worktree_path, config, process_runner)
     publish_remote_name = validate_publish_remote(worktree_path, config, process_runner)
-    process_runner.run(
-        ["git", "push", "-u", publish_remote_name, branch], cwd=worktree_path
+    try:
+        process_runner.run(
+            ["git", "push", "-u", publish_remote_name, branch], cwd=worktree_path
+        )
+    except (RuntimeError, OSError) as exc:
+        raise PushChangesError(str(exc)) from exc
+    return branch
+
+
+def create_draft_pr(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    *,
+    expected_branch: str | None = None,
+    content_generator: IContentGenerator | None = None,
+) -> tuple[str, str]:
+    """Create a draft PR for the current branch, or reuse an existing open PR.
+
+    Assumes the branch has already been pushed by :func:`push_changes`. Performs
+    the same branch guard, PR lookup, generated content, and validation
+    checklist logic as the legacy :func:`publish_changes` so the resulting PR
+    text and behaviour are unchanged.
+
+    Args:
+        issue: Issue being published.
+        worktree_path: Agent worktree path.
+        config: Agent Runner configuration.
+        github_client: GitHub client used for PR lookup and creation.
+        process_runner: Command runner.
+        expected_branch: Optional explicit branch to verify before creating the
+            PR. When set, the worktree's current branch must match.
+        content_generator: Optional AI content generator for PR title/body.
+
+    Returns:
+        ``(branch, pr_url)`` tuple.
+
+    Raises:
+        DraftPRCreationError: If the PR lookup or creation step fails.
+    """
+    branch = _validate_branch_for_publish(
+        worktree_path,
+        process_runner,
+        expected_branch=expected_branch,
+        issue=issue,
     )
 
-    # 重新领取场景（如 worktree 损坏后人工重打 ready 标签）下分支可能已有
-    # 开放 PR，此时 gh pr create 会失败；复用已有 PR，push 已更新其 head。
     try:
         existing_pr_url = github_client.find_open_pr_by_head(branch)
     except Exception as exc:
@@ -189,9 +255,6 @@ def publish_changes(
         pr_title = generated.title
         pr_body = generated.body
 
-    # 要求验证的 Issue：PR body 末尾追加 marker 包裹的人工签收清单。
-    # 人工 reviewer 查看证据 comment 后直接在 GitHub 上点勾，
-    # validation-gate required check 据此放行合并。
     if validation_required(issue.body, config):
         validation_checklist_items = extract_realistic_validation_items(issue.body)
         if validation_checklist_items:
@@ -210,3 +273,41 @@ def publish_changes(
     except Exception as exc:
         raise DraftPRCreationError(str(exc)) from exc
     return branch, pr_url
+
+
+def publish_changes(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    *,
+    expected_branch: str | None = None,
+    content_generator: IContentGenerator | None = None,
+    require_prd_archived: bool = True,
+) -> tuple[str, str]:
+    """Compatibility wrapper that pushes then creates a draft PR in one call.
+
+    New flows should call :func:`push_changes` and :func:`create_draft_pr`
+    independently so the publish gate (PR creation) can be ordered around the
+    pre-PR review. This wrapper is retained for call sites that legitimately
+    need the combined behaviour (e.g. PRD rework publication that is not gated
+    by pre-PR review).
+    """
+    push_changes(
+        issue,
+        worktree_path,
+        config,
+        process_runner,
+        expected_branch=expected_branch,
+        require_prd_archived=require_prd_archived,
+    )
+    return create_draft_pr(
+        issue,
+        worktree_path,
+        config,
+        github_client,
+        process_runner,
+        expected_branch=expected_branch,
+        content_generator=content_generator,
+    )

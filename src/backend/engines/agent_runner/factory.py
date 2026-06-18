@@ -30,7 +30,7 @@ from backend.core.shared.models.agent_runner import (
     GitConfig,
     LabelConfig,
     PostPrSupervisorConfig,
-    PrePushReviewConfig,
+    PrePrReviewConfig,
     PromptConfig,
     RepositoryRunContext,
     RunnerConfig,
@@ -143,7 +143,7 @@ def build_app_config_from_settings(
     validation_settings = agent_runner_settings.validation
     prompt_settings = agent_runner_settings.prompts
 
-    pre_push = agent_runner_settings.pre_push_review
+    pre_pr = agent_runner_settings.pre_pr_review
     post_supervisor = agent_runner_settings.post_pr_supervisor
     generated_content = _build_generated_content_config(
         agent_runner_settings.generated_content
@@ -199,13 +199,13 @@ def build_app_config_from_settings(
             default_phase=prompt_settings.default_phase,
             phases=dict(prompt_settings.phases),
         ),
-        pre_push_review=PrePushReviewConfig(
-            enabled=pre_push.enabled,
-            review_agent=pre_push.review_agent,
-            allow_same_agent=pre_push.allow_same_agent,
-            max_attempts=pre_push.max_attempts,
-            timeout_seconds=pre_push.timeout_seconds,
-            review_prompt_template=tuple(pre_push.review_prompt_template),
+        pre_pr_review=PrePrReviewConfig(
+            enabled=pre_pr.enabled,
+            review_agent=pre_pr.review_agent,
+            allow_same_agent=pre_pr.allow_same_agent,
+            max_attempts=pre_pr.max_attempts,
+            timeout_seconds=pre_pr.timeout_seconds,
+            review_prompt_template=tuple(pre_pr.review_prompt_template),
         ),
         post_pr_supervisor=PostPrSupervisorConfig(
             enabled=post_supervisor.enabled,
@@ -295,7 +295,7 @@ def get_agent_runner_status_data() -> dict:
             "remote": app_config.git.remote,
             "auto_merge": app_config.safety.auto_merge,
             "forbidden_path_patterns": list(app_config.safety.forbidden_path_patterns),
-            "pre_push_review_enabled": app_config.pre_push_review.enabled,
+            "pre_pr_review_enabled": app_config.pre_pr_review.enabled,
             "post_pr_supervisor_enabled": app_config.post_pr_supervisor.enabled,
         },
         "repositories": repositories,
@@ -455,8 +455,8 @@ def merge_repository_config(
         global_config.validation, repo_settings.validation
     )
     prompts = _merge_prompt_config(global_config.prompts, repo_settings.prompts)
-    pre_push_review = _merge_optional_model(
-        global_config.pre_push_review, repo_settings.pre_push_review
+    pre_pr_review = _merge_optional_model(
+        global_config.pre_pr_review, repo_settings.pre_pr_review
     )
     post_pr_supervisor = _merge_optional_model(
         global_config.post_pr_supervisor, repo_settings.post_pr_supervisor
@@ -475,7 +475,7 @@ def merge_repository_config(
         safety=safety,
         validation=validation,
         prompts=prompts,
-        pre_push_review=pre_push_review,
+        pre_pr_review=pre_pr_review,
         post_pr_supervisor=post_pr_supervisor,
         generated_content=generated_content,
         interactive_decision=interactive_decision,

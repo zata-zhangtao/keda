@@ -77,9 +77,9 @@ default_phase = "execution"
 
 [agent_runner.prompts.phases]
 
-# 提交前 AI review 门禁
-[agent_runner.pre_push_review]
-# 是否启用提交前 AI review
+# Draft PR 创建前的 AI review 门禁（push 之后、PR 之前）
+[agent_runner.pre_pr_review]
+# 是否启用 Draft PR 创建前的 AI review
 enabled = true
 # 执行 review 的 agent：auto / claude / codex / kimi
 review_agent = "auto"
