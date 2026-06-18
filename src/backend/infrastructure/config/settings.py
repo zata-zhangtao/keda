@@ -473,6 +473,25 @@ class AgentRunnerPrePushReviewSettings(BaseModel):
     allow_same_agent: bool = True
     max_attempts: int = 2
     timeout_seconds: int = 900
+    # Review rules template; supports either a single string or a list of
+    # lines. When the field is omitted from TOML the embedded default in
+    # ``agent_review.py`` is used so out-of-the-box behavior still calls the
+    # ``code-reviewer`` skill.
+    review_prompt_template: str | list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _normalize_review_prompt_template(self) -> "AgentRunnerPrePushReviewSettings":
+        """Collapse empty / scalar values to a stable list representation."""
+        if isinstance(self.review_prompt_template, str):
+            normalized = (
+                [self.review_prompt_template] if self.review_prompt_template else []
+            )
+        else:
+            normalized = [str(item) for item in self.review_prompt_template]
+        # Pydantic v2 disallows assigning to a field directly after validation;
+        # use object.__setattr__ to keep the field frozen-friendly.
+        object.__setattr__(self, "review_prompt_template", normalized)
+        return self
 
 
 class AgentRunnerPostPrSupervisorSettings(BaseModel):

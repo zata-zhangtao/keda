@@ -104,10 +104,26 @@ def test_settings_review_and_supervisor_match_core() -> None:
     assert pre_push.allow_same_agent == core_pre.allow_same_agent
     assert pre_push.max_attempts == core_pre.max_attempts
     assert pre_push.timeout_seconds == core_pre.timeout_seconds
+    assert list(pre_push.review_prompt_template) == list(
+        core_pre.review_prompt_template
+    )
 
     assert post_sup.enabled == core_post.enabled
     assert post_sup.supervisor_agent == core_post.supervisor_agent
     assert post_sup.max_repair_attempts == core_post.max_repair_attempts
+
+
+def test_pre_push_review_prompt_template_normalizes_string() -> None:
+    """Settings layer must coerce a string override into a list."""
+    from backend.infrastructure.config.settings import (
+        AgentRunnerPrePushReviewSettings,
+    )
+
+    settings = AgentRunnerPrePushReviewSettings(review_prompt_template="just one line")
+    assert settings.review_prompt_template == ["just one line"]
+
+    settings_empty = AgentRunnerPrePushReviewSettings(review_prompt_template="")
+    assert settings_empty.review_prompt_template == []
 
 
 def test_factory_build_app_config_maps_supervising() -> None:

@@ -293,6 +293,52 @@ def test_build_review_packet_includes_diff_and_verification() -> None:
     assert "+added line" in packet
     assert "M file.py" in packet
     assert "`just test`: exit 0" in packet
+    assert "call the `code-reviewer` skill" in packet
+    assert "Findings JSON schema" in packet
+
+
+def test_build_review_packet_uses_configured_template() -> None:
+    """When ``review_prompt_template`` is configured it overrides the default."""
+    issue = IssueSummary(
+        number=2,
+        title="Custom",
+        url="https://github.com/example/repo/issues/2",
+        body="Just review me.",
+        labels=(),
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "diff", "main...deadbeef"): CommandResult(
+                command=("git", "diff", "main...deadbeef"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+            ("git", "status", "--short"): CommandResult(
+                command=("git", "status", "--short"),
+                return_code=0,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    config = AppConfig(
+        pre_push_review=PrePushReviewConfig(
+            review_prompt_template=("Custom rule A", "Custom rule B"),
+        )
+    )
+    packet = build_review_packet(
+        issue=issue,
+        worktree_path=Path("."),
+        config=config,
+        process_runner=fake_runner,
+        verification_results=[],
+        head_sha="deadbeef",
+    )
+    assert "Custom rule A" in packet
+    assert "Custom rule B" in packet
+    # The embedded default should NOT be appended when an override is present.
+    assert "call the `code-reviewer` skill" not in packet
 
 
 def test_build_pre_push_review_result_comment_structure() -> None:
@@ -308,6 +354,7 @@ def test_build_pre_push_review_result_comment_structure() -> None:
         findings_low=3,
         action_summary="reviewer approved without changes",
         cycle=1,
+        findings_critical=0,
     )
     assert "<!-- iar:event" in body
     assert "phase=pre_push_review" in body
@@ -316,7 +363,47 @@ def test_build_pre_push_review_result_comment_structure() -> None:
     assert "Head Before: `abc123`" in body
     assert "Head After: `def456`" in body
     assert "Verification: passed" in body
-    assert "Findings: 1 high, 2 medium, 3 low" in body
+    assert "Findings: 0 critical, 1 high, 2 medium, 3 low" in body
+
+
+def test_build_pre_push_review_result_comment_renders_findings_table() -> None:
+    """The findings markdown table must render every captured finding."""
+    from backend.core.shared.models.agent_runner import ReviewFinding
+
+    body = build_pre_push_review_result_comment(
+        verdict="changes requested",
+        reviewer="codex",
+        head_before="abc123",
+        head_after="def456",
+        verification_passed=False,
+        findings_high=1,
+        findings_medium=0,
+        findings_low=0,
+        findings_critical=1,
+        action_summary="reviewer reported findings but produced no commit request",
+        cycle=2,
+        findings=(
+            ReviewFinding(
+                category="code",
+                severity="critical",
+                file="src/backend/foo.py",
+                line=42,
+                title="dangerous",
+                description="boom",
+                recommendation="fix it",
+            ),
+            ReviewFinding(
+                category="docs",
+                severity="high",
+                title="outdated",
+            ),
+        ),
+    )
+    assert "### Findings" in body
+    assert "| Severity | Category | File | Line | Title | Recommendation |" in body
+    assert "critical" in body
+    assert "src/backend/foo.py" in body
+    assert "outdated" in body
 
 
 def test_parse_reviewer_decision_from_json() -> None:
@@ -360,6 +447,77 @@ def test_parse_reviewer_decision_falls_back_to_quoted_text_verdict() -> None:
 
     assert result.verdict == "approved"
     assert result.parseable is True
+
+
+def test_parse_reviewer_decision_extracts_findings_array() -> None:
+    """Findings JSON array is parsed into structured ``ReviewFinding`` objects."""
+    result = parse_reviewer_decision(
+        "```json\n"
+        "{\n"
+        '  "verdict": "changes_requested",\n'
+        '  "summary": "needs work",\n'
+        '  "findings": [\n'
+        '    {"category": "code", "severity": "high", '
+        '"file": "src/foo.py", "line": 12, '
+        '"title": "off-by-one", '
+        '"description": "loop bound", '
+        '"recommendation": "use < len"},\n'
+        '    {"category": "docs", "severity": "medium", '
+        '"title": "missing comment"}\n'
+        "  ]\n"
+        "}\n"
+        "```"
+    )
+
+    assert result.verdict == "changes_requested"
+    assert len(result.findings) == 2
+    assert result.findings[0].category == "code"
+    assert result.findings[0].severity == "high"
+    assert result.findings[0].file == "src/foo.py"
+    assert result.findings[0].line == 12
+    assert result.findings[1].category == "docs"
+    # Counts must be derived from the parsed findings, not from the agent's
+    # self-reported numbers.
+    assert result.findings_high == 1
+    assert result.findings_medium == 1
+    assert result.findings_low == 0
+
+
+def test_parse_reviewer_decision_overrides_approved_when_findings_present() -> None:
+    """``verdict=approved`` with findings is downgraded to changes_requested."""
+    result = parse_reviewer_decision(
+        "```json\n"
+        "{\n"
+        '  "verdict": "approved",\n'
+        '  "summary": "looks good",\n'
+        '  "findings": [\n'
+        '    {"severity": "low", "title": "minor nit"}'
+        "  ]\n"
+        "}\n"
+        "```"
+    )
+
+    assert result.verdict == "changes_requested"
+    assert len(result.findings) == 1
+    assert result.findings_low == 1
+
+
+def test_parse_reviewer_decision_counts_critical_findings() -> None:
+    """Critical severity counts must be exposed for the comment and counts line."""
+    result = parse_reviewer_decision(
+        "```json\n"
+        "{\n"
+        '  "verdict": "changes_requested",\n'
+        '  "findings": [\n'
+        '    {"severity": "critical", "title": "data loss"},\n'
+        '    {"severity": "critical", "title": "auth bypass"},'
+        "  ]\n"
+        "}\n"
+        "```"
+    )
+
+    assert result.findings_critical == 2
+    assert result.findings_high == 0
 
 
 def test_run_pre_push_review_skips_when_disabled() -> None:
@@ -621,7 +779,7 @@ def test_run_pre_push_review_approved_with_patch_converges(tmp_path: Path) -> No
 def test_run_pre_push_review_patched_soft_fail_reports_last_cycle_summary(
     tmp_path: Path,
 ) -> None:
-    """Exhausted attempts must report the last cycle's patched summary, not a stale one."""
+    """Last cycle with a successful patch must commit and continue publish."""
     issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
     fake_client = FakeGitHubClient()
     worktree_path = tmp_path / "fake-worktree"
@@ -636,20 +794,25 @@ def test_run_pre_push_review_patched_soft_fail_reports_last_cycle_summary(
         runner=RunnerConfig(verification_commands=("just test",)),
     )
 
-    with pytest.raises(RuntimeError) as exc_info:
-        run_pre_push_review(
-            issue=issue,
-            worktree_path=worktree_path,
-            config=config,
-            github_client=fake_client,
-            process_runner=fake_runner,
-            selected_agent="codex",
-            head_sha_before="before-sha",
-            expected_branch="issue-1",
-            verification_results=[],
-        )
-    assert "reviewer patched and runner committed follow-up changes" in str(
-        exc_info.value
+    final_sha, _verification = run_pre_push_review(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=fake_runner,
+        selected_agent="codex",
+        head_sha_before="before-sha",
+        expected_branch="issue-1",
+        verification_results=[],
+    )
+    # Per the PRD: the last cycle accepts the reviewer-supplied final patch
+    # instead of hard-failing, so the runner converges and publishes.
+    assert final_sha == "after-sha"
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert (
+        "reviewer patched and runner committed follow-up changes"
+        in (comment_calls[0]["body"])
     )
 
 
@@ -1015,3 +1178,153 @@ def test_run_pre_push_review_passes_configured_timeout(tmp_path: Path) -> None:
 
     assert final_sha == "before-sha"
     assert fake_runner.agent_timeouts == [42]
+
+
+def test_run_pre_push_review_soft_fails_with_findings_on_last_cycle(
+    tmp_path: Path,
+) -> None:
+    """Final cycle with findings and no commit request soft-fails with findings rendered."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+
+    class _FindingsOnlyRunner(FakeProcessRunner):
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout=(
+                        "```json\n"
+                        "{\n"
+                        '  "verdict": "changes_requested",\n'
+                        '  "summary": "needs work",\n'
+                        '  "findings": [\n'
+                        '    {"severity": "high", '
+                        '"category": "code", '
+                        '"title": "missing tests"}\n'
+                        "  ]\n"
+                        "}\n"
+                        "```"
+                    ),
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    config = AppConfig(
+        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
+    )
+
+    with pytest.raises(RuntimeError, match="did not approve"):
+        run_pre_push_review(
+            issue=issue,
+            worktree_path=tmp_path,
+            config=config,
+            github_client=fake_client,
+            process_runner=_FindingsOnlyRunner(),
+            selected_agent="codex",
+            head_sha_before="before-sha",
+            expected_branch="issue-1",
+            verification_results=[],
+        )
+
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    body = comment_calls[0]["body"]
+    assert "Verdict: changes requested" in body
+    assert "missing tests" in body
+    assert "reviewer reported findings but produced no commit request" in body
+
+
+def test_run_pre_push_review_last_cycle_final_patch_is_accepted(
+    tmp_path: Path,
+) -> None:
+    """Final cycle with findings + commit request must commit and continue publish."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    worktree_path = tmp_path / "fake-worktree"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    _write_commit_request(worktree_path)
+
+    class _FinalPatchReviewer(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__(
+                responses={
+                    ("git", "branch", "--show-current"): CommandResult(
+                        command=("git", "branch", "--show-current"),
+                        return_code=0,
+                        stdout="issue-1\n",
+                        stderr="",
+                    ),
+                    ("git", "status", "--porcelain"): CommandResult(
+                        command=("git", "status", "--porcelain"),
+                        return_code=0,
+                        stdout=" M file.py\n",
+                        stderr="",
+                    ),
+                    ("git", "rev-parse", "HEAD"): CommandResult(
+                        command=("git", "rev-parse", "HEAD"),
+                        return_code=0,
+                        stdout="after-sha\n",
+                        stderr="",
+                    ),
+                }
+            )
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout=(
+                        "```json\n"
+                        "{\n"
+                        '  "verdict": "changes_requested",\n'
+                        '  "findings": [\n'
+                        '    {"severity": "medium", '
+                        '"title": "naming"}\n'
+                        "  ]\n"
+                        "}\n"
+                        "```"
+                    ),
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    config = AppConfig(
+        pre_push_review=PrePushReviewConfig(enabled=True, max_attempts=1)
+    )
+
+    final_sha, _verification = run_pre_push_review(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=_FinalPatchReviewer(),
+        selected_agent="codex",
+        head_sha_before="before-sha",
+        expected_branch="issue-1",
+        verification_results=[],
+    )
+    assert final_sha == "after-sha"
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert (
+        "reviewer patched and runner committed follow-up changes"
+        in (comment_calls[0]["body"])
+    )

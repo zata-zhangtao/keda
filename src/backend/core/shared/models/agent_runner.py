@@ -179,6 +179,19 @@ class ValidationConfig:
 
 
 @dataclass(frozen=True)
+class ReviewFinding:
+    """Structured finding emitted by the pre-push reviewer."""
+
+    category: str = ""
+    severity: str = ""
+    title: str = ""
+    description: str = ""
+    file: str = ""
+    line: int = 0
+    recommendation: str = ""
+
+
+@dataclass(frozen=True)
 class PrePushReviewConfig:
     """Pre-push AI review gate configuration."""
 
@@ -187,6 +200,12 @@ class PrePushReviewConfig:
     allow_same_agent: bool = True
     max_attempts: int = 2
     timeout_seconds: int = 900
+    # Overrides for the review rules appended after the review packet.
+    # Empty tuple means "use the embedded default template" which instructs
+    # the reviewer to call the ``code-reviewer`` skill and emit a findings
+    # array. Repositories can override individual lines via ``.iar.toml``
+    # without forking ``agent_review.py``.
+    review_prompt_template: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

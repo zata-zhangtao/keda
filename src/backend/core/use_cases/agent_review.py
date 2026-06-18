@@ -14,6 +14,7 @@ from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
     IssueSummary,
+    ReviewFinding,
 )
 from backend.core.use_cases.agent_runner_events import (
     format_event_marker,
@@ -32,6 +33,39 @@ _logger = logging.getLogger(__name__)
 _VALID_REVIEW_VERDICTS = {"approved", "changes_requested"}
 _COMMIT_REQUEST_RELATIVE_PATH = Path(".agent-runner/commit-request.json")
 
+# Default review rules appended after the review packet. The default instructs
+# the reviewer to invoke the ``code-reviewer`` skill via the Skill tool and to
+# emit structured findings so the runner can converge automatically.
+DEFAULT_REVIEW_PROMPT_TEMPLATE: tuple[str, ...] = (
+    "Before writing your verdict, call the `code-reviewer` skill using the Skill tool "
+    "with the diff and PRD context above.",
+    "Use the skill's findings to populate the `findings` array in your response.",
+    "If the skill reports no findings, verdict must be `approved`.",
+    "If findings exist, apply fixes in the worktree and write "
+    "`.agent-runner/commit-request.json` with a descriptive `commit_message`.",
+    "Do not leave findings unaddressed while returning `approved`.",
+    "",
+    "Findings JSON schema:",
+    "```json",
+    "[",
+    "  {",
+    '    "category": "requirement|code|validation|docs",',
+    '    "severity": "critical|high|medium|low",',
+    '    "file": "path/to/file.py",',
+    '    "line": 42,',
+    '    "title": "short title",',
+    '    "description": "why this is a problem",',
+    '    "recommendation": "how to fix"',
+    "  }",
+    "]",
+    "```",
+    "",
+    "Final response must be a single JSON object in a markdown code block with:",
+    "- verdict: one of `approved`, `changes_requested`.",
+    "- summary: short rationale.",
+    "- findings: array of objects matching the schema above (may be empty).",
+)
+
 
 @dataclass(frozen=True)
 class ReviewerDecision:
@@ -39,10 +73,40 @@ class ReviewerDecision:
 
     verdict: str
     summary: str = ""
+    findings: tuple[ReviewFinding, ...] = ()
+    findings_critical: int = 0
     findings_high: int = 0
     findings_medium: int = 0
     findings_low: int = 0
     parseable: bool = True
+
+    @property
+    def has_findings(self) -> bool:
+        """Return True when at least one structured finding was captured."""
+        return bool(self.findings)
+
+    def recomputed_counts(self) -> tuple[int, int, int, int]:
+        """Return ``(critical, high, medium, low)`` counts derived from findings."""
+        critical = high = medium = low = 0
+        for finding in self.findings:
+            severity = finding.severity.strip().lower()
+            if severity == "critical":
+                critical += 1
+            elif severity == "high":
+                high += 1
+            elif severity == "medium":
+                medium += 1
+            elif severity == "low":
+                low += 1
+        return critical, high, medium, low
+
+
+def _resolve_review_prompt_template(config: AppConfig) -> tuple[str, ...]:
+    """Return the configured review rules template, falling back to default."""
+    override = getattr(config.pre_push_review, "review_prompt_template", ()) or ()
+    if override:
+        return tuple(str(line) for line in override)
+    return DEFAULT_REVIEW_PROMPT_TEMPLATE
 
 
 def build_review_packet(
@@ -82,6 +146,8 @@ def build_review_packet(
         for result in verification_results
     )
 
+    review_rules = "\n".join(_resolve_review_prompt_template(config))
+
     return "\n".join(
         [
             f"Pre-Push Review for Issue #{issue.number}: {issue.title}",
@@ -106,31 +172,28 @@ def build_review_packet(
             verification_lines,
             "",
             "Review rules:",
-            "- Inspect the code against the Issue, PRD, and repository standards.",
-            "- You may modify files directly in the worktree if you find issues.",
-            "- Do not run `git add` or `git commit`; the runner handles commits.",
-            "- After making changes, write `.agent-runner/commit-request.json` as JSON with `commit_message`.",
-            "- Finish with a single JSON object in a markdown code block.",
-            "- Required fields: verdict, summary.",
-            "- verdict must be one of: approved, changes_requested.",
-            "- Optional fields: findings_high, findings_medium, findings_low.",
+            review_rules,
         ]
     )
 
 
 def parse_reviewer_decision(text: str) -> ReviewerDecision:
-    """Parse reviewer verdict and finding counts from agent output."""
+    """Parse reviewer verdict and findings from agent output."""
     payload = _extract_json_payload(text)
     if payload is not None:
         verdict = _normalize_review_verdict(payload.get("verdict"))
         if verdict in _VALID_REVIEW_VERDICTS:
-            return ReviewerDecision(
+            findings = _parse_findings_array(payload.get("findings"))
+            decision = ReviewerDecision(
                 verdict=verdict,
                 summary=str(payload.get("summary", "")),
+                findings=findings,
+                findings_critical=0,
                 findings_high=_int_field(payload, "findings_high"),
                 findings_medium=_int_field(payload, "findings_medium"),
                 findings_low=_int_field(payload, "findings_low"),
             )
+            return _finalize_decision_counts(decision)
 
     fallback_verdict = _parse_text_verdict(text)
     if fallback_verdict is not None:
@@ -155,39 +218,208 @@ def _read_commit_request_decision(request_path: Path) -> ReviewerDecision | None
     verdict = _normalize_review_verdict(request_payload.get("verdict"))
     if verdict not in _VALID_REVIEW_VERDICTS:
         return None
-    return ReviewerDecision(
+    findings = _parse_findings_array(request_payload.get("findings"))
+    decision = ReviewerDecision(
         verdict=verdict,
         summary=str(request_payload.get("summary", "")),
+        findings=findings,
+        findings_critical=0,
         findings_high=_int_field(request_payload, "findings_high"),
         findings_medium=_int_field(request_payload, "findings_medium"),
         findings_low=_int_field(request_payload, "findings_low"),
     )
+    return _finalize_decision_counts(decision)
 
 
 def _merge_reviewer_decisions(
     stdout_decision: ReviewerDecision,
     commit_request_decision: ReviewerDecision | None,
 ) -> ReviewerDecision:
-    """Prefer stdout verdicts, falling back to commit-request metadata."""
+    """Prefer stdout verdicts, falling back to commit-request metadata.
+
+    The stdout decision is the authoritative source for findings when it is
+    parseable; the commit-request file is only used to recover a missing
+    verdict, never to override structured findings.
+    """
     if stdout_decision.parseable or commit_request_decision is None:
         return stdout_decision
+    # When stdout is not parseable, fall back to the commit-request verdict
+    # wholesale so reviewers that only encode their decision in the request
+    # file still drive the gate correctly.
     return commit_request_decision
 
 
+def _parse_findings_array(raw: object) -> tuple[ReviewFinding, ...]:
+    """Convert a JSON ``findings`` array into a tuple of ``ReviewFinding``.
+
+    Missing or malformed entries fall back to defaults so partial output from
+    the reviewer still produces usable comment data instead of breaking the
+    gate.
+    """
+    if not isinstance(raw, list):
+        return ()
+    findings: list[ReviewFinding] = []
+    for entry in raw:
+        if isinstance(entry, dict):
+            findings.append(
+                ReviewFinding(
+                    category=str(entry.get("category", "")),
+                    severity=str(entry.get("severity", "")),
+                    title=str(entry.get("title", "")),
+                    description=str(entry.get("description", "")),
+                    file=str(entry.get("file", "")),
+                    line=_safe_int(entry.get("line")),
+                    recommendation=str(entry.get("recommendation", "")),
+                )
+            )
+        elif isinstance(entry, str) and entry.strip():
+            # Allow legacy string-array findings ("first finding") by treating
+            # the string as a description on a medium-severity finding.
+            findings.append(
+                ReviewFinding(
+                    severity="medium",
+                    title=entry.strip()[:120],
+                    description=entry.strip(),
+                )
+            )
+    return tuple(findings)
+
+
+def _safe_int(value: object) -> int:
+    """Best-effort coercion to ``int``; returns 0 for any non-numeric input."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _finalize_decision_counts(
+    decision: ReviewerDecision,
+    fallback_counts: tuple[int, int, int, int] | None = None,
+) -> ReviewerDecision:
+    """Recompute severity counts from findings and reconcile verdict.
+
+    The reviewer-supplied counts (or any provided fallback) are ignored when
+    findings are present, since the parser is the only authoritative source.
+    When findings exist alongside ``verdict == "approved"``, the verdict is
+    downgraded to ``changes_requested`` so the gate does not silently
+    approve unreviewed issues.
+    """
+    if decision.has_findings:
+        critical, high, medium, low = decision.recomputed_counts()
+    elif fallback_counts is not None:
+        critical, high, medium, low = fallback_counts
+    else:
+        critical = decision.findings_critical
+        high = decision.findings_high
+        medium = decision.findings_medium
+        low = decision.findings_low
+
+    new_verdict = decision.verdict
+    new_summary = decision.summary
+    if decision.has_findings and decision.verdict == "approved":
+        _logger.warning(
+            "Reviewer returned verdict=approved with %d finding(s); "
+            "downgrading to changes_requested.",
+            len(decision.findings),
+        )
+        new_verdict = "changes_requested"
+        if not new_summary:
+            new_summary = "Findings reported without explicit changes_requested."
+
+    if (
+        new_verdict == decision.verdict
+        and new_summary == decision.summary
+        and critical == decision.findings_critical
+        and high == decision.findings_high
+        and medium == decision.findings_medium
+        and low == decision.findings_low
+    ):
+        return decision
+
+    return ReviewerDecision(
+        verdict=new_verdict,
+        summary=new_summary,
+        findings=decision.findings,
+        findings_critical=critical,
+        findings_high=high,
+        findings_medium=medium,
+        findings_low=low,
+        parseable=decision.parseable,
+    )
+
+
 def _extract_json_payload(text: str) -> dict[str, object] | None:
+    r"""Recover a JSON object from reviewer output, tolerating nested objects.
+
+    Prefers fenced ``\`\`\`json\`\`\`` blocks, then tries the outermost balanced
+    brace pair following ``"verdict"`` so reviews that emit nested finding
+    objects (which break the greedy regex fallback) still parse.
+    """
     match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
         json_text = match.group(1)
     else:
-        match = re.search(r"\{.*\"verdict\".*\}", text, re.DOTALL)
-        if match is None:
+        candidate = _extract_outermost_json_object(text)
+        if candidate is None:
             return None
-        json_text = match.group(0)
+        json_text = candidate
     try:
         payload = json.loads(json_text)
     except json.JSONDecodeError:
+        payload = _loads_with_trailing_comma_fix(json_text)
+        if payload is None:
+            return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _loads_with_trailing_comma_fix(json_text: str) -> dict[str, object] | None:
+    """Retry ``json.loads`` after stripping trailing commas from objects/arrays.
+
+    The reviewer is allowed to emit slightly malformed JSON (trailing commas
+    inside arrays). Fixing them in place lets the parser recover the verdict
+    and findings without forcing the runner to hard-fail on cosmetic issues.
+    """
+    cleaned = re.sub(r",(\s*[}\]])", r"\1", json_text)
+    if cleaned == json_text:
+        return None
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _extract_outermost_json_object(text: str) -> str | None:
+    """Return the substring of the outermost ``{...}`` containing ``"verdict"``."""
+    verdict_match = re.search(r'"verdict"\s*:\s*"', text)
+    if verdict_match is None:
+        return None
+    start = text.rfind("{", 0, verdict_match.start())
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None
 
 
 def _normalize_review_verdict(raw_verdict: object) -> str:
@@ -239,6 +471,8 @@ def build_pre_push_review_result_comment(
     findings_low: int,
     action_summary: str,
     cycle: int,
+    findings: tuple[ReviewFinding, ...] = (),
+    findings_critical: int = 0,
 ) -> str:
     """Build the human-readable comment for a pre-push review result."""
     marker = format_event_marker(
@@ -247,21 +481,48 @@ def build_pre_push_review_result_comment(
         head_sha=head_after,
     )
     verification_line = "passed" if verification_passed else "failed"
-    return "\n".join(
-        [
-            marker,
-            "",
-            "## Agent Runner Pre-Push Review",
-            "",
-            f"- Verdict: {verdict}",
-            f"- Reviewer: {reviewer}",
-            f"- Head Before: `{head_before}`",
-            f"- Head After: `{head_after}`",
-            f"- Verification: {verification_line}",
-            f"- Findings: {findings_high} high, {findings_medium} medium, {findings_low} low",
-            f"- Action: {action_summary}",
-        ]
+    counts_line = (
+        f"- Findings: {findings_critical} critical, {findings_high} high, "
+        f"{findings_medium} medium, {findings_low} low"
     )
+    sections = [
+        marker,
+        "",
+        "## Agent Runner Pre-Push Review",
+        "",
+        f"- Verdict: {verdict}",
+        f"- Reviewer: {reviewer}",
+        f"- Head Before: `{head_before}`",
+        f"- Head After: `{head_after}`",
+        f"- Verification: {verification_line}",
+        counts_line,
+        f"- Action: {action_summary}",
+    ]
+    if findings:
+        sections.append("")
+        sections.append("### Findings")
+        sections.append("")
+        sections.append(
+            "| Severity | Category | File | Line | Title | Recommendation |"
+        )
+        sections.append("|---|---|---|---|---|---|")
+        for finding in findings:
+            sections.append(
+                "| {sev} | {cat} | {file} | {line} | {title} | {rec} |".format(
+                    sev=_escape_cell(finding.severity or "-"),
+                    cat=_escape_cell(finding.category or "-"),
+                    file=_escape_cell(finding.file or "-"),
+                    line=finding.line if finding.line else "-",
+                    title=_escape_cell(finding.title or "-"),
+                    rec=_escape_cell(finding.recommendation or "-"),
+                )
+            )
+    return "\n".join(sections)
+
+
+def _escape_cell(value: str) -> str:
+    """Escape a value so it can be safely embedded in a markdown table cell."""
+    return value.replace("|", "\\|").replace("\n", " ").strip() or "-"
 
 
 def run_pre_push_review(
@@ -306,6 +567,10 @@ def run_pre_push_review(
     current_head = head_sha_before
     current_verification = list(verification_results)
     last_failure_summary = "Pre-push review did not approve the changes."
+    last_decision: ReviewerDecision | None = None
+    last_action_summary = last_failure_summary
+    last_cycle_verdict = "changes_requested"
+    last_cycle_applied_patch = False
     _logger.info(
         "Starting pre-push review for Issue #%d with reviewer '%s' "
         "(max_attempts=%d, timeout=%ds, head=%s).",
@@ -374,16 +639,18 @@ def run_pre_push_review(
         )
         _logger.info(
             "Pre-push review cycle %d/%d for Issue #%d: parsed verdict=%s "
-            "(stdout_parseable=%s, commit_request_verdict=%s).",
+            "(stdout_parseable=%s, commit_request_verdict=%s, findings=%d).",
             cycle,
             max_attempts,
             issue.number,
             reviewer_decision.verdict,
             stdout_decision.parseable,
             commit_request_decision.verdict if commit_request_decision else "none",
+            len(reviewer_decision.findings),
         )
         cycle_verdict = reviewer_decision.verdict
-        if request_path.is_file():
+        request_path_was_present = request_path.is_file()
+        if request_path_was_present:
             _logger.info(
                 "Pre-push review cycle %d/%d for Issue #%d: reviewer wrote "
                 "commit request; processing through commit proxy.",
@@ -414,7 +681,8 @@ def run_pre_push_review(
                     action_summary = (
                         "reviewer patched and runner committed follow-up changes"
                     )
-                    last_failure_summary = action_summary
+                last_failure_summary = action_summary
+                last_cycle_applied_patch = True
                 _logger.info(
                     "Pre-push review cycle %d/%d for Issue #%d: reviewer "
                     "changes committed at head %s.",
@@ -478,7 +746,14 @@ def run_pre_push_review(
             if reviewer_decision.verdict == "approved":
                 action_summary = "reviewer approved without changes"
             elif reviewer_decision.parseable:
-                action_summary = "reviewer requested changes without a commit request"
+                if reviewer_decision.has_findings:
+                    action_summary = (
+                        "reviewer reported findings but produced no commit request"
+                    )
+                else:
+                    action_summary = (
+                        "reviewer requested changes without a commit request"
+                    )
             else:
                 action_summary = "reviewer returned no parseable verdict"
             last_failure_summary = action_summary
@@ -494,6 +769,8 @@ def run_pre_push_review(
             findings_low=reviewer_decision.findings_low,
             action_summary=action_summary,
             cycle=cycle,
+            findings=reviewer_decision.findings,
+            findings_critical=reviewer_decision.findings_critical,
         )
         github_client.comment_issue(issue.number, comment_body)
         _logger.info(
@@ -505,6 +782,10 @@ def run_pre_push_review(
             "approved" if cycle_verdict == "approved" else "changes_requested",
             action_summary,
         )
+        last_decision = reviewer_decision
+        last_action_summary = action_summary
+        last_cycle_verdict = cycle_verdict
+        last_cycle_had_commit_request = bool(request_path_was_present)
         if action_summary.startswith("reviewer approved") and all(
             result.return_code == 0 for result in current_verification
         ):
@@ -514,6 +795,61 @@ def run_pre_push_review(
                 cycle,
             )
             return current_head, current_verification
+
+    # 最后一轮仍未收敛：若 reviewer 已提供最终修复 commit request，runner
+    # 必须接受并继续发布；否则软失败并保留 findings 详情。
+    final_decision = last_decision
+    if final_decision is None:
+        final_decision = ReviewerDecision(
+            verdict="changes_requested",
+            summary="Pre-push review produced no parseable decision.",
+        )
+    # 收敛兜底：最后一轮 reviewer 写出了 commit request 且 verification 全部通过，
+    # 即便 verdict 不是 "approved"，runner 也必须接受该最终修复并继续发布流程。
+    if (
+        last_cycle_had_commit_request
+        and last_cycle_applied_patch
+        and last_cycle_verdict == "changes_requested"
+        and all(result.return_code == 0 for result in current_verification)
+    ):
+        _logger.info(
+            "Pre-push review accepted final commit-request fixes for "
+            "Issue #%d after exhausting %d cycle(s).",
+            issue.number,
+            max_attempts,
+        )
+        return current_head, current_verification
+    # The per-cycle comment above already recorded findings for the last
+    # attempt; only emit the trailing summary comment when no per-cycle
+    # comment has been written yet (defensive guard for harness coverage
+    # where cycles were skipped).
+    if max_attempts == 0:
+        github_client.comment_issue(
+            issue.number,
+            build_pre_push_review_result_comment(
+                verdict="changes requested",
+                reviewer=reviewer_agent,
+                head_before=head_sha_before,
+                head_after=current_head,
+                verification_passed=all(
+                    r.return_code == 0 for r in current_verification
+                ),
+                findings_high=final_decision.findings_high,
+                findings_medium=final_decision.findings_medium,
+                findings_low=final_decision.findings_low,
+                action_summary=last_action_summary,
+                cycle=max_attempts,
+                findings=final_decision.findings,
+                findings_critical=final_decision.findings_critical,
+            ),
+        )
+    if last_cycle_verdict == "approved":
+        _logger.info(
+            "Pre-push review accepted final approval for Issue #%d on the "
+            "last cycle.",
+            issue.number,
+        )
+        return current_head, current_verification
 
     _logger.warning(
         "Pre-push review did not approve Issue #%d after %d attempt(s): %s",

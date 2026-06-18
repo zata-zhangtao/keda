@@ -199,6 +199,11 @@ review_agent = "auto"
 allow_same_agent = true
 max_attempts = 2
 timeout_seconds = 900
+# Review rules appended after the review packet. Empty list = use the
+# embedded default that calls the ``code-reviewer`` skill and asks the
+# reviewer to emit structured findings. Override line-by-line in
+# ``.iar.toml`` to customize without forking ``agent_review.py``.
+review_prompt_template = []
 
 [agent_runner.post_pr_supervisor]
 enabled = true

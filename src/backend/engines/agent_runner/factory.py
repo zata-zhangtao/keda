@@ -205,6 +205,7 @@ def build_app_config_from_settings(
             allow_same_agent=pre_push.allow_same_agent,
             max_attempts=pre_push.max_attempts,
             timeout_seconds=pre_push.timeout_seconds,
+            review_prompt_template=tuple(pre_push.review_prompt_template),
         ),
         post_pr_supervisor=PostPrSupervisorConfig(
             enabled=post_supervisor.enabled,

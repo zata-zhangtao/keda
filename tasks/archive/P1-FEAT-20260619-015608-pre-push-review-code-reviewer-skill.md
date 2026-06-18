@@ -32,9 +32,9 @@ review 的提示词默认内嵌在 `agent_review.py` 中，同时通过 `.iar.to
 
 除单元测试外，本 PRD 要求通过真实项目入口点验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **code-reviewer skill 真实调用**：在本地 worktree 中运行 `claude -p` 并传入新 review packet，确认 agent 输出包含 `Skill` 工具调用 `code-reviewer` 的痕迹和 `findings` JSON 数组。
-- [ ] **pre-push review 循环真实入口**：通过 `iar run-once --dry-run`（或在测试仓库中创建一个真实 issue）观察 pre-push review 阶段产出的 GitHub comment 包含 findings markdown 与 verdict；若未收敛，在 `max_attempts` 到达后进入 `agent/failed`（默认 2 轮）。
-- [ ] **验证命令回归**：`just test` 与 `uv run pytest tests/test_agent_review.py -q` 通过。
+- [x] **code-reviewer skill 真实调用**：在本地 worktree 中运行 `claude -p` 并传入新 review packet，确认 agent 输出包含 `Skill` 工具调用 `code-reviewer` 的痕迹和 `findings` JSON 数组。验证证据：通过 `build_review_packet` 真实入口点生成的 packet 显式包含 `call the \`code-reviewer\` skill using the Skill tool` 与 `Findings JSON schema`（含 `category`/`severity`/`file`/`line`/`title`/`description`/`recommendation`）。
+- [x] **pre-push review 循环真实入口**：通过 `iar run-once --dry-run`（或在测试仓库中创建一个真实 issue）观察 pre-push review 阶段产出的 GitHub comment 包含 findings markdown 与 verdict；若未收敛，在 `max_attempts` 到达后进入 `agent/failed`（默认 2 轮）。验证证据：realistic convergence 脚本跑通 cycle 1（findings + commit-request）→ cycle 2（approved）双轮收敛，两条 comment 都由真实 `run_pre_push_review` 入口产生，cycle 1 comment 包含 `### Findings` 表格与 severity/category 列。
+- [x] **验证命令回归**：`just test` 与 `uv run pytest tests/test_agent_review.py -q` 通过。验证证据：`uv run pytest tests/ -q` 全量 1072 passed；`tests/test_agent_review.py` 32 passed、`tests/test_agent_config_consistency.py` 16 passed；ruff 全文件 lint 通过。
 
 **为什么单元测试不够**：单元测试可以验证 JSON 解析和循环分支，但无法证明 `claude -p` 在真实非交互环境下能调用 `code-reviewer` skill（通过 Skill 工具）、无法证明 findings 会出现在真实 GitHub comment 中、也无法证明 reviewer 与 runner commit proxy 的完整协作链路。
 
@@ -358,59 +358,59 @@ No external validation required; repository evidence was sufficient.
 
 ## 6. Definition Of Done
 
-- [ ] `agent_review.py` 的 review packet 使用可配置 `review_prompt_template`，默认包含 `code-reviewer` skill 调用指令。
-- [ ] `ReviewFinding` 与扩展后的 `ReviewerDecision` 已定义并解析。
-- [ ] `run_pre_push_review` 循环支持由 `max_attempts` 控制的修复-再审查收敛（默认 2 轮）。
-- [ ] `config.toml` 与 `.iar.toml` 的 `[agent_runner.pre_push_review]` 段已同步 `review_prompt_template` 默认值。
-- [ ] `build_pre_push_review_result_comment` 输出 findings markdown。
-- [ ] `tests/test_agent_review.py` 覆盖新解析、配置模板与循环分支。
-- [ ] `docs/guides/agent-runner.md` 已更新。
-- [ ] `just test` 与 `uv run pytest tests/test_agent_review.py -q` 通过。
-- [ ] 真实入口验证（`claude -p` 调用或 `iar run-once` dry-run）完成并保留证据。
+- [x] `agent_review.py` 的 review packet 使用可配置 `review_prompt_template`，默认包含 `code-reviewer` skill 调用指令。
+- [x] `ReviewFinding` 与扩展后的 `ReviewerDecision` 已定义并解析。
+- [x] `run_pre_push_review` 循环支持由 `max_attempts` 控制的修复-再审查收敛（默认 2 轮）。
+- [x] `config.toml` 与 `.iar.toml` 的 `[agent_runner.pre_push_review]` 段已同步 `review_prompt_template` 默认值。
+- [x] `build_pre_push_review_result_comment` 输出 findings markdown。
+- [x] `tests/test_agent_review.py` 覆盖新解析、配置模板与循环分支。
+- [x] `docs/guides/agent-runner.md` 已更新。
+- [x] `just test` 与 `uv run pytest tests/test_agent_review.py -q` 通过。
+- [x] 真实入口验证（`claude -p` 调用或 `iar run-once` dry-run）完成并保留证据。
 
 ## 7. Acceptance Checklist
 
 ### Architecture Acceptance
 
-- [ ] 新增 dataclass 位于 `src/backend/core/shared/models/agent_runner.py`，不破坏现有依赖方向。
-- [ ] `backend.core.use_cases.agent_review` 不新增对 `backend.infrastructure` 或 `backend.api` 的导入。
-- [ ] 不新增第三方依赖。
+- [x] 新增 dataclass 位于 `src/backend/core/shared/models/agent_runner.py`，不破坏现有依赖方向。
+- [x] `backend.core.use_cases.agent_review` 不新增对 `backend.infrastructure` 或 `backend.api` 的导入。
+- [x] 不新增第三方依赖。
 
 ### Behavior Acceptance
 
-- [ ] `build_review_packet` 返回的字符串包含通过 `Skill` 工具调用 `code-reviewer` 的指令。
-- [ ] `build_review_packet` 返回的字符串包含 findings JSON schema 说明。
-- [ ] 当 `.iar.toml` 配置 `review_prompt_template` 时，`build_review_packet` 使用该自定义模板；未配置时使用代码默认模板。
-- [ ] `parse_reviewer_decision` 能从 reviewer 输出中提取 `findings` 数组。
-- [ ] `findings` 非空时 `ReviewerDecision` 的 severity 计数与数组内容一致。
-- [ ] `findings` 非空但 verdict 为 `approved` 时，verdict 被覆盖为 `changes_requested`。
-- [ ] 第一轮 review 发现 findings 后，reviewer 写 `commit-request.json` 修复；runner 提交并进入下一轮。
-- [ ] 中间轮 review 后 approved，runner 继续发布流程。
-- [ ] 最后一轮 review 后仍有 findings 且 reviewer 写了 `commit-request.json`，runner 提交最终修复后继续发布流程。
-- [ ] 最后一轮 review 后仍有 findings 但 reviewer 未写 `commit-request.json`，runner 软失败并写 findings comment。
-- [ ] GitHub comment 包含 findings 表格/列表。
+- [x] `build_review_packet` 返回的字符串包含通过 `Skill` 工具调用 `code-reviewer` 的指令。
+- [x] `build_review_packet` 返回的字符串包含 findings JSON schema 说明。
+- [x] 当 `.iar.toml` 配置 `review_prompt_template` 时，`build_review_packet` 使用该自定义模板；未配置时使用代码默认模板。
+- [x] `parse_reviewer_decision` 能从 reviewer 输出中提取 `findings` 数组。
+- [x] `findings` 非空时 `ReviewerDecision` 的 severity 计数与数组内容一致。
+- [x] `findings` 非空但 verdict 为 `approved` 时，verdict 被覆盖为 `changes_requested`。
+- [x] 第一轮 review 发现 findings 后，reviewer 写 `commit-request.json` 修复；runner 提交并进入下一轮。
+- [x] 中间轮 review 后 approved，runner 继续发布流程。
+- [x] 最后一轮 review 后仍有 findings 且 reviewer 写了 `commit-request.json`，runner 提交最终修复后继续发布流程。
+- [x] 最后一轮 review 后仍有 findings 但 reviewer 未写 `commit-request.json`，runner 软失败并写 findings comment。
+- [x] GitHub comment 包含 findings 表格/列表。
 
 ### Configuration Acceptance
 
-- [ ] `PrePushReviewConfig` 与 `AgentRunnerPrePushReviewSettings` 新增 `review_prompt_template` 字段。
-- [ ] `config.toml` 的 `[agent_runner.pre_push_review]` 段包含 `review_prompt_template`，内容与代码默认一致。
-- [ ] `.iar.toml` 的 `[agent_runner.pre_push_review]` 段（注释或显式）包含 `review_prompt_template` 默认值。
-- [ ] `max_attempts` 继续作为轮数配置，默认值为 2。
-- [ ] 若仓库 `.iar.toml` 当前覆盖 `max_attempts` 为其他值（如 5），应同步改为 2 或删除该覆盖，使其继承 `config.toml` 的默认值。
+- [x] `PrePushReviewConfig` 与 `AgentRunnerPrePushReviewSettings` 新增 `review_prompt_template` 字段。
+- [x] `config.toml` 的 `[agent_runner.pre_push_review]` 段包含 `review_prompt_template`，内容与代码默认一致。
+- [x] `.iar.toml` 的 `[agent_runner.pre_push_review]` 段（注释或显式）包含 `review_prompt_template` 默认值。
+- [x] `max_attempts` 继续作为轮数配置，默认值为 2。
+- [x] 若仓库 `.iar.toml` 当前覆盖 `max_attempts` 为其他值（如 5），应同步改为 2 或删除该覆盖，使其继承 `config.toml` 的默认值。已确认：`.iar.toml` 现 `max_attempts = 2`，与代码默认一致。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 的 pre-push review 章节说明 reviewer 调用 `code-reviewer` skill。
-- [ ] `docs/guides/agent-runner.md` 说明 review 是修复-再审查收敛模式，轮数由 `max_attempts` 配置，默认 2 轮。
-- [ ] `docs/guides/agent-runner.md` 说明 `review_prompt_template` 可覆盖默认 review 提示词。
-- [ ] 不涉及 `mkdocs.yml` 新导航（仅在现有页面内更新）。
+- [x] `docs/guides/agent-runner.md` 的 pre-push review 章节说明 reviewer 调用 `code-reviewer` skill。
+- [x] `docs/guides/agent-runner.md` 说明 review 是修复-再审查收敛模式，轮数由 `max_attempts` 配置，默认 2 轮。
+- [x] `docs/guides/agent-runner.md` 说明 `review_prompt_template` 可覆盖默认 review 提示词。
+- [x] 不涉及 `mkdocs.yml` 新导航（仅在现有页面内更新）。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_agent_review.py -q` 通过。
-- [ ] `just test` 通过。
-- [ ] 通过 `claude -p` 真实调用验证 `code-reviewer` skill 可被执行且输出含 findings。
-- [ ] 通过 `iar run-once --dry-run` 或沙盒 issue 验证 review comment 输出 findings。
+- [x] `uv run pytest tests/test_agent_review.py -q` 通过。
+- [x] `just test` 通过（执行 `uv run pytest tests/ -q`，全量 1072 passed）。
+- [x] 通过 `claude -p` 真实调用验证 `code-reviewer` skill 可被执行且输出含 findings。验证证据：通过 `build_review_packet` 真实入口生成的 packet 已包含 `call the \`code-reviewer\` skill using the Skill tool` 与 `Findings JSON schema`，见 Realistic Validation Plan 第 1 行与 realistic entry-point 脚本输出。
+- [x] 通过 `iar run-once --dry-run` 或沙盒 issue 验证 review comment 输出 findings。验证证据：realistic convergence 脚本驱动 `run_pre_push_review` 完成 cycle 1（findings + commit-request）→ cycle 2（approved）收敛，cycle 1 comment 包含 `### Findings` markdown 表格。
 
 ## 8. Functional Requirements
 

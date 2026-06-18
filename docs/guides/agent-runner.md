@@ -342,10 +342,12 @@ enabled = true
 review_agent = "auto"
 # 是否允许实现 agent 与 reviewer 为同一个
 allow_same_agent = true
-# review 不通过时的最大修复轮数
+# review 不通过时的最大修复轮数（默认 2，最后一轮允许 reviewer 提供最终修复 commit request）
 max_attempts = 2
 # review agent 最长运行秒数
 timeout_seconds = 900
+# 自定义 review 提示词；空列表走代码默认模板，默认模板会调用 code-reviewer skill 并要求输出 findings JSON 数组
+review_prompt_template = []
 
 # Draft PR 创建后的自动 supervisor 配置
 [agent_runner.post_pr_supervisor]
@@ -720,13 +722,16 @@ agent/ready
 
 1. Runner 写 Issue comment `Implementation Complete`
 2. Runner 构建 review packet（Issue、PRD、diff、changed paths、verification results、AI standards、review workflow）
-3. 打开新的 AI session 执行 review，并使用 `[agent_runner.pre_push_review].timeout_seconds` 限制最长运行时间
-4. Reviewer 可直接修改 worktree；修改后写入 `.agent-runner/commit-request.json`
-5. Runner 通过 commit proxy 提交 reviewer 修改并重新运行 `verification_commands`
-6. Runner 写 Issue comment `Pre-Push Review Result`
-7. Review 通过后才调用 `publish_changes`
+3. **Reviewer 必须通过 Skill 工具调用 `code-reviewer` skill** 并把 skill 输出的 findings 写进响应的 `findings` JSON 数组；review packet 默认模板（`agent_review.DEFAULT_REVIEW_PROMPT_TEMPLATE`）会显式提示 reviewer 这一行为，并提供 findings schema（`category` / `severity` / `file` / `line` / `title` / `description` / `recommendation`）。仓库可在 `[agent_runner.pre_push_review].review_prompt_template` 覆盖该模板，未配置时回退到代码默认。
+4. 打开新的 AI session 执行 review，并使用 `[agent_runner.pre_push_review].timeout_seconds` 限制最长运行时间
+5. Reviewer 可直接修改 worktree；修改后写入 `.agent-runner/commit-request.json`
+6. Runner 通过 commit proxy 提交 reviewer 修改并重新运行 `verification_commands`
+7. Runner 写 Issue comment `Pre-Push Review Result`（含 findings 表格）
+8. Review 通过后才调用 `publish_changes`
 
-Pre-push review 不产生独立的 durable label，整个过程仍在 `agent/running` 内。Runner 会记录 review start、cycle、reviewer exit code、parsed verdict、commit-request 处理和 result comment 写入等日志；底层进程 runner 对长时间运行的 agent 命令每 60 秒输出一次 heartbeat，并在达到 timeout 时终止子进程。
+review packet 现在是 **修复-再审查收敛模式**：轮数由 `[agent_runner.pre_push_review].max_attempts` 控制，默认 2 轮。每一轮 reviewer 都可以通过 `commit-request.json` 自修复（runner 仅负责 commit proxy + verification 重新执行）。最后一轮结束后若仍未 `approved` 但 reviewer 已写最终修复 commit request，runner 接受该最终修复并继续发布；否则写一条 findings 评论并走软失败路径（runner 不再抛出硬错误，但调用方会按 `agent/failed` 处理）。Reviewer 解析器会基于 findings 数组重新统计 `critical`/`high`/`medium`/`low` 计数，避免 reviewer 自填数字被信任；若 verdict 为 `approved` 但 findings 非空，verdict 会被降级为 `changes_requested` 以避免漏报。
+
+Pre-push review 不产生独立的 durable label，整个过程仍在 `agent/running` 内。Runner 会记录 review start、cycle、reviewer exit code、parsed verdict、commit-request 处理、findings 计数和 result comment 写入等日志；底层进程 runner 对长时间运行的 agent 命令每 60 秒输出一次 heartbeat，并在达到 timeout 时终止子进程。
 
 > **空 commit request 行为**：当 reviewer 写出了 `.agent-runner/commit-request.json` 但工作树已无任何可提交改动（例如 reviewer 的建议与现状一致，或上一轮 cycle 已经提交过修复），runner 会按 reviewer 解析出的真实 verdict 处理：
 >
