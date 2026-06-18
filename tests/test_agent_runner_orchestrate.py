@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,10 @@ from backend.core.shared.models.agent_runner import (
     AppConfig,
     AttemptResult,
     FailureType,
+    GeneratedContentConfig,
     IssueSummary,
     LabelConfig,
+    WorktreeConfig,
 )
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from backend.core.use_cases.agent_runner_failure import (
@@ -26,6 +29,7 @@ from backend.core.use_cases.agent_runner_orchestrate import (
     process_prd_rework_issues,
     run_once,
 )
+from backend.infrastructure.process_runner import SubprocessRunner
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
 
@@ -583,10 +587,72 @@ def test_running_publish_recovery_holds_worktree_lock_around_heal(
     assert events == ["acquire", "heal", "publish", "release"]
 
 
-def test_process_prd_rework_issues_success(tmp_path: Path) -> None:
-    """PRD rework issues should generate PRD and update labels/comments."""
-    pending_dir = tmp_path / "tasks" / "pending"
+def _git(command: list[str], cwd: Path) -> None:
+    """Run a git command in cwd, raising on failure."""
+    subprocess.run(
+        ["git", *command],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _init_repo_with_remote(repo_path: Path, remote_path: Path) -> None:
+    """Initialize a git repo (with tasks/pending/) pushed to a bare remote."""
+    repo_path.mkdir(parents=True, exist_ok=True)
+    _git(["init", "-b", "main"], repo_path)
+    _git(["config", "user.name", "Test"], repo_path)
+    _git(["config", "user.email", "test@example.com"], repo_path)
+    (repo_path / "README.md").write_text("# repo\n", encoding="utf-8")
+    pending_dir = repo_path / "tasks" / "pending"
     pending_dir.mkdir(parents=True)
+    (pending_dir / ".gitkeep").write_text("", encoding="utf-8")
+    archive_dir = repo_path / "tasks" / "archive"
+    archive_dir.mkdir(parents=True)
+    (archive_dir / ".gitkeep").write_text("", encoding="utf-8")
+    _git(["add", "-A"], repo_path)
+    _git(["commit", "-m", "init"], repo_path)
+    remote_path.mkdir(parents=True, exist_ok=True)
+    _git(["init", "--bare"], remote_path)
+    _git(["remote", "add", "origin", str(remote_path)], repo_path)
+    _git(["push", "-u", "origin", "main"], repo_path)
+
+
+def _rework_config(worktree_path: Path) -> AppConfig:
+    """Build a rework-prd config that resolves to a pre-created worktree.
+
+    create_command is a no-op (the worktree already exists); path_command echoes
+    the pre-created worktree path so create_or_reuse_worktree resolves to it.
+    Generated content is disabled so the fallback PRD is used (no agent needed).
+    """
+    return AppConfig(
+        labels=LabelConfig(rework_prd="agent/rework-prd"),
+        worktree=WorktreeConfig(
+            create_command="true",
+            reuse_command="true",
+            path_command=f"echo {worktree_path}",
+        ),
+        generated_content=GeneratedContentConfig(enabled=False),
+    )
+
+
+def test_process_prd_rework_issues_lands_pr_in_worktree(tmp_path: Path) -> None:
+    """Real entry point: PRD lands on the issue-N branch + draft PR, main tree clean.
+
+    Exercises the real worktree/commit/push machinery (real git + bare remote,
+    fake gh) to prove: the PRD is written inside the issue-87 worktree, committed
+    to the issue-87 branch, published via create_draft_pr, the main repo working
+    tree gains no untracked PRD, and the PRD is visible on the branch to any
+    downstream worktree (queue_ready safety).
+    """
+    repo_path = tmp_path / "repo"
+    remote_path = tmp_path / "remote.git"
+    _init_repo_with_remote(repo_path, remote_path)
+    worktree_path = tmp_path / "worktrees" / "issue-87"
+    worktree_path.parent.mkdir(parents=True)
+    _git(["worktree", "add", "-b", "issue-87", str(worktree_path), "main"], repo_path)
+
     issue = _make_ready_issue(
         87, "Generate PRD", "Need a feature.", ("agent/rework-prd",)
     )
@@ -594,47 +660,89 @@ def test_process_prd_rework_issues_success(tmp_path: Path) -> None:
     fake_client.set_rework_prd_issues([issue])
 
     process_prd_rework_issues(
-        repo_path=tmp_path,
-        config=AppConfig(labels=LabelConfig(rework_prd="agent/rework-prd")),
+        repo_path=repo_path,
+        config=_rework_config(worktree_path),
         github_client=fake_client,
+        process_runner=SubprocessRunner(),
         content_generator=None,
         max_issues=1,
     )
 
-    prd_files = list(pending_dir.glob("*.md"))
+    # PRD written inside the issue-87 worktree, not the main repo tree.
+    prd_files = list((worktree_path / "tasks" / "pending").glob("*-prd-*.md"))
     assert len(prd_files) == 1
     assert prd_files[0].read_text(encoding="utf-8").startswith("# PRD: Generate PRD")
+    relative_prd = prd_files[0].relative_to(worktree_path).as_posix()
+
+    # Main repo working tree gains no untracked PRD file.
+    main_status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "tasks/pending" not in main_status.stdout
+
+    # PRD is committed to the issue-87 branch (visible to any downstream worktree).
+    branch_show = subprocess.run(
+        ["git", "show", f"issue-87:{relative_prd}"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert branch_show.stdout.startswith("# PRD: Generate PRD")
+
+    # Draft PR created via the GitHub client.
+    pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
+    assert len(pr_calls) == 1
+
+    # Labels switched; agent/ready kept.
     label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
     assert len(label_calls) == 1
     assert "source/prd" in label_calls[0]["add"]
     assert "agent/ready" in label_calls[0]["add"]
     assert "agent/rework-prd" in label_calls[0]["remove"]
 
+    # Success comment includes the draft PR link.
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "Draft PR:" in comment_calls[0]["body"]
+
 
 def test_process_prd_rework_issues_failure_rollback(tmp_path: Path) -> None:
-    """PRD rework failure should mark issue as failed and comment error details."""
+    """Worktree provisioning failure marks the issue failed without writing main tree."""
     issue = _make_ready_issue(88, "Issue #88", "", ("agent/rework-prd",))
-
-    class BrokenClient(FakeGitHubClient):
-        def edit_issue_body(self, issue_number: int, body: str) -> None:
-            raise RuntimeError("body update failed")
-
-    broken_client = BrokenClient()
-    broken_client.set_rework_prd_issues([issue])
+    fake_client = FakeGitHubClient()
+    fake_client.set_rework_prd_issues([issue])
+    # path_command echoes a path that does not exist → create_or_reuse_worktree
+    # raises FileNotFoundError before any PRD is generated.
+    config = AppConfig(
+        labels=LabelConfig(rework_prd="agent/rework-prd"),
+        worktree=WorktreeConfig(
+            create_command="true",
+            reuse_command="true",
+            path_command=f"echo {tmp_path / 'missing-worktree'}",
+        ),
+    )
 
     process_prd_rework_issues(
         repo_path=tmp_path,
-        config=AppConfig(labels=LabelConfig(rework_prd="agent/rework-prd")),
-        github_client=broken_client,
+        config=config,
+        github_client=fake_client,
+        process_runner=SubprocessRunner(),
         content_generator=None,
         max_issues=1,
     )
 
-    label_calls = [c for c in broken_client.calls if c["method"] == "edit_issue_labels"]
+    # No PRD written anywhere under the main repo tree.
+    assert not list(tmp_path.rglob("*-prd-*.md"))
+    label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
     failed_label_calls = [c for c in label_calls if "agent/failed" in c["add"]]
     assert len(failed_label_calls) == 1
     assert "agent/rework-prd" in failed_label_calls[0]["remove"]
-    comment_calls = [c for c in broken_client.calls if c["method"] == "comment_issue"]
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     assert len(comment_calls) == 1
     assert "PRD generation failed" in comment_calls[0]["body"]
     assert "agent/rework-prd" in comment_calls[0]["body"]

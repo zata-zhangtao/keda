@@ -241,6 +241,19 @@ uv run --project /path/to/keda iar init
 
 `iar init --dry-run` 只打印将要写入的内容，不创建文件。`.iar.toml` 已存在时，`iar init` 会拒绝覆盖；确认需要重建时显式传入 `--force`。
 
+### `verification_commands` 自动探测
+
+`iar init` 不会写死验证命令，而是按目标仓库实际情况探测 `[agent_runner.runner].verification_commands`（实现见 `src/backend/engines/agent_runner/repository_local.py` 的 `detect_verification_commands`）：
+
+- 基线始终包含 `git diff --check`；
+- 声明了 `mkdocs` 依赖且存在 `mkdocs.yml` → 追加 `uv run mkdocs build`；
+- 存在 `just test` 配方（含经 `import 'justfile.shared'` 等导入的配方，以及 `@test` quiet 前缀）→ 追加 `just test`，并**优先选它**：`just test` 跑的就是 `git commit` 时 pre-commit 强制的同一组 lint/format/test 钩子，并刷新 `.last_tested_commit` 标记，因此 runner 验证通过后提交不会再被 pre-commit 挡下；
+- 否则走通用回退：声明了 `pre-commit` 依赖且有 `.pre-commit-config.yaml` → 追加 `uv run pre-commit run --all-files`；声明了 `pytest` 且有 `tests/` → 追加 `uv run pytest -q`。
+
+> **check-test-flag 护栏**：若仓库装了 `check-test-flag` 钩子却没有可探测的 `just test` 配方，`iar init` 会**跳过** `pre-commit run --all-files` 并打印告警——该钩子只认 `just test` 写入的 `.last_tested_commit` 标记，bare `pre-commit run` 会触发它并让 runner 代提交死锁。这类仓库应补一个 `just test` 配方，或移除 check-test-flag。
+>
+> 探测只在 `iar init` 时发生：已存在的 `.iar.toml` 不会自动更新，需重跑 `iar init --force` 或手改 `verification_commands` 才会采用新探测结果。
+
 生成示例：
 
 ```toml
@@ -803,18 +816,22 @@ The next daemon pass or `iar run` will detect the label and process the Issue be
 ### What Happens During PRD Rework
 
 1. **List**: The runner queries open Issues labeled `agent/rework-prd` (default limit 1 per pass).
-2. **Collect**: It loads the Issue body and all comments.
-3. **Resolve Path**:
+2. **Worktree**: It creates or reuses the `issue-<N>` worktree (the same worktree/branch a downstream ready-issue run would use), so the PRD never touches the main working tree.
+3. **Collect**: It loads the Issue body and all comments.
+4. **Resolve Path** (inside the worktree):
    - If the Issue body already contains a `- PRD path: \`...\`` anchor, the runner rewrites that same file.
    - If no anchor exists, the runner generates a new filename under `tasks/pending/` using the pattern `P<priority>-<TYPE>-YYYYMMDD-HHMMSS-prd-<slug>.md` (priority/type are inferred from `priority/<p>` and `type/<t>` labels, or the `[Type]` title prefix).
-4. **Generate**: It calls the configured content generator (template, agent, or fallback) to produce the PRD markdown.
-5. **Write**: The PRD file is written (overwriting existing or creating new).
-6. **Update Issue**:
-   - If new PRD: inserts the `PRD path:` anchor at the top of the Issue body.
+5. **Generate**: It calls the configured content generator. In agent mode the prompt is built from the `prd` skill spec (`~/.claude/skills/prd/SKILL.md`, the single source of the PRD methodology and 11-section output contract); if the skill is unreachable it falls back to the configured `prompt` template, then to a minimal fallback PRD.
+6. **Write**: The PRD file is written inside the worktree (overwriting existing or creating new).
+7. **Commit + Publish**: The PRD is committed to the `issue-<N>` branch and published via `publish_changes` — pushed to the remote and opened (or reused) as a **draft PR**. A regenerated-but-identical PRD that produces no new commit skips PR creation.
+8. **Update Issue**:
+   - Inserts/updates the `PRD path:` anchor in the Issue body.
    - Removes `agent/rework-prd`.
    - Adds `source/prd`.
-   - Optionally adds `agent/ready` (so the runner can immediately proceed to implementation).
-7. **Comment**: Posts a success comment with the PRD path and generation source.
+   - Optionally adds `agent/ready`. Because the PRD is committed to the `issue-<N>` branch, a downstream ready-issue run reusing that worktree can read it, so `agent/ready` is safe to keep.
+9. **Comment**: Posts a success comment with the PRD path, generation source, and the draft PR link.
+
+Because the PRD lands on the `issue-<N>` branch behind a draft PR (instead of being written straight into `main`), the main working tree stays clean and the change is reviewable before merge.
 
 ### Label Transitions
 
@@ -830,6 +847,30 @@ agent/rework-prd  →  agent/failed
 
 A failure comment is posted with the error and instructions to re-add `agent/rework-prd` to retry.
 
+### Stopping at the PRD (skip auto-implementation)
+
+By default, generation does **not** stop at the PRD. Step 8 adds `agent/ready`, and within the **same** `iar run` / daemon pass the PRD-rework phase (`process_prd_rework_issues`) runs *before* the ready-issue phase (`run_once`). So the freshly generated Issue can be claimed and implemented in that same pass; the implementation commits land on the same `issue-<N>` branch and accumulate in the same draft PR as the PRD.
+
+If you want the runner to generate the PRD but **hold before implementing** (e.g. to review the PRD on its own first), use the dependency gate. Add an `iar:depends-on` marker to the **Issue body**, pointing at a sentinel Issue you keep open until you are ready:
+
+```text
+<!-- iar:depends-on #<sentinel-issue> -->
+```
+
+Group form (waits until every Issue labeled `task-group/<name>` is closed):
+
+```text
+<!-- iar:depends-on group:<name> -->
+```
+
+How it behaves:
+
+- The gate is evaluated in the ready-issue phase (`run_once`), **not** during PRD generation. The PRD is still generated, committed, and published as a draft PR; only implementation is held.
+- An unsatisfied dependency adds `agent/waiting` and the Issue is skipped. An Issue dependency is satisfied when the target Issue is **closed**; a group dependency when all members carrying the `task-group/<name>` label are closed. Close the sentinel Issue (or the group members) to release — the next pass clears `agent/waiting` and proceeds to implementation.
+- Add the marker to the Issue body **before** the rework pass. Removing `agent/ready` after generation is racy, because generation and the first claim can happen in the same pass; the body marker is evaluated up front and avoids that race. The rework step only edits the `PRD path:` line, so a pre-existing marker is preserved. See the "Issue 依赖门禁（Dependency Gate）" section above for full marker semantics.
+
+This reuses the inter-Issue ordering gate as a manual hold, so it needs a real sentinel Issue or group to point at. If you are fine reviewing the PRD and its implementation together, you do not need to block at all — nothing merges until the draft PR passes human review and validation sign-off.
+
 ### Configuration
 
 The PRD-from-Issue generation target is configured under `[agent_runner.generated_content.prd_from_issue]`:
@@ -841,8 +882,10 @@ mode = "agent"
 agent = "auto"
 timeout_seconds = 120
 body_template = "..."
-prompt = "..."
+prompt = "..."   # fallback only — used when the prd skill spec is unreachable
 ```
+
+In `mode = "agent"`, the PRD prompt is built from the `prd` skill spec rather than the inline `prompt`. The skill path is resolved as: explicit override → `IAR_PRD_SKILL_PATH` environment variable → `~/.claude/skills/prd/SKILL.md`. The skill is the single source of the PRD methodology/output contract, so the inline `prompt` is kept only as a fallback for when the skill file cannot be read (e.g. a runner host without the skill installed). Set `IAR_PRD_SKILL_PATH` when the runner runs in a product repo while the skill lives under a different home directory.
 
 See the "Generated Content 配置" section above for the full template variable list and example.
 

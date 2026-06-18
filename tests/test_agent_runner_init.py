@@ -253,6 +253,111 @@ def test_detect_verification_commands_justfile_without_test_recipe_uses_pytest(
     ]
 
 
+def test_detect_verification_commands_follows_justfile_import(
+    tmp_path: Path,
+) -> None:
+    """A ``test`` recipe in an imported ``justfile.shared`` is detected.
+
+    Reproduces the shared-template layout: the top-level justfile only imports
+    ``justfile.shared``, where a quiet ``@test`` recipe lives. Earlier detection
+    missed both the ``import`` and the ``@`` prefix and wrongly fell back to a
+    bare ``pytest -q``, which then deadlocked against the check-test-flag hook.
+    """
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "target"',
+                'version = "0.1.0"',
+                'dependencies = ["pytest>=8.3.0"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_path / "tests").mkdir()
+    (repo_path / "justfile").write_text("import 'justfile.shared'\n", encoding="utf-8")
+    (repo_path / "justfile.shared").write_text(
+        '@test type="local":\n    uv run pytest -q\n', encoding="utf-8"
+    )
+
+    assert detect_verification_commands(repo_path) == [
+        "git diff --check",
+        "just test",
+    ]
+
+
+def test_detect_verification_commands_generic_fallback_adds_precommit(
+    tmp_path: Path,
+) -> None:
+    """Without a ``just test`` recipe, a pre-commit config adds ``pre-commit run``."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "target"',
+                'version = "0.1.0"',
+                'dependencies = ["pre-commit>=3.7.0", "pytest>=8.3.0"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_path / "tests").mkdir()
+    (repo_path / ".pre-commit-config.yaml").write_text(
+        "repos:\n  - repo: local\n    hooks:\n      - id: ruff\n        name: ruff\n",
+        encoding="utf-8",
+    )
+
+    assert detect_verification_commands(repo_path) == [
+        "git diff --check",
+        "uv run pre-commit run --all-files",
+        "uv run pytest -q",
+    ]
+
+
+def test_detect_verification_commands_skips_precommit_with_check_test_flag(
+    tmp_path: Path,
+) -> None:
+    """A ``check-test-flag`` gate without ``just test`` must not add ``pre-commit run``.
+
+    The hook only accepts a marker written by ``just test``; emitting a bare
+    ``pre-commit run`` would deadlock the runner's commit, so only pytest is kept.
+    """
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "target"',
+                'version = "0.1.0"',
+                'dependencies = ["pre-commit>=3.7.0", "pytest>=8.3.0"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_path / "tests").mkdir()
+    (repo_path / ".pre-commit-config.yaml").write_text(
+        "\n".join(
+            [
+                "repos:",
+                "  - repo: local",
+                "    hooks:",
+                "      - id: check-test-flag",
+                "        name: Check just test flag",
+                "        entry: bash scripts/shared/hooks/check_test_flag.sh",
+                "        language: system",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert detect_verification_commands(repo_path) == [
+        "git diff --check",
+        "uv run pytest -q",
+    ]
+
+
 def test_detect_verification_commands_skips_undeclared_tools(
     tmp_path: Path,
 ) -> None:

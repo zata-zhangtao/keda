@@ -225,6 +225,7 @@ class FakeContentGenerator(IContentGenerator):
     def __init__(self, response: str = "") -> None:
         self.response = response
         self.calls: list[list[str]] = []
+        self.prompts: list[str] = []
 
     def generate(
         self,
@@ -235,6 +236,7 @@ class FakeContentGenerator(IContentGenerator):
         timeout: int | None = None,
     ) -> CommandResult:
         self.calls.append([agent_name, prompt[:50]])
+        self.prompts.append(prompt)
         return CommandResult(
             command=("generate", agent_name),
             return_code=0,

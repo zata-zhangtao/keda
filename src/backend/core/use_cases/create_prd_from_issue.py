@@ -20,13 +20,16 @@ from pathlib import Path
 from backend.core.shared.interfaces.agent_runner import (
     IContentGenerator,
     IGitHubClient,
+    IProcessRunner,
 )
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     GeneratedContentConfig,
     IssueSummary,
 )
+from backend.core.use_cases.agent_runner_commit import commit_runner_authored_paths
 from backend.core.use_cases.agent_runner_feedback import extract_prd_path
+from backend.core.use_cases.agent_runner_publish import publish_changes
 from backend.core.use_cases.generated_content import (
     build_prd_context,
     generate_prd_content,
@@ -46,6 +49,11 @@ class CreatePrdFromIssueRequest:
         generated_content_config: 内容生成配置；为 ``None`` 时使用 fallback。
         content_generator: AI 内容生成器；agent 模式必需。
         queue_ready: 成功后在 Issue 上添加 ``agent/ready`` label。
+        worktree_path: ``issue-<N>`` worktree 路径。提供时 PRD 在 worktree 内生成、
+            commit 进 ``issue-<N>`` 分支并经 draft PR 落地；为 ``None`` 时仅在
+            ``repo_path`` 内生成而不发布（供隔离单测）。
+        process_runner: git 命令执行器；与 ``worktree_path`` 一同提供时启用
+            commit + 发布路径。
     """
 
     repo_path: Path
@@ -54,6 +62,8 @@ class CreatePrdFromIssueRequest:
     generated_content_config: GeneratedContentConfig | None = None
     content_generator: IContentGenerator | None = None
     queue_ready: bool = False
+    worktree_path: Path | None = None
+    process_runner: IProcessRunner | None = None
 
 
 _TYPE_ACRONYMS: dict[str, str] = {
@@ -245,6 +255,82 @@ def _extract_existing_prd_text(prd_path: Path) -> str:
     return ""
 
 
+def _commit_and_publish_prd(
+    *,
+    request: CreatePrdFromIssueRequest,
+    issue: IssueSummary,
+    worktree_path: Path,
+    relative_prd_path: str,
+    is_rewrite: bool,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+) -> str | None:
+    """把生成的 PRD commit 进 ``issue-<N>`` 分支并经 draft PR 落地。
+
+    复用既有 worktree+publish 基础设施，不新增并行抽象：commit 走
+    :func:`commit_runner_authored_paths`（runner 直接产出的文档提交），发布走
+    :func:`publish_changes`（push + 开/复用 draft PR）。PRD 是 ``tasks/pending/``
+    下的提案，按定义尚未归档，因此以 ``require_prd_archived=False`` 跳过交付门禁。
+
+    Args:
+        request: 创建 PRD 的请求参数。
+        issue: 当前处理的 Issue。
+        worktree_path: ``issue-<N>`` worktree 路径。
+        relative_prd_path: PRD 相对 worktree 的路径。
+        is_rewrite: 是否为重写（影响 commit message 文案）。
+        github_client: GitHub 客户端。
+        process_runner: git 命令执行器。
+
+    Returns:
+        draft PR 链接；PRD 相对 base 分支无新增提交（如重写产出相同文本）时
+        返回 ``None``。
+    """
+    config = request.config
+    expected_branch = f"issue-{issue.number}"
+    commit_message = (
+        f"docs(prd): {'update' if is_rewrite else 'add'} PRD for issue "
+        f"#{issue.number}"
+    )
+    committed_sha = commit_runner_authored_paths(
+        worktree_path,
+        [relative_prd_path],
+        commit_message,
+        config,
+        process_runner,
+        expected_branch=expected_branch,
+    )
+    # 新提交一定发布；若本次没产生新提交（如重写产出相同文本），仅当分支相对 base
+    # 已有历史提交才发布，否则不对空分支创建空 PR。
+    if committed_sha is None:
+        ahead_result = process_runner.run(
+            ["git", "rev-list", "--count", f"{config.git.base_branch}..HEAD"],
+            cwd=worktree_path,
+            check=False,
+        )
+        branch_has_commits = (
+            ahead_result.return_code == 0
+            and ahead_result.stdout.strip() not in ("", "0")
+        )
+        if not branch_has_commits:
+            _logger.info(
+                "Issue #%d PRD unchanged on %s; skipping draft PR.",
+                issue.number,
+                expected_branch,
+            )
+            return None
+    _, pr_url = publish_changes(
+        issue,
+        worktree_path,
+        config,
+        github_client,
+        process_runner,
+        expected_branch=expected_branch,
+        content_generator=request.content_generator,
+        require_prd_archived=False,
+    )
+    return pr_url
+
+
 def create_prd_from_issue(
     *,
     request: CreatePrdFromIssueRequest,
@@ -254,16 +340,21 @@ def create_prd_from_issue(
 
     执行流程：
 
-    1. 解析目标 PRD 路径（复用已有或新建）。
+    1. 解析目标 PRD 路径（复用已有或新建），基准目录为 worktree（若提供）否则
+       主仓库目录。
     2. 读取现有 PRD 文本（如有）。
     3. 获取 Issue 评论列表。
     4. 调用 ``generate_prd_content`` 生成 PRD 文本（支持 template/agent/fallback）。
     5. 写入文件（覆盖或新建）。
-    6. 如果是新建 PRD，更新 Issue body 添加 ``PRD path`` 锚点。
-    7. 更新 labels：移除 ``agent/rework-prd``，添加 ``source/prd``，可选添加 ``agent/ready``。
-    8. 在 Issue 上评论成功通知。
+    6. 若提供了 worktree + process_runner：commit 进 ``issue-<N>`` 分支并经
+       ``publish_changes`` 开/复用 draft PR（push 前不污染主工作树）。
+    7. 更新 Issue body 添加/更新 ``PRD path`` 锚点。
+    8. 更新 labels：移除 ``agent/rework-prd``，添加 ``source/prd``，可选添加
+       ``agent/ready``。
+    9. 在 Issue 上评论成功通知（含 draft PR 链接，若已发布）。
 
-    失败时抛出异常，由调用方（编排器）捕获并标记 ``agent/failed``。
+    失败时抛出异常，由调用方（编排器）捕获并标记 ``agent/failed``。主工作树
+    不会被写入（PRD 落在 worktree 内）。
 
     Args:
         request: 创建 PRD 的请求参数。
@@ -273,13 +364,16 @@ def create_prd_from_issue(
         写入的 PRD 文件绝对路径。
 
     Raises:
-        Exception: 当 PRD 生成或写入失败时，原样抛出异常。
+        Exception: 当 PRD 生成、写入、commit 或发布失败时，原样抛出异常。
     """
     issue = request.issue
     repo_path = request.repo_path
     labels_config = request.config.labels
+    # PRD 落地基准目录：提供 worktree 时写入 worktree（再 commit 进 issue 分支 +
+    # 开 draft PR）；否则写入主仓库目录（仅生成、不发布——供隔离单测）。
+    base_path = request.worktree_path or repo_path
 
-    prd_path = _resolve_prd_path(repo_path=repo_path, issue=issue)
+    prd_path = _resolve_prd_path(repo_path=base_path, issue=issue)
     existing_prd_text = _extract_existing_prd_text(prd_path)
     is_rewrite = bool(existing_prd_text)
 
@@ -291,9 +385,9 @@ def create_prd_from_issue(
             issue=issue,
             comments=comments,
             existing_prd_text=existing_prd_text,
-            repo_path=repo_path,
+            repo_path=base_path,
         )
-        gc_cwd = repo_path if request.content_generator is not None else None
+        gc_cwd = base_path if request.content_generator is not None else None
         generated = generate_prd_content(
             config=gc_config,
             context=gc_context,
@@ -308,7 +402,21 @@ def create_prd_from_issue(
     prd_path.write_text(prd_text, encoding="utf-8")
     _logger.info("%s PRD at %s", "Rewrote" if is_rewrite else "Created", prd_path)
 
-    relative_prd_path = prd_path.relative_to(repo_path.resolve()).as_posix()
+    relative_prd_path = prd_path.relative_to(base_path.resolve()).as_posix()
+
+    # 落地：commit 进 issue-<N> 分支 + 开/复用 draft PR（在更新 Issue body/labels
+    # 之前，确保发布失败不会留下半态 label）。
+    pr_url: str | None = None
+    if request.worktree_path is not None and request.process_runner is not None:
+        pr_url = _commit_and_publish_prd(
+            request=request,
+            issue=issue,
+            worktree_path=request.worktree_path,
+            relative_prd_path=relative_prd_path,
+            is_rewrite=is_rewrite,
+            github_client=github_client,
+            process_runner=request.process_runner,
+        )
 
     updated_body = _update_issue_body_with_prd_path(issue.body, relative_prd_path)
     if updated_body != issue.body:
@@ -331,11 +439,14 @@ def create_prd_from_issue(
         if gc_config is not None and gc_config.enabled
         else "fallback template"
     )
-    github_client.comment_issue(
-        issue.number,
-        f"PRD {action} successfully.\n\n"
-        f"- PRD path: `{relative_prd_path}`\n"
-        f"- Source: {source_label}\n",
-    )
+    comment_lines = [
+        f"PRD {action} successfully.",
+        "",
+        f"- PRD path: `{relative_prd_path}`",
+        f"- Source: {source_label}",
+    ]
+    if pr_url is not None:
+        comment_lines.append(f"- Draft PR: {pr_url}")
+    github_client.comment_issue(issue.number, "\n".join(comment_lines) + "\n")
 
     return prd_path

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import tomllib
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ from backend.core.shared.interfaces.runner_console import (
 )
 from backend.infrastructure.process_runner import CommandResult, SubprocessRunner
 
+
+_logger = logging.getLogger(__name__)
 
 _MAX_SCAN_DEPTH = 4
 
@@ -386,27 +389,109 @@ def _uv_dependency_flag(
     return None
 
 
-_JUST_TEST_RECIPE_PATTERN = re.compile(r"^test\b[^\n]*:(?!=)", re.MULTILINE)
+# Recipe header at column zero, optionally prefixed by ``@`` (quiet recipe),
+# e.g. ``test:``, ``@test:`` or ``test *args:``; the ``:(?!=)`` lookahead skips
+# ``test := ...`` variable assignments and ``\btest\b`` skips ``test_setup:``.
+_JUST_TEST_RECIPE_PATTERN = re.compile(r"^@?test\b[^\n]*:(?!=)", re.MULTILINE)
+# Justfile ``import`` / ``import?`` / ``!include`` directive with the (optionally
+# quoted) target path captured, so a ``test`` recipe living in an imported file
+# (such as a shared ``justfile.shared`` template) is still discovered.
+_JUST_IMPORT_PATTERN = re.compile(
+    r"""^\s*(?:import\??|!include)\s+['"]?([^'"\n]+?)['"]?\s*$""",
+    re.MULTILINE,
+)
+_MAX_JUSTFILE_IMPORT_DEPTH = 8
+
+
+def _justfile_defines_test_recipe(
+    justfile_path: Path,
+    visited_paths: set[Path] | None = None,
+    depth: int = 0,
+) -> bool:
+    """Return whether ``justfile_path`` or any file it imports defines ``test``.
+
+    Follows ``import`` directives relative to each justfile's own directory,
+    guarding against import cycles and runaway depth.
+    """
+    if visited_paths is None:
+        visited_paths = set()
+    if depth > _MAX_JUSTFILE_IMPORT_DEPTH:
+        return False
+    try:
+        resolved_path = justfile_path.resolve()
+    except OSError:
+        return False
+    if resolved_path in visited_paths:
+        return False
+    visited_paths.add(resolved_path)
+    if not justfile_path.is_file():
+        return False
+    try:
+        justfile_text = justfile_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if _JUST_TEST_RECIPE_PATTERN.search(justfile_text):
+        return True
+    for import_match in _JUST_IMPORT_PATTERN.finditer(justfile_text):
+        imported_path = justfile_path.parent / import_match.group(1).strip()
+        if _justfile_defines_test_recipe(imported_path, visited_paths, depth + 1):
+            return True
+    return False
 
 
 def _has_just_test_recipe(repo_root_path: Path) -> bool:
     """Return whether a justfile in the repo defines a ``test`` recipe.
 
-    Matches a recipe header line such as ``test:`` or ``test *args:`` at column
-    zero while ignoring ``test := ...`` variable assignments. Used to align the
-    generated verification command with the project's own aggregate gate.
+    Matches a recipe header such as ``test:``, ``@test:`` or ``test *args:`` at
+    column zero (ignoring ``test := ...`` assignments) and follows ``import``
+    directives so a ``test`` recipe in an imported ``justfile.shared`` is still
+    detected. Used to align the generated verification command with the
+    project's own aggregate gate.
     """
     for filename in ("justfile", "Justfile", ".justfile"):
         justfile_path = repo_root_path / filename
-        if not justfile_path.is_file():
-            continue
-        try:
-            justfile_text = justfile_path.read_text(encoding="utf-8")
-        except OSError:
-            return False
-        if _JUST_TEST_RECIPE_PATTERN.search(justfile_text):
+        if justfile_path.is_file() and _justfile_defines_test_recipe(justfile_path):
             return True
     return False
+
+
+def _detect_precommit_verification_command(
+    repo_root_path: Path, pyproject_data: dict[str, Any]
+) -> str | None:
+    """Return a generic ``pre-commit run`` verification command, or ``None``.
+
+    Running the repository's own pre-commit hooks during verification surfaces
+    lint/format failures while the runner can still recover, instead of letting
+    them hard-fail at the commit step. Returns ``None`` when:
+
+    - there is no ``.pre-commit-config.yaml`` (nothing to run);
+    - ``pre-commit`` is not a declared dependency (``uv run pre-commit`` would
+      fail); or
+    - the config installs the ``check-test-flag`` gate. That hook only accepts a
+      marker written by ``just test``; this helper is reached only when no
+      ``just test`` recipe was detected, so a bare ``pre-commit run`` would
+      deadlock on the stale marker. Skip it and let pytest stand alone.
+    """
+    precommit_config_path = repo_root_path / ".pre-commit-config.yaml"
+    if not precommit_config_path.is_file():
+        return None
+    precommit_flag = _uv_dependency_flag(pyproject_data, "pre-commit")
+    if precommit_flag is None:
+        return None
+    try:
+        precommit_config_text = precommit_config_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if "check-test-flag" in precommit_config_text:
+        _logger.warning(
+            "Repository at %s installs the check-test-flag pre-commit hook but "
+            "has no detectable `just test` recipe to refresh its marker; "
+            "omitting `pre-commit run` from verification_commands to avoid a "
+            "commit deadlock. Add a `just test` recipe or remove check-test-flag.",
+            repo_root_path,
+        )
+        return None
+    return f"uv run{precommit_flag} pre-commit run --all-files"
 
 
 def detect_verification_commands(repo_root_path: Path) -> list[str]:
@@ -419,6 +504,12 @@ def detect_verification_commands(repo_root_path: Path) -> list[str]:
     repository declares the tool in ``pyproject.toml``, using the ``uv run``
     invocation (``--extra`` / ``--group``) that matches where the dependency
     is declared.
+
+    When the repository exposes a ``just test`` aggregate gate (directly or via
+    an imported ``justfile.shared``) it is preferred, since it runs the same
+    lint/format/test hooks pre-commit enforces at ``git commit``. Otherwise a
+    generic ``pre-commit run --all-files`` (when safe) plus ``pytest -q`` keep
+    the runner's verification aligned with the commit gate.
     """
     verification_commands = ["git diff --check"]
     pyproject_path = repo_root_path / "pyproject.toml"
@@ -435,16 +526,26 @@ def detect_verification_commands(repo_root_path: Path) -> list[str]:
         if mkdocs_flag is not None:
             verification_commands.append(f"uv run{mkdocs_flag} mkdocs build")
 
-    if (repo_root_path / "tests").is_dir():
-        if _has_just_test_recipe(repo_root_path):
-            # Prefer the project's own ``just test`` aggregate gate when present:
-            # it runs the same lint/format/test hooks that pre-commit enforces at
-            # ``git commit`` (and refreshes any just-test marker), so a commit
-            # cannot fail pre-commit after the runner's verification already
-            # passed. A bare ``pytest -q`` misses ruff/format/test-flag, letting
-            # those failures surface only at commit time and hard-fail the run.
+    has_tests = (repo_root_path / "tests").is_dir()
+    if _has_just_test_recipe(repo_root_path):
+        # ``just test`` is the project's aggregate gate: it runs the same
+        # lint/format/test hooks pre-commit enforces at ``git commit`` (and
+        # refreshes any just-test marker), so a commit cannot fail pre-commit
+        # after the runner's verification already passed. It already covers
+        # pre-commit, so no separate ``pre-commit run`` is added here.
+        if has_tests:
             verification_commands.append("just test")
-        else:
+    else:
+        # Generic fallback for repos without a ``just test`` gate: run the
+        # project's own pre-commit hooks (so lint/format failures surface during
+        # verification, not at commit time) plus pytest. A bare ``pytest -q``
+        # alone misses ruff/format hooks, letting them hard-fail at commit time.
+        precommit_command = _detect_precommit_verification_command(
+            repo_root_path, pyproject_data
+        )
+        if precommit_command is not None:
+            verification_commands.append(precommit_command)
+        if has_tests:
             pytest_flag = _uv_dependency_flag(pyproject_data, "pytest")
             if pytest_flag is not None:
                 verification_commands.append(f"uv run{pytest_flag} pytest -q")

@@ -105,8 +105,9 @@ def publish_changes(
     *,
     expected_branch: str | None = None,
     content_generator: IContentGenerator | None = None,
+    require_prd_archived: bool = True,
 ) -> tuple[str, str]:
-    """Push and create a draft PR. Assumes the agent has already committed.
+    """Push and create a draft PR. Assumes the caller has already committed.
 
     在 push 前再次执行安全检查（validate_safe_changes），
     防止 agent 在 commit 后、push 前的间隙修改了 forbidden paths。
@@ -120,6 +121,9 @@ def publish_changes(
         process_runner: 命令执行器。
         expected_branch: 期望的分支名，用于防止分支漂移。
         content_generator: 可选的 AI 内容生成器，用于生成 PR 标题和描述。
+        require_prd_archived: 是否在 push 前断言 canonical PRD 已归档。实现交付
+            路径默认 ``True``；PRD rework 发布的是 ``tasks/pending/`` 下尚未实现的
+            新 PRD（提案而非成品），此时传 ``False`` 跳过该交付门禁。
 
     Returns:
         (分支名, PR URL) 元组。
@@ -137,8 +141,10 @@ def publish_changes(
         )
     # 发布前硬门禁：PRD-backed Issue 的 canonical PRD 必须已归档且验收完成。
     # 该检查在 commit 阶段由 ensure_prd_delivery_ready 执行过一次，这里作为
-    # push 前的最终只读断言，防止任何绕过路径。
-    assert_prd_archived_for_publish(issue, worktree_path)
+    # push 前的最终只读断言，防止任何绕过路径。PRD rework 发布的是 pending 提案
+    # PRD（按定义尚未归档），因此显式以 require_prd_archived=False 跳过。
+    if require_prd_archived:
+        assert_prd_archived_for_publish(issue, worktree_path)
     # push 前再次检查 forbidden paths，防止 commit 后又被修改
     validate_safe_changes(worktree_path, config, process_runner)
     # 证据文件绝不允许进入代码 diff（info/exclude 之外的双保险）

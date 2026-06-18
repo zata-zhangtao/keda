@@ -66,6 +66,7 @@ def run_agent_repositories_once(
                     repo_path=context.repo_path,
                     config=context.config,
                     github_client=github_client,
+                    process_runner=process_runner,
                     content_generator=content_generator,
                     max_issues=max_prd_issues,
                 )

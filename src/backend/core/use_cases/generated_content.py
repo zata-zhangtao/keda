@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -630,6 +631,116 @@ def _validate_prd_output(text: str) -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# prd skill 规范来源（单一来源；禁止硬编码安装路径）
+# ---------------------------------------------------------------------------
+
+# 环境变量覆盖 prd skill 路径，便于全局工具 / 跨仓库运行（runner 在产品仓执行，
+# skill 在用户级目录）下显式指定，而非硬编码安装路径。
+_PRD_SKILL_PATH_ENV_VAR = "IAR_PRD_SKILL_PATH"
+# 默认安装位置相对用户主目录派生（不写死绝对安装路径）。
+_DEFAULT_PRD_SKILL_RELATIVE_PATH = Path(".claude") / "skills" / "prd" / "SKILL.md"
+
+
+def resolve_prd_skill_path(explicit_path: Path | None = None) -> Path:
+    """解析 ``prd`` skill ``SKILL.md`` 路径，不硬编码绝对安装路径。
+
+    解析优先级：显式入参 → ``IAR_PRD_SKILL_PATH`` 环境变量 →
+    ``~/.claude/skills/prd/SKILL.md``（相对主目录派生）。
+
+    Args:
+        explicit_path: 调用方显式指定的路径；为 ``None`` 时回落到环境变量/默认。
+
+    Returns:
+        待读取的 skill 规范文件路径（不保证存在）。
+    """
+    if explicit_path is not None:
+        return explicit_path
+    env_value = os.environ.get(_PRD_SKILL_PATH_ENV_VAR)
+    if env_value:
+        return Path(env_value).expanduser()
+    return Path.home() / _DEFAULT_PRD_SKILL_RELATIVE_PATH
+
+
+def load_prd_skill_spec(explicit_path: Path | None = None) -> str | None:
+    """读取 ``prd`` skill 规范文本，不可达时安全返回 ``None``。
+
+    Args:
+        explicit_path: 显式 skill 路径；为 ``None`` 时按 :func:`resolve_prd_skill_path`
+            的优先级解析。
+
+    Returns:
+        skill 规范文本（已 strip）；文件缺失/不可读/为空时返回 ``None``，
+        由调用方回退到现有模板 prompt。
+    """
+    skill_path = resolve_prd_skill_path(explicit_path)
+    try:
+        skill_text = skill_path.read_text(encoding="utf-8")
+    except OSError:
+        _logger.warning(
+            "prd skill spec unreachable at %s; falling back to template prompt.",
+            skill_path,
+        )
+        return None
+    skill_text = skill_text.strip()
+    return skill_text or None
+
+
+def _build_prd_agent_prompt(
+    skill_spec: str, context: PrdContext, max_context_chars: int
+) -> str:
+    """用 ``prd`` skill 规范 + PRD 上下文组合 agent prompt。
+
+    skill 规范是方法论与输出契约的单一来源，始终完整注入（不截断）；
+    ``max_context_chars`` 只约束可变的输入上下文（Issue 正文/评论/现有 PRD/仓库
+    结构），避免超长 Issue 线程撑爆 prompt 而又不丢失规范本身。
+
+    Args:
+        skill_spec: ``prd`` skill ``SKILL.md`` 全文。
+        context: PRD 上下文变量。
+        max_context_chars: 可变上下文部分的最大字符数。
+
+    Returns:
+        发送给内容生成器的完整 prompt。
+    """
+    context_block = "\n".join(
+        [
+            f"GitHub Issue #{context.issue_number}: {context.issue_title}",
+            "",
+            "Issue Body:",
+            context.issue_body,
+            "",
+            "Issue Comments (chronological):",
+            context.issue_comments,
+            "",
+            "Existing PRD (rewrite if present, otherwise empty):",
+            context.existing_prd_text,
+            "",
+            "Repository Structure Summary:",
+            context.repo_structure_summary,
+        ]
+    )
+    context_block = _truncate_text(context_block, max_context_chars)
+    return "\n".join(
+        [
+            skill_spec,
+            "",
+            "---",
+            "",
+            "Follow the PRD methodology and output contract above. Apply it to the "
+            "GitHub Issue and repository context below.",
+            "",
+            context_block,
+            "",
+            "Output rules:",
+            "- Write the PRD in the same language as the Issue title.",
+            "- The PRD MUST start with `# PRD: <title>` and include a "
+            "`- GitHub Issue:` line.",
+            "- Output only the PRD markdown, with no extra commentary.",
+        ]
+    )
+
+
 def generate_prd_content(
     *,
     config: GeneratedContentConfig,
@@ -637,6 +748,7 @@ def generate_prd_content(
     fallback_prd_text: str,
     generator: IContentGenerator | None = None,
     cwd: Path | None = None,
+    prd_skill_path: Path | None = None,
 ) -> GeneratedPrdContent:
     """生成 PRD markdown，支持多级回退。
 
@@ -657,6 +769,9 @@ def generate_prd_content(
         fallback_prd_text: 当所有生成方式失败时使用的 PRD 文本。
         generator: agent 模式所需的内容生成器。
         cwd: agent 工作目录。
+        prd_skill_path: 可选的 ``prd`` skill ``SKILL.md`` 显式路径；为 ``None`` 时按
+            :func:`resolve_prd_skill_path` 解析。agent 模式优先用 skill 规范构建
+            prompt（单一来源），skill 不可达时回退到配置的 ``target.prompt`` 模板。
 
     Returns:
         包含 text 和 source 的 ``GeneratedPrdContent`` 实例。
@@ -674,8 +789,16 @@ def generate_prd_content(
             pass
     elif target.mode == "agent" and generator is not None and cwd is not None:
         agent_name = target.agent if target.agent != "auto" else config.default_agent
-        prompt = _render_template(target.prompt, context)
-        prompt = _truncate_text(prompt, config.max_input_chars)
+        # PRD 规范单一来源：优先注入 prd skill 规范；不可达时回退到配置模板 prompt。
+        skill_spec = load_prd_skill_spec(prd_skill_path)
+        if skill_spec:
+            prompt = _build_prd_agent_prompt(
+                skill_spec, context, config.max_input_chars
+            )
+        else:
+            prompt = _truncate_text(
+                _render_template(target.prompt, context), config.max_input_chars
+            )
         generated_text = _run_content_generator(
             generator, agent_name, prompt, cwd, target.timeout_seconds
         )

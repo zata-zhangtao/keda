@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 
 from backend.core.shared.models.agent_runner import (
     CommandResult,
@@ -13,6 +14,7 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.generated_content import (
     IssueContext,
     PrContext,
+    PrdContext,
     _parse_json_output,
     _parse_markdown_output,
     _validate_issue_body,
@@ -21,6 +23,9 @@ from backend.core.use_cases.generated_content import (
     extract_first_h2_section,
     generate_issue_content,
     generate_pr_content,
+    generate_prd_content,
+    load_prd_skill_spec,
+    resolve_prd_skill_path,
 )
 from tests.conftest import FakeContentGenerator, FakeProcessRunner
 
@@ -774,6 +779,104 @@ def test_generate_prd_content_agent_invalid_uses_fallback() -> None:
     )
     assert result.text == "fallback"
     assert result.source == "fallback"
+
+
+_VALID_AGENT_PRD = "# PRD: Generated\n\n- GitHub Issue: #1\n\n## 1. Goals\n\nbody\n"
+
+
+def _prd_context() -> PrdContext:
+    return PrdContext(
+        issue_number=1,
+        issue_title="Generated",
+        issue_body="Body",
+        issue_comments="",
+        existing_prd_text="",
+        repo_structure_summary="src/",
+    )
+
+
+def _agent_prd_config() -> GeneratedContentConfig:
+    return GeneratedContentConfig(
+        enabled=True,
+        prd_from_issue=GeneratedContentTargetConfig(
+            enabled=True,
+            mode="agent",
+            output="markdown",
+            agent="claude",
+            prompt="You are a technical product manager. PRD for {issue_title}",
+        ),
+    )
+
+
+def test_generate_prd_content_agent_prompt_uses_skill_spec(tmp_path: Path) -> None:
+    """Agent prompt should be built from the prd skill spec (single source)."""
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text(
+        "# PRD Generator (Architecture-First)\n\n## Output Contract\n"
+        "Follow the required PRD structure.\n",
+        encoding="utf-8",
+    )
+    generator = FakeContentGenerator(response=_VALID_AGENT_PRD)
+    result = generate_prd_content(
+        config=_agent_prd_config(),
+        context=_prd_context(),
+        fallback_prd_text="fallback",
+        generator=generator,
+        cwd=tmp_path,
+        prd_skill_path=skill_file,
+    )
+    assert result.source == "agent"
+    assert result.text == _VALID_AGENT_PRD.strip()
+    # The captured prompt embeds the skill spec, not the hardcoded template.
+    sent_prompt = generator.prompts[0]
+    assert "PRD Generator (Architecture-First)" in sent_prompt
+    assert "Output Contract" in sent_prompt
+    assert "technical product manager" not in sent_prompt
+    # And it still carries the PRD input context.
+    assert "GitHub Issue #1: Generated" in sent_prompt
+
+
+def test_generate_prd_content_agent_prompt_falls_back_when_skill_missing(
+    tmp_path: Path,
+) -> None:
+    """When the skill is unreachable, the agent prompt falls back to target.prompt."""
+    missing_skill = tmp_path / "nope" / "SKILL.md"
+    generator = FakeContentGenerator(response=_VALID_AGENT_PRD)
+    result = generate_prd_content(
+        config=_agent_prd_config(),
+        context=_prd_context(),
+        fallback_prd_text="fallback",
+        generator=generator,
+        cwd=tmp_path,
+        prd_skill_path=missing_skill,
+    )
+    assert result.source == "agent"
+    sent_prompt = generator.prompts[0]
+    assert "technical product manager" in sent_prompt
+    assert "PRD Generator (Architecture-First)" not in sent_prompt
+
+
+def test_load_prd_skill_spec_reads_and_handles_missing(tmp_path: Path) -> None:
+    """load_prd_skill_spec reads an explicit path and returns None when unreachable."""
+    skill_file = tmp_path / "SKILL.md"
+    skill_file.write_text("spec body", encoding="utf-8")
+    assert load_prd_skill_spec(skill_file) == "spec body"
+    assert load_prd_skill_spec(tmp_path / "missing.md") is None
+
+
+def test_resolve_prd_skill_path_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit path wins, then IAR_PRD_SKILL_PATH env, then the ~/.claude default."""
+    explicit = tmp_path / "explicit.md"
+    assert resolve_prd_skill_path(explicit) == explicit
+    monkeypatch.setenv("IAR_PRD_SKILL_PATH", str(tmp_path / "env.md"))
+    assert resolve_prd_skill_path() == tmp_path / "env.md"
+    monkeypatch.delenv("IAR_PRD_SKILL_PATH", raising=False)
+    assert (
+        resolve_prd_skill_path()
+        == Path.home() / ".claude" / "skills" / "prd" / "SKILL.md"
+    )
 
 
 def test_generate_prd_content_agent_fallback_to_template() -> None:

@@ -111,19 +111,23 @@ def process_prd_rework_issues(
     repo_path: Path,
     config: AppConfig,
     github_client: IGitHubClient,
+    process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
     max_issues: int = 1,
 ) -> None:
     """处理标记为 PRD rework 的 Issue。
 
-    在正常的 ready Issue 执行之前调用，生成或重写 PRD，并更新 Issue
-    body/labels/comments。单个 Issue 失败时记录错误并继续处理后续 Issue，
-    不让 PRD 生成阶段污染 ready Issue 执行阶段。
+    在正常的 ready Issue 执行之前调用：为每个 Issue 建/复用 ``issue-<N>``
+    worktree，在 worktree 内生成或重写 PRD、commit 进 ``issue-<N>`` 分支并经
+    draft PR 落地，随后更新 Issue body/labels/comments。主工作树保持干净。
+    单个 Issue 失败时记录错误并继续处理后续 Issue，不让 PRD 生成阶段污染
+    ready Issue 执行阶段。
 
     Args:
         repo_path: 目标仓库路径。
         config: 应用配置。
         github_client: GitHub 客户端。
+        process_runner: git 命令执行器（建/复用 worktree、commit、push）。
         content_generator: 可选的 AI 内容生成器。
         max_issues: 本轮最多处理的 rework-prd Issue 数量。
     """
@@ -135,6 +139,9 @@ def process_prd_rework_issues(
             "Processing PRD rework for Issue #%d: %s", issue.number, issue.title
         )
         try:
+            worktree_path = create_or_reuse_worktree(
+                repo_path, issue, config, process_runner
+            )
             create_prd_from_issue(
                 request=CreatePrdFromIssueRequest(
                     repo_path=repo_path,
@@ -143,6 +150,8 @@ def process_prd_rework_issues(
                     generated_content_config=config.generated_content,
                     content_generator=content_generator,
                     queue_ready=True,
+                    worktree_path=worktree_path,
+                    process_runner=process_runner,
                 ),
                 github_client=github_client,
             )
