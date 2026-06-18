@@ -95,8 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_create_parser.add_argument(
         "--publish-prd",
-        action="store_true",
-        help="Commit and push only the target PRD before adding the ready label.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Commit and push only the target PRD before adding the ready label "
+            "(default: on; pass --no-publish-prd to defer publishing to the "
+            "interactive prompt)."
+        ),
     )
     issue_create_parser.add_argument("--force", action="store_true")
     issue_create_parser.add_argument(

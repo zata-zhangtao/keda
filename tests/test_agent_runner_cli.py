@@ -77,7 +77,7 @@ def test_cli_parser_issue_create_defaults() -> None:
     assert parsed.type == "feature"
     assert parsed.ready is False
     assert parsed.agent == "auto"
-    assert parsed.publish_prd is False
+    assert parsed.publish_prd is True
     assert parsed.force is False
 
 
@@ -91,6 +91,17 @@ def test_cli_parser_issue_create_publish_prd() -> None:
     assert parsed.issue_command == "create"
     assert parsed.publish_prd is True
     assert parsed.ready is False
+
+
+def test_cli_parser_issue_create_no_publish_prd() -> None:
+    """issue create should allow opting out of the default PRD publishing."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["issue", "create", "tasks/example.md", "--no-publish-prd"]
+    )
+    assert parsed.command == "issue create"
+    assert parsed.issue_command == "create"
+    assert parsed.publish_prd is False
 
 
 def test_cli_parser_issue_create_dependency_options() -> None:
@@ -539,7 +550,7 @@ def test_main_issue_create_failure_prints_command_output(capsys) -> None:
         "backend.api.cli._prompt_and_publish_prd_if_needed",
         side_effect=commit_error,
     ):
-        exit_code = main(["issue", "create", "tasks/example.md"])
+        exit_code = main(["issue", "create", "tasks/example.md", "--no-publish-prd"])
 
     captured = capsys.readouterr()
     combined_output = f"{captured.out}\n{captured.err}"
@@ -563,7 +574,7 @@ def test_main_issue_create_ready_without_publish_defers_label() -> None:
     时序说明：
     ┌─────────────────────────────────────────────────────────┐
     │ cli.py                                                 │
-    │   queue_ready_for_request = False  # 无 --publish-prd   │
+    │   queue_ready_for_request = False  # --no-publish-prd   │
     │   create_issue_from_prd(queue_ready=False)  → Issue不含ready │
     │   _prompt_and_publish_prd_if_needed(queue_ready=True)   │
     │     └─ 用户确认push → edit_issue_labels add ready      │
@@ -589,7 +600,9 @@ def test_main_issue_create_ready_without_publish_defers_label() -> None:
     ) as mock_create, patch(
         "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
     ) as mock_prompt:
-        exit_code = main(["issue", "create", "tasks/example.md", "--ready"])
+        exit_code = main(
+            ["issue", "create", "tasks/example.md", "--ready", "--no-publish-prd"]
+        )
         assert exit_code == 0
         # create_issue_from_prd should be called with queue_ready=False
         assert mock_create.call_args.kwargs["request"].queue_ready is False

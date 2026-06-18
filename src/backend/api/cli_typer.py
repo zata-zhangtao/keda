@@ -397,8 +397,11 @@ def issue_create_command(
     ] = IssueAgentChoice.auto,
     publish_prd: Annotated[
         bool,
-        typer.Option("--publish-prd", help="Publish the PRD before ready."),
-    ] = False,
+        typer.Option(
+            "--publish-prd/--no-publish-prd",
+            help="Publish the PRD before ready (default: on).",
+        ),
+    ] = True,
     force: Annotated[bool, typer.Option("--force", help="Bypass PRD checks.")] = False,
     group: Annotated[
         str,

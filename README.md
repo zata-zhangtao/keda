@@ -102,8 +102,8 @@ iar labels sync --repo-id keda
 ### 从 PRD 创建 Issue
 
 ```bash
-# 从 PRD 创建 GitHub Issue，标记为 ready 并发布 PRD
-iar issue create tasks/pending/example.md --repo-id keda --agent codex --publish-prd --ready
+# 从 PRD 创建 GitHub Issue，标记为 ready（默认发布 PRD）
+iar issue create tasks/pending/example.md --repo-id keda --agent codex --ready
 ```
 
 ### 运行 Agent

@@ -620,9 +620,9 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             if gc_config.enabled and gc_config.issue_from_prd.enabled:
                 if gc_config.issue_from_prd.mode == "agent":
                     content_generator = create_content_generator(process_runner)
-            # 当不显式 --publish-prd 时，先把 queue_ready 压成 False，
-            # 避免 Issue 还没发布就已经 ready，runner 在 worktree 里读到过时 PRD。
-            # 交互式 prompt 在 push 成功后再补 ready。
+            # publish_prd 默认开启；仅当用户显式 --no-publish-prd 时，
+            # 先把 queue_ready 压成 False，避免 Issue 还没发布就已经 ready，
+            # runner 在 worktree 里读到过时 PRD。交互式 prompt 在 push 成功后再补 ready。
             queue_ready_for_request = parsed.ready if parsed.publish_prd else False
             issue_url = create_issue_from_prd(
                 request=IssueFromPrdRequest(
