@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 220" role="img" aria-label="Keda - AI Agent + Clean Architecture template">
+  <defs>
+    <linearGradient id="heroBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="markGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="layer1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="layer2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#d946ef"/>
+    </linearGradient>
+    <linearGradient id="layer3" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#84cc16"/>
+    </linearGradient>
+    <linearGradient id="layer4" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="960" height="220" fill="url(#heroBg)" rx="14"/>
+
+  <!-- Logo mark: stacked layers forming a stylized K -->
+  <g transform="translate(60, 50)">
+    <rect x="0"  y="0"   width="120" height="22" rx="4" fill="url(#layer1)"/>
+    <rect x="14" y="30"  width="92"  height="22" rx="4" fill="url(#layer2)"/>
+    <rect x="28" y="60"  width="64"  height="22" rx="4" fill="url(#layer3)"/>
+    <rect x="42" y="90"  width="36"  height="22" rx="4" fill="url(#layer4)"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="230" y="100" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="56" font-weight="800" fill="#f8fafc" letter-spacing="-1">Keda</text>
+  <text x="232" y="135" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="15" font-weight="500" fill="#94a3b8" letter-spacing="0.5">
+    AI Agent Runner · Clean Architecture · Monorepo Template
+  </text>
+
+  <!-- Right-side badges -->
+  <g transform="translate(670, 60)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+     font-size="12" font-weight="600">
+    <g transform="translate(0, 0)">
+      <rect width="120" height="26" rx="13" fill="#1e293b" stroke="#334155"/>
+      <circle cx="14" cy="13" r="4" fill="#22c55e"/>
+      <text x="26" y="17" fill="#e2e8f0">Python ≥ 3.11</text>
+    </g>
+    <g transform="translate(0, 36)">
+      <rect width="120" height="26" rx="13" fill="#1e293b" stroke="#334155"/>
+      <circle cx="14" cy="13" r="4" fill="#60a5fa"/>
+      <text x="26" y="17" fill="#e2e8f0">uv + just</text>
+    </g>
+    <g transform="translate(0, 72)">
+      <rect width="120" height="26" rx="13" fill="#1e293b" stroke="#334155"/>
+      <circle cx="14" cy="13" r="4" fill="#a78bfa"/>
+      <text x="26" y="17" fill="#e2e8f0">Claude / Codex</text>
+    </g>
+  </g>
+
+  <!-- Bottom tagline -->
+  <line x1="60" y1="180" x2="900" y2="180" stroke="#334155" stroke-width="1"/>
+  <text x="60" y="205" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" fill="#94a3b8">
+    Turn GitHub Issues into a self-driving AI agent queue · worktrees · PRs
+  </text>
+</svg>

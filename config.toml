@@ -487,11 +487,12 @@ display_name = "Keda Main"
 history_db_path = "~/.iar/console.db"
 # 面板托管 runner 进程的注册表（JSON pidfile，后端重启后据此复活探活）。
 process_registry_path = "~/.iar/processes.json"
-# 托管进程的 stdout/stderr 日志目录（相对 keda 项目根）。
-process_log_dir = "logs/agent-runner/processes"
-# 托管进程的启动命令前缀。默认走 `uv run iar` 并以 keda 项目根为 cwd，
-# 因为全局安装的 iar 读不到项目本地 config.toml。
-runner_command = ["uv", "run", "iar"]
+# 托管进程的 stdout/stderr 日志目录。全局安装时使用绝对路径，
+# 避免依赖 keda 项目根。
+process_log_dir = "~/.iar/process-logs"
+# 托管进程的启动命令前缀。全局安装后直接使用 `iar`；
+# 在 keda 源码树内开发时可覆盖为 ["uv", "run", "iar"]。
+runner_command = ["iar"]
 # 停止进程时 SIGTERM 后等待多少秒升级为 SIGKILL。
 stop_timeout_seconds = 30
 

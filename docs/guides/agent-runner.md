@@ -443,6 +443,8 @@ include_diff_stat = true
 | `iar --repo /path/to/repo run` | 等价的顶层 selector 写法，适合把目标仓库放在命令前 |
 | `iar run --repo-id keda` | 从 legacy registry 找到路径，再合并目标仓库 `.iar.toml` |
 | `iar run --all` | 显式处理 `config.toml` 中所有 enabled registry entries |
+| `iar daemon` / `iar review-daemon` | 默认处理 `config.toml` 中所有 enabled registry entries |
+| `iar daemon --repo-id keda` | 仅处理指定仓库 |
 
 历史命令 `iar run-once`、`iar review-once`、`iar issue-from-prd` 和 `iar recover-publish` 已被删除；请改用 `iar run` / `iar review` / `iar issue create` / `iar recover`。
 
@@ -572,7 +574,7 @@ enabled = true
 - 每个仓库必须有 `path`（本地绝对路径）。
 - `enabled = false` 可临时禁用某个仓库。
 - registry 通常只保留 `path` 和 `enabled`；仓库级 overrides 仍兼容，但建议迁移到目标仓库的 `.iar.toml`。
-- 未指定 `--repo`、`--repo-id` 或 `--all` 时，单仓库命令只处理当前 Git 仓库，不会隐式处理所有 enabled registry entries。
+- 未指定 `--repo`、`--repo-id` 或 `--all` 时，单仓库命令（如 `iar run`、`iar review`）只处理当前 Git 仓库；`iar daemon` 和 `iar review-daemon` 例外，默认监控所有 enabled registry entries。
 
 迁移示例：
 
@@ -615,6 +617,81 @@ base_branch = "main"
 
 [agent_runner.runner]
 verification_commands = ["git diff --check", "uv run pytest"]
+```
+
+## 全局多仓库接管（`iar takeover`）
+
+全局安装 `iar` 后，你可以从任意目录直接接管 GitHub 仓库，无需手动 `git clone`、`iar init` 和编辑 registry。
+
+### 前置条件
+
+- 已全局安装 `iar`（见上文"安装"）。
+- 已登录 GitHub CLI：`gh auth login -h github.com`。
+- `iar` 会在首次需要时自动把默认配置复制到 `~/.iar/config.toml`，作为全局配置源。
+
+### 交互式接管
+
+```bash
+# 列出当前 gh 用户可见的仓库，勾选后自动接管
+iar takeover
+```
+
+流程：
+
+1. 检查 `gh` 登录状态。
+2. 调用 `gh repo list` 拉取仓库列表（默认 100 条）。
+3. 过滤掉已经注册且本地路径存在的仓库。
+4. 在终端展示 checkbox 多选界面，输入编号 toggle、`all` 全选、`none` 清空、`done` 确认、`quit` 取消。
+5. 对每个选中的仓库：
+   - `gh repo clone <owner>/<repo> ~/.iar/repos/<owner>/<repo>`
+   - 在新 clone 的仓库执行 `iar init`
+   - 写入 `~/.iar/config.toml` 的 `[agent_runner.repositories.<repo_id>]`
+6. 默认启动 `iar daemon` 和 `iar review-daemon` 两个托管子进程（默认监控所有已注册仓库）。
+
+### 非交互式与批量接管
+
+```bash
+# 直接指定仓库，适合脚本
+iar takeover --repos owner/repo-a owner/repo-b
+
+# 指定组织或用户
+iar takeover --owner myorg --limit 200
+
+# 指定 clone 根目录（默认 ~/.iar/repos）
+iar takeover --clone-root ~/iar-repos
+
+# 只接管，不启动 daemon
+iar takeover --repos owner/repo-a --no-start
+
+# 预览将要执行的操作，不写入任何文件
+iar takeover --repos owner/repo-a --dry-run
+```
+
+### 全局配置与进程日志
+
+接管后的仓库注册在 `~/.iar/config.toml` 中，托管进程使用：
+
+- `~/.iar/console.db`：运行历史与审计日志。
+- `~/.iar/processes.json`：托管进程 pidfile registry。
+- `~/.iar/process-logs/<repo_id>/`：daemon / review-daemon 的 stdout/stderr 日志。
+
+你可以通过现有 HTTP 管理终端查看、停止、重启这些进程（console 子命令可通过 FastAPI 服务或已暴露的 Typer 子命令访问，具体取决于部署方式）。
+
+### 接管后的日常命令
+
+```bash
+# 查看所有托管进程状态（通过 HTTP API）
+curl http://localhost:8000/api/v1/agent-runner/console/processes
+
+# 停止某个托管进程
+# 先在 list 响应中找到 process_id，再调用 stop 端点
+curl -X POST http://localhost:8000/api/v1/agent-runner/console/processes/<process-id>/stop
+
+# 查看进程日志
+curl 'http://localhost:8000/api/v1/agent-runner/console/processes/<process-id>/logs?offset=0'
+
+# 手动对某个接管的仓库跑一次
+iar run --repo-id owner-repo-a
 ```
 
 ## 状态流转与两阶段审查
@@ -781,13 +858,13 @@ iar run
 # 显式处理所有 enabled registry entries
 iar run --all
 
-# Daemon 模式（默认每 120 秒轮询一次，当前仓库）
+# Daemon 模式（默认每 120 秒轮询一次，所有已注册仓库）
 iar daemon
 
 # 单次 review 检查
 iar review
 
-# Review daemon 模式
+# Review daemon 模式（默认每 120 秒轮询一次，所有已注册仓库）
 iar review-daemon
 
 # 恢复发布失败（仅用于已完成审查后的 push/PR 收尾失败）
@@ -1975,7 +2052,7 @@ Overview 还会按 severity 汇总 `anomaly_count` 和 `anomaly_summary`（`warn
 
 管理终端按 `(repo_id, kind)` 托管 runner 子进程。**每个仓库一个
 daemon 进程**即获得多项目并发——不同仓库的 Issue 同时执行，互不阻塞
-（CLI 的 `iar daemon --all` 仍是单进程串行轮询，行为不变）。
+（CLI 的 `iar daemon` 默认监控所有已注册仓库，但在单个进程内串行轮询）。
 
 - 子进程以 `start_new_session` 脱离后端进程组：后端重启不影响执行中
   的 runner；重启后从 pidfile registry（`~/.iar/processes.json`）复活

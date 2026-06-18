@@ -8,6 +8,23 @@ version = "0.2.0"
 description = "Issue Agent Runner (iar) — turn GitHub Issues into a local AI agent queue."
 readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "zata"},
+]
+keywords = ["ai-agent", "clean-architecture", "monorepo-template", "issue-runner", "git-worktree"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
 dependencies = [
     "alembic>=1.18.4",
     "boto3>=1.37.0",

@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 560" role="img" aria-label="Keda backend clean architecture: four layers with strict dependency direction">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,3 L0,6 z" fill="#475569"/>
+    </marker>
+    <filter id="cardShadow" x="-5%" y="-5%" width="110%" height="120%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <text x="440" y="32" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="18" font-weight="700" fill="#0f172a">Backend Clean Architecture · 4-Layer Dependency</text>
+  <text x="440" y="52" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="12" fill="#64748b">依赖方向严格向下: api → core → engines → infrastructure</text>
+
+  <!-- API -->
+  <g filter="url(#cardShadow)">
+    <rect x="80" y="80" width="720" height="86" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+  </g>
+  <circle cx="120" cy="113" r="16" fill="#2563eb"/>
+  <text x="120" y="118" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" font-weight="700" fill="#fff">1</text>
+  <text x="150" y="115" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="16" font-weight="700" fill="#1e3a8a">API Layer · src/backend/api/</text>
+  <text x="150" y="138" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" fill="#334155">FastAPI · CLI (Typer) · WebSocket · 请求接入与路由</text>
+  <text x="150" y="156" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="11" fill="#64748b" font-style="italic">允许依赖: core/, engines/</text>
+
+  <line x1="440" y1="170" x2="440" y2="194" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Core -->
+  <g filter="url(#cardShadow)">
+    <rect x="80" y="200" width="720" height="86" rx="10" fill="#faf5ff" stroke="#7c3aed" stroke-width="2"/>
+  </g>
+  <circle cx="120" cy="233" r="16" fill="#7c3aed"/>
+  <text x="120" y="238" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" font-weight="700" fill="#fff">2</text>
+  <text x="150" y="235" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="16" font-weight="700" fill="#5b21b6">Core Layer · src/backend/core/</text>
+  <text x="150" y="258" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" fill="#334155">Use cases · Agent 编排 · 领域契约与业务规则</text>
+  <text x="150" y="276" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="11" fill="#64748b" font-style="italic">允许依赖: core/ 自身与 core/shared/interfaces/</text>
+
+  <line x1="440" y1="290" x2="440" y2="314" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Engines -->
+  <g filter="url(#cardShadow)">
+    <rect x="80" y="320" width="720" height="86" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+  </g>
+  <circle cx="120" cy="353" r="16" fill="#16a34a"/>
+  <text x="120" y="358" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" font-weight="700" fill="#fff">3</text>
+  <text x="150" y="355" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="16" font-weight="700" fill="#15803d">Engines Layer · src/backend/engines/</text>
+  <text x="150" y="378" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" fill="#334155">Skills · RAG · 可插拔能力 · 适配器与工厂</text>
+  <text x="150" y="396" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="11" fill="#64748b" font-style="italic">允许依赖: core/, infrastructure/</text>
+
+  <line x1="440" y1="410" x2="440" y2="434" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Infrastructure -->
+  <g filter="url(#cardShadow)">
+    <rect x="80" y="440" width="720" height="86" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="2"/>
+  </g>
+  <circle cx="120" cy="473" r="16" fill="#ea580c"/>
+  <text x="120" y="478" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" font-weight="700" fill="#fff">4</text>
+  <text x="150" y="475" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="16" font-weight="700" fill="#9a3412">Infrastructure · src/backend/infrastructure/</text>
+  <text x="150" y="498" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" fill="#334155">Models · Storage · HTTP · Config · Logging</text>
+  <text x="150" y="516" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="11" fill="#64748b" font-style="italic">仅允许依赖第三方包,禁止 import 任何本仓内层</text>
+</svg>

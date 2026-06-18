@@ -16,7 +16,8 @@
 #
 # Environment overrides:
 #   KEDA_VERSION       Tag to install (default: latest non-draft release).
-#   KEDA_PYPI=1        Install from PyPI (placeholder; reserved for future use).
+#   KEDA_SOURCE=auto|pypi|tarball  Install source (default: auto = GitHub tarball).
+#   KEDA_PYPI=1        Legacy alias for `--source pypi` (kept for backward compatibility).
 #   KEDA_INSTALL_METHOD=uv|pipx|pip  Force installer selection.
 
 set -euo pipefail
@@ -29,6 +30,10 @@ readonly TOOL_BIN_NAME="iar"
 
 INSTALL_METHOD="${KEDA_INSTALL_METHOD:-}"
 VERSION_TAG="${KEDA_VERSION:-}"
+SOURCE="${KEDA_SOURCE:-auto}"
+if [ "${KEDA_PYPI:-0}" = "1" ]; then
+    SOURCE="pypi"
+fi
 UNINSTALL_ONLY=0
 CHECK_ONLY=0
 SHORT_HELP=0
@@ -44,13 +49,15 @@ keda / iar installer
 Usage: install.sh [options]
   --version <tag>     Install a specific release tag (default: latest).
   --method uv|pipx|pip  Force a specific installer.
+  --source auto|pypi|tarball  Install source (default: auto = GitHub tarball).
   --check             Dry-run; print the plan without writing anything.
   --uninstall         Remove the keda tool environment and the iar binary.
   -h, --help          Show this help.
 
 Environment:
   KEDA_VERSION         Same as --version.
-  KEDA_PYPI=1          Reserved; install from PyPI when published.
+  KEDA_SOURCE=auto|pypi|tarball  Same as --source.
+  KEDA_PYPI=1          Legacy alias for `--source pypi`.
   KEDA_INSTALL_METHOD  Same as --method.
 EOF
 }
@@ -62,6 +69,8 @@ parse_args() {
             --version=*) VERSION_TAG="${1#*=}"; shift ;;
             --method) INSTALL_METHOD="${2:-}"; shift 2 ;;
             --method=*) INSTALL_METHOD="${1#*=}"; shift ;;
+            --source) SOURCE="${2:-}"; shift 2 ;;
+            --source=*) SOURCE="${1#*=}"; shift ;;
             --check) CHECK_ONLY=1; shift ;;
             --uninstall) UNINSTALL_ONLY=1; shift ;;
             -h|--help) show_help; exit 0 ;;
@@ -151,11 +160,18 @@ resolve_version() {
 }
 
 tarball_url() {
-    if [ "${KEDA_PYPI:-0}" = "1" ]; then
-        printf 'pypi:%s' "$DEFAULT_TOOL_NAME"
-    else
-        printf 'https://github.com/%s/archive/refs/tags/%s.tar.gz' "$REPO_SLUG" "$VERSION_TAG"
-    fi
+    case "$SOURCE" in
+        pypi)
+            printf 'pypi:%s' "$DEFAULT_TOOL_NAME"
+            ;;
+        auto|tarball)
+            printf 'https://github.com/%s/archive/refs/tags/%s.tar.gz' "$REPO_SLUG" "$VERSION_TAG"
+            ;;
+        *)
+            log_err "Unknown --source: $SOURCE (expected auto|pypi|tarball)"
+            exit 2
+            ;;
+    esac
 }
 
 print_plan() {
@@ -249,10 +265,7 @@ main() {
         return
     fi
 
-    if [ "${KEDA_PYPI:-0}" = "1" ]; then
-        log_warn "KEDA_PYPI=1 is a placeholder; falling back to GitHub tarball."
-    fi
-    log_info "Selected installer: ${INSTALL_METHOD}"
+    log_info "Selected installer: ${INSTALL_METHOD}; source: $(tarball_url)"
     run_install
     verify_iar
     log_info "Done. Run \`iar init\` inside a Git repository to start."

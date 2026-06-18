@@ -373,4 +373,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_options(workflow_install_parser)
 
+    takeover_parser = subparsers.add_parser(
+        "takeover",
+        help="Take over GitHub repositories: clone, init, register, and start daemons.",
+    )
+    takeover_parser.add_argument(
+        "--owner",
+        default=None,
+        help="GitHub user or organization whose repositories to list.",
+    )
+    takeover_parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum number of repositories to fetch from GitHub (default: 100).",
+    )
+    takeover_parser.add_argument(
+        "--clone-root",
+        default=None,
+        help="Directory where repositories will be cloned (default: ~/.iar/repos).",
+    )
+    takeover_parser.add_argument(
+        "--repos",
+        nargs="+",
+        default=[],
+        help="Non-interactive mode: list of owner/repo names to take over.",
+    )
+    takeover_parser.add_argument(
+        "--no-start",
+        action="store_true",
+        help="Take over repositories without starting daemon processes.",
+    )
+    takeover_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the takeover plan without making changes.",
+    )
+
     return parser

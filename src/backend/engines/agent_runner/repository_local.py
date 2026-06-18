@@ -706,8 +706,8 @@ def _detect_repository_id(
     if remote_url:
         remote_repo_name = _repository_name_from_remote_url(remote_url)
         if remote_repo_name:
-            return _normalize_repository_id(remote_repo_name)
-    return _normalize_repository_id(repo_root_path.name)
+            return normalize_repository_id(remote_repo_name)
+    return normalize_repository_id(repo_root_path.name)
 
 
 def _repository_name_from_remote_url(remote_url: str) -> str:
@@ -717,7 +717,7 @@ def _repository_name_from_remote_url(remote_url: str) -> str:
     return re.split(r"[:/]", trimmed_url)[-1]
 
 
-def _normalize_repository_id(raw_repo_name: str) -> str:
+def normalize_repository_id(raw_repo_name: str) -> str:
     normalized_repo_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_repo_name)
     stripped_repo_name = normalized_repo_name.strip("-_.").lower()
     return stripped_repo_name or "repository"
@@ -807,7 +807,7 @@ def discover_iar_repositories(
         repo_id = (
             local_settings.id
             if local_settings and local_settings.id
-            else _normalize_repository_id(directory.name)
+            else normalize_repository_id(directory.name)
         )
         display_name = (
             local_settings.display_name

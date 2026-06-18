@@ -424,6 +424,76 @@ def test_main_run_passes_all_repositories_selector() -> None:
     assert mock_run.call_args.kwargs["agent"] == "codex"
 
 
+def test_main_daemon_defaults_to_all_repositories(monkeypatch) -> None:
+    """daemon without selectors should default to all configured repositories."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
+        exit_code = main(["daemon"])
+
+    assert exit_code == 0
+    assert mock_resolve.call_args.kwargs["all_repositories"] is True
+
+
+def test_main_review_daemon_defaults_to_all_repositories(monkeypatch) -> None:
+    """review-daemon without selectors should default to all configured repositories."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ) as mock_resolve, patch("backend.api.cli.run_review_daemon"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
+        exit_code = main(["review-daemon"])
+
+    assert exit_code == 0
+    assert mock_resolve.call_args.kwargs["all_repositories"] is True
+
+
+def test_main_daemon_with_repo_id_does_not_default_to_all(monkeypatch) -> None:
+    """daemon with --repo-id should still target only the specified repository."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "keda"
+    mock_context.display_name = "Keda"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
+        exit_code = main(["daemon", "--repo-id", "keda"])
+
+    assert exit_code == 0
+    assert mock_resolve.call_args.kwargs["repo_id"] == "keda"
+    assert mock_resolve.call_args.kwargs["all_repositories"] is False
+
+
 def test_main_typer_top_level_repo_selector_is_honored() -> None:
     """Typer entrypoint should accept repository selectors before the command."""
     from backend.api.cli import main
@@ -1599,3 +1669,122 @@ def test_main_workflow_install_rejects_global_repo_id_flag(
 
     assert exit_code == 1
     assert not (tmp_path / "deploy").exists()
+
+
+def test_cli_parser_takeover_defaults() -> None:
+    """takeover should have sensible defaults."""
+    parser = build_parser()
+    parsed = parser.parse_args(["takeover"])
+    assert parsed.command == "takeover"
+    assert parsed.owner is None
+    assert parsed.limit == 100
+    assert parsed.clone_root is None
+    assert parsed.repos == []
+    assert parsed.no_start is False
+    assert parsed.dry_run is False
+
+
+def test_cli_parser_takeover_with_options() -> None:
+    """takeover should accept all defined options."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        [
+            "takeover",
+            "--owner",
+            "myorg",
+            "--limit",
+            "50",
+            "--clone-root",
+            "/tmp/repos",
+            "--repos",
+            "owner/repo-a",
+            "owner/repo-b",
+            "--no-start",
+            "--dry-run",
+        ]
+    )
+    assert parsed.command == "takeover"
+    assert parsed.owner == "myorg"
+    assert parsed.limit == 50
+    assert parsed.clone_root == "/tmp/repos"
+    assert parsed.repos == ["owner/repo-a", "owner/repo-b"]
+    assert parsed.no_start is True
+    assert parsed.dry_run is True
+
+
+def test_main_takeover_rejects_unauthenticated_gh(capsys) -> None:
+    """takeover should fail gracefully when gh is not authenticated."""
+    from backend.api.cli import main
+
+    auth_client = MagicMock()
+    auth_client.check_auth_status.return_value = MagicMock(
+        authenticated=False,
+        failure_reason="not logged in",
+        account=None,
+    )
+
+    with patch(
+        "backend.api.cli.create_github_client",
+        return_value=auth_client,
+    ):
+        exit_code = main(["takeover"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    combined = f"{captured.out}\n{captured.err}"
+    assert "GitHub CLI" in combined
+    assert "gh auth login" in combined
+
+
+def test_main_takeover_noninteractive_repos(capsys, monkeypatch) -> None:
+    """takeover --repos should bypass interactive selection and execute."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    auth_client = MagicMock()
+    auth_client.check_auth_status.return_value = MagicMock(
+        authenticated=True,
+        failure_reason=None,
+        account="user",
+    )
+
+    mock_result = MagicMock()
+    mock_result.attempted = 1
+    mock_result.succeeded = 1
+    mock_result.started_daemons = 0
+    mock_result.started_review_daemons = 0
+    mock_result.repositories = (
+        MagicMock(
+            full_name="owner/repo-a",
+            repo_id="owner-repo-a",
+            repo_path=Path("/tmp/repos/owner/repo-a"),
+            error=None,
+        ),
+    )
+
+    with patch(
+        "backend.api.cli.create_github_client",
+        return_value=auth_client,
+    ), patch(
+        "backend.api.cli.select_repositories_interactive",
+        side_effect=AssertionError("should not be called in non-interactive mode"),
+    ), patch(
+        "backend.api.cli.execute_takeover",
+        return_value=mock_result,
+    ) as mock_execute:
+        exit_code = main(
+            [
+                "takeover",
+                "--repos",
+                "owner/repo-a",
+                "--clone-root",
+                "/tmp/repos",
+                "--no-start",
+            ]
+        )
+
+    assert exit_code == 0
+    mock_execute.assert_called_once()
+    captured = capsys.readouterr()
+    assert "Takeover complete" in captured.out

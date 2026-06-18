@@ -44,13 +44,64 @@ def _resolve_project_root_from_settings_path(settings_path: Path) -> Path:
 _PROJECT_ROOT_PATH: Path = _resolve_project_root_from_settings_path(_SETTINGS_FILE_PATH)
 
 
+def _global_iar_dir() -> Path:
+    """Return the global IAR state directory under the user's home."""
+    return Path.home() / ".iar"
+
+
+def _ensure_global_config_toml() -> Path | None:
+    """Ensure ``~/.iar/config.toml`` exists, seeding from the source root.
+
+    This provides a stable configuration home for globally-installed ``iar``
+    invocations outside any project directory.
+    """
+    global_dir = _global_iar_dir()
+    global_config = global_dir / "config.toml"
+    if global_config.is_file():
+        return global_config
+    source_config = _PROJECT_ROOT_PATH / "config.toml"
+    if not source_config.is_file():
+        return None
+    try:
+        global_dir.mkdir(parents=True, exist_ok=True)
+        global_config.write_text(
+            source_config.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        return global_config
+    except OSError:
+        return None
+
+
 def _find_config_toml() -> Path | None:
-    """从当前工作目录向上查找 config.toml，回退到源码根目录。"""
+    """Resolve the effective config.toml using the standard search order.
+
+    Search order:
+    1. ``IAR_CONFIG`` environment variable, if set.
+    2. Walk upward from the current working directory.
+    3. ``~/.iar/config.toml`` (seeded from the source root if missing).
+    4. keda source root config.toml.
+    """
+    env_config = os.environ.get("IAR_CONFIG")
+    if env_config:
+        env_path = Path(env_config).expanduser()
+        if env_path.is_file():
+            return env_path
+        if env_path.is_dir():
+            candidate = env_path / "config.toml"
+            if candidate.is_file():
+                return candidate
+
     cwd = Path.cwd()
     for path in [cwd, *cwd.parents]:
         candidate = path / "config.toml"
         if candidate.is_file():
             return candidate
+
+    global_config = _ensure_global_config_toml()
+    if global_config is not None:
+        return global_config
+
     fallback = _PROJECT_ROOT_PATH / "config.toml"
     if fallback.is_file():
         return fallback

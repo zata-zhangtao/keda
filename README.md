@@ -1,10 +1,26 @@
 # Keda
 
+<p align="center">
+  <img src="./assets/diagrams/hero.svg" alt="Keda · AI Agent Runner · Clean Architecture · Monorepo Template" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/zata-zhangtao/keda/stargazers"><img src="https://img.shields.io/github/stars/zata-zhangtao/keda?style=flat-square" alt="GitHub Stars"></a>
+  <a href="https://github.com/zata-zhangtao/keda/network/members"><img src="https://img.shields.io/github/forks/zata-zhangtao/keda?style=flat-square" alt="GitHub Forks"></a>
+  <a href="https://github.com/zata-zhangtao/keda/issues"><img src="https://img.shields.io/github/issues/zata-zhangtao/keda?style=flat-square" alt="GitHub Issues"></a>
+  <a href="https://github.com/zata-zhangtao/keda/pulls"><img src="https://img.shields.io/github/issues-pr/zata-zhangtao/keda?style=flat-square" alt="GitHub PRs"></a>
+  <img src="https://img.shields.io/badge/python-≥3.11-blue?style=flat-square" alt="Python">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0-blue?style=flat-square" alt="License: Apache-2.0"></a>
+  <a href="https://pypi.org/project/keda/"><img src="https://img.shields.io/pypi/v/keda?style=flat-square" alt="PyPI"></a>
+</p>
+
 > 面向 AI Agent 与通用 Python 工程实践的模块化单体项目模板。基于 Clean Architecture 四层架构，内置 `iar`（issue-agent-runner）CLI，支持将 GitHub Issues 转为本地 AI Agent 队列并自动管理 Worktree 生命周期。
 
 ## 一键安装
 
-无需克隆仓库，直接在新机器上安装 `iar` CLI：
+无需克隆仓库，直接在新机器上安装 `iar` CLI。安装器会自动选择 `uv` / `pipx` / `pip --user` 中可用的那个，零 sudo，失败有明确提示。详见 `docs/getting-started/installation.md`。
+
+**默认安装（从 GitHub release tarball）：**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zata-zhangtao/keda/main/install.sh | bash
@@ -12,9 +28,32 @@ iar --version
 iar init   # 在任意 Git 仓库内运行，会自动写入 .iar.toml 并复制 prd / code-reviewer 两个 Skill
 ```
 
-安装器会自动选择 `uv` / `pipx` / `pip --user` 中可用的那个，零 sudo，失败有明确提示。详见 `docs/getting-started/installation.md`。
+**从 PyPI 安装（keda 已发布到 PyPI 后可用）：**
 
-> 想从 PyPI 安装？设置 `KEDA_PYPI=1` 走占位钩子（PyPI 发布留待后续 PRD）。
+```bash
+curl -fsSL https://raw.githubusercontent.com/zata-zhangtao/keda/main/install.sh | bash -s -- --source pypi
+iar --version
+```
+
+也可以绕过 install.sh，直接用包管理器安装：
+
+```bash
+uv tool install keda          # 推荐：uv 隔离环境
+# 或
+pip install --user keda       # 兜底：用户级安装
+```
+
+**安装参数速查：**
+
+| 选项 | 说明 |
+|------|------|
+| `--version <tag>` | 安装指定 release tag（默认: latest） |
+| `--method uv\|pipx\|pip` | 强制使用指定安装器（默认自动选择） |
+| `--source auto\|pypi\|tarball` | 安装源（默认: `auto` = GitHub tarball） |
+| `--check` | dry-run，只打印计划 |
+| `--uninstall` | 卸载 keda 工具环境与 iar binary |
+
+环境变量等价：`KEDA_VERSION`、`KEDA_INSTALL_METHOD`、`KEDA_SOURCE`、`KEDA_PYPI=1`（legacy，等价于 `--source pypi`）。
 
 ## 前置要求
 
@@ -30,31 +69,22 @@ iar init   # 在任意 Git 仓库内运行，会自动写入 .iar.toml 并复制
 git clone <repository-url>
 cd keda
 
-# 2. 一键初始化开发环境（安装依赖 + pre-commit hooks）
-just dev
+# 2. 初始化开发环境（安装依赖 + pre-commit hooks）
+uv sync --all-extras
+uv run pre-commit install
 
-# 3. 启动服务（后端 + 前端）
-just run
+# 3. 启动服务（后端 + 前端，分别开两个终端）
+uv run python -m backend.main          # 后端（默认 8000 端口）
+cd frontend && npm run dev             # 前端（默认 5173 端口）
 ```
 
-## 常用命令速查
-
-| 命令 | 说明 |
-|------|------|
-| `just dev` | 初始化开发环境（含 pre-commit hooks） |
-| `just run` | 同时启动后端和前端 |
-| `just run backend` | 仅启动后端 |
-| `just run frontend` | 仅启动前端 |
-| `just run docker` | 使用 Docker Compose 启动 |
-| `just test` | 运行本地测试（无需 API Key） |
-| `just test all` | 运行全部测试 |
-| `just lint` | 对暂存文件运行代码检查 |
-| `just lint --full` | 对全部文件运行代码检查 |
-| `just docs-serve` | 启动 MkDocs 文档服务（默认端口 8000） |
-| `just clean` | 清理缓存和构建产物 |
-| `just reinstall-iar` | 重装全局 `iar` CLI（依赖变更后） |
+> 项目提供了 `justfile` 作为便捷封装（如 `just dev`、`just run`、`just test`），如果你使用 [just](https://github.com/casey/just)，可以直接调用。下文只列出底层命令。
 
 ## `iar` CLI 使用说明
+
+<p align="center">
+  <img src="./assets/diagrams/iar-workflow.svg" alt="iar pipeline: GitHub issue to pull request" width="100%">
+</p>
 
 `iar`（issue-agent-runner）是本项目的核心工具，用于将 GitHub Issues 转为本地 AI Agent 任务队列，自动创建 Git Worktree 并驱动 Agent 执行。
 
@@ -70,10 +100,10 @@ uv tool install --reinstall --editable .
 uv tool install --reinstall --editable /path/to/keda
 ```
 
-`uv tool install` 的参数应是项目目录或包名，不要传入 `README.md` 等普通文件路径。当 `pyproject.toml` 的依赖或 CLI 入口变更后，需要重新执行可编辑安装命令；也可使用项目内置命令重装：
+`uv tool install` 的参数应是项目目录或包名，不要传入 `README.md` 等普通文件路径。当 `pyproject.toml` 的依赖或 CLI 入口变更后，需要重新执行可编辑安装命令：
 
 ```bash
-just reinstall-iar
+uv tool install --reinstall --editable .
 ```
 
 安装后可直接使用 `iar <command>`；未安装时可用 `uv run iar <command>` 代替。CLI 基于 Typer/Rich，`iar --help` 会展示分组命令、参数和别名。
@@ -132,8 +162,14 @@ iar run
 # 处理 registry 中所有启用的仓库
 iar run --all
 
-# Daemon 模式轮询（默认每 600 秒）
+# Daemon 模式轮询（默认每 120 秒，监控所有已注册仓库）
 iar daemon
+
+# Review daemon 模式轮询（默认每 120 秒，监控所有已注册仓库）
+iar review-daemon
+
+# 只监控单个仓库
+iar daemon --repo-id keda
 ```
 
 ### 自然语言决策入口（`iar ask`）
@@ -197,32 +233,32 @@ enabled = true
 
 ## Git Worktree 工作流
 
-本项目内置强大的 Git Worktree 辅助命令，用于隔离开发环境：
+本项目内置 Git Worktree 脚本，用于隔离开发环境：
 
 ```bash
 # 创建并进入新 worktree（自动同步远程 base branch）
-just worktree feature-branch
+./scripts/shared/worktree/create.sh feature-branch
 
-# 基于远程分支创建 worktree（自动检测 checkout）
-just worktree feature-login
+# 基于远程分支创建 worktree
+./scripts/shared/worktree/create.sh feature-login --checkout origin/feature-login
 
 # 指定来源分支
-just worktree issue-15 --checkout zata/issue-15
+./scripts/shared/worktree/create.sh issue-15 --checkout zata/issue-15
 
 # 强制新建本地分支（忽略同名远程分支）
-just worktree feature-x --new
+./scripts/shared/worktree/create.sh feature-x --new
 
 # 打开已有 worktree
-just worktree -o feature-branch
+./scripts/shared/worktree/open.sh feature-branch
 
 # 合并 worktree 并清理
-just worktree -m feature-branch
+./scripts/shared/worktree/merge.sh feature-branch
 
 # 删除 worktree
-just worktree -d feature-branch
+./scripts/shared/worktree/merge.sh feature-branch -d
 
 # 诊断 worktree 状态
-just worktree --doctor
+./scripts/shared/worktree/merge.sh --doctor
 ```
 
 创建 worktree 后会自动安装 Python 和前端依赖。
@@ -231,37 +267,38 @@ just worktree --doctor
 
 ```bash
 # 从 PRD 自动创建 worktree 并启动 AI 工具
-just implement tasks/pending/feature-x.md clauded "请根据 PRD 实现该功能"
-
-# 省略 prompt 时使用默认提示
-just implement tasks/pending/feature-x.md kim
+./scripts/shared/worktree/create.sh feature-x --subdir tasks
+cp tasks/pending/feature-x.md ../tasks/feature-x/tasks/pending/feature-x.md
+# 然后在 worktree 中启动 AI 工具执行 PRD
 ```
+
+> 更完整的 PRD → worktree → AI 实现流程可参考 `justfile.shared` 中的 `implement` recipe。
 
 ## 测试
 
 ```bash
-# 运行本地测试（无需 API Key，自动先运行 lint）
-just test
+# 运行本地测试（无需 API Key）
+uv run pytest tests/ -v
 
 # 运行全部测试
-just test all
+uv run pytest tests/ -v
 
 # 运行需要真实 API 的测试
-just test real
+uv run pytest tests/ -v -k "expensive or not expensive"
 
 # 运行 Playwright E2E 测试（需先安装）
-just e2e-install
-just e2e
-just e2e smoke      # 仅冒烟测试
-just e2e no-auth    # 无需登录的公开页面测试
-just e2e report     # 打开测试报告
+cd tests/playwright-e2e && npm install && npx playwright install chromium
+cd tests/playwright-e2e && npm test
+cd tests/playwright-e2e && npm run test:smoke      # 仅冒烟测试
+cd tests/playwright-e2e && npm run test:no-auth    # 无需登录的公开页面测试
+cd tests/playwright-e2e && npm run report          # 打开测试报告
 ```
 
 ## 文档
 
 ```bash
-# 本地预览（带热重载）
-just docs-serve
+# 本地预览（带热重载，默认 8000 端口）
+WATCHDOG_USE_POLLING=1 uv run mkdocs serve -a 127.0.0.1:8000
 
 # 构建静态文档
 uv run mkdocs build --strict
@@ -281,6 +318,12 @@ uv run mkdocs build --strict
 
 ## 架构概览
 
+<p align="center">
+  <img src="./assets/diagrams/architecture.svg" alt="Backend clean architecture: four layers with strict dependency direction" width="100%">
+</p>
+
+源码目录约定：
+
 ```
 src/backend/
   api/           → 请求接入层（API、WebSocket、CLI）
@@ -289,13 +332,13 @@ src/backend/
   infrastructure/ → 基础设施层（模型、存储、HTTP、配置、日志）
 ```
 
-依赖方向严格向下：`api → core → engines → infrastructure`
+依赖方向严格向下：`api → core → engines → infrastructure`，由 `hooks/check_architecture.py` 在 pre-commit 强制校验。
 
 ## Docker 部署
 
 ```bash
-# 一键 Docker Compose 启动
-just run docker
+# Docker Compose 启动
+docker compose up --build
 ```
 
 详见 `docker-compose.yml` 和 `docker-compose.dokploy.yml`。
@@ -311,4 +354,24 @@ just run docker
 
 ## 许可证
 
-[请添加许可证信息]
+本项目基于 **Apache License 2.0** 开源发布 —— 你可以自由使用、修改、分发，也可以将其用于商业产品，但需保留版权声明并随分发物附带 `LICENSE` 文件。
+
+```
+Copyright 2026 zata
+Licensed under the Apache License, Version 2.0
+```
+
+完整文本见 [`LICENSE`](./LICENSE)。Apache 2.0 的关键条款：
+
+- ✅ 商用、私有 fork、修改、再分发
+- ✅ 授予使用者**专利使用权**（patent grant）
+- ⚠️ 必须保留版权、商标与归属声明
+- ⚠️ 修改文件需显著标注
+- 🚫 不得使用 `keda` / `iar` 商标暗示官方背书
+
+## 致谢
+
+- [FastAPI](https://github.com/tiangolo/fastapi) · [Typer](https://github.com/tiangolo/typer) · [Rich](https://github.com/Textualize/rich) — 后端 & CLI 栈
+- [uv](https://github.com/astral-sh/uv) · [just](https://github.com/casey/just) — 工具链
+- [MkDocs Material](https://github.com/squidfunk/mkdocs-material) — 文档站
+- [Anthropic Claude](https://www.anthropic.com/) · [OpenAI Codex](https://openai.com/) — 驱动 `iar` 的 AI Agent

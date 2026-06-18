@@ -872,6 +872,56 @@ def worktree_cleanup_command(
     )
 
 
+@app.command("takeover")
+def takeover_command(
+    owner: Annotated[
+        str | None,
+        typer.Option(
+            "--owner", help="GitHub user or organization whose repositories to list."
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option(
+            "--limit", help="Maximum number of repositories to fetch from GitHub."
+        ),
+    ] = 100,
+    clone_root: Annotated[
+        str | None,
+        typer.Option(
+            "--clone-root", help="Directory where repositories will be cloned."
+        ),
+    ] = None,
+    repos: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--repos",
+            help="Non-interactive mode: owner/repo names to take over.",
+        ),
+    ] = None,
+    no_start: Annotated[
+        bool,
+        typer.Option("--no-start", help="Take over without starting daemon processes."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Preview the takeover plan without making changes."
+        ),
+    ] = False,
+) -> int:
+    """Take over GitHub repositories: clone, init, register, and start daemons."""
+    return _run_typer_command(
+        "takeover",
+        owner=owner,
+        limit=limit,
+        clone_root=clone_root,
+        repos=tuple(repos or ()),
+        start_daemons=not no_start,
+        dry_run=dry_run,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the Typer-powered CLI."""
     args = sys.argv[1:] if argv is None else argv
