@@ -56,6 +56,7 @@ from backend.engines.agent_runner.factory import (
     create_github_client,
     create_planner_runner,
     create_process_runner,
+    create_registry_editor,
     create_transcript_runner,
     get_agent_runner_settings,
     logger,
@@ -64,7 +65,13 @@ from backend.engines.agent_runner.factory import (
     write_deliberation_outputs,
 )
 from backend.engines.agent_runner.live_terminal import create_output_view
-from backend.engines.agent_runner.factory import create_registry_editor
+from backend.engines.agent_runner.init_flow import (
+    BundledSkillCopyOptions,
+    DEFAULT_BUNDLED_SKILL_NAMES,
+    copy_bundled_skills,
+    format_skill_copy_plan,
+    format_skill_copy_summary,
+)
 from backend.engines.agent_runner.repository_local import (
     IARRepositoryNotInitializedError,
     RepositoryInitOptions,
@@ -293,6 +300,114 @@ def _handle_not_initialized_error(exc: IARRepositoryNotInitializedError) -> int:
     return 1
 
 
+def _run_init_command(
+    parsed: argparse.Namespace, process_runner: IProcessRunner
+) -> int:
+    """Render / write the local config, copy bundled skills, sync labels."""
+    try:
+        init_result = initialize_repository_local_config(
+            RepositoryInitOptions(
+                cwd=Path.cwd(),
+                repo_id_override=parsed.repository_id,
+                display_name_override=parsed.display_name,
+                remote_override=parsed.remote,
+                base_branch_override=parsed.base_branch,
+                dry_run=parsed.dry_run,
+                force=parsed.force,
+            ),
+            process_runner,
+        )
+    except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
+        logger.error("iar init failed: %s", exc)
+        return 1
+    if parsed.dry_run:
+        print(init_result.config_text, end="")
+        console.print(
+            f"[cyan]{format_skill_copy_plan(init_result.repo_root_path)}[/]",
+            markup=False,
+        )
+        return 0
+    console.print(f"[green]Wrote IAR local config:[/] {init_result.config_path}")
+    copy_skills_flag = (
+        False
+        if getattr(parsed, "skip_skills", False)
+        else str(getattr(parsed, "copy_skills", "true")).lower() != "false"
+    )
+    try:
+        skill_result = copy_bundled_skills(
+            BundledSkillCopyOptions(
+                repo_root_path=init_result.repo_root_path,
+                force=parsed.force,
+                dry_run=False,
+                skip=not copy_skills_flag,
+                skill_names=DEFAULT_BUNDLED_SKILL_NAMES,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        error_console.print(f"[yellow]Bundled skill copy failed:[/] {exc}")
+    else:
+        for line in format_skill_copy_summary(skill_result):
+            if line.startswith("Copied skill"):
+                console.print(f"[green]{line}[/]")
+            elif line.startswith(("Overwrote skill", "Skill diverged")):
+                console.print(f"[yellow]{line}[/]")
+            elif line.startswith("Skill already up to date"):
+                console.print(f"[dim]{line}[/]")
+            else:
+                console.print(line)
+    try:
+        sync_labels(
+            labels_config=LabelConfig(),
+            github_client=create_github_client(
+                init_result.repo_root_path, process_runner
+            ),
+        )
+        console.print(f"[green]Labels synced for:[/] {init_result.repo_root_path}")
+    except Exception as exc:  # noqa: BLE001
+        error_console.print(f"[yellow]Label sync failed:[/] {exc}")
+    return 0
+
+
+def _print_workflow_config_plan(config_plan, *, dry_run: bool) -> None:
+    """Print the [preview] section status after workflow install."""
+    if config_plan is None:
+        console.print(
+            "config.toml not found at repo root; skipping [preview] section write",
+            markup=False,
+            style="dim",
+        )
+        return
+    if config_plan.parse_failed:
+        console.print(
+            "config.toml 解析失败，跳过 [preview] 段写入",
+            markup=False,
+            style="yellow",
+        )
+        return
+    if config_plan.will_overwrite_preview_section:
+        label = "Would overwrite" if dry_run else "Overwrote"
+        console.print(
+            f"{label} existing [preview] section",
+            markup=False,
+            style="yellow",
+        )
+        return
+    if config_plan.will_write_new_section:
+        label = "Would append" if dry_run else "Appended"
+        console.print(
+            f"{label} [preview] section",
+            markup=False,
+            style="green",
+        )
+        return
+    suffix = "use --force to overwrite" if dry_run else "pass --force to overwrite"
+    console.print(
+        f"[preview] section already exists; {suffix}",
+        markup=False,
+        style="dim",
+    )
+
+
 def _run_parsed_command(parsed: argparse.Namespace) -> int:
     """Run a command after CLI arguments have been parsed."""
     if parsed.config:
@@ -315,39 +430,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 "iar init uses the current Git repository; omit --repo/--repo-id."
             )
             return 1
-        try:
-            init_result = initialize_repository_local_config(
-                RepositoryInitOptions(
-                    cwd=Path.cwd(),
-                    repo_id_override=parsed.repository_id,
-                    display_name_override=parsed.display_name,
-                    remote_override=parsed.remote,
-                    base_branch_override=parsed.base_branch,
-                    dry_run=parsed.dry_run,
-                    force=parsed.force,
-                ),
-                process_runner,
-            )
-        except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
-            logger.error("iar init failed: %s", exc)
-            return 1
-        if parsed.dry_run:
-            print(init_result.config_text, end="")
-            return 0
-
-        logger.info("Wrote IAR local config: %s", init_result.config_path)
-        console.print(f"[green]Wrote IAR local config:[/] {init_result.config_path}")
-        try:
-            github_client = create_github_client(
-                init_result.repo_root_path, process_runner
-            )
-            sync_labels(labels_config=LabelConfig(), github_client=github_client)
-            logger.info("Labels synced for: %s", init_result.repo_root_path)
-            console.print(f"[green]Labels synced for:[/] {init_result.repo_root_path}")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Label sync failed (labels may already exist): %s", exc)
-            error_console.print(f"[yellow]Label sync failed:[/] {exc}")
-        return 0
+        return _run_init_command(parsed, process_runner)
 
     if parsed.command == "workflow install":
         if (
@@ -393,76 +476,22 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     "  %s %s (%d bytes)"
                     % (marker, plan.target_path, plan.bytes_to_write)
                 )
-            if install_result.config_toml_plan is None:
-                console.print(
-                    "config.toml not found at repo root; skipping [preview] section write",
-                    markup=False,
-                    style="dim",
-                )
-            elif install_result.config_toml_plan.parse_failed:
-                console.print(
-                    "config.toml 解析失败，跳过 [preview] 段写入",
-                    markup=False,
-                    style="yellow",
-                )
-            elif install_result.config_toml_plan.will_overwrite_preview_section:
-                console.print(
-                    "Would overwrite existing [preview] section",
-                    markup=False,
-                    style="yellow",
-                )
-            elif install_result.config_toml_plan.will_write_new_section:
-                console.print(
-                    "Would append [preview] section",
-                    markup=False,
-                    style="green",
-                )
-            else:
-                console.print(
-                    "[preview] section already exists; use --force to overwrite",
-                    markup=False,
-                    style="dim",
-                )
+            _print_workflow_config_plan(install_result.config_toml_plan, dry_run=True)
             return 0
 
         for plan in install_result.template_file_plans:
             if plan.exists_on_disk and install_result.refused_template_paths:
                 continue
-            marker = (
-                "[green]Wrote[/]" if not plan.exists_on_disk else "[yellow]Overwrote[/]"
-            )
-            console.print("%s %s" % (marker, plan.target_path))
-        config_plan = install_result.config_toml_plan
-        if config_plan is None:
             console.print(
-                "config.toml not found at repo root; skipping [preview] section write",
-                markup=False,
-                style="dim",
+                "%s %s"
+                % (
+                    "[green]Wrote[/]"
+                    if not plan.exists_on_disk
+                    else "[yellow]Overwrote[/]",
+                    plan.target_path,
+                )
             )
-        elif config_plan.parse_failed:
-            console.print(
-                "config.toml 解析失败，跳过 [preview] 段写入",
-                markup=False,
-                style="yellow",
-            )
-        elif config_plan.will_overwrite_preview_section:
-            console.print(
-                "Overwrote existing [preview] section",
-                markup=False,
-                style="yellow",
-            )
-        elif config_plan.will_write_new_section:
-            console.print(
-                "Appended [preview] section",
-                markup=False,
-                style="green",
-            )
-        else:
-            console.print(
-                "[preview] section already exists; pass --force to overwrite",
-                markup=False,
-                style="dim",
-            )
+        _print_workflow_config_plan(install_result.config_toml_plan, dry_run=False)
         return 0
 
     if parsed.command == "registry scan":

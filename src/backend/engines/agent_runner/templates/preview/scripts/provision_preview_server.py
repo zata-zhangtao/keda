@@ -721,16 +721,19 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.key and not args.password:
         parser.error("Provide either --key (preferred) or --password")
-    if args.password and not shutil.which("sshpass"):
-        parser.error(
-            "--password requires sshpass. Install it: "
-            "brew install sshpass (macOS) or apt install sshpass (Debian/Ubuntu)"
-        )
     return args
 
 
 def main() -> int:
     args = parse_args()
+    # Runtime check (kept out of parse_args so argument parsing can be exercised
+    # in tests and `--help` output without sshpass being installed locally).
+    if args.password and not shutil.which("sshpass"):
+        sys.stderr.write(
+            "ERROR: --password requires sshpass. Install it: "
+            "brew install sshpass (macOS) or apt install sshpass (Debian/Ubuntu)\n"
+        )
+        return 4
     remote = Remote(args)
 
     print(f"==> Opening SSH control master to {args.user}@{args.host}:{args.port}")

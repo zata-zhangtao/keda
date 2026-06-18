@@ -1,0 +1,73 @@
+name: Install smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: install-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-smoke:
+    name: Install + iar init on ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
+    env:
+      KEDA_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Run install.sh --check (local)
+        run: bash install.sh --check
+
+      - name: Install keda from local checkout (editable + reinstall)
+        run: |
+          uv tool install --reinstall --editable .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          iar --version
+
+      - name: Exercise iar init in a throwaway git repo
+        run: |
+          tmp_repo="$(mktemp -d)"
+          git -C "$tmp_repo" init -q
+          git -C "$tmp_repo" checkout -q -b main
+          git -C "$tmp_repo" config user.email "smoke@example.com"
+          git -C "$tmp_repo" config user.name "Install Smoke"
+          cd "$tmp_repo"
+          iar init --dry-run
+          iar init
+          test -f "$tmp_repo/.claude/skills/prd/SKILL.md"
+          test -f "$tmp_repo/.claude/skills/code-reviewer/SKILL.md"
+          iar init  # second run should be a no-op for skills
+
+      - name: "Optional: install from raw GitHub URL (release tag only)"
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          curl --max-time 60 -fsSL \
+            "https://raw.githubusercontent.com/${KEDA_REPO}/${GITHUB_REF_NAME}/install.sh" \
+            -o /tmp/install.sh
+          bash /tmp/install.sh --check
