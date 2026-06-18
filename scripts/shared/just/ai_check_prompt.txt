@@ -1,0 +1,17 @@
+You are reviewing a single file in this project for compliance, staleness, and improvement opportunities.
+
+File to review: <FILE_PATH>
+
+First, read the file at <FILE_PATH> end-to-end. Then read the project standards that are most relevant to it (start with `docs/ai-standards/index.md` and follow the per-topic pages it links to — architecture, naming, comments-docstrings, documentation, testing, tooling). For backend files (anything under `src/backend/`), also read `docs/architecture/system-design.md` as the authoritative layer-placement and dependency-direction reference. For files under `docs/`, also re-check the corresponding `mkdocs.yml` `nav:` entry and prefer `mkdocstrings` directives over hand-copied Python signatures.
+
+Group your findings into three categories. Report ALL of them — if a category is empty, say "none" for that one rather than skipping it.
+
+1. **Stale references** — places in the file that mention a function, class, file path, command, just recipe, or env var that no longer exists in the repo. Verify each one yourself (use `rg`, `grep`, `ls`, `git log`, etc.) before reporting it. For each finding give: the current line, what it references, and the evidence that it's gone (or the rename that replaces it).
+
+2. **Outdated patterns** — code or doc patterns that worked under an older version of the standards above but now contradict the current rules. Examples: variable names like `data` / `res` / `tmp` (violates fully qualified naming), imports that cross the four-layer dependency direction, docstrings missing `Args` / `Returns` / `Raises`, hardcoded paths that should be env vars, missing `encoding="utf-8"` on text I/O, references to removed just recipes.
+
+3. **Proactive improvements** — even where the file does not strictly violate any rule, suggest concrete changes that would align it better with current project conventions (clearer SSA-style names, better placement in the four-layer architecture, more accurate docstring, replacing a manual list with a call into `src/backend/core/`, etc.).
+
+For each finding, give: the location (path:line when possible), the current text, why it's a problem, and a concrete recommended fix. If the file is fully clean across all three categories, say so explicitly.
+
+Do NOT modify the file. After you finish the report, stay in interactive mode so I can ask follow-up questions, drill into specific findings, or request targeted edits one at a time.

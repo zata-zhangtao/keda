@@ -815,9 +815,7 @@ function ai_worktree() {
             -not -path "$repo_root_path/.git/*" \
             -not -path "$repo_root_path/.venv/*" \
             -not -path "$repo_root_path/.uv-cache/*" \
-            -not -path "$repo_root_path/site/*" \
-            -not -path "$repo_root_path/.iar-worktrees/*" \
-            -not -path "*/node_modules/*"
+            -not -path "$repo_root_path/site/*"
     )
 
     source_env_example_path="$repo_root_path/.env.example"

@@ -4,4 +4,4 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-exec bash "${REPO_ROOT}/scripts/template/sync_template.sh" "$@"
+exec bash "${REPO_ROOT}/scripts/shared/template/sync_template.sh" "$@"

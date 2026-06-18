@@ -624,13 +624,7 @@ implement prd_file ai_tool prompt="":
     # Run AI tool in worktree via user's interactive shell (needed for alias resolution)
     echo "Running $ai_tool in worktree..."
     cd "$worktree_path"
-    if [ "$ai_tool" = "kimi" ]; then
-        # kimi uses --prompt flag instead of positional argument
-        "${SHELL:-bash}" -i -c "$(printf '%s --prompt %q' "$ai_tool" "$prompt_text")" || true
-    else
-        # claude and others accept prompt as positional argument
-        "${SHELL:-bash}" -i -c "$(printf '%s %q' "$ai_tool" "$prompt_text")" || true
-    fi
+    ./scripts/shared/just/ai_run.sh "$ai_tool" "$prompt_text"
 
     echo ""
 
@@ -656,17 +650,26 @@ implement prd_file ai_tool prompt="":
 
 # AI-assisted commands.
 # Usage:
-#   just ai fix                             # resolve rebase conflicts with claude
-#   just ai fix kimi "custom prompt"         # resolve conflicts with kimi
-#   just ai commit                          # run `just test`, then commit with claude
-#   just ai commit kimi "custom prompt"      # use kimi with a custom prompt
-#   just ai push                            # run `just test`, commit, then push with claude
-#   just ai push kimi "custom prompt"        # use kimi, then push
-#   just ai implement <prd-file> [tool]     # implement a PRD (default: claude)
+#   just ai check <file_path>                 # review a file against project standards, then stay interactive
+#   just ai check <file_path> kimi            # use kimi
+#   just ai check <file_path> claude "prompt" # custom prompt (still interactive)
+#   just ai fix                               # resolve rebase conflicts with claude
+#   just ai fix kimi "custom prompt"          # resolve conflicts with kimi
+#   just ai commit                            # run `just test`, then commit with claude
+#   just ai commit kimi "custom prompt"        # use kimi with a custom prompt
+#   just ai push                              # run `just test`, commit, then push with claude
+#   just ai push kimi "custom prompt"          # use kimi, then push
+#   just ai implement <prd-file> [tool]       # implement a PRD (default: claude)
+#   just ai tag <name>                        # write tag message and create annotated tag with claude
+#   just ai tag <name> kimi "custom prompt"   # use kimi with a custom prompt
+# Shortcuts: check, fix, commit, push, implement, tag — all delegate to scripts/shared/just/ai_run.sh
 ai subcommand arg1="" arg2="" arg3="" :
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{subcommand}}" in
+        check)
+            just _ai_check "{{arg1}}" "{{arg2}}" "{{arg3}}"
+            ;;
         fix)
             just _ai_fix "{{arg1}}" "{{arg2}}"
             ;;
@@ -679,22 +682,56 @@ ai subcommand arg1="" arg2="" arg3="" :
         implement)
             just implement "{{arg1}}" "{{arg2}}" "{{arg3}}"
             ;;
+        tag)
+            just _ai_tag "{{arg1}}" "{{arg2}}" "{{arg3}}"
+            ;;
         *)
             echo "Usage:"
-            echo "  just ai fix          # resolve rebase conflicts"
-            echo "  just ai commit       # run just test, then commit"
-            echo "  just ai push         # run just test, then commit and push"
-            echo "  just ai implement    # implement a PRD"
+            echo "  just ai check <file>  # review file against project standards, stay interactive"
+            echo "  just ai fix           # resolve rebase conflicts"
+            echo "  just ai commit        # run just test, then commit"
+            echo "  just ai push          # run just test, then commit and push"
+            echo "  just ai implement     # implement a PRD"
+            echo "  just ai tag <name>    # write tag message and create annotated tag"
             exit 1
             ;;
     esac
+
+# Internal: review a single file against project standards, then stay interactive.
+# Output is a structured report; the AI does NOT modify the file, and the
+# REPL stays open so the caller can drill into findings or request targeted
+# edits one at a time.
+_ai_check file_path ai_tool="claude" prompt="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [ -z "{{file_path}}" ]; then
+        echo "Usage: just ai check <file_path> [claude|kimi] [prompt]"
+        exit 1
+    fi
+
+    if [ ! -e "{{file_path}}" ]; then
+        echo "ERROR: file not found: {{file_path}}"
+        exit 1
+    fi
+
+    if [ -z "{{prompt}}" ]; then
+        # Default prompt lives in a sibling file so this recipe body
+        # stays short (just's recipe parser is indent-sensitive and
+        # multi-line string literals are awkward inside a recipe).
+        prompt_text="$(cat ./scripts/shared/just/ai_check_prompt.txt)"
+        prompt_text="${prompt_text//<FILE_PATH>/{{file_path}}}"
+    else
+        prompt_text="{{prompt}}"
+    fi
+
+    ./scripts/shared/just/ai_run.sh "{{ai_tool}}" "$prompt_text" --interactive
 
 # Internal: fix git rebase/merge conflicts with an AI tool.
 _ai_fix ai_tool="claude" prompt="" :
     #!/usr/bin/env bash
     set -euo pipefail
 
-    ai_tool="{{ai_tool}}"
     prompt_text="{{prompt}}"
 
     # Check if a rebase or merge is in progress
@@ -726,41 +763,13 @@ _ai_fix ai_tool="claude" prompt="" :
         prompt_text="Resolve all git rebase conflicts. For each conflict file, read it, merge correctly preserving the intent of both sides where possible, remove all conflict markers, then git add the resolved file. Do NOT commit — just stage. After all files are done, run git diff --cached to show what you resolved. Finally, run 'just test' and ensure it passes."
     fi
 
-    echo "Tool: $ai_tool"
-    echo "Prompt: $prompt_text"
-    echo ""
-
-    # Run AI tool via user's interactive shell (needed for alias resolution)
-    if [ "$ai_tool" = "kimi" ]; then
-        # kimi uses --prompt flag instead of positional argument
-        "${SHELL:-bash}" -i -c "$(printf '%s --prompt %q' "$ai_tool" "$prompt_text")" || true
-    elif [ "$ai_tool" = "claude" ]; then
-        # claude: --print + --verbose + stream-json lets jq render thinking/tool calls in real time
-        claude --dangerously-skip-permissions --print --verbose --output-format stream-json --include-partial-messages < <(printf '%s' "$prompt_text") 2>&1 | \
-            jq --unbuffered -r '
-                if .type == "stream_event" and .event.type == "content_block_delta" and .event.delta.type == "thinking_delta" then
-                    "💭 \(.event.delta.thinking)\n"
-                elif .type == "stream_event" and .event.type == "content_block_start" and .event.content_block.type == "tool_use" then
-                    "\n🔧 \(.event.content_block.name)(\((.event.content_block.input // {} | tostring) | .[0:120]))\n"
-                elif .type == "result" then
-                    "\n\(.result)\n"
-                else
-                    empty
-                end
-            ' || true
-    else
-        "${SHELL:-bash}" -i -c "$(printf '%s %q' "$ai_tool" "$prompt_text")" || true
-    fi
+    ./scripts/shared/just/ai_run.sh "{{ai_tool}}" "$prompt_text"
 
 # Internal: ask an AI tool to run `just test`, then commit current changes.
 _ai_commit ai_tool="claude" prompt="" :
     #!/usr/bin/env bash
     set -euo pipefail
 
-    ai_tool="{{ai_tool}}"
-    if [ -z "$ai_tool" ]; then
-        ai_tool="claude"
-    fi
     prompt_text="{{prompt}}"
 
     # Fail fast if there is nothing to commit
@@ -774,41 +783,13 @@ _ai_commit ai_tool="claude" prompt="" :
         prompt_text="First, run \`just test\` in the repository root to verify all tests pass. If tests fail, fix the underlying issues and re-run until \`just test\` is green. Once tests pass, review the current git changes (git status, git diff, and git diff --cached) and create a commit. Stage relevant files with git add, then write a clear commit message in English following conventional commit style (e.g. 'feat(scope): ...', 'fix(scope): ...', 'refactor(scope): ...'). Keep the subject line under 72 characters and use the body to explain the 'why' rather than the 'what'. Do NOT push. Do NOT amend existing commits. If pre-commit hooks fail, fix the underlying issues and create a new commit (never amend). Proceed autonomously without asking for confirmation at any step — commit directly once \`just test\` is green."
     fi
 
-    echo "Tool: $ai_tool"
-    echo "Prompt: $prompt_text"
-    echo ""
-
-    # Run AI tool via user's interactive shell (needed for alias resolution)
-    if [ "$ai_tool" = "kimi" ]; then
-        # kimi uses --prompt flag instead of positional argument
-        "${SHELL:-bash}" -i -c "$(printf '%s --prompt %q' "$ai_tool" "$prompt_text")" || true
-    elif [ "$ai_tool" = "claude" ]; then
-        # claude: --print + --verbose + stream-json lets jq render thinking/tool calls in real time
-        claude --dangerously-skip-permissions --print --verbose --output-format stream-json --include-partial-messages < <(printf '%s' "$prompt_text") 2>&1 | \
-            jq --unbuffered -r '
-                if .type == "stream_event" and .event.type == "content_block_delta" and .event.delta.type == "thinking_delta" then
-                    "💭 \(.event.delta.thinking)\n"
-                elif .type == "stream_event" and .event.type == "content_block_start" and .event.content_block.type == "tool_use" then
-                    "\n🔧 \(.event.content_block.name)(\((.event.content_block.input // {} | tostring) | .[0:120]))\n"
-                elif .type == "result" then
-                    "\n\(.result)\n"
-                else
-                    empty
-                end
-            ' || true
-    else
-        "${SHELL:-bash}" -i -c "$(printf '%s %q' "$ai_tool" "$prompt_text")" || true
-    fi
+    ./scripts/shared/just/ai_run.sh "{{ai_tool}}" "$prompt_text"
 
 # Internal: ask an AI tool to run `just test` and commit, then push the result.
 _ai_push ai_tool="claude" prompt="" :
     #!/usr/bin/env bash
     set -euo pipefail
 
-    ai_tool="{{ai_tool}}"
-    if [ -z "$ai_tool" ]; then
-        ai_tool="claude"
-    fi
     prompt_text="{{prompt}}"
 
     # Fail fast if there is nothing to commit
@@ -822,31 +803,7 @@ _ai_push ai_tool="claude" prompt="" :
         prompt_text="First, run \`just test\` in the repository root to verify all tests pass. If tests fail, fix the underlying issues and re-run until \`just test\` is green. Once tests pass, review the current git changes (git status, git diff, and git diff --cached) and create a commit. Stage relevant files with git add, then write a clear commit message in English following conventional commit style (e.g. 'feat(scope): ...', 'fix(scope): ...', 'refactor(scope): ...'). Keep the subject line under 72 characters and use the body to explain the 'why' rather than the 'what'. Do NOT amend existing commits. If pre-commit hooks fail, fix the underlying issues and create a new commit (never amend). Proceed autonomously without asking for confirmation at any step — commit directly once \`just test\` is green. After you finish, the script will handle the push, so you do NOT need to push."
     fi
 
-    echo "Tool: $ai_tool"
-    echo "Prompt: $prompt_text"
-    echo ""
-
-    # Run AI tool via user's interactive shell (needed for alias resolution)
-    if [ "$ai_tool" = "kimi" ]; then
-        # kimi uses --prompt flag instead of positional argument
-        "${SHELL:-bash}" -i -c "$(printf '%s --prompt %q' "$ai_tool" "$prompt_text")" || true
-    elif [ "$ai_tool" = "claude" ]; then
-        # claude: --print + --verbose + stream-json lets jq render thinking/tool calls in real time
-        claude --dangerously-skip-permissions --print --verbose --output-format stream-json --include-partial-messages < <(printf '%s' "$prompt_text") 2>&1 | \
-            jq --unbuffered -r '
-                if .type == "stream_event" and .event.type == "content_block_delta" and .event.delta.type == "thinking_delta" then
-                    "💭 \(.event.delta.thinking)\n"
-                elif .type == "stream_event" and .event.type == "content_block_start" and .event.content_block.type == "tool_use" then
-                    "\n🔧 \(.event.content_block.name)(\((.event.content_block.input // {} | tostring) | .[0:120]))\n"
-                elif .type == "result" then
-                    "\n\(.result)\n"
-                else
-                    empty
-                end
-            ' || true
-    else
-        "${SHELL:-bash}" -i -c "$(printf '%s %q' "$ai_tool" "$prompt_text")" || true
-    fi
+    ./scripts/shared/just/ai_run.sh "{{ai_tool}}" "$prompt_text"
 
     # AI finished - now handle push with safety checks and user confirmation.
     echo ""
@@ -890,19 +847,57 @@ _ai_push ai_tool="claude" prompt="" :
         git push
     fi
 
+# Internal: ask an AI tool to write a release-note message and create an annotated git tag on the current commit.
+_ai_tag tag_name ai_tool="claude" prompt="" :
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    tag_name="{{tag_name}}"
+    prompt_text="{{prompt}}"
+
+    if [ -z "$tag_name" ]; then
+        echo "Error: tag name is required."
+        echo "Usage: just ai tag <name> [claude|kimi] [prompt]"
+        exit 1
+    fi
+
+    # Tag is the only `ai` subcommand that strictly whitelists tools,
+    # since wrong tool here would silently create a malformed tag.
+    if [ "{{ai_tool}}" != "claude" ] && [ "{{ai_tool}}" != "kimi" ]; then
+        echo "Unsupported AI tool: {{ai_tool}}"
+        echo "Supported tools: claude, kimi"
+        echo "Usage: just ai tag <name> [claude|kimi] [prompt]"
+        exit 1
+    fi
+
+    if [ -z "$prompt_text" ]; then
+        last_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+        if [ -n "$last_tag" ]; then
+            range_desc="commits since ${last_tag}"
+            log_cmd="git log --oneline ${last_tag}..HEAD"
+        else
+            range_desc="all commits"
+            log_cmd="git log --oneline"
+        fi
+        prompt_text="Summarize the ${range_desc} with \`${log_cmd}\` (and \`git diff --stat <ref>..HEAD\` if needed) and create an annotated git tag named '${tag_name}' on the current HEAD using \`git tag -a '${tag_name}' -m \"<release notes>\"\`. The tag message should be a scannable release note — short subject line, then a few bullet points describing user-visible changes. If the tag already exists locally, do NOT overwrite or delete it — stop and report the conflict. Do NOT push. Do NOT amend existing commits. Proceed autonomously without asking for confirmation — tag directly."
+    fi
+
+    echo "Tag: $tag_name"
+    ./scripts/shared/just/ai_run.sh "{{ai_tool}}" "$prompt_text"
+
 # Sync files from the upstream template repository.
-# Compares local files against the template and offers to apply updates.
+# Compares local files against the template and lets you pick which to apply
+# via an fzf TUI with per-entry diff preview.
 # Usage:
-#   just sync-template         # skip project-specific paths from config.toml [template_sync]
-#   just sync-template --all   # include project-specific files too
+#   just sync-template            # TUI: upstream-owned entries only
+#   just sync-template --all      # TUI: all entries except config.toml project_skip_paths
+#   just sync-template --list     # print upstream-owned entries, no TUI, no apply
+#   just sync-template --list-all # print all entries, no TUI, no apply
+#   just sync-template --dry-run  # run TUI but don't write anything
 sync-template flags="":
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -n "{{flags}}" ]; then
-        ./scripts/sync_template.sh {{flags}}
-    else
-        ./scripts/sync_template.sh
-    fi
+    ./scripts/sync_template.sh {{flags}}
 
 # Run tests after `just lint --full` (usage: just test [all|local|real])
 #   just test        - Run local tests (no API keys needed)

@@ -124,10 +124,7 @@ run_worktree_doctor() {
         local resolved_cleanup_worktree_path=""
         resolved_cleanup_worktree_path="$(resolve_worktree_path_by_branch "$doctor_feature_branch")"
         if [[ -z "$resolved_cleanup_worktree_path" ]]; then
-            resolved_cleanup_worktree_path="$(dirname "$repo_root")/$(basename "$repo_root")-worktrees/$doctor_feature_branch"
-            if [[ ! -d "$resolved_cleanup_worktree_path" && "$doctor_feature_branch" == issue-* ]]; then
-                resolved_cleanup_worktree_path="$(dirname "$repo_root")/$(basename "$repo_root")-worktrees/tasks/$doctor_feature_branch"
-            fi
+            resolved_cleanup_worktree_path="$(dirname "$repo_root")/$doctor_feature_branch"
         fi
 
         echo "Checking worktree for feature branch '$doctor_feature_branch'..."
@@ -483,10 +480,7 @@ cleanup_feature_branch() {
     if [[ -z "$resolved_cleanup_worktree_path" ]]; then
         resolved_cleanup_worktree_path="$(resolve_worktree_path_by_branch "$feature_branch")"
         if [[ -z "$resolved_cleanup_worktree_path" ]]; then
-            resolved_cleanup_worktree_path="$(dirname "$repo_root")/$(basename "$repo_root")-worktrees/$feature_branch"
-            if [[ ! -d "$resolved_cleanup_worktree_path" && "$feature_branch" == issue-* ]]; then
-                resolved_cleanup_worktree_path="$(dirname "$repo_root")/$(basename "$repo_root")-worktrees/tasks/$feature_branch"
-            fi
+            resolved_cleanup_worktree_path="$(dirname "$repo_root")/$feature_branch"
         fi
     fi
 
