@@ -17,6 +17,31 @@ from backend.core.use_cases.agent_runner_orchestrate import run_once
 
 _logger = logging.getLogger(__name__)
 
+# Hints in stderr/exception text that indicate a transient GitHub API/network
+# failure rather than a logic error. Used to surface actionable recovery steps.
+_TRANSIENT_NETWORK_ERROR_HINTS: tuple[str, ...] = (
+    "api.github.com/graphql",
+    'Post "https://api.github.com/graphql"',
+    "connection reset by peer",
+    "broken pipe",
+    "Temporary failure in name resolution",
+    "timeout",
+    "EOF",
+)
+
+_RECOVERY_MESSAGE = (
+    "Recovery: this appears to be a transient GitHub API network error; "
+    "no issue labels were changed. Run `iar run` again to retry."
+)
+
+
+def _is_transient_network_error(exc: Exception) -> bool:
+    """Return True when the exception looks like a transient network failure."""
+    exc_text = f"{exc}"
+    return any(
+        hint.lower() in exc_text.lower() for hint in _TRANSIENT_NETWORK_ERROR_HINTS
+    )
+
 
 def run_agent_repositories_once(
     *,
@@ -94,9 +119,17 @@ def run_agent_repositories_once(
                 aggregated_exit_code = 1
         except Exception as exc:  # noqa: BLE001 - isolate per-repo failures.
             aggregated_exit_code = 1
-            _logger.error(
-                "Repository '%s' run_once failed: %s",
-                context.repo_id,
-                exc,
-            )
+            if _is_transient_network_error(exc):
+                _logger.error(
+                    "Repository '%s' run_once failed: %s\n%s",
+                    context.repo_id,
+                    exc,
+                    _RECOVERY_MESSAGE,
+                )
+            else:
+                _logger.error(
+                    "Repository '%s' run_once failed: %s",
+                    context.repo_id,
+                    exc,
+                )
     return aggregated_exit_code

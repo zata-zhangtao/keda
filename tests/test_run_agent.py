@@ -2671,6 +2671,60 @@ def test_run_agent_repositories_once_isolates_failures() -> None:
     assert exit_code == 1
 
 
+def test_run_agent_repositories_once_hints_recovery_for_network_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A transient GitHub API network error should include a recovery hint."""
+    from backend.core.shared.models.agent_runner import (
+        RepositoryRunContext,
+    )
+    from backend.core.use_cases.run_agent_repositories_once import (
+        run_agent_repositories_once,
+    )
+
+    class _NetworkFailingClient(FakeGitHubClient):
+        def list_ready_issues(self, ready_label: str, limit: int) -> list:
+            raise RuntimeError(
+                "Command '['gh', 'issue', 'list', ...]' returned non-zero exit "
+                "status 1.\n\n--- stderr/stdout ---\n"
+                'Post "https://api.github.com/graphql": EOF'
+            )
+
+    context = RepositoryRunContext(
+        repo_id="repo-net",
+        display_name="Repo Network",
+        repo_path=Path("."),
+        config=AppConfig(),
+    )
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "remote"): CommandResult(
+                command=("git", "remote"),
+                return_code=0,
+                stdout="origin\n",
+                stderr="",
+            ),
+        }
+    )
+    with caplog.at_level(logging.ERROR):
+        exit_code = run_agent_repositories_once(
+            contexts=[context],
+            dry_run=False,
+            agent="auto",
+            max_issues=1,
+            process_runner=fake_runner,
+            github_client_factory=lambda rp: _NetworkFailingClient(),
+        )
+
+    assert exit_code == 1
+    assert any(
+        "Run `iar run` again to retry" in record.message
+        for record in caplog.records
+        if record.levelno == logging.ERROR
+    )
+
+
 def test_publish_changes_generated_pr_template_mode() -> None:
     """Template mode should render PR title and body when enabled."""
     issue = IssueSummary(
