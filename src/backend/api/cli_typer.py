@@ -385,7 +385,6 @@ def _run_issue_create_command(
     repo: str | None,
     repo_id: str | None,
     config: str | None,
-    group: str = "",
     depends_on: tuple[int, ...] = (),
     depends_on_group: tuple[str, ...] = (),
 ) -> int:
@@ -403,7 +402,6 @@ def _run_issue_create_command(
         agent=_enum_value(agent),
         publish_prd=publish_prd,
         force=force,
-        group=group,
         depends_on=depends_on,
         depends_on_group=depends_on_group,
     )
@@ -436,12 +434,6 @@ def issue_create_command(
         ),
     ] = True,
     force: Annotated[bool, typer.Option("--force", help="Bypass PRD checks.")] = False,
-    group: Annotated[
-        str,
-        typer.Option(
-            "--group", help="Task group name (materialised as task-group/<name> label)."
-        ),
-    ] = "",
     depends_on: Annotated[
         list[int] | None,
         typer.Option("--depends-on", help="Upstream Issue number (repeatable)."),
@@ -464,7 +456,6 @@ def issue_create_command(
         agent=agent,
         publish_prd=publish_prd,
         force=force,
-        group=group,
         depends_on=tuple(depends_on or ()),
         depends_on_group=tuple(depends_on_group or ()),
         repo=repo,

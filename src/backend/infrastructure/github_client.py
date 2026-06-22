@@ -887,21 +887,3 @@ class GitHubCliClient:
             )
             for raw_issue in raw_issues
         ]
-
-    def ensure_label(self, name: str) -> None:
-        """Ensure a label exists in the repository, creating it if necessary."""
-        result = self._runner.run(
-            ["gh", "label", "list", "--json", "name"],
-            cwd=self.repo_path,
-            check=False,
-        )
-        if result.return_code == 0:
-            existing = json.loads(result.stdout or "[]")
-            existing_names = {str(label.get("name", "")) for label in existing}
-            if name in existing_names:
-                return
-        self._runner.run(
-            ["gh", "label", "create", name, "--force"],
-            cwd=self.repo_path,
-            check=False,
-        )

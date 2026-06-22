@@ -112,8 +112,6 @@ def test_cli_parser_issue_create_dependency_options() -> None:
             "issue",
             "create",
             "tasks/example.md",
-            "--group",
-            "downstream",
             "--depends-on",
             "42",
             "--depends-on",
@@ -122,7 +120,6 @@ def test_cli_parser_issue_create_dependency_options() -> None:
             "upstream-a",
         ]
     )
-    assert parsed.group == "downstream"
     assert parsed.depends_on == [42, 43]
     assert parsed.depends_on_group == ["upstream-a"]
 
@@ -1724,7 +1721,7 @@ def test_main_takeover_rejects_unauthenticated_gh(capsys) -> None:
     )
 
     with patch(
-        "backend.api.cli.create_github_client",
+        "backend.api.cli_takeover.create_github_client",
         return_value=auth_client,
     ):
         exit_code = main(["takeover"])
@@ -1764,13 +1761,13 @@ def test_main_takeover_noninteractive_repos(capsys, monkeypatch) -> None:
     )
 
     with patch(
-        "backend.api.cli.create_github_client",
+        "backend.api.cli_takeover.create_github_client",
         return_value=auth_client,
     ), patch(
-        "backend.api.cli.select_repositories_interactive",
+        "backend.api.cli_takeover.select_repositories_interactive",
         side_effect=AssertionError("should not be called in non-interactive mode"),
     ), patch(
-        "backend.api.cli.execute_takeover",
+        "backend.api.cli_takeover.execute_takeover",
         return_value=mock_result,
     ) as mock_execute:
         exit_code = main(

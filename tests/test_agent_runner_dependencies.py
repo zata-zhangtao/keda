@@ -552,8 +552,7 @@ class TestBuildWaitingComment:
 
 class TestResolveDependencies:
     def test_no_dependencies(self) -> None:
-        group, gate, issues, groups = _resolve_dependencies("# PRD\n")
-        assert group == ""
+        gate, issues, groups = _resolve_dependencies("# PRD\n")
         assert gate == "none"
         assert issues == ()
         assert groups == ()
@@ -566,17 +565,15 @@ class TestResolveDependencies:
 - Depends on tasks/issues: #42
 - Gate type: hard
 """
-        group, gate, issues, groups = _resolve_dependencies(prd)
-        assert group == "g1"
+        gate, issues, groups = _resolve_dependencies(prd)
         assert gate == "hard"
         assert issues == (42,)
 
     def test_cli_overrides(self) -> None:
         prd = "# PRD\n"
-        group, gate, issues, groups = _resolve_dependencies(
-            prd, group="g2", depends_on=(99,), depends_on_group=("extra",)
+        gate, issues, groups = _resolve_dependencies(
+            prd, depends_on=(99,), depends_on_group=("extra",)
         )
-        assert group == "g2"
         assert issues == (99,)
         assert groups == ("extra",)
 
@@ -587,12 +584,12 @@ class TestResolveDependencies:
 - Depends on tasks/issues: #1
 - Gate type: hard
 """
-        group, gate, issues, groups = _resolve_dependencies(prd, depends_on=(1, 2))
+        gate, issues, groups = _resolve_dependencies(prd, depends_on=(1, 2))
         assert issues == (1, 2)
 
     def test_explicit_marker_compat(self) -> None:
         prd = "<!-- iar:depends-on #5 group:g3 -->\n# PRD\n"
-        group, gate, issues, groups = _resolve_dependencies(prd)
+        gate, issues, groups = _resolve_dependencies(prd)
         assert issues == (5,)
         assert groups == ("g3",)
 

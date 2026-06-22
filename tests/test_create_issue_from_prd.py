@@ -237,10 +237,7 @@ def test_create_issue_from_prd_materializes_prd_ref_issue_link(
 
     create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
     assert "<!-- iar:depends-on #77 -->" in create_calls[0]["body"]
-    assert "task-group/downstream-group" in create_calls[0]["labels"]
-    assert {"method": "ensure_label", "name": "task-group/downstream-group"} in (
-        fake_client.calls
-    )
+    assert "task-group/downstream-group" not in create_calls[0]["labels"]
 
 
 def test_create_issue_from_prd_materializes_prd_ref_group_fallback(

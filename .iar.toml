@@ -31,7 +31,7 @@ path_command = "iar worktree path --branch issue-{issue_number}"
 # Runner 行为配置：每轮处理 Issue 数量、默认 agent、提交前验证命令
 [agent_runner.runner]
 # 每次轮询每个仓库最多处理多少个 Issue
-max_issues = 5
+max_issues = 1
 # 默认使用的 AI agent：auto / claude / codex / kimi
 default_agent = "auto"
 # Agent 失败后的最大重试次数
@@ -42,7 +42,7 @@ recovery_retry_delay_seconds = 30
 verification_commands = [
     "git diff --check",
     "uv run mkdocs build",
-    "uv run pytest -q",
+    "just test",
 ]
 
 # 发布前安全边界：自动合并开关、禁止提交的路径模式
@@ -69,6 +69,10 @@ branch_prefix = "iar-evidence/"
 evidence_format_check = true
 # 是否用 agent 解析 PRD 中的格式要求
 parse_evidence_format_with_agent = true
+# 证据 prompt 与 PR 评论的固定标签语言，如 zh-CN / en-US
+language = "zh-CN"
+# 是否要求带 iar:structured-evidence marker 的 Issue 提供 evidence.json manifest
+structured_evidence = true
 
 # 实现 Agent 的 prompt 模板；默认 phase 与自定义阶段模板
 [agent_runner.prompts]
@@ -85,11 +89,10 @@ enabled = true
 review_agent = "auto"
 # 是否允许实现 agent 与 reviewer 为同一个
 allow_same_agent = true
-# review 不通过时的最大修复轮数（默认 2，最后一轮允许 reviewer 提供最终修复 commit request）
+# review 不通过时的最大修复轮数
 max_attempts = 2
 # review agent 最长运行秒数
 timeout_seconds = 900
-# 自定义 review 提示词；空列表走代码默认模板，默认模板会调用 code-reviewer skill 并输出 findings JSON 数组
 review_prompt_template = []
 
 # Draft PR 创建后的自动 supervisor 配置
@@ -99,7 +102,7 @@ enabled = true
 # 执行 supervisor 的 agent
 supervisor_agent = "auto"
 # supervisor 要求修复时的最大修复 / rebase 次数
-max_repair_attempts = 5
+max_repair_attempts = 2
 # supervisor agent 进程崩溃（API / 网络等基础设施错误）时同一 cycle 内的最大重试次数
 max_agent_crash_retries = 5
 # 崩溃重试的初始退避秒数，之后每次重试翻倍
@@ -162,6 +165,18 @@ prompt = ""
 # PR 生成时是否包含 commit log
 include_commit_log = true
 # PR 生成时是否包含 diff stat
+include_diff_stat = true
+
+[agent_runner.generated_content.prd_from_issue]
+enabled = true
+mode = "agnet"
+output = "json"
+title_template = ""
+body_template = ""
+agent = "auto"
+timeout_seconds = 120
+prompt = ""
+include_commit_log = true
 include_diff_stat = true
 
 # GitHub labels 状态流转配置（如你的仓库使用不同标签名，可取消注释并覆盖）

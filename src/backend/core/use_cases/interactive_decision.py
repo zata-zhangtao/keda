@@ -611,7 +611,6 @@ def _execute_create_issue_from_prd(
     ready = bool(action.parameters.get("ready", False))
     agent = str(action.parameters.get("agent", "auto"))
     issue_type = str(action.parameters.get("issue_type", "feature"))
-    group = str(action.parameters.get("group", ""))
 
     request = IssueFromPrdRequest(
         repo_path=context.repo_path,
@@ -620,7 +619,6 @@ def _execute_create_issue_from_prd(
         queue_ready=ready,
         issue_agent=agent,
         labels_config=context.config.labels,
-        group=group,
     )
     issue_url = create_issue_from_prd(
         request=request,

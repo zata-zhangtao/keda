@@ -117,11 +117,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_create_parser.add_argument("--force", action="store_true")
     issue_create_parser.add_argument(
-        "--group",
-        default="",
-        help="Task group name (materialised as task-group/<name> label).",
-    )
-    issue_create_parser.add_argument(
         "--depends-on",
         action="append",
         type=int,

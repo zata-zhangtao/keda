@@ -103,7 +103,6 @@ class IssueFromPrdRequest:
         git_base_branch: 基础分支名称。当 ``queue_ready=True`` 且 ``publish_prd=True`` 时必需。
         generated_content_config: 可选的 AI 内容生成配置。
             为 ``None`` 或 ``enabled=False`` 时使用确定性 fallback 正文。
-        group: 可选的任务组名称，会被物化为 ``task-group/<name>`` label。
         depends_on: 显式指定的上游 Issue 编号列表（与 PRD 声明合并去重）。
         depends_on_group: 显式指定的上游 group 列表（与 PRD 声明合并去重）。
         parse_evidence_format_with_agent: 是否用 agent 解析 PRD 中的格式要求。
@@ -123,7 +122,6 @@ class IssueFromPrdRequest:
     git_remote: str = "origin"
     git_base_branch: str = "main"
     generated_content_config: GeneratedContentConfig | None = None
-    group: str = ""
     depends_on: tuple[int, ...] = ()
     depends_on_group: tuple[str, ...] = ()
     parse_evidence_format_with_agent: bool = True
@@ -348,8 +346,6 @@ def build_issue_labels(
             [*effective_labels_config.agent_labels.keys(), "auto", "none"]
         )
         raise ValueError(f"issue_agent must be one of: {allowed}")
-    if request.group:
-        labels.append(f"{effective_labels_config.group_prefix}{request.group}")
     return labels
 
 
@@ -574,35 +570,32 @@ def _resolve_dependencies(
     *,
     repo_path: Path | None = None,
     current_prd_path: Path | None = None,
-    group: str = "",
     depends_on: tuple[int, ...] = (),
     depends_on_group: tuple[str, ...] = (),
-) -> tuple[str, str, tuple[int, ...], tuple[str, ...]]:
+) -> tuple[str, tuple[int, ...], tuple[str, ...]]:
     """Merge PRD structured dependencies, explicit markers and CLI overrides.
 
     Three sources are merged with CLI taking highest precedence:
 
     1. ``Delivery Dependencies`` section in the PRD.
-    2. Explicit ``iar:depends-on`` / ``iar:group`` markers in the PRD body.
-    3. CLI arguments ``--group``, ``--depends-on``, ``--depends-on-group``.
+    2. Explicit ``iar:depends-on`` markers in the PRD body.
+    3. CLI arguments ``--depends-on`` and ``--depends-on-group``.
 
     Args:
         prd_text: Full PRD Markdown text.
         repo_path: Repository root, required when the PRD declares PRD file
             dependencies in ``Depends on tasks/issues``.
         current_prd_path: Current PRD path, used to reject self-dependencies.
-        group: CLI override group name.
         depends_on: CLI override issue numbers.
         depends_on_group: CLI override group names.
 
     Returns:
-        ``(resolved_group, gate_type, resolved_issues, resolved_groups)``.
+        ``(gate_type, resolved_issues, resolved_groups)``.
         ``gate_type`` is the gate from the PRD section (``none`` if absent).
     """
     from_prd = parse_delivery_dependencies(prd_text)
 
     # Start with PRD section values
-    resolved_group = from_prd.group or ""
     gate_type = from_prd.gate_type
     resolved_issues = list(from_prd.depends_on_issues)
     resolved_groups = list(from_prd.depends_on_groups)
@@ -621,9 +614,7 @@ def _resolve_dependencies(
         resolved_issues.extend(explicit.issue_numbers)
         resolved_groups.extend(explicit.groups)
 
-    # CLI overrides take precedence and are additive
-    if group:
-        resolved_group = group
+    # CLI overrides are additive
     resolved_issues.extend(depends_on)
     resolved_groups.extend(depends_on_group)
 
@@ -638,7 +629,6 @@ def _resolve_dependencies(
     ]
 
     return (
-        resolved_group,
         gate_type,
         tuple(deduped_issues),
         tuple(deduped_groups),
@@ -1049,11 +1039,10 @@ def create_issue_from_prd(
     # ------------------------------------------------------------------
     # 4.5 解析并物化依赖声明。
     # ------------------------------------------------------------------
-    resolved_group, gate_type, resolved_issues, resolved_groups = _resolve_dependencies(
+    gate_type, resolved_issues, resolved_groups = _resolve_dependencies(
         prd_text,
         repo_path=request.repo_path,
         current_prd_path=absolute_prd_path,
-        group=request.group,
         depends_on=request.depends_on,
         depends_on_group=request.depends_on_group,
     )
@@ -1063,12 +1052,6 @@ def create_issue_from_prd(
             issue_numbers=resolved_issues,
             groups=resolved_groups,
         )
-    # Ensure group label exists before creating the Issue.
-    if resolved_group:
-        group_label = f"{effective_labels_config.group_prefix}{resolved_group}"
-        github_client.ensure_label(group_label)
-        if group_label not in labels:
-            labels.append(group_label)
 
     # ------------------------------------------------------------------
     # 5. 发布预检（仅在 publish_prd=True 时执行）。

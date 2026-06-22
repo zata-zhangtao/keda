@@ -136,7 +136,7 @@ iar labels sync --repo-id keda
 依赖门禁采用 **PRD 结构化依赖声明 + IAR materialized marker/label** 的无状态方案：
 
 - PRD 中包含工具无关的 `Delivery Dependencies` 小节
-- `iar issue create` 将 `Gate type: hard` 的依赖物化为 Issue body 中的 `<!-- iar:depends-on ... -->` marker 和 `task-group/<name>` label
+- `iar issue create` 将 `Gate type: hard` 的依赖物化为 Issue body 中的 `<!-- iar:depends-on ... -->` marker
 - runner 每次轮询时实时查询 GitHub 状态：依赖未满足时跳过领取、叠加 `agent/waiting` label 并写等待 comment
 - 依赖未满足的 ready Issue 不消耗 `max_issues` 的处理额度；runner 会继续扫描后续 ready Issue，直到找到可领取任务或扫描窗口耗尽
 - 上游 Issue 全部 closed 后，下一轮轮询自动移除 `agent/waiting` 并正常领取
@@ -159,7 +159,7 @@ iar labels sync --repo-id keda
 
 | 字段 | 说明 |
 |---|---|
-| `Group` | 本 Issue 所属的任务组，会被物化为 `task-group/<name>` label |
+| `Group` | 本 Issue 所属的任务组；当其他 PRD 引用本 PRD 且本 PRD 尚未关联 Issue 时，可作为 fallback 物化为 `group:<name>` 依赖 marker |
 | `Depends on groups` | 上游任务组，该组下全部 Issue closed 后才满足 |
 | `Depends on tasks/issues` | 上游 Issue 编号或 PRD 引用；Issue 支持 `#N` / `N`，PRD 支持 repo-relative 路径或 `tasks/` 下唯一文件名/文件 stem，多个用逗号/分号或 Markdown 子列表分隔；引用后可以追加说明文字，解析器只提取引用 token |
 | `Gate type` | `hard` = 阻塞门禁；`soft` = 仅文档信息，不阻塞；`none` = 不生成依赖 marker |
@@ -177,9 +177,6 @@ PRD 引用只在 `iar issue create` 发布时解析，不会原样写入 Issue b
 即使 PRD 中没有写依赖，也可以在 `iar issue create` 时显式指定：
 
 ```bash
-# 指定本 Issue 所属组
-iar issue create tasks/pending/foo.md --group my-group
-
 # 声明依赖上游 Issue #42 和 #43
 iar issue create tasks/pending/foo.md --depends-on 42 --depends-on 43
 

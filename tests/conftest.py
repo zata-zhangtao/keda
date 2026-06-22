@@ -215,9 +215,6 @@ class FakeGitHubClient(IGitHubClient):
         )
         return []
 
-    def ensure_label(self, name: str) -> None:
-        self.calls.append({"method": "ensure_label", "name": name})
-
 
 class FakeContentGenerator(IContentGenerator):
     """In-memory content generator for tests."""

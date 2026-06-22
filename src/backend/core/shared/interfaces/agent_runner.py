@@ -456,12 +456,3 @@ class IGitHubClient(ABC):
             list[IssueSummary]: 满足条件的 Issue 摘要列表。
         """
         ...
-
-    @abstractmethod
-    def ensure_label(self, name: str) -> None:
-        """确保仓库中存在指定标签，不存在则创建。
-
-        Args:
-            name: 标签名称。
-        """
-        ...
