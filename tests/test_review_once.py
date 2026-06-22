@@ -895,7 +895,16 @@ def test_review_once_auto_stashes_dirty_worktree_and_approves() -> None:
             super().__init__()
             self._status_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple == ("git", "status", "--porcelain"):

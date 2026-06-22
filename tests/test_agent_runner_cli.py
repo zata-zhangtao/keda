@@ -11,6 +11,7 @@ import pytest
 
 from backend.api.cli import main
 from backend.api.cli_parser import build_parser
+from backend.core.shared.interfaces.runner_console import RunnerProcessKind
 from backend.infrastructure.logging.logger import Logger
 
 
@@ -1717,6 +1718,111 @@ def test_main_registry_reinit_missing_repo(
     assert "not found in registry" in _strip_ansi(captured.out + captured.err)
 
 
+def test_main_registry_reinit_start_daemons_uses_project_root_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry reinit --start-daemons` should spawn daemons from the keda project root so they read the same config.toml as the parent CLI."""
+    monkeypatch.chdir(tmp_path)
+    repo_path = _init_bare_git_repository(tmp_path, "fsense")
+    _write_iar_toml(repo_path, "zata-zhangtao-fsense")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[agent_runner]\n[agent_runner.repositories.zata-zhangtao-fsense]\n"
+        f'path = "{repo_path}"\nenabled = true\ndisplay_name = "fsense"\n',
+        encoding="utf-8",
+    )
+
+    project_root_cwd = tmp_path / "project-root"
+    project_root_cwd.mkdir()
+
+    fake_context = MagicMock()
+    fake_context.repo_id = "zata-zhangtao-fsense"
+
+    fake_settings = MagicMock()
+    fake_settings.console.runner_command = ["iar"]
+
+    from backend.infrastructure.console.process_supervisor import RunnerProcessRecord
+
+    def _fake_start(
+        *,
+        repo_id,
+        kind,
+        contexts,
+        supervisor,
+        runner_command,
+        spawn_cwd,
+        issue_number=None,
+    ):
+        return RunnerProcessRecord(
+            process_id=f"fake-{kind.value}",
+            repo_id=repo_id,
+            kind=kind.value,
+            pid=1,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/fake.log",
+            command=tuple(runner_command) + (kind.value, "--repo-id", repo_id),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        )
+
+    with (
+        patch(
+            "backend.api.cli_registry.initialize_repository_local_config"
+        ) as mock_init,
+        patch(
+            "backend.api.cli_registry.load_fresh_agent_runner_settings",
+            return_value=fake_settings,
+        ),
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
+            return_value=([fake_context], []),
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor"
+        ) as mock_create_supervisor,
+        patch(
+            "backend.api.cli_registry.start_runner_process",
+            side_effect=_fake_start,
+        ) as mock_start,
+        patch(
+            "backend.api.cli_registry.resolve_console_spawn_cwd",
+            return_value=project_root_cwd,
+        ) as mock_spawn_cwd,
+    ):
+        mock_supervisor = MagicMock()
+        mock_supervisor.list_processes.return_value = []
+        mock_create_supervisor.return_value = mock_supervisor
+
+        exit_code = main(
+            [
+                "registry",
+                "reinit",
+                "--repo-id",
+                "zata-zhangtao-fsense",
+                "--start-daemons",
+            ]
+        )
+        captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    assert "Reinitialized" in _strip_ansi(captured.out)
+    assert "Started daemon" in _strip_ansi(captured.out)
+    assert "Started review_daemon" in _strip_ansi(captured.out)
+
+    # The local config initializer was invoked as part of reinit.
+    mock_init.assert_called_once()
+
+    # spawn_cwd must come from resolve_console_spawn_cwd(), not the repository path.
+    mock_spawn_cwd.assert_called_once()
+    assert mock_start.call_count == 2
+    for call in mock_start.call_args_list:
+        assert call.kwargs["spawn_cwd"] == project_root_cwd
+        assert isinstance(call.kwargs["kind"], RunnerProcessKind)
+
+
 def test_main_registry_remove_deletes_entry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1815,7 +1921,7 @@ def test_main_registry_list_shows_repositories_and_daemon_status(
         RunnerProcessRecord(
             process_id="review-1",
             repo_id="repo-a",
-            kind="review-daemon",
+            kind="review_daemon",
             pid=124,
             status="running",
             exit_code=None,

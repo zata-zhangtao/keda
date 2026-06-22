@@ -105,6 +105,7 @@ class SubprocessRunner:
         timeout: int | None = None,
         capture_output: bool = True,
         input_text: str | None = None,
+        label: str | None = None,
     ) -> CommandResult:
         """Run a subprocess and capture output."""
         if input_text is not None:
@@ -123,12 +124,14 @@ class SubprocessRunner:
             stderr = completed.stderr
         elif should_filter_claude_stream(command):
             completed = run_filtered_claude_stream(
-                command, cwd=cwd, timeout=timeout, collect_stdout=True
+                command, cwd=cwd, timeout=timeout, collect_stdout=True, label=label
             )
             stdout = completed.stdout
             stderr = completed.stderr
         elif capture_output and timeout is not None:
-            completed = _run_captured_process(command, cwd=cwd, timeout=timeout)
+            completed = _run_captured_process(
+                command, cwd=cwd, timeout=timeout, label=label
+            )
             stdout = completed.stdout
             stderr = completed.stderr
         elif capture_output:
@@ -160,7 +163,8 @@ class SubprocessRunner:
                 command,
                 timeout=timeout,
                 heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
-                label="Command",
+                base_label="Command",
+                context_label=label,
             )
             watchdog.start()
             stdout_lines: list[str] = []
@@ -215,6 +219,7 @@ def _run_captured_process(
     *,
     cwd: Path,
     timeout: int,
+    label: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a captured subprocess with heartbeat logging."""
     process = subprocess.Popen(
@@ -231,7 +236,8 @@ def _run_captured_process(
         command,
         timeout=timeout,
         heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
-        label="Command",
+        base_label="Command",
+        context_label=label,
     )
     watchdog.start()
     try:
@@ -261,13 +267,15 @@ class _ProcessWatchdog:
         *,
         timeout: int | None,
         heartbeat_seconds: int,
-        label: str,
+        base_label: str,
+        context_label: str | None = None,
     ) -> None:
         self._process = process
         self._command = tuple(command)
         self._timeout = timeout
         self._heartbeat_seconds = heartbeat_seconds
-        self._label = label
+        self._base_label = base_label
+        self._context_label = context_label
         self._started_at = time.monotonic()
         self._stop_event = threading.Event()
         self._timed_out = False
@@ -290,6 +298,12 @@ class _ProcessWatchdog:
                 timeout=self._timeout,
             )
 
+    def _format_label(self) -> str:
+        """Return the log label, optionally appending the context label."""
+        if self._context_label:
+            return f"{self._base_label} ({self._context_label})"
+        return self._base_label
+
     def _run(self) -> None:
         next_heartbeat_at = self._heartbeat_seconds
         while not self._stop_event.wait(timeout=1):
@@ -297,18 +311,20 @@ class _ProcessWatchdog:
                 return
             elapsed_seconds = int(time.monotonic() - self._started_at)
             if elapsed_seconds >= next_heartbeat_at:
+                label = self._format_label()
                 logger.info(
                     "%s still running after %ds: %s",
-                    self._label,
+                    label,
                     elapsed_seconds,
                     _summarize_command(self._command),
                 )
                 next_heartbeat_at += self._heartbeat_seconds
             if self._timeout is not None and elapsed_seconds >= self._timeout:
                 self._timed_out = True
+                label = self._format_label()
                 logger.error(
                     "%s timed out after %ds; terminating: %s",
-                    self._label,
+                    label,
                     elapsed_seconds,
                     _summarize_command(self._command),
                 )
@@ -412,6 +428,7 @@ def run_filtered_claude_stream(
     prompt_text: str | None = None,
     output_sink: Callable[[str], None] | None = None,
     display_sink: Callable[[str], None] | None = None,
+    label: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run Claude stream-json and print a filtered live view.
 
@@ -447,7 +464,8 @@ def run_filtered_claude_stream(
         command,
         timeout=timeout,
         heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
-        label="Claude stream",
+        base_label="Claude stream",
+        context_label=label,
     )
     watchdog.start()
 

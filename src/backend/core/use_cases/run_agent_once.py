@@ -403,7 +403,9 @@ def run_agent(
         phase="execution",
         validation_line=build_validation_prompt_line(issue, config),
     )
-    return run_agent_with_prompt(agent_name, prompt, worktree_path, process_runner)
+    return run_agent_with_prompt(
+        agent_name, prompt, worktree_path, process_runner, issue=issue
+    )
 
 
 def run_agent_with_prompt(
@@ -414,19 +416,36 @@ def run_agent_with_prompt(
     *,
     capture_output: bool = False,
     timeout_seconds: int | None = None,
+    issue: IssueSummary | None = None,
 ) -> CommandResult:
     """Run Codex or Claude Code with a prepared prompt."""
+    if issue is not None:
+        _logger.info(
+            "Starting agent for Issue #%d: %s",
+            issue.number,
+            issue.url,
+        )
     builder = _AGENT_COMMAND_BUILDERS.get(agent_name)
     if builder is not None:
         command = builder(prompt, worktree_path)
     else:
         command = _build_codex_command(prompt, worktree_path)
-    return process_runner.run(
+    label = f"Issue #{issue.number}: {issue.url}" if issue is not None else None
+    result = process_runner.run(
         command,
         cwd=worktree_path,
         capture_output=capture_output,
         timeout=timeout_seconds,
+        label=label,
     )
+    if issue is not None:
+        _logger.info(
+            "Agent finished for Issue #%d: %s (exit_code=%d)",
+            issue.number,
+            issue.url,
+            result.return_code,
+        )
+    return result
 
 
 def extract_agent_response_text(result: CommandResult) -> str:

@@ -559,7 +559,7 @@ def test_process_watchdog_logs_heartbeat_and_kills_on_timeout() -> None:
         ["slow", "command"],
         timeout=2,
         heartbeat_seconds=1,
-        label="Command",
+        base_label="Command",
     )
     watchdog._started_at = 0
     watchdog._stop_event = _NeverStoppedEvent()
@@ -583,6 +583,47 @@ def test_process_watchdog_logs_heartbeat_and_kills_on_timeout() -> None:
         "slow command",
     )
     mock_process.kill.assert_called_once_with()
+
+
+def test_process_watchdog_includes_context_label_in_logs() -> None:
+    """Process watchdog should include the context label in heartbeat logs."""
+    from backend.infrastructure import process_runner
+
+    class _NeverStoppedEvent:
+        def wait(self, timeout: float) -> bool:  # noqa: ARG002
+            return False
+
+    mock_process = MagicMock()
+    mock_process.poll.return_value = None
+    watchdog = process_runner._ProcessWatchdog(
+        mock_process,
+        ["slow", "command"],
+        timeout=2,
+        heartbeat_seconds=1,
+        base_label="Claude stream",
+        context_label="Issue #23: https://github.com/example/repo/issues/23",
+    )
+    watchdog._started_at = 0
+    watchdog._stop_event = _NeverStoppedEvent()
+
+    with (
+        patch.object(process_runner.time, "monotonic", side_effect=[1.1, 2.1]),
+        patch.object(process_runner, "logger") as logger_mock,
+    ):
+        watchdog._run()
+
+    logger_mock.info.assert_any_call(
+        "%s still running after %ds: %s",
+        "Claude stream (Issue #23: https://github.com/example/repo/issues/23)",
+        1,
+        "slow command",
+    )
+    logger_mock.error.assert_called_once_with(
+        "%s timed out after %ds; terminating: %s",
+        "Claude stream (Issue #23: https://github.com/example/repo/issues/23)",
+        2,
+        "slow command",
+    )
 
 
 def test_subprocess_runner_replaces_invalid_utf8_in_captured_output(

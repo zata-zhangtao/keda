@@ -59,6 +59,7 @@ class IProcessRunner(ABC):
         timeout: int | None = None,
         capture_output: bool = True,
         input_text: str | None = None,
+        label: str | None = None,
     ) -> CommandResult:
         """运行一条命令并捕获其结果。
 
@@ -84,6 +85,8 @@ class IProcessRunner(ABC):
             input_text: 可选的标准输入文本。提供时会原样写入子进程的
                 stdin（如 ``git mktree`` 这类从标准输入读取的 plumbing
                 命令），并强制以捕获模式运行；为 ``None`` 时不写 stdin。
+            label: 可选的运行上下文标签，用于在 watchdog 心跳或超时
+                日志中标识本次命令。例如 ``"Issue #23: https://..."``。
 
         Returns:
             CommandResult: 包含退出码与（按需）捕获到的 stdout/stderr

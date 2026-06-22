@@ -251,6 +251,7 @@ class FakeProcessRunner(IProcessRunner):
         self.responses = responses or {}
         self.calls: list[list[str]] = []
         self.input_texts: list[str | None] = []
+        self.labels: list[str | None] = []
 
     def run(
         self,
@@ -261,9 +262,11 @@ class FakeProcessRunner(IProcessRunner):
         timeout: int | None = None,
         capture_output: bool = True,
         input_text: str | None = None,
+        label: str | None = None,
     ) -> CommandResult:
         self.calls.append(list(command))
         self.input_texts.append(input_text)
+        self.labels.append(label)
         key = tuple(command)
         if key in self.responses:
             result = self.responses[key]

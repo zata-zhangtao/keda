@@ -553,7 +553,16 @@ def test_run_pre_pr_review_runs_agent_and_approves_when_no_changes(
     fake_client = FakeGitHubClient()
 
     class _ApprovingRunner(FakeProcessRunner):
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple[:1] == ("codex",):
                 self.calls.append(list(command))
@@ -634,7 +643,16 @@ def test_run_pre_pr_review_commits_reviewer_changes(tmp_path: Path) -> None:
             )
             self._review_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple[:1] == ("codex",):
                 self.calls.append(list(command))
@@ -708,7 +726,9 @@ class _PatchingReviewRunner(FakeProcessRunner):
         )
         self._verdict = verdict
 
-    def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+    def run(
+        self, command, *, cwd, check=True, timeout=None, capture_output=True, label=None
+    ):
         command_tuple = tuple(command)
         if command_tuple[:1] == ("codex",):
             self.calls.append(list(command))
@@ -858,7 +878,16 @@ def test_run_pre_pr_review_empty_commit_request_with_approval_converges(
                 }
             )
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple[:1] == ("codex",):
                 self.calls.append(list(command))
@@ -942,7 +971,16 @@ def test_run_pre_pr_review_uses_commit_request_verdict_when_stdout_unparseable(
                 }
             )
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple[:1] == ("codex",):
                 self.calls.append(list(command))
@@ -1023,7 +1061,16 @@ def test_run_pre_pr_review_empty_commit_request_changes_requested_soft_fails(
                 }
             )
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple[:1] == ("codex",):
                 self.calls.append(list(command))
@@ -1072,7 +1119,16 @@ def test_run_pre_pr_review_rejects_changes_requested_without_commit_request(
     fake_client = FakeGitHubClient()
 
     class _ChangesRequestedRunner(FakeProcessRunner):
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple[:1] == ("codex",):
                 self.calls.append(list(command))
@@ -1127,7 +1183,16 @@ def test_run_pre_pr_review_passes_configured_timeout(tmp_path: Path) -> None:
             super().__init__()
             self.agent_timeouts: list[int | None] = []
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple[:1] == ("codex",):
                 self.calls.append(list(command))
@@ -1179,7 +1244,16 @@ def test_run_pre_pr_review_soft_fails_with_findings_on_last_cycle(
     fake_client = FakeGitHubClient()
 
     class _FindingsOnlyRunner(FakeProcessRunner):
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple[:1] == ("codex",):
                 self.calls.append(list(command))
@@ -1267,7 +1341,16 @@ def test_run_pre_pr_review_last_cycle_final_patch_is_accepted(
                 }
             )
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple[:1] == ("codex",):
                 self.calls.append(list(command))

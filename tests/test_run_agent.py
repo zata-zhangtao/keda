@@ -147,7 +147,16 @@ def test_run_agent_with_prompt_passes_timeout(tmp_path: Path) -> None:
             super().__init__()
             self.timeouts: list[int | None] = []
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             self.timeouts.append(timeout)
             return super().run(
                 command,
@@ -155,6 +164,7 @@ def test_run_agent_with_prompt_passes_timeout(tmp_path: Path) -> None:
                 check=check,
                 timeout=timeout,
                 capture_output=capture_output,
+                label=label,
             )
 
     fake_runner = _RecordingTimeoutRunner()
@@ -169,6 +179,38 @@ def test_run_agent_with_prompt_passes_timeout(tmp_path: Path) -> None:
     )
 
     assert fake_runner.timeouts == [123]
+
+
+def test_run_agent_with_prompt_logs_issue_context(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """When an issue is provided, run_agent_with_prompt logs the full URL and passes it as label."""
+    issue = IssueSummary(
+        number=23,
+        title="Schema-Aware End-to-End Evaluation Framework",
+        url="https://github.com/zata-zhangtao/fsense/issues/23",
+        body="Body",
+        labels=(),
+    )
+    fake_runner = FakeProcessRunner()
+
+    with caplog.at_level(logging.INFO, logger="backend.core.use_cases.run_agent_once"):
+        result = run_agent_with_prompt(
+            "claude", "Implement.", tmp_path, fake_runner, issue=issue
+        )
+
+    assert result.return_code == 0
+    assert fake_runner.labels == [
+        "Issue #23: https://github.com/zata-zhangtao/fsense/issues/23"
+    ]
+    assert (
+        "Starting agent for Issue #23: https://github.com/zata-zhangtao/fsense/issues/23"
+        in caplog.text
+    )
+    assert (
+        "Agent finished for Issue #23: https://github.com/zata-zhangtao/fsense/issues/23 (exit_code=0)"
+        in caplog.text
+    )
 
 
 def test_extract_agent_response_text_from_claude_stream_json() -> None:
@@ -1194,7 +1236,16 @@ def test_run_once_uncommitted_changes_runner_commits(
             self._sha_calls = 0
             self._status_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple == ("git", "rev-parse", "HEAD"):
                 self.calls.append(list(command))
@@ -1228,6 +1279,7 @@ def test_run_once_uncommitted_changes_runner_commits(
                 check=check,
                 timeout=timeout,
                 capture_output=capture_output,
+                label=label,
             )
 
     fake_runner = _FallbackCommitRunner()
@@ -1321,7 +1373,16 @@ def test_run_once_recovers_after_staged_verification_failure(
             self._test_calls = 0
             self._committed = False
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -1424,7 +1485,16 @@ def test_run_once_recovers_after_agent_command_failure(
             self._sha_calls = 0
             self._committed = False
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -1863,6 +1933,7 @@ class _PrecommitCommitRunner(FakeProcessRunner):
         timeout=None,
         capture_output=True,
         input_text=None,
+        label=None,
     ):
         command_tuple = tuple(command)
         is_proxy_commit = command_tuple[:2] == ("git", "commit")
@@ -1894,6 +1965,7 @@ class _PrecommitCommitRunner(FakeProcessRunner):
             timeout=timeout,
             capture_output=capture_output,
             input_text=input_text,
+            label=label,
         )
 
 
@@ -2050,7 +2122,16 @@ def test_run_once_success(tmp_path: Path) -> None:
             self._sha_calls = 0
             self._agent_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple == ("git", "rev-parse", "HEAD"):
@@ -2162,7 +2243,16 @@ def test_run_once_failure_removes_supervising_label(tmp_path: Path) -> None:
             self._sha_calls = 0
             self._agent_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple == ("git", "rev-parse", "HEAD"):
@@ -2381,7 +2471,16 @@ def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
             self._sha_calls = 0
             self._status_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             if command_tuple == ("git", "rev-parse", "HEAD"):
                 self.calls.append(list(command))
@@ -2430,6 +2529,7 @@ def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
                 check=check,
                 timeout=timeout,
                 capture_output=capture_output,
+                label=label,
             )
 
     fake_runner = _PrdSuccessRunner()
@@ -2487,7 +2587,16 @@ def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
             self._agent_calls = 0
             self._committed = False
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -2995,7 +3104,16 @@ def test_recovery_loop_success_on_second_attempt(tmp_path: Path) -> None:
             self._agent_calls = 0
             self._committed = False
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -3071,7 +3189,16 @@ def test_recovery_loop_exhausted_raises_max_retries(tmp_path: Path) -> None:
             super().__init__()
             self._sha_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -3132,7 +3259,16 @@ def test_run_once_reuses_existing_clean_local_commit(tmp_path: Path) -> None:
     worktree_path.mkdir()
 
     class _ExistingCommitRunner(FakeProcessRunner):
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -3464,7 +3600,16 @@ def test_run_once_recovers_running_issue_with_existing_local_commit(
     worktree_path.mkdir()
 
     class _RunningRecoveryRunner(FakeProcessRunner):
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -3528,7 +3673,16 @@ def test_attempt_history_in_issue_comment(tmp_path: Path) -> None:
             self._sha_calls = 0
             self._agent_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -3773,7 +3927,16 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
             self._lint_calls = 0
             self._committed = False
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -3899,7 +4062,16 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
             self._sha_calls = 0
             self._agent_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple in self.responses:
@@ -4069,6 +4241,7 @@ def test_run_once_rebase_conflict_detached_head(
             check=True,
             timeout=None,
             capture_output=True,
+            label=None,
         ):
             command_tuple = tuple(command)
             if command_tuple == ("git", "branch", "--show-current"):
@@ -4094,6 +4267,7 @@ def test_run_once_rebase_conflict_detached_head(
                 check=check,
                 timeout=timeout,
                 capture_output=capture_output,
+                label=label,
             )
 
     fake_runner = _DetachedHeadReworkRunner(worktree_path)
@@ -5486,6 +5660,7 @@ def test_worktree_reconcile_run_once(tmp_path: Path) -> None:
             timeout=None,
             capture_output=True,
             input_text=None,
+            label=None,
         ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
@@ -6127,6 +6302,7 @@ def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> 
             timeout=None,
             capture_output=True,
             input_text=None,
+            label=None,
         ):
             if command[0] in ("claude", "kimi", "codex"):
                 request_path = cwd / ".agent-runner" / "commit-request.json"
@@ -6146,6 +6322,7 @@ def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> 
                 timeout=timeout,
                 capture_output=capture_output,
                 input_text=input_text,
+                label=label,
             )
 
     fake_runner = _AgentWritingRunner(

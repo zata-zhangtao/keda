@@ -2065,6 +2065,29 @@ Agent Runner 同时暴露只读状态端点：
 - `GET /api/v1/agent-runner/status` — 返回 runner 配置摘要与仓库列表
 - `GET /api/v1/agent-runner/health` — 返回 runner 健康状态（GitHub CLI 可用性等）
 
+## Agent Runner 日志与 Issue 上下文
+
+Agent Runner 在启动和结束一次 agent 执行时，会显式记录当前处理的 GitHub Issue 编号和完整 URL：
+
+```text
+Starting agent for Issue #23: https://github.com/zata-zhangtao/fsense/issues/23
+Agent finished for Issue #23: https://github.com/zata-zhangtao/fsense/issues/23 (exit_code=0)
+```
+
+对于运行时间超过心跳阈值（默认 60 秒）的长命令，process runner 的 watchdog 心跳日志也会携带 Issue 上下文：
+
+```text
+Claude stream (Issue #23: https://github.com/zata-zhangtao/fsense/issues/23) still running after 60s: claude --dangerously-skip-permissions ...
+```
+
+这样即使命令摘要因 `_summarize_command` 的 240 字符限制被截断，Issue URL 仍以独立字段完整保留，便于从日志直接定位当前处理的 Issue。
+
+### 实现要点
+
+- `IProcessRunner.run` 新增可选 `label` 参数，例如 `"Issue #23: https://github.com/..."`。
+- `run_agent_once.run_agent_with_prompt` 在有 `IssueSummary` 时记录启动/结束日志，并把 `issue.number` 与 `issue.url` 作为 `label` 传给 process runner。
+- `_ProcessWatchdog` 将 `label` 附加到原有 base label 之后，无 `label` 时保持原有日志格式不变。
+
 ## Agent Runner Monitoring Dashboard
 
 Dashboard 路由 `/dashboard`（即 `frontend/src/pages/dashboard-page.tsx`）展示 Agent Runner 的监控视图。运维者打开 Web 就能看到当前队列、PR 状态、事件时间线和异常。监控 API 本身保持只读；写操作（重试 failed、继续 blocked、启停 runner 进程等）由独立的管理终端 API 承载，见下文「Agent Runner 统一管理终端（Operations Console）」一节。

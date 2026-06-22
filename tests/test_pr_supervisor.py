@@ -764,7 +764,16 @@ def test_run_post_pr_supervisor_cycle_parses_action() -> None:
             super().__init__()
             self.agent_capture_output: list[bool] = []
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             if tuple(command)[:1] == ("codex",):
                 self.calls.append(list(command))
                 self.agent_capture_output.append(capture_output)
@@ -828,7 +837,9 @@ class _CrashingAgentRunner(FakeProcessRunner):
         self.success_stdout = success_stdout
         self.agent_attempts = 0
 
-    def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+    def run(
+        self, command, *, cwd, check=True, timeout=None, capture_output=True, label=None
+    ):
         if tuple(command)[:1] == ("codex",):
             self.calls.append(list(command))
             self.agent_attempts += 1
@@ -1348,7 +1359,16 @@ def test_dirty_worktree_before_supervisor_auto_stash_and_approve(
             super().__init__()
             self._status_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple == ("git", "status", "--porcelain"):
@@ -1435,7 +1455,16 @@ def test_dirty_worktree_after_approve_blocks_review(tmp_path: Path) -> None:
             super().__init__()
             self._status_calls = 0
 
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple == ("git", "status", "--porcelain"):
@@ -1512,7 +1541,16 @@ def test_supervisor_loop_waits_for_pending_checks_once(tmp_path: Path) -> None:
     worktree_path.mkdir()
 
     class _ApproveRunner(FakeProcessRunner):
-        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
             command_tuple = tuple(command)
             self.calls.append(list(command))
             if command_tuple == ("git", "status", "--porcelain"):

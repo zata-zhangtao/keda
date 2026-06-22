@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from backend.api.cli_console import console, error_console
+from backend.core.shared.interfaces.runner_console import RunnerProcessKind
 from backend.core.use_cases.console_processes import (
     start_runner_process,
     stop_runner_process,
@@ -18,6 +19,7 @@ from backend.engines.agent_runner.factory import (
     create_process_supervisor,
     create_registry_editor,
     load_fresh_agent_runner_settings,
+    resolve_console_spawn_cwd,
     resolve_repository_targets_with_diagnostics,
 )
 from backend.engines.agent_runner.repository_local import (
@@ -25,11 +27,12 @@ from backend.engines.agent_runner.repository_local import (
     initialize_repository_local_config,
 )
 
-# ProcessSupervisor stores ``kind`` as the CLI-facing strings below, not as
-# the ``RunnerProcessKind`` enum values, so registry commands compare against
-# these literals directly.
-_DAEMON_KIND = "daemon"
-_REVIEW_DAEMON_KIND = "review-daemon"
+# ``ProcessSupervisor`` stores ``kind`` as the string value of the enum member
+# (``RunnerProcessKind.DAEMON.value`` / ``RunnerProcessKind.REVIEW_DAEMON.value``),
+# not as the enum member itself, so registry commands compare against these
+# literal values directly.
+_DAEMON_KIND = RunnerProcessKind.DAEMON.value
+_REVIEW_DAEMON_KIND = RunnerProcessKind.REVIEW_DAEMON.value
 
 if TYPE_CHECKING:
     import argparse
@@ -222,7 +225,8 @@ def _restart_daemons(repo_id: str, repo_path: Path, process_runner) -> int:
                     f"[yellow]Failed to stop old {record.kind} {record.process_id}:[/] {exc}"
                 )
 
-    for kind in (_DAEMON_KIND, _REVIEW_DAEMON_KIND):
+    spawn_cwd = resolve_console_spawn_cwd()
+    for kind in (RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON):
         try:
             record = start_runner_process(
                 repo_id=repo_id,
@@ -230,15 +234,15 @@ def _restart_daemons(repo_id: str, repo_path: Path, process_runner) -> int:
                 contexts=contexts,
                 supervisor=supervisor,
                 runner_command=runner_command,
-                spawn_cwd=repo_path,
+                spawn_cwd=spawn_cwd,
             )
             console.print(
-                f"[green]Started {kind}[/] for {repo_id} "
+                f"[green]Started {kind.value}[/] for {repo_id} "
                 f"(process {record.process_id})"
             )
         except Exception as exc:  # noqa: BLE001 - daemon start is best effort.
             error_console.print(
-                f"[yellow]Failed to start {kind} for {repo_id}:[/] {exc}"
+                f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}"
             )
             return 1
     return 0
