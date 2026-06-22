@@ -1,5 +1,7 @@
 # PRD: IAR REPL 交互入口（`iar` 无参数启动 agent 对话）
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/103
+
 > REPL（Read-Eval-Print Loop）— 在本 PRD 中特指 IAR 提供的持续多轮 agent 对话与命令执行入口。
 > 用户在 TTY 中直接运行 `iar`（不带任何子命令）即进入该 REPL；非 TTY 环境与现有行为一致，
 > 仍打印 `iar --help` 后退出。
