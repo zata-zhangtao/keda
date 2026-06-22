@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 from backend.core.shared.models.agent_runner import CommandResult, LabelConfig
 from backend.infrastructure.github_client import (
@@ -519,3 +523,86 @@ def test_edit_issue_body_writes_via_file(tmp_path: Path) -> None:
     assert runner.calls[0][:4] == ["gh", "issue", "edit", "9"]
     assert runner.calls[0][4] == "--body-file"
     assert runner.captured_body == "New body text."
+
+
+class _FlakyProcessRunner(FakeProcessRunner):
+    """Process runner that fails a fixed number of times before succeeding."""
+
+    def __init__(self, fail_count: int, error_text: str) -> None:
+        super().__init__()
+        self.fail_count = fail_count
+        self.error_text = error_text
+        self.attempts = 0
+
+    def run(self, command, *, cwd, check=True, **kwargs):  # type: ignore[override]
+        self.attempts += 1
+        if self.attempts <= self.fail_count:
+            exc = subprocess.CalledProcessError(
+                returncode=1,
+                cmd=list(command),
+                output="",
+                stderr=self.error_text,
+            )
+            if check:
+                raise exc
+            return CommandResult(
+                command=tuple(command),
+                return_code=1,
+                stdout="",
+                stderr=self.error_text,
+            )
+        return CommandResult(
+            command=tuple(command),
+            return_code=0,
+            stdout="https://github.com/org/repo/issues/42",
+            stderr="",
+        )
+
+
+def test_create_issue_retries_on_transient_tls_timeout(tmp_path: Path) -> None:
+    """create_issue should retry when gh fails with a TLS handshake timeout."""
+    runner = _FlakyProcessRunner(
+        fail_count=1,
+        error_text='Post "https://api.github.com/graphql": net/http: TLS handshake timeout',
+    )
+    github_client = GitHubCliClient(tmp_path, runner)
+
+    with patch("backend.infrastructure.github_client.time.sleep") as mock_sleep:
+        issue_url = github_client.create_issue(
+            title="title", body="body", labels=["type/feature"]
+        )
+
+    assert issue_url == "https://github.com/org/repo/issues/42"
+    assert runner.attempts == 2
+    mock_sleep.assert_called_once()
+
+
+def test_create_issue_does_not_retry_permanent_errors(tmp_path: Path) -> None:
+    """create_issue should fail immediately on non-transient errors."""
+    runner = _FlakyProcessRunner(
+        fail_count=1,
+        error_text="HTTP 401: Bad credentials",
+    )
+    github_client = GitHubCliClient(tmp_path, runner)
+
+    with patch("backend.infrastructure.github_client.time.sleep") as mock_sleep:
+        with pytest.raises(subprocess.CalledProcessError):
+            github_client.create_issue(title="title", body="body", labels=[])
+
+    assert runner.attempts == 1
+    mock_sleep.assert_not_called()
+
+
+def test_create_issue_gives_up_after_max_retries(tmp_path: Path) -> None:
+    """create_issue should stop retrying after the maximum number of attempts."""
+    runner = _FlakyProcessRunner(
+        fail_count=10,
+        error_text="net/http: TLS handshake timeout",
+    )
+    github_client = GitHubCliClient(tmp_path, runner)
+
+    with patch("backend.infrastructure.github_client.time.sleep"):
+        with pytest.raises(subprocess.CalledProcessError):
+            github_client.create_issue(title="title", body="body", labels=[])
+
+    assert runner.attempts == 3

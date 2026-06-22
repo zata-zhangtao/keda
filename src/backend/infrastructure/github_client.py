@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
-from backend.infrastructure.process_runner import SubprocessRunner
+from backend.infrastructure.process_runner import CommandResult, SubprocessRunner
 
 _logger = logging.getLogger(__name__)
 
@@ -25,6 +27,26 @@ _MAX_GITHUB_BODY_LENGTH = 60000
 _CONTROL_CHARACTER_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 _BODY_TRUNCATION_MARKER = "\n\n... (truncated to fit GitHub's size limit) ...\n\n"
+
+# Number of attempts for transient GitHub CLI network failures.
+_MAX_GH_RETRIES = 3
+
+# Delay between retries in seconds.
+_GH_RETRY_DELAY_SECONDS = 1.0
+
+# Patterns matched against combined stdout/stderr of a failed ``gh`` call to
+# decide whether the failure is likely transient and worth retrying.
+_RETRYABLE_GH_ERROR_PATTERNS = (
+    re.compile(r"TLS handshake timeout", re.IGNORECASE),
+    re.compile(r"connection timed out", re.IGNORECASE),
+    re.compile(r"i/o timeout", re.IGNORECASE),
+    re.compile(r"no such host", re.IGNORECASE),
+    re.compile(r"temporary failure in name resolution", re.IGNORECASE),
+    re.compile(r"500\s+Internal Server Error", re.IGNORECASE),
+    re.compile(r"502\s+Bad Gateway", re.IGNORECASE),
+    re.compile(r"503\s+Service Unavailable", re.IGNORECASE),
+    re.compile(r"504\s+Gateway Timeout", re.IGNORECASE),
+)
 
 
 def sanitize_github_body(
@@ -261,6 +283,61 @@ class GitHubCliClient:
         self.repo_path = repo_path
         self._runner = process_runner or SubprocessRunner()
 
+    def _is_retryable_gh_error(self, exc: subprocess.CalledProcessError) -> bool:
+        """Return True when a failed ``gh`` call looks like a transient network error."""
+        combined_output = (exc.stdout or "") + "\n" + (exc.stderr or "")
+        return any(
+            pattern.search(combined_output) for pattern in _RETRYABLE_GH_ERROR_PATTERNS
+        )
+
+    def _run_with_retry(
+        self,
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        check: bool = True,
+        timeout: int | None = None,
+        capture_output: bool = True,
+        input_text: str | None = None,
+    ) -> CommandResult:
+        """Run a ``gh`` command, retrying a limited number of times on transient errors.
+
+        Retries are only attempted when ``check=True`` and the failure matches
+        one of the known transient network patterns (timeouts, DNS failures,
+        or HTTP 5xx responses from GitHub).
+        """
+
+        last_exc: subprocess.CalledProcessError | None = None
+        for attempt in range(1, _MAX_GH_RETRIES + 1):
+            try:
+                return self._runner.run(
+                    command,
+                    cwd=cwd,
+                    check=check,
+                    timeout=timeout,
+                    capture_output=capture_output,
+                    input_text=input_text,
+                )
+            except subprocess.CalledProcessError as exc:
+                last_exc = exc
+                if (
+                    not check
+                    or attempt >= _MAX_GH_RETRIES
+                    or not self._is_retryable_gh_error(exc)
+                ):
+                    raise
+                _logger.warning(
+                    "GitHub CLI transient error (attempt %d/%d), "
+                    "retrying in %.1fs: %s",
+                    attempt,
+                    _MAX_GH_RETRIES,
+                    _GH_RETRY_DELAY_SECONDS,
+                    exc.stderr.strip() if exc.stderr else str(exc),
+                )
+                time.sleep(_GH_RETRY_DELAY_SECONDS)
+        # pragma: no cover - loop always returns or raises before exhausting.
+        raise last_exc  # type: ignore[misc]
+
     def _write_body_file(self, temp_dir: str, filename: str, body: str) -> Path:
         """Sanitize a Markdown body and write it for a ``--body-file`` flag.
 
@@ -278,7 +355,7 @@ class GitHubCliClient:
         Returns:
             GhAuthStatus indicating whether the user is authenticated.
         """
-        result = self._runner.run(
+        result = self._run_with_retry(
             ["gh", "auth", "status", "--hostname", "github.com"],
             cwd=self.repo_path,
             check=False,
@@ -381,7 +458,7 @@ class GitHubCliClient:
         )
         for label_name, color, description in label_specs:
             effective_name = configured_names.get(label_name, label_name)
-            self._runner.run(
+            self._run_with_retry(
                 [
                     "gh",
                     "label",
@@ -398,7 +475,7 @@ class GitHubCliClient:
 
     def list_ready_issues(self, ready_label: str, limit: int) -> list[IssueSummary]:
         """List open Issues with the ready label."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "issue",
@@ -455,10 +532,10 @@ class GitHubCliClient:
             command.extend(["--add-label", label])
         for label in labels_to_remove:
             command.extend(["--remove-label", label])
-        self._runner.run(command, cwd=self.repo_path)
+        self._run_with_retry(command, cwd=self.repo_path)
 
     def _list_issue_label_names(self, issue_number: int) -> set[str]:
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "issue",
@@ -480,7 +557,7 @@ class GitHubCliClient:
         """Post a Markdown comment to an Issue."""
         with tempfile.TemporaryDirectory(prefix="iar-comment-") as temp_dir:
             comment_path = self._write_body_file(temp_dir, "comment.md", body)
-            self._runner.run(
+            self._run_with_retry(
                 [
                     "gh",
                     "issue",
@@ -496,7 +573,7 @@ class GitHubCliClient:
         self, rework_prd_label: str, limit: int
     ) -> list[IssueSummary]:
         """List open Issues with the rework-prd label."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "issue",
@@ -534,7 +611,7 @@ class GitHubCliClient:
         with tempfile.TemporaryDirectory(prefix="iar-issue-body-") as temp_dir:
             body_path = Path(temp_dir) / "issue_body.md"
             body_path.write_text(body, encoding="utf-8")
-            self._runner.run(
+            self._run_with_retry(
                 [
                     "gh",
                     "issue",
@@ -567,7 +644,7 @@ class GitHubCliClient:
             ]
             for label in labels:
                 command.extend(["--label", label])
-            result = self._runner.run(command, cwd=self.repo_path)
+            result = self._run_with_retry(command, cwd=self.repo_path)
         return result.stdout.strip().splitlines()[-1]
 
     def create_draft_pr(
@@ -576,7 +653,7 @@ class GitHubCliClient:
         """Create a draft pull request from the current branch."""
         with tempfile.TemporaryDirectory(prefix="iar-pr-") as temp_dir:
             body_path = self._write_body_file(temp_dir, "pr.md", body)
-            result = self._runner.run(
+            result = self._run_with_retry(
                 [
                     "gh",
                     "pr",
@@ -600,7 +677,7 @@ class GitHubCliClient:
         seen_numbers: set[int] = set()
         candidates: list[IssueSummary] = []
         for label in labels:
-            result = self._runner.run(
+            result = self._run_with_retry(
                 [
                     "gh",
                     "issue",
@@ -640,7 +717,7 @@ class GitHubCliClient:
 
     def get_pull_request_context(self, branch: str) -> PullRequestContext | None:
         """Return PR context for an open PR on the given branch."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "pr",
@@ -684,7 +761,7 @@ class GitHubCliClient:
 
     def list_issue_comments(self, issue_number: int) -> list[str]:
         """Return raw comment bodies for an Issue."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "issue",
@@ -707,7 +784,7 @@ class GitHubCliClient:
         """Post a Markdown comment to a Pull Request."""
         with tempfile.TemporaryDirectory(prefix="iar-pr-comment-") as temp_dir:
             comment_path = self._write_body_file(temp_dir, "comment.md", body)
-            self._runner.run(
+            self._run_with_retry(
                 [
                     "gh",
                     "pr",
@@ -723,7 +800,7 @@ class GitHubCliClient:
         """Replace the description body of a Pull Request."""
         with tempfile.TemporaryDirectory(prefix="iar-pr-body-") as temp_dir:
             body_path = self._write_body_file(temp_dir, "body.md", body)
-            self._runner.run(
+            self._run_with_retry(
                 [
                     "gh",
                     "pr",
@@ -737,7 +814,7 @@ class GitHubCliClient:
 
     def list_pr_comments(self, pr_number: int) -> list[str]:
         """Return raw comment bodies for a PR."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "pr",
@@ -758,7 +835,7 @@ class GitHubCliClient:
 
     def find_open_pr_by_head(self, branch: str) -> str | None:
         """Return PR URL if an open PR exists for the branch."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "pr",
@@ -782,7 +859,7 @@ class GitHubCliClient:
 
     def find_merged_pr_by_head(self, branch: str) -> str | None:
         """Return PR URL if a merged PR exists for the branch."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "pr",
@@ -806,7 +883,7 @@ class GitHubCliClient:
 
     def get_remote_base_sha(self, remote: str, base_branch: str) -> str:
         """Return the SHA of the remote base branch."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "git",
                 "rev-parse",
@@ -821,7 +898,7 @@ class GitHubCliClient:
 
     def get_issue(self, issue_number: int) -> IssueSummary:
         """Return the Issue summary for the given issue number."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "issue",
@@ -855,7 +932,7 @@ class GitHubCliClient:
         self, label: str, limit: int, state: str = "all"
     ) -> list[IssueSummary]:
         """List Issues by label across open and closed states."""
-        result = self._runner.run(
+        result = self._run_with_retry(
             [
                 "gh",
                 "issue",
