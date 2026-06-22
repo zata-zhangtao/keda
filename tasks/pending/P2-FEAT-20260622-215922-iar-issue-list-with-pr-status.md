@@ -1,5 +1,7 @@
 # PRD: `iar issue list` — 带 PR 状态的 Issue 追踪视图
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/105
+
 ## 1. Introduction & Goals
 
 ### Problem Statement
