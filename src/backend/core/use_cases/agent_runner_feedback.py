@@ -92,29 +92,6 @@ _DEFAULT_EXECUTION_TEMPLATE = "\n".join(
 )
 
 
-def _build_prd_line(issue: IssueSummary) -> str:
-    """Build the PRD reference line for a prompt template (pointer-only)."""
-    prd_path = extract_prd_path(issue.body)
-    if prd_path:
-        prd_path_obj = Path(prd_path)
-        move_instruction = ""
-        if (
-            len(prd_path_obj.parts) >= 2
-            and prd_path_obj.parts[0] == "tasks"
-            and prd_path_obj.parts[1] == "pending"
-        ):
-            move_instruction = (
-                " If all checklist items are complete, move the PRD from "
-                "`tasks/pending/` to `tasks/archive/`."
-            )
-        return (
-            f"Also read the canonical PRD at `{prd_path}`. "
-            "Before requesting a commit, update the PRD's Acceptance Checklist "
-            f"to reflect completed work.{move_instruction}"
-        )
-    return "If the Issue references a PRD, read it before editing."
-
-
 def _read_prd_text(prd_path: Path) -> str | None:
     """Return the canonical PRD file contents, or ``None`` if unreadable.
 
