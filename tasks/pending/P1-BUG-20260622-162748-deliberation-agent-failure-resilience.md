@@ -1,6 +1,7 @@
 # PRD: Deliberation Agent Failure Resilience
 
-- GitHub Issue: （待创建或留空）
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/102
+
 
 ## 1. Introduction & Goals
 

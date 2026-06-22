@@ -27,6 +27,7 @@ from backend.api.cli_registry import (
 )
 from backend.api.cli_takeover import _run_takeover_command
 from backend.core.use_cases.create_issue_from_prd import (
+    ISSUE_LINK_LINE_RE,
     IssueFromPrdRequest,
     PrdPublishContext,
     create_issue_from_prd,
@@ -296,21 +297,28 @@ def _handle_not_initialized_error(exc: IARRepositoryNotInitializedError) -> int:
     return 1
 
 
-def _expand_prd_paths(repo_path: Path, prd_paths: list[str]) -> list[str]:
+def _expand_prd_paths(
+    repo_path: Path, prd_paths: list[str]
+) -> tuple[list[str], list[str]]:
     """Expand directories in ``prd_paths`` to their ``*.md`` files.
 
     Files are returned as repo-relative paths. Directories are expanded to
-    their immediate ``*.md`` children, sorted by filename. Non-existent
-    paths are passed through unchanged so that downstream validation can
-    report them with its usual diagnostics.
+    their immediate ``*.md`` children, sorted by filename. PRDs that already
+    contain a ``- GitHub Issue:`` URL are skipped when discovered via a
+    directory, because the user's intent is to create Issues only for pending
+    PRDs. Explicitly passed files are not skipped so that errors remain
+    visible. Non-existent paths are passed through unchanged so that downstream
+    validation can report them with its usual diagnostics.
 
     Args:
         repo_path: Repository root used to resolve relative paths.
         prd_paths: Raw CLI arguments, each may be a file or a directory.
 
     Returns:
-        Repo-relative paths of PRD Markdown files, preserving input order
-        and deduplicated while keeping the first occurrence.
+        ``(expanded_paths, skipped_paths)`` tuple. ``expanded_paths`` are
+        repo-relative PRD Markdown files to process. ``skipped_paths`` are
+        repo-relative PRD files that already have an Issue link and were
+        discovered through a directory argument.
 
     Raises:
         ValueError: When a directory is empty of ``*.md`` files or the
@@ -318,7 +326,15 @@ def _expand_prd_paths(repo_path: Path, prd_paths: list[str]) -> list[str]:
     """
 
     expanded_paths: list[str] = []
+    skipped_paths: list[str] = []
     seen_paths: set[str] = set()
+
+    def _has_issue_link(absolute_prd_path: Path) -> bool:
+        try:
+            prd_text = absolute_prd_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        return any(ISSUE_LINK_LINE_RE.match(line) for line in prd_text.splitlines())
 
     for prd_path_text in prd_paths:
         candidate_path = (repo_path / prd_path_text).resolve()
@@ -327,11 +343,12 @@ def _expand_prd_paths(repo_path: Path, prd_paths: list[str]) -> list[str]:
             expanded_paths.append(prd_path_text)
             continue
 
+        is_directory = candidate_path.is_dir()
         if candidate_path.is_file():
             if candidate_path.suffix.lower() != ".md":
                 raise ValueError(f"PRD file must be a Markdown file: {prd_path_text}")
             file_entries = [candidate_path]
-        elif candidate_path.is_dir():
+        elif is_directory:
             file_entries = sorted(
                 [
                     entry
@@ -354,12 +371,17 @@ def _expand_prd_paths(repo_path: Path, prd_paths: list[str]) -> list[str]:
             if relative_path in seen_paths:
                 continue
             seen_paths.add(relative_path)
+
+            if is_directory and _has_issue_link(file_entry):
+                skipped_paths.append(relative_path)
+                continue
+
             expanded_paths.append(relative_path)
 
-    if not expanded_paths:
+    if not expanded_paths and not skipped_paths:
         raise ValueError("No PRD Markdown files found.")
 
-    return expanded_paths
+    return expanded_paths, skipped_paths
 
 
 def _run_parsed_command(parsed: argparse.Namespace) -> int:
@@ -613,10 +635,25 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 cwd=Path.cwd(),
             )
             try:
-                prd_paths = _expand_prd_paths(context.repo_path, raw_prd_paths)
+                prd_paths, skipped_prd_paths = _expand_prd_paths(
+                    context.repo_path, raw_prd_paths
+                )
             except ValueError as exc:
                 logger.error("iar issue create failed: %s", exc)
                 return 1
+
+            for skipped_prd_path in skipped_prd_paths:
+                console.print(
+                    f"[yellow]Skipped PRD with existing Issue:[/] {skipped_prd_path}"
+                )
+                logger.info("Skipped PRD with existing Issue: %s", skipped_prd_path)
+
+            if not prd_paths:
+                console.print(
+                    "[green]All PRDs in the requested directories already have "
+                    "GitHub Issues.[/]"
+                )
+                return 0
 
             if len(prd_paths) > 1 and parsed.title is not None:
                 logger.error(

@@ -153,9 +153,10 @@ def test_expand_prd_paths_directory(tmp_path: Path) -> None:
     (tmp_path / "tasks" / "pending" / "a.md").write_text("# A", encoding="utf-8")
     (tmp_path / "tasks" / "pending" / ".gitkeep").write_text("", encoding="utf-8")
 
-    expanded = _expand_prd_paths(tmp_path, ["tasks/pending"])
+    expanded, skipped = _expand_prd_paths(tmp_path, ["tasks/pending"])
 
     assert expanded == ["tasks/pending/a.md", "tasks/pending/b.md"]
+    assert skipped == []
 
 
 def test_expand_prd_paths_mixed_file_and_directory(tmp_path: Path) -> None:
@@ -164,9 +165,10 @@ def test_expand_prd_paths_mixed_file_and_directory(tmp_path: Path) -> None:
     (tmp_path / "tasks" / "pending" / "a.md").write_text("# A", encoding="utf-8")
     (tmp_path / "tasks" / "root.md").write_text("# Root", encoding="utf-8")
 
-    expanded = _expand_prd_paths(tmp_path, ["tasks/root.md", "tasks/pending"])
+    expanded, skipped = _expand_prd_paths(tmp_path, ["tasks/root.md", "tasks/pending"])
 
     assert expanded == ["tasks/root.md", "tasks/pending/a.md"]
+    assert skipped == []
 
 
 def test_expand_prd_paths_deduplicates(tmp_path: Path) -> None:
@@ -174,9 +176,12 @@ def test_expand_prd_paths_deduplicates(tmp_path: Path) -> None:
     (tmp_path / "tasks" / "pending").mkdir(parents=True)
     (tmp_path / "tasks" / "pending" / "a.md").write_text("# A", encoding="utf-8")
 
-    expanded = _expand_prd_paths(tmp_path, ["tasks/pending", "tasks/pending/a.md"])
+    expanded, skipped = _expand_prd_paths(
+        tmp_path, ["tasks/pending", "tasks/pending/a.md"]
+    )
 
     assert expanded == ["tasks/pending/a.md"]
+    assert skipped == []
 
 
 def test_expand_prd_paths_empty_directory_rejected(tmp_path: Path) -> None:
@@ -189,9 +194,10 @@ def test_expand_prd_paths_empty_directory_rejected(tmp_path: Path) -> None:
 
 def test_expand_prd_paths_missing_path_passed_through(tmp_path: Path) -> None:
     """_expand_prd_paths should pass through non-existent paths unchanged."""
-    expanded = _expand_prd_paths(tmp_path, ["tasks/missing.md"])
+    expanded, skipped = _expand_prd_paths(tmp_path, ["tasks/missing.md"])
 
     assert expanded == ["tasks/missing.md"]
+    assert skipped == []
 
 
 def test_expand_prd_paths_non_md_file_rejected(tmp_path: Path) -> None:
@@ -201,6 +207,55 @@ def test_expand_prd_paths_non_md_file_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must be a Markdown file"):
         _expand_prd_paths(tmp_path, ["tasks/readme.txt"])
+
+
+def test_expand_prd_paths_skips_linked_files_in_directory(
+    tmp_path: Path,
+) -> None:
+    """Directory expansion should skip PRDs that already have an Issue link."""
+    (tmp_path / "tasks" / "pending").mkdir(parents=True)
+    (tmp_path / "tasks" / "pending" / "linked.md").write_text(
+        "# Linked\n- GitHub Issue: https://github.com/org/repo/issues/1\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "tasks" / "pending" / "new.md").write_text("# New", encoding="utf-8")
+
+    expanded, skipped = _expand_prd_paths(tmp_path, ["tasks/pending"])
+
+    assert expanded == ["tasks/pending/new.md"]
+    assert skipped == ["tasks/pending/linked.md"]
+
+
+def test_expand_prd_paths_keeps_linked_file_when_explicitly_passed(
+    tmp_path: Path,
+) -> None:
+    """Explicitly passed files with Issue links are not skipped."""
+    (tmp_path / "tasks" / "pending").mkdir(parents=True)
+    (tmp_path / "tasks" / "pending" / "linked.md").write_text(
+        "# Linked\n- GitHub Issue: https://github.com/org/repo/issues/1\n",
+        encoding="utf-8",
+    )
+
+    expanded, skipped = _expand_prd_paths(tmp_path, ["tasks/pending/linked.md"])
+
+    assert expanded == ["tasks/pending/linked.md"]
+    assert skipped == []
+
+
+def test_expand_prd_paths_all_linked_in_directory_returns_empty(
+    tmp_path: Path,
+) -> None:
+    """Directory with only linked PRDs returns empty expanded list."""
+    (tmp_path / "tasks" / "pending").mkdir(parents=True)
+    (tmp_path / "tasks" / "pending" / "linked.md").write_text(
+        "# Linked\n- GitHub Issue: https://github.com/org/repo/issues/1\n",
+        encoding="utf-8",
+    )
+
+    expanded, skipped = _expand_prd_paths(tmp_path, ["tasks/pending"])
+
+    assert expanded == []
+    assert skipped == ["tasks/pending/linked.md"]
 
 
 def test_cli_parser_run() -> None:
@@ -1012,6 +1067,83 @@ def test_main_issue_create_directory_expansion(
         Path("tasks/pending/a.md"),
         Path("tasks/pending/b.md"),
     ]
+
+
+def test_main_issue_create_directory_skips_linked_prds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """issue create should skip PRDs with existing Issue links in a directory."""
+    from backend.api.cli import main
+
+    pending_dir = tmp_path / "tasks" / "pending"
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "linked.md").write_text(
+        "# Linked\n- GitHub Issue: https://github.com/org/repo/issues/1\n",
+        encoding="utf-8",
+    )
+    (pending_dir / "new.md").write_text("# New", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+
+    mock_context = MagicMock()
+    mock_context.repo_path = tmp_path
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd",
+        return_value="https://github.com/example/issues/2",
+    ) as mock_create, patch(
+        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
+    ), patch("backend.api.cli.require_iar_repository_initialized"):
+        exit_code = main(["issue", "create", "tasks/pending", "--ready"])
+
+    assert exit_code == 0
+    assert mock_create.call_count == 1
+    created_prd_paths = [
+        call.kwargs["request"].prd_path for call in mock_create.call_args_list
+    ]
+    assert created_prd_paths == [Path("tasks/pending/new.md")]
+
+    captured = capsys.readouterr()
+    assert "Skipped PRD with existing Issue: tasks/pending/linked.md" in captured.out
+
+
+def test_main_issue_create_all_directory_prds_linked_returns_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """issue create succeeds when all PRDs in a directory already have Issues."""
+    from backend.api.cli import main
+
+    pending_dir = tmp_path / "tasks" / "pending"
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "linked.md").write_text(
+        "# Linked\n- GitHub Issue: https://github.com/org/repo/issues/1\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+
+    mock_context = MagicMock()
+    mock_context.repo_path = tmp_path
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd"
+    ) as mock_create, patch(
+        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
+    ), patch("backend.api.cli.require_iar_repository_initialized"):
+        exit_code = main(["issue", "create", "tasks/pending"])
+
+    assert exit_code == 0
+    mock_create.assert_not_called()
 
 
 def test_cli_parser_deliberate_defaults() -> None:
