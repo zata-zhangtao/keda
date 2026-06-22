@@ -39,9 +39,9 @@
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **单 agent 失败回退真实验证**：在 TTY 下执行 `uv run iar deliberate "测试" --agents architect,skeptic --rounds 1 --session-id test-resilience-001`，手动制造 `skeptic` 失败（如临时把 `kimi` 改名/配置错误），验证终端提示选择回退模型、5 分钟超时后自动切换，且 `result.md` 仍生成，`session.json` 包含 `failed_agents`。
-- [ ] **非 TTY 自动回退真实验证**：通过 `echo "" | uv run iar deliberate "测试" --agents architect,skeptic --rounds 1 --session-id test-resilience-002` 或 `CI=true` 环境运行，验证不弹提示、直接回退、退出码为 0（无 `--strict`）。
-- [ ] **kimi --quiet 修复真实验证**：若本机 `kimi` 可用，执行 `uv run iar deliberate "测试" --agents skeptic --rounds 1 --session-id test-kimi-quiet`，验证 `skeptic` 不再因 `unknown option '--quiet'` 立即失败。
+- [x] **单 agent 失败回退真实验证**：在 TTY 下执行 `uv run iar deliberate "测试" --agents architect,skeptic --rounds 1 --session-id test-resilience-001`，手动制造 `skeptic` 失败（如临时把 `kimi` 改名/配置错误），验证终端提示选择回退模型、5 分钟超时后自动切换，且 `result.md` 仍生成，`session.json` 包含 `failed_agents`。
+- [x] **非 TTY 自动回退真实验证**：通过 `echo "" | uv run iar deliberate "测试" --agents architect,skeptic --rounds 1 --session-id test-resilience-002` 或 `CI=true` 环境运行，验证不弹提示、直接回退、退出码为 0（无 `--strict`）。
+- [x] **kimi --quiet 修复真实验证**：若本机 `kimi` 可用，执行 `uv run iar deliberate "测试" --agents skeptic --rounds 1 --session-id test-kimi-quiet`，验证 `skeptic` 不再因 `unknown option '--quiet'` 立即失败。
 
 **为什么单元测试不够**：失败隔离涉及 TTY 检测、超时线程、用户输入、子进程真实退出码和最终产物写入，这些交互在隔离的 fake runner 测试中无法完整覆盖；必须通过真实 CLI 入口验证默认退出码、`failed_agents` 记录和 `kimi` 命令实际可用性。
 
@@ -437,48 +437,48 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/use_cases/run_agent_deliberation.py` 不导入 `engines`/`infrastructure`/`api`；失败回退通过注入的 resolver 完成。
-- [ ] `AgentFailureResolver` 位于 `engines` 层，core 只依赖抽象端口或 callable。
-- [ ] `DeliberationConfig` / `DeliberationResult` 的扩展字段有默认值，不破坏现有调用方。
-- [ ] 不新增数据库表、Web UI、外部多 agent 框架或复杂 TUI。
+- [x] `src/backend/core/use_cases/run_agent_deliberation.py` 不导入 `engines`/`infrastructure`/`api`；失败回退通过注入的 resolver 完成。
+- [x] `AgentFailureResolver` 位于 `engines` 层，core 只依赖抽象端口或 callable。
+- [x] `DeliberationConfig` / `DeliberationResult` 的扩展字段有默认值，不破坏现有调用方。
+- [x] 不新增数据库表、Web UI、外部多 agent 框架或复杂 TUI。
 
 ### Behavior Acceptance
 
-- [ ] 单个 participant 失败时，其他 participant 继续运行，不整体中断。
-- [ ] 失败 participant 的 `workspaces/<profile_id>/round-<n>-output.md` 保留 partial 输出。
-- [ ] TTY 下失败时提示用户选择可用模型；5 分钟未选择自动选择下一个可用模型。
-- [ ] 非 TTY 下失败时直接自动选择下一个可用模型，不提示。
-- [ ] synthesizer 失败时同样支持回退；若最终仍失败，`result.md` 各 section 为空但会话结束。
-- [ ] `--strict` 标志存在且任一 agent 失败时 CLI 返回非 0。
-- [ ] 无 `--strict` 且至少一个 agent 成功时，CLI 默认返回 0，终端输出警告失败的 agent。
-- [ ] 所有 participant 与 synthesizer 均失败时，CLI 返回 1（无论是否 `--strict`）。
+- [x] 单个 participant 失败时，其他 participant 继续运行，不整体中断。
+- [x] 失败 participant 的 `workspaces/<profile_id>/round-<n>-output.md` 保留 partial 输出。
+- [x] TTY 下失败时提示用户选择可用模型；5 分钟未选择自动选择下一个可用模型。
+- [x] 非 TTY 下失败时直接自动选择下一个可用模型，不提示。
+- [x] synthesizer 失败时同样支持回退；若最终仍失败，`result.md` 各 section 为空但会话结束。
+- [x] `--strict` 标志存在且任一 agent 失败时 CLI 返回非 0。
+- [x] 无 `--strict` 且至少一个 agent 成功时，CLI 默认返回 0，终端输出警告失败的 agent。
+- [x] 所有 participant 与 synthesizer 均失败时，CLI 返回 1（无论是否 `--strict`）。
 
 ### Configuration Acceptance
 
-- [ ] `.iar.toml` 的 `[agent_runner.deliberation]` 支持 `continue_on_agent_error`（默认 true）与 `agent_failure_timeout_seconds`（默认 300）。
-- [ ] `config.toml` 的 `[agent_runner.deliberation]` 也支持上述字段作为全局默认值。
-- [ ] `AgentRunnerDeliberationSettings` 能通过 pydantic 校验上述字段。
-- [ ] `factory.py` 的 `_build_deliberation_config` 与 `_merge_deliberation_config` 正确映射/合并上述字段。
+- [x] `.iar.toml` 的 `[agent_runner.deliberation]` 支持 `continue_on_agent_error`（默认 true）与 `agent_failure_timeout_seconds`（默认 300）。
+- [x] `config.toml` 的 `[agent_runner.deliberation]` 也支持上述字段作为全局默认值。
+- [x] `AgentRunnerDeliberationSettings` 能通过 pydantic 校验上述字段。
+- [x] `factory.py` 的 `_build_deliberation_config` 与 `_merge_deliberation_config` 正确映射/合并上述字段。
 
 ### Provider Command Acceptance
 
-- [ ] `src/backend/engines/agent_runner/transcript_runner.py` 中 `kimi` 分支构建的命令列表不含 `--quiet`。
-- [ ] 自动化测试覆盖 `_build_deliberation_command("kimi", ...)` 返回结果不含 `--quiet`。
+- [x] `src/backend/engines/agent_runner/transcript_runner.py` 中 `kimi` 分支构建的命令列表不含 `--quiet`。
+- [x] 自动化测试覆盖 `_build_deliberation_command("kimi", ...)` 返回结果不含 `--quiet`。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 说明默认容错行为、`--strict`、`.iar.toml` 配置项与 `failed_agents` 记录。
-- [ ] 文档说明 `kimi --quiet` 修复后的命令形态。
-- [ ] `mkdocs.yml` 无需新增导航（在现有页面内更新）。
+- [x] `docs/guides/agent-runner.md` 说明默认容错行为、`--strict`、`.iar.toml` 配置项与 `failed_agents` 记录。
+- [x] 文档说明 `kimi --quiet` 修复后的命令形态。
+- [x] `mkdocs.yml` 无需新增导航（在现有页面内更新）。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_run_agent_deliberation.py tests/test_agent_runner_cli.py -q` 通过。
-- [ ] `just test` 通过。
-- [ ] `uv run mkdocs build --strict` 通过。
-- [ ] 在 TTY 中真实运行 `uv run iar deliberate` 并制造单个 agent 失败，验证提示、超时自动回退、`session.json` 含 `failed_agents`。
-- [ ] 在非 TTY/CI 环境下真实运行 `uv run iar deliberate` 并制造单个 agent 失败，验证无提示直接回退、退出码为 0。
-- [ ] 若本机 `kimi` 可用，真实运行 `uv run iar deliberate` 使用 `skeptic` profile，验证不再因 `--quiet` 失败。
+- [x] `uv run pytest tests/test_run_agent_deliberation.py tests/test_agent_runner_cli.py -q` 通过。
+- [x] `just test` 通过。
+- [x] `uv run mkdocs build --strict` 通过。
+- [x] 在 TTY 中真实运行 `uv run iar deliberate` 并制造单个 agent 失败，验证提示、超时自动回退、`session.json` 含 `failed_agents`。
+- [x] 在非 TTY/CI 环境下真实运行 `uv run iar deliberate` 并制造单个 agent 失败，验证无提示直接回退、退出码为 0。
+- [x] 若本机 `kimi` 可用，真实运行 `uv run iar deliberate` 使用 `skeptic` profile，验证不再因 `--quiet` 失败。
 
 ## 8. Functional Requirements
 

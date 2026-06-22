@@ -171,7 +171,8 @@ def test_transcript_runner_builds_kimi_command() -> None:
     )
 
     cmd = _build_deliberation_command("kimi", "hello", Path("/tmp"))
-    assert cmd == ["kimi", "--quiet", "--input-format", "text"]
+    assert cmd == ["kimi", "--input-format", "text"]
+    assert "--quiet" not in cmd
 
 
 def test_transcript_runner_builds_codex_command() -> None:

@@ -82,6 +82,7 @@ def _make_request(
 
 def _make_config(
     profiles: tuple[DeliberationAgentProfile, ...] | None = None,
+    continue_on_agent_error: bool = True,
 ) -> DeliberationConfig:
     if profiles is None:
         profiles = (
@@ -98,7 +99,9 @@ def _make_config(
                 behavior_prompt="be a skeptic",
             ),
         )
-    return DeliberationConfig(profiles=profiles)
+    return DeliberationConfig(
+        profiles=profiles, continue_on_agent_error=continue_on_agent_error
+    )
 
 
 def test_build_isolated_prompt_excludes_transcript() -> None:
@@ -446,9 +449,9 @@ def test_run_agent_deliberation_preserves_profile_ids_in_outputs(
 def test_run_agent_deliberation_raises_on_agent_failure(
     tmp_path: Path,
 ) -> None:
-    """A failed participant should fail the deliberation instead of producing blanks."""
+    """A failed participant should fail the deliberation when error tolerance is off."""
     request = _make_request(agents=("skeptic",), rounds=1)
-    config = _make_config()
+    config = _make_config(continue_on_agent_error=False)
     events: list[DeliberationEvent] = []
     fake_runner = FakeTranscriptRunner(
         responses={"kimi": "tool failed"},
@@ -475,9 +478,9 @@ def test_run_agent_deliberation_raises_on_agent_failure(
 def test_run_agent_deliberation_raises_on_synthesizer_failure(
     tmp_path: Path,
 ) -> None:
-    """A failed synthesizer should fail the whole deliberation."""
+    """A failed synthesizer should fail the deliberation when error tolerance is off."""
     request = _make_request(agents=("skeptic",), rounds=1, synthesizer="synth")
-    config = _make_config()
+    config = _make_config(continue_on_agent_error=False)
     events: list[DeliberationEvent] = []
     fake_runner = FakeTranscriptRunner(
         responses={"kimi": "skeptic output", "synth": "synth failed"},
@@ -499,3 +502,105 @@ def test_run_agent_deliberation_raises_on_synthesizer_failure(
         and event.message == "exit=9"
         for event in events
     )
+
+
+def test_run_agent_deliberation_isolates_single_agent_failure(
+    tmp_path: Path,
+) -> None:
+    """Default behavior continues when one participant fails and records it."""
+    request = _make_request(agents=("architect", "skeptic"), rounds=1)
+    config = _make_config()
+    events: list[DeliberationEvent] = []
+    fake_runner = FakeTranscriptRunner(
+        responses={"claude": "architect output", "kimi": "skeptic failed"},
+        return_codes={"kimi": 5},
+    )
+
+    result = run_agent_deliberation(
+        request=request,
+        config=config,
+        transcript_runner=fake_runner,
+        event_sink=events.append,
+        target_repo_path=tmp_path,
+    )
+
+    assert isinstance(result, DeliberationResult)
+    assert len(result.failed_agents) == 1
+    failure = result.failed_agents[0]
+    assert failure.profile_id == "skeptic"
+    assert failure.attempted_agent == "kimi"
+    assert failure.fallback_agent is None
+    assert failure.reason == "exit=5"
+    assert result.agent_outputs["round_1"]["architect"] == "architect output"
+    assert "skeptic" in result.agent_outputs["round_1"]
+
+
+def test_run_agent_deliberation_fallback_resolver_retries_failed_agent(
+    tmp_path: Path,
+) -> None:
+    """Resolver returning a fallback re-runs the failed profile with a new agent."""
+    request = _make_request(agents=("architect", "skeptic"), rounds=1)
+    config = _make_config()
+    events: list[DeliberationEvent] = []
+    fake_runner = FakeTranscriptRunner(
+        responses={
+            "claude": "architect output",
+            "kimi": "skeptic failed",
+            "codex": "skeptic fallback output",
+        },
+        return_codes={"kimi": 5, "codex": 0},
+    )
+
+    def _resolver(profile, reason):
+        _ = reason
+        if profile.agent == "kimi":
+            return DeliberationAgentProfile(
+                profile_id=profile.profile_id,
+                agent="codex",
+                role=profile.role,
+                behavior_prompt=profile.behavior_prompt,
+            )
+        return None
+
+    result = run_agent_deliberation(
+        request=request,
+        config=config,
+        transcript_runner=fake_runner,
+        event_sink=events.append,
+        target_repo_path=tmp_path,
+        resolver=_resolver,
+    )
+
+    assert isinstance(result, DeliberationResult)
+    assert len(result.failed_agents) == 1
+    failure = result.failed_agents[0]
+    assert failure.profile_id == "skeptic"
+    assert failure.attempted_agent == "kimi"
+    assert failure.fallback_agent == "codex"
+    assert result.agent_outputs["round_1"]["skeptic"] == "skeptic fallback output"
+
+
+def test_run_agent_deliberation_continues_when_synthesizer_fails(
+    tmp_path: Path,
+) -> None:
+    """Default behavior returns empty result sections when synthesizer fails."""
+    request = _make_request(agents=("skeptic",), rounds=1, synthesizer="synth")
+    config = _make_config()
+    events: list[DeliberationEvent] = []
+    fake_runner = FakeTranscriptRunner(
+        responses={"kimi": "skeptic output", "synth": "synth failed"},
+        return_codes={"synth": 3},
+    )
+
+    result = run_agent_deliberation(
+        request=request,
+        config=config,
+        transcript_runner=fake_runner,
+        event_sink=events.append,
+        target_repo_path=tmp_path,
+    )
+
+    assert isinstance(result, DeliberationResult)
+    assert result.recommendation == ""
+    assert result.failed_agents[0].profile_id == "synthesizer"
+    assert result.failed_agents[0].attempted_agent == "synth"

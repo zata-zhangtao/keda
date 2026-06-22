@@ -2399,7 +2399,16 @@ cat logs/agent-runner/deliberations/test-001/workspaces/implementer/round-1-outp
 cat logs/agent-runner/deliberations/test-001/workspaces/synthesizer/synthesis-output.md
 ```
 
-若任一参与 agent 或 synthesizer 子进程返回非 0 退出码，`iar deliberate` 会整体失败并返回非 0 退出码；已发生的事件和 partial output 仍保留在对应文件中便于排查。
+若任一参与 agent 或 synthesizer 子进程返回非 0 退出码，默认行为不再整体失败，而是记录失败并继续；`--strict` 可恢复为失败即非 0。
+
+> **失败隔离与回退**：从本 PRD 起，`iar deliberate` 对单个 agent 失败默认隔离并继续。
+> - 失败 agent 的 `workspaces/<profile_id>/round-<n>-output.md` 保留 partial 输出。
+> - TTY 下会提示选择回退模型，5 分钟无选择自动切换到下一个可用模型。
+> - 非 TTY / CI 下直接自动切换，不阻塞。
+> - 使用 `--strict` 或设置 `continue_on_agent_error = false` 时，任一 agent 失败即让 CLI 返回非 0。
+> - 全部参与 agent 和 synthesizer 均失败时，无论是否 `--strict` 都返回非 0。
+>
+> 注意：默认 `skeptic` profile 使用 `kimi`，此前 `kimi` deliberation 命令错误地传递了 `--quiet`，`kimi` CLI 不支持该选项。修复后 `kimi` 命令为 `kimi --input-format text`。
 
 ### 安全边界
 
@@ -2418,6 +2427,10 @@ cat logs/agent-runner/deliberations/test-001/workspaces/synthesizer/synthesis-ou
 default_rounds = 2
 default_synthesizer = "claude"
 default_output_dir = "logs/agent-runner/deliberations"
+# 是否对单个 agent 失败继续执行（默认 true）
+continue_on_agent_error = true
+# TTY 下等待用户选择回退模型的超时秒数（默认 300）
+agent_failure_timeout_seconds = 300
 
 [agent_runner.deliberation.profiles.architect]
 agent = "claude"
@@ -2429,6 +2442,8 @@ agent = "kimi"
 role = "skeptic"
 behavior_prompt = "You are a skeptical reviewer..."
 ```
+
+`session.json` 新增 `failed_agents` 字段，记录失败的 `profile_id`、尝试的 agent、最终回退 agent（如有）和失败原因。
 
 ## 架构说明
 

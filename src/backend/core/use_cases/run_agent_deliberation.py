@@ -7,6 +7,7 @@ import re
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +16,7 @@ from backend.core.shared.interfaces.agent_runner import (
     IAgentTranscriptRunner,
 )
 from backend.core.shared.models.agent_deliberation import (
+    DeliberationAgentFailure,
     DeliberationAgentProfile,
     DeliberationConfig,
     DeliberationEvent,
@@ -126,6 +128,16 @@ def _write_workspace_output(output_path: Path, output_text: str) -> None:
     )
 
 
+@dataclass(frozen=True)
+class AgentRunOutcome:
+    """Outcome of running a single deliberation agent."""
+
+    success: bool
+    stdout: str
+    return_code: int
+    profile_id: str
+
+
 def _create_streaming_sink(
     output_path: Path,
     output_view: IAgentOutputView,
@@ -184,7 +196,7 @@ def _run_single_agent(
     output_view: IAgentOutputView,
     output_sink: Callable[[str], None] | None = None,
     display_sink: Callable[[str], None] | None = None,
-) -> str:
+) -> "AgentRunOutcome":
     _emit(
         event_sink,
         session_id,
@@ -215,12 +227,12 @@ def _run_single_agent(
         "agent_finished",
         f"exit={result.return_code}",
     )
-    if result.return_code != 0:
-        raise RuntimeError(
-            f"Deliberation agent '{agent_label}' failed with exit code "
-            f"{result.return_code}."
-        )
-    return output_text
+    return AgentRunOutcome(
+        success=result.return_code == 0,
+        stdout=output_text,
+        return_code=result.return_code,
+        profile_id=agent_label,
+    )
 
 
 def _run_round(
@@ -233,13 +245,16 @@ def _run_round(
     workspace_root: Path,
     session_id: str,
     output_view: IAgentOutputView,
-) -> dict[str, str]:
+    config: DeliberationConfig,
+    resolver: "Callable[[DeliberationAgentProfile, str], DeliberationAgentProfile | None] | None" = None,
+) -> tuple[dict[str, str], list[DeliberationAgentFailure]]:
     outputs: dict[str, str] = {}
+    failed_agents: list[DeliberationAgentFailure] = []
 
     # Register profiles with the output view for this round
     output_view.register_round_profiles(round_number, profiles)
 
-    def _run_profile(profile: DeliberationAgentProfile) -> tuple[str, str]:
+    def _run_profile(profile: DeliberationAgentProfile) -> AgentRunOutcome:
         prompt = prompt_builder(profile)
         profile_workspace = workspace_root / profile.profile_id
         profile_workspace.mkdir(parents=True, exist_ok=True)
@@ -250,7 +265,7 @@ def _run_round(
         display_sink = _create_display_sink(
             output_view, round_number, profile.profile_id
         )
-        output = _run_single_agent(
+        return _run_single_agent(
             agent_name=profile.agent,
             prompt=prompt,
             cwd=profile_workspace,
@@ -263,15 +278,64 @@ def _run_round(
             output_sink=streaming_sink,
             display_sink=display_sink,
         )
-        return profile.profile_id, output
 
+    outcomes: list[AgentRunOutcome] = []
     with ThreadPoolExecutor(max_workers=len(profiles)) as executor:
         futures = [executor.submit(_run_profile, profile) for profile in profiles]
         for future in futures:
-            profile_id, output = future.result()
-            outputs[profile_id] = output
+            outcomes.append(future.result())
 
-    return outputs
+    for outcome in outcomes:
+        if outcome.success:
+            outputs[outcome.profile_id] = outcome.stdout
+            continue
+        if not config.continue_on_agent_error:
+            raise RuntimeError(
+                f"Deliberation agent '{outcome.profile_id}' failed with exit code "
+                f"{outcome.return_code}."
+            )
+        profile_by_id = {p.profile_id: p for p in profiles}
+        failed_profile = profile_by_id[outcome.profile_id]
+        reason = f"exit={outcome.return_code}"
+        fallback: DeliberationAgentProfile | None = None
+        if resolver is not None:
+            try:
+                fallback = resolver(failed_profile, reason, config)
+            except TypeError:
+                fallback = resolver(failed_profile, reason)
+        if fallback is not None:
+            _emit(
+                event_sink,
+                session_id,
+                round_number,
+                failed_profile.profile_id,
+                "agent_fallback",
+                f"fallback={fallback.agent}",
+            )
+            fallback_outcome = _run_profile(fallback)
+            if fallback_outcome.success:
+                outputs[fallback.profile_id] = fallback_outcome.stdout
+                failed_agents.append(
+                    DeliberationAgentFailure(
+                        profile_id=failed_profile.profile_id,
+                        attempted_agent=failed_profile.agent,
+                        fallback_agent=fallback.agent,
+                        reason=reason,
+                    )
+                )
+                continue
+            reason = f"fallback={fallback.agent} exit={fallback_outcome.return_code}"
+        outputs[failed_profile.profile_id] = outcome.stdout
+        failed_agents.append(
+            DeliberationAgentFailure(
+                profile_id=failed_profile.profile_id,
+                attempted_agent=failed_profile.agent,
+                fallback_agent=None,
+                reason=reason,
+            )
+        )
+
+    return outputs, failed_agents
 
 
 def _format_round_transcript(
@@ -323,6 +387,7 @@ def run_agent_deliberation(
     event_sink: Callable[[DeliberationEvent], None],
     target_repo_path: Path,
     output_view: IAgentOutputView | None = None,
+    resolver: "Callable[[DeliberationAgentProfile, str], DeliberationAgentProfile | None] | None" = None,
 ) -> DeliberationResult:
     """Run a multi-agent deliberation session.
 
@@ -334,6 +399,10 @@ def run_agent_deliberation(
         target_repo_path: Path to the target repository for read-only safety checks.
         output_view: Optional output view for live terminal display. If not
             provided, a NoOpOutputView is used.
+        resolver: Optional callable that decides how to recover from a single
+            agent failure. Receives the failed profile and a reason string, and
+            returns a fallback profile or None. If None, failures are recorded
+            without retry.
 
     Returns:
         DeliberationResult with the final report.
@@ -352,6 +421,7 @@ def run_agent_deliberation(
 
         started_at = _now_iso()
         emitted_events: list[DeliberationEvent] = []
+        session_failed_agents: list[DeliberationAgentFailure] = []
 
         def _record_event(event: DeliberationEvent) -> None:
             emitted_events.append(event)
@@ -379,7 +449,7 @@ def run_agent_deliberation(
         round_outputs: dict[int, dict[str, str]] = {}
 
         # Isolation round
-        isolation_outputs = _run_round(
+        isolation_outputs, isolation_failures = _run_round(
             request=request,
             profiles=selected_profiles,
             round_number=1,
@@ -389,14 +459,17 @@ def run_agent_deliberation(
             workspace_root=workspace_root,
             session_id=session_id,
             output_view=output_view,
+            config=config,
+            resolver=resolver,
         )
+        session_failed_agents.extend(isolation_failures)
         round_outputs[1] = isolation_outputs
         transcript_parts.append(_format_round_transcript(1, isolation_outputs))
 
         # Discussion rounds
         for round_number in range(2, request.rounds + 1):
             current_transcript = "\n\n".join(transcript_parts)
-            discussion_outputs = _run_round(
+            discussion_outputs, discussion_failures = _run_round(
                 request=request,
                 profiles=selected_profiles,
                 round_number=round_number,
@@ -408,7 +481,10 @@ def run_agent_deliberation(
                 workspace_root=workspace_root,
                 session_id=session_id,
                 output_view=output_view,
+                config=config,
+                resolver=resolver,
             )
+            session_failed_agents.extend(discussion_failures)
             round_outputs[round_number] = discussion_outputs
             transcript_parts.append(
                 _format_round_transcript(round_number, discussion_outputs)
@@ -462,13 +538,30 @@ def run_agent_deliberation(
             "agent_finished",
             f"exit={synthesis_result.return_code}",
         )
-        if synthesis_result.return_code != 0:
-            raise RuntimeError(
-                "Deliberation synthesizer failed with exit code "
-                f"{synthesis_result.return_code}."
-            )
 
         parsed = _parse_synthesis(synthesis_output)
+        if synthesis_result.return_code != 0:
+            if not config.continue_on_agent_error:
+                raise RuntimeError(
+                    "Deliberation synthesizer failed with exit code "
+                    f"{synthesis_result.return_code}."
+                )
+            session_failed_agents.append(
+                DeliberationAgentFailure(
+                    profile_id="synthesizer",
+                    attempted_agent=request.synthesizer,
+                    fallback_agent=None,
+                    reason=f"exit={synthesis_result.return_code}",
+                )
+            )
+            _emit(
+                _record_event,
+                session_id,
+                0,
+                "system",
+                "synthesis_failed",
+                f"exit={synthesis_result.return_code}",
+            )
 
         finished_at = _now_iso()
         _emit(
@@ -496,6 +589,7 @@ def run_agent_deliberation(
             output_dir=str(output_dir),
             started_at=started_at,
             finished_at=finished_at,
+            failed_agents=tuple(session_failed_agents),
         )
 
         return result

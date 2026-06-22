@@ -78,6 +78,7 @@ from backend.engines.agent_runner.factory import (
     resolve_repository_targets,
     write_deliberation_outputs,
 )
+from backend.engines.agent_runner.failure_resolver import AgentFailureResolver
 from backend.engines.agent_runner.live_terminal import create_output_view
 from backend.engines.agent_runner.repository_local import (
     IARRepositoryNotInitializedError,
@@ -1133,6 +1134,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             output_path.mkdir(parents=True, exist_ok=True)
             output_view = create_output_view()
             event_sink = create_event_sink(output_path, output_view)
+            resolver = AgentFailureResolver()
             result = run_agent_deliberation(
                 request=request,
                 config=deliberation_config,
@@ -1140,6 +1142,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 event_sink=event_sink,
                 target_repo_path=context.repo_path,
                 output_view=output_view,
+                resolver=resolver.resolve,
             )
             selected_profile_ids = tuple(
                 dict.fromkeys(
@@ -1168,6 +1171,40 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             )
             write_deliberation_outputs(result, session, output_path)
             console.print(f"\n[green]Deliberation complete:[/] {output_path}")
+            if result.failed_agents:
+                for failure in result.failed_agents:
+                    logger.warning(
+                        "Deliberation agent failed: profile=%s attempted=%s "
+                        "fallback=%s reason=%s",
+                        failure.profile_id,
+                        failure.attempted_agent,
+                        failure.fallback_agent,
+                        failure.reason,
+                    )
+                    console.print(
+                        f"[yellow]Agent '{failure.profile_id}' failed "
+                        f"(attempted={failure.attempted_agent}, "
+                        f"fallback={failure.fallback_agent or 'none'}, "
+                        f"reason={failure.reason}).[/]"
+                    )
+            strict_mode = (
+                parsed.strict or not deliberation_config.continue_on_agent_error
+            )
+            all_participants_failed = len(selected_profile_ids) > 0 and all(
+                profile_id in {f.profile_id for f in result.failed_agents}
+                for profile_id in selected_profile_ids
+            )
+            synthesizer_failed = any(
+                failure.profile_id == "synthesizer" for failure in result.failed_agents
+            )
+            if strict_mode and result.failed_agents:
+                return 1
+            if all_participants_failed:
+                return 1
+            if synthesizer_failed and not any(
+                failure.profile_id != "synthesizer" for failure in result.failed_agents
+            ):
+                return 1
             return 0
     except IARRepositoryNotInitializedError as exc:
         return _handle_not_initialized_error(exc)

@@ -264,6 +264,11 @@ def build_parser() -> argparse.ArgumentParser:
     deliberate_parser.add_argument(
         "--session-id", default=None, help="Optional session ID for reproducibility."
     )
+    deliberate_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Return non-zero exit code if any agent fails.",
+    )
     add_common_options(deliberate_parser)
 
     worktree_parser = subparsers.add_parser(

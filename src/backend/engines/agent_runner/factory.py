@@ -149,6 +149,8 @@ def _build_deliberation_config(
         default_rounds=deliberation_settings.default_rounds,
         default_synthesizer=deliberation_settings.default_synthesizer,
         default_output_dir=deliberation_settings.default_output_dir,
+        continue_on_agent_error=deliberation_settings.continue_on_agent_error,
+        agent_failure_timeout_seconds=deliberation_settings.agent_failure_timeout_seconds,
         profiles=profiles,
     )
 
@@ -487,6 +489,12 @@ def _merge_deliberation_config(
         ),
         default_output_dir=override_data.get(
             "default_output_dir", base_config.default_output_dir
+        ),
+        continue_on_agent_error=override_data.get(
+            "continue_on_agent_error", base_config.continue_on_agent_error
+        ),
+        agent_failure_timeout_seconds=override_data.get(
+            "agent_failure_timeout_seconds", base_config.agent_failure_timeout_seconds
         ),
         profiles=tuple(profiles.values()),
     )

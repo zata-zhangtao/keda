@@ -1315,6 +1315,7 @@ def test_cli_parser_deliberate_custom_agents() -> None:
             "/tmp/out",
             "--session-id",
             "sid-1",
+            "--strict",
         ]
     )
     assert parsed.command == "deliberate"
@@ -1324,6 +1325,256 @@ def test_cli_parser_deliberate_custom_agents() -> None:
     assert parsed.synthesizer == "kimi"
     assert parsed.output == "/tmp/out"
     assert parsed.session_id == "sid-1"
+    assert parsed.strict is True
+
+
+def test_cli_parser_deliberate_strict_default_false() -> None:
+    """deliberate --strict should default to False."""
+    parser = build_parser()
+    parsed = parser.parse_args(["deliberate", "test prompt"])
+    assert parsed.strict is False
+
+
+def test_main_deliberate_strict_returns_nonzero_on_failure(tmp_path) -> None:
+    """deliberate --strict should return 1 when an agent fails."""
+    from backend.api.cli import main
+    from backend.core.shared.models.agent_deliberation import (
+        DeliberationAgentFailure,
+        DeliberationAgentProfile,
+        DeliberationConfig,
+        DeliberationResult,
+    )
+    from backend.core.shared.models.agent_runner import AppConfig
+
+    mock_config = AppConfig(
+        deliberation=DeliberationConfig(
+            default_output_dir=str(tmp_path),
+            default_rounds=1,
+            default_synthesizer="claude",
+            profiles=(
+                DeliberationAgentProfile(
+                    profile_id="architect",
+                    agent="claude",
+                    role="architect",
+                    behavior_prompt="be an architect",
+                ),
+            ),
+        )
+    )
+    mock_context = MagicMock()
+    mock_context.repo_path = tmp_path / "repo"
+    mock_context.config = mock_config
+
+    def fake_run_agent_deliberation(**kwargs):
+        request = kwargs["request"]
+        return DeliberationResult(
+            session_id=request.session_id,
+            prompt=request.prompt,
+            recommendation="",
+            consensus="",
+            disagreements="",
+            risks="",
+            next_actions="",
+            events=(),
+            agent_outputs={"round_1": {"architect": ""}},
+            output_dir=request.output_dir,
+            started_at="2026-05-23T00:00:00+00:00",
+            finished_at="2026-05-23T00:01:00+00:00",
+            failed_agents=(
+                DeliberationAgentFailure(
+                    profile_id="architect",
+                    attempted_agent="claude",
+                    fallback_agent=None,
+                    reason="exit=1",
+                ),
+            ),
+        )
+
+    with patch("backend.api.cli.create_process_runner"), patch(
+        "backend.api.cli.get_agent_runner_settings"
+    ), patch(
+        "backend.engines.agent_runner.factory.build_app_config_from_settings",
+        return_value=mock_config,
+    ), patch(
+        "backend.api.cli._resolve_cli_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_transcript_runner"), patch(
+        "backend.api.cli.create_event_sink"
+    ) as mock_event_sink, patch(
+        "backend.api.cli.run_agent_deliberation",
+        side_effect=fake_run_agent_deliberation,
+    ), patch("backend.api.cli.write_deliberation_outputs"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
+        mock_event_sink.return_value = MagicMock()
+
+        exit_code = main(["deliberate", "test prompt", "--strict"])
+
+    assert exit_code == 1
+
+
+def test_main_deliberate_default_returns_zero_with_failed_agents(
+    tmp_path,
+) -> None:
+    """deliberate without --strict should return 0 when at least one agent succeeds."""
+    from backend.api.cli import main
+    from backend.core.shared.models.agent_deliberation import (
+        DeliberationAgentFailure,
+        DeliberationAgentProfile,
+        DeliberationConfig,
+        DeliberationResult,
+    )
+    from backend.core.shared.models.agent_runner import AppConfig
+
+    mock_config = AppConfig(
+        deliberation=DeliberationConfig(
+            default_output_dir=str(tmp_path),
+            default_rounds=1,
+            default_synthesizer="claude",
+            profiles=(
+                DeliberationAgentProfile(
+                    profile_id="architect",
+                    agent="claude",
+                    role="architect",
+                    behavior_prompt="be an architect",
+                ),
+                DeliberationAgentProfile(
+                    profile_id="skeptic",
+                    agent="kimi",
+                    role="skeptic",
+                    behavior_prompt="be a skeptic",
+                ),
+            ),
+        )
+    )
+    mock_context = MagicMock()
+    mock_context.repo_path = tmp_path / "repo"
+    mock_context.config = mock_config
+
+    def fake_run_agent_deliberation(**kwargs):
+        request = kwargs["request"]
+        return DeliberationResult(
+            session_id=request.session_id,
+            prompt=request.prompt,
+            recommendation="do it",
+            consensus="agree",
+            disagreements="none",
+            risks="low",
+            next_actions="next",
+            events=(),
+            agent_outputs={"round_1": {"architect": "architect out", "skeptic": ""}},
+            output_dir=request.output_dir,
+            started_at="2026-05-23T00:00:00+00:00",
+            finished_at="2026-05-23T00:01:00+00:00",
+            failed_agents=(
+                DeliberationAgentFailure(
+                    profile_id="skeptic",
+                    attempted_agent="kimi",
+                    fallback_agent=None,
+                    reason="exit=1",
+                ),
+            ),
+        )
+
+    with patch("backend.api.cli.create_process_runner"), patch(
+        "backend.api.cli.get_agent_runner_settings"
+    ), patch(
+        "backend.engines.agent_runner.factory.build_app_config_from_settings",
+        return_value=mock_config,
+    ), patch(
+        "backend.api.cli._resolve_cli_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_transcript_runner"), patch(
+        "backend.api.cli.create_event_sink"
+    ) as mock_event_sink, patch(
+        "backend.api.cli.run_agent_deliberation",
+        side_effect=fake_run_agent_deliberation,
+    ), patch("backend.api.cli.write_deliberation_outputs"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
+        mock_event_sink.return_value = MagicMock()
+
+        exit_code = main(["deliberate", "test prompt"])
+
+    assert exit_code == 0
+
+
+def test_main_deliberate_returns_one_when_all_agents_fail(tmp_path) -> None:
+    """deliberate should return 1 when all participants fail."""
+    from backend.api.cli import main
+    from backend.core.shared.models.agent_deliberation import (
+        DeliberationAgentFailure,
+        DeliberationAgentProfile,
+        DeliberationConfig,
+        DeliberationResult,
+    )
+    from backend.core.shared.models.agent_runner import AppConfig
+
+    mock_config = AppConfig(
+        deliberation=DeliberationConfig(
+            default_output_dir=str(tmp_path),
+            default_rounds=1,
+            default_synthesizer="claude",
+            profiles=(
+                DeliberationAgentProfile(
+                    profile_id="architect",
+                    agent="claude",
+                    role="architect",
+                    behavior_prompt="be an architect",
+                ),
+            ),
+        )
+    )
+    mock_context = MagicMock()
+    mock_context.repo_path = tmp_path / "repo"
+    mock_context.config = mock_config
+
+    def fake_run_agent_deliberation(**kwargs):
+        request = kwargs["request"]
+        return DeliberationResult(
+            session_id=request.session_id,
+            prompt=request.prompt,
+            recommendation="",
+            consensus="",
+            disagreements="",
+            risks="",
+            next_actions="",
+            events=(),
+            agent_outputs={"round_1": {"architect": ""}},
+            output_dir=request.output_dir,
+            started_at="2026-05-23T00:00:00+00:00",
+            finished_at="2026-05-23T00:01:00+00:00",
+            failed_agents=(
+                DeliberationAgentFailure(
+                    profile_id="architect",
+                    attempted_agent="claude",
+                    fallback_agent=None,
+                    reason="exit=1",
+                ),
+            ),
+        )
+
+    with patch("backend.api.cli.create_process_runner"), patch(
+        "backend.api.cli.get_agent_runner_settings"
+    ), patch(
+        "backend.engines.agent_runner.factory.build_app_config_from_settings",
+        return_value=mock_config,
+    ), patch(
+        "backend.api.cli._resolve_cli_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_transcript_runner"), patch(
+        "backend.api.cli.create_event_sink"
+    ) as mock_event_sink, patch(
+        "backend.api.cli.run_agent_deliberation",
+        side_effect=fake_run_agent_deliberation,
+    ), patch("backend.api.cli.write_deliberation_outputs"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
+        mock_event_sink.return_value = MagicMock()
+
+        exit_code = main(["deliberate", "test prompt"])
+
+    assert exit_code == 1
 
 
 def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:

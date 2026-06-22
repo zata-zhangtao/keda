@@ -217,7 +217,7 @@ def _build_deliberation_command(agent_name: str, prompt: str, cwd: Path) -> list
             prompt,
         ]
     if agent_name == "kimi":
-        return ["kimi", "--quiet", "--input-format", "text"]
+        return ["kimi", "--input-format", "text"]
     return [
         "codex",
         "--cd",
