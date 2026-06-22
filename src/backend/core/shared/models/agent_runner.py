@@ -63,6 +63,55 @@ class IssueSummary:
 
 
 @dataclass(frozen=True)
+class PullRequestSummary:
+    """View-model summary of a Pull Request linked to an Issue.
+
+    Attributes:
+        number: PR number within the repository.
+        state: Normalized state, one of ``"open"``, ``"draft"``,
+            ``"merged"``, ``"closed"``.
+        url: Web URL of the PR.
+        is_draft: Whether the PR is currently a draft.
+        merged: Whether the PR has been merged.
+        title: PR title (used by ``--output json`` consumers).
+    """
+
+    number: int
+    state: str
+    url: str
+    is_draft: bool
+    merged: bool
+    title: str
+
+
+@dataclass(frozen=True)
+class IssueWithPulls:
+    """View-model row for ``iar issue list`` output.
+
+    Attributes:
+        repo: ``owner/name`` identifier when the list spans multiple
+            repositories; ``None`` for single-repository listings.
+        number: Issue number within the repository.
+        title: Issue title.
+        state: GitHub state (``"OPEN"`` / ``"CLOSED"``).
+        labels: Label names attached to the Issue.
+        updated_at: ISO-8601 timestamp of the last update (or empty
+            string when the backend cannot supply one).
+        url: Web URL of the Issue.
+        pulls: Linked Pull Requests, already normalized.
+    """
+
+    repo: str | None
+    number: int
+    title: str
+    state: str
+    labels: tuple[str, ...]
+    updated_at: str
+    url: str
+    pulls: tuple[PullRequestSummary, ...]
+
+
+@dataclass(frozen=True)
 class LabelConfig:
     """GitHub labels used as runner queue state."""
 

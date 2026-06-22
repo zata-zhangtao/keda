@@ -607,6 +607,64 @@ def issue_create_command(
     )
 
 
+@issue_app.command("list", context_settings=_HELP_CONTEXT)
+def issue_list_command(
+    ctx: typer.Context,
+    repo: Annotated[
+        str | None, typer.Option("--repo", help="Target repository path.")
+    ] = None,
+    repo_id: Annotated[
+        str | None, typer.Option("--repo-id", help="Target configured repository ID.")
+    ] = None,
+    all_registered: Annotated[
+        bool,
+        typer.Option(
+            "--all-registered",
+            help="Force multi-repository scan even when cwd is an iAR project repo.",
+        ),
+    ] = False,
+    state: Annotated[
+        str, typer.Option("--state", help="Issue state filter: open|closed|all.")
+    ] = "all",
+    label: Annotated[
+        str | None,
+        typer.Option("--label", help="Only show Issues carrying this label."),
+    ] = None,
+    with_pr: Annotated[
+        bool, typer.Option("--with-pr", help="Only show Issues with at least one PR.")
+    ] = False,
+    without_pr: Annotated[
+        bool, typer.Option("--without-pr", help="Only show Issues with no PRs.")
+    ] = False,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="Maximum Issues per repository (default: 100)."),
+    ] = 100,
+    output: Annotated[
+        str, typer.Option("--output", help="Render format: table|json.")
+    ] = "table",
+) -> int:
+    """List Issues with linked Pull Request status."""
+    context_values = ctx.obj or {}
+    effective_repo = repo if repo is not None else context_values.get("repo")
+    effective_repo_id = (
+        repo_id if repo_id is not None else context_values.get("repo_id")
+    )
+    return _run_typer_command(
+        "issue list",
+        repo=effective_repo,
+        repo_id=effective_repo_id,
+        config=None,
+        all_registered=all_registered,
+        state=state,
+        label=label,
+        with_pr=with_pr,
+        without_pr=without_pr,
+        limit=limit,
+        output=output,
+    )
+
+
 def _run_runner_command(
     ctx: typer.Context,
     *,

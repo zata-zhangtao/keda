@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -637,6 +639,109 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 )
                 return 1
             return 0
+
+        if parsed.command == "issue list":
+            if parsed.with_pr and parsed.without_pr:
+                logger.error("--with-pr and --without-pr are mutually exclusive.")
+                return 1
+            from backend.core.use_cases.issue_pr_status import (
+                IAR_REPOSITORY_MARKER_FILENAME,
+                IssueListRequest,
+                list_issues_with_prs,
+                make_default_has_local_iar_repo,
+                render_issue_with_pulls_json,
+                render_pr_column,
+            )
+            from rich.console import Console
+            from rich.table import Table
+
+            def _resolve_targets(
+                *,
+                repo_id: str | None,
+                repo_path_override: str | None,
+                all_repositories: bool,
+            ) -> list:
+                return resolve_repository_targets(
+                    runner_settings,
+                    repo_id=repo_id,
+                    repo_path_override=repo_path_override,
+                    all_repositories=all_repositories,
+                )
+
+            request = IssueListRequest(
+                repo_id=repo_id,
+                repo_path_override=repo_override,
+                all_repositories=getattr(parsed, "all_registered", False),
+                state_filter=parsed.state,
+                label_filter=parsed.label,
+                with_pr=True
+                if parsed.with_pr
+                else (False if parsed.without_pr else None),
+                limit=parsed.limit,
+            )
+            try:
+                result = list_issues_with_prs(
+                    request,
+                    cwd=Path.cwd(),
+                    github_client_factory=github_client_factory,
+                    resolve_targets=_resolve_targets,
+                    has_local_iar_repo=make_default_has_local_iar_repo(
+                        marker_filename=IAR_REPOSITORY_MARKER_FILENAME
+                    ),
+                )
+            except ValueError as exc:
+                logger.error("%s", exc)
+                error_console.print(f"[red]{exc}[/]")
+                return 1
+            render_console = Console()
+            multi_repo = len({row.repo for row in result.rows if row.repo}) > 1
+            output_format = parsed.output
+            if not result.rows and not result.errors:
+                if output_format == "json":
+                    sys.stdout.write("[]\n")
+                else:
+                    table = Table(show_header=True, header_style="bold")
+                    if multi_repo:
+                        table.add_column("repo")
+                    table.add_column("#")
+                    table.add_column("title")
+                    table.add_column("labels")
+                    table.add_column("state")
+                    table.add_column("PRs")
+                    render_console.print(table)
+                    render_console.print("No issues match the filters.")
+                return 0
+            if output_format == "json":
+                for row in result.rows:
+                    sys.stdout.write(
+                        json.dumps(render_issue_with_pulls_json(row)) + "\n"
+                    )
+            else:
+                table = Table(show_header=True, header_style="bold")
+                if multi_repo:
+                    table.add_column("repo")
+                table.add_column("#")
+                table.add_column("title")
+                table.add_column("labels")
+                table.add_column("state")
+                table.add_column("PRs")
+                for row in result.rows:
+                    cells = [
+                        f"#{row.number}",
+                        row.title,
+                        ", ".join(row.labels) if row.labels else "—",
+                        row.state,
+                        render_pr_column(row.pulls),
+                    ]
+                    if multi_repo:
+                        cells.insert(0, row.repo or "")
+                    table.add_row(*cells)
+                render_console.print(table)
+            for repo_label, error_message in result.errors:
+                error_console.print(
+                    f"[red]Error fetching {repo_label}:[/] {error_message}"
+                )
+            return 1 if result.errors else 0
 
         if parsed.command == "run":
             contexts = _resolve_cli_repository_targets(

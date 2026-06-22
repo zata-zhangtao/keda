@@ -91,6 +91,18 @@ class IssueSummary:
 
 
 @dataclass(frozen=True)
+class PullRequestSummary:
+    """Local mirror of :class:`backend.core.shared.models.agent_runner.PullRequestSummary`."""
+
+    number: int
+    state: str
+    url: str
+    is_draft: bool
+    merged: bool
+    title: str
+
+
+@dataclass(frozen=True)
 class LabelConfig:
     """GitHub labels used as runner queue state."""
 
@@ -238,6 +250,42 @@ def _check_entry_state(raw_check: dict[str, object]) -> str:
     if status in _CHECK_SUCCESS_STATES:
         return "SUCCESS"
     return "PENDING"
+
+
+# Stable sort order for ``list_pull_requests_for_issue`` output. Open
+# PRs first (incl. drafts), then closed, then merged last so the table
+# always reads "in flight → historical".
+_STATE_ORDER = {"open": 0, "draft": 1, "closed": 2, "merged": 3}
+
+
+def _normalise_pr_state(raw_state: object, *, is_draft: bool, merged_at: object) -> str:
+    """Map GitHub's PR state and draft flag into one of four buckets."""
+    if merged_at:
+        return "merged"
+    if is_draft:
+        return "draft"
+    state_text = str(raw_state or "").upper()
+    if state_text == "MERGED":
+        return "merged"
+    if state_text == "CLOSED":
+        return "closed"
+    return "open"
+
+
+def _parse_pr_summary(raw_pr: dict[str, object]) -> PullRequestSummary:
+    """Convert a ``gh pr list --json`` row into a PullRequestSummary."""
+    merged_at = raw_pr.get("mergedAt") or ""
+    is_draft = bool(raw_pr.get("isDraft", False))
+    return PullRequestSummary(
+        number=int(raw_pr.get("number", 0)),
+        state=_normalise_pr_state(
+            raw_pr.get("state"), is_draft=is_draft, merged_at=merged_at
+        ),
+        url=str(raw_pr.get("url", "")),
+        is_draft=is_draft,
+        merged=bool(merged_at),
+        title=str(raw_pr.get("title", "")),
+    )
 
 
 def _aggregate_status_check_rollup(
@@ -929,25 +977,27 @@ class GitHubCliClient:
         )
 
     def list_issues_by_label(
-        self, label: str, limit: int, state: str = "all"
+        self, label: str | None, limit: int, state: str = "all"
     ) -> list[IssueSummary]:
-        """List Issues by label across open and closed states."""
-        result = self._run_with_retry(
-            [
-                "gh",
-                "issue",
-                "list",
-                "--state",
-                state,
-                "--label",
-                label,
-                "--limit",
-                str(limit),
-                "--json",
-                "number,title,url,labels,body,state",
-            ],
-            cwd=self.repo_path,
-        )
+        """List Issues by label across open and closed states.
+
+        When ``label`` is ``None``, the ``--label`` flag is omitted so
+        the listing returns issues regardless of label.
+        """
+        command: list[str] = [
+            "gh",
+            "issue",
+            "list",
+            "--state",
+            state,
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,url,labels,body,state",
+        ]
+        if label is not None:
+            command[3:3] = ["--label", label]
+        result = self._run_with_retry(command, cwd=self.repo_path)
         raw_issues = json.loads(result.stdout or "[]")
         return [
             IssueSummary(
@@ -964,3 +1014,37 @@ class GitHubCliClient:
             )
             for raw_issue in raw_issues
         ]
+
+    def list_pull_requests_for_issue(
+        self, repo: str, issue_number: int
+    ) -> list[PullRequestSummary]:
+        """List PRs that reference or close the given Issue.
+
+        Uses ``gh pr list --search`` to find PRs whose body or commits
+        mention the Issue via closing keywords. State is normalised to
+        one of ``"open"`` / ``"draft"`` / ``"merged"`` / ``"closed"``.
+        """
+        search_query = (
+            f"closes:#{issue_number} OR fixes:#{issue_number} "
+            f"OR resolves:#{issue_number} OR refs:#{issue_number}"
+        )
+        command = [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--search",
+            search_query,
+            "--state",
+            "all",
+            "--limit",
+            "100",
+            "--json",
+            "number,title,state,url,isDraft,mergedAt",
+        ]
+        result = self._run_with_retry(command, cwd=self.repo_path)
+        raw_prs = json.loads(result.stdout or "[]")
+        pulls = [_parse_pr_summary(raw_pr) for raw_pr in raw_prs]
+        pulls.sort(key=lambda pull: (_STATE_ORDER.get(pull.state, 99), pull.number))
+        return pulls

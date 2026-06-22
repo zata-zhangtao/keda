@@ -963,6 +963,72 @@ rebase/repair 仍由下一次 `iar run` 在 PR branch worktree 中执行。
 
 否则 `iar run` 会跳过该 Issue，避免抢占另一个 runner 正在首次执行的任务。
 
+## iar issue list
+
+`iar issue list` 是一个**只读**视图命令，用于回答"哪些 issue 已经提交了 PR、哪些还在排队"。它拉取每个目标仓库的 Issue 列表，并补齐每个 Issue 关联的 Pull Request 状态。
+
+### CWD 自动检测
+
+不传 `--repo` / `--repo-id` / `--all-registered` 时，命令根据 `Path.cwd() / ".iar.toml"` 是否存在自动决定单仓 / 全仓模式：
+
+- 存在 `.iar.toml`（即 `IAR_REPOSITORY_CONFIG_FILENAME`）→ 等价 `--repo Path.cwd()`，只列当前仓
+- 不存在 → 等价 `--all-registered`，跨 `config.toml` 中所有 enabled 注册仓
+
+### Flag 表
+
+| Flag | 说明 |
+|---|---|
+| `--repo <path>` | 强制单仓模式，指向任意本地仓库路径 |
+| `--repo-id <id>` | 强制单仓模式，指向 `config.toml` 注册项 |
+| `--all-registered` | 强制多仓扫描，即使 cwd 是 iAR 项目仓 |
+| `--state <open\|closed\|all>` | Issue 状态过滤（默认 `all`） |
+| `--label <name>` | 仅显示带该 label 的 Issue |
+| `--with-pr` | 仅显示至少有一个 PR 的 Issue |
+| `--without-pr` | 仅显示无 PR 的 Issue；与 `--with-pr` 互斥 |
+| `--limit <n>` | 每仓最多拉取 Issue 数（默认 100） |
+| `--output <table\|json>` | 渲染格式（默认 `table`） |
+
+### 示例：单仓（cwd 是 iAR 项目仓）
+
+```bash
+$ cd ~/code/keda
+$ iar issue list
+  #     TITLE                              LABELS              STATE   PRS
+  42    Add issue list command              iar-agent-ready     open    #143 [draft]
+  41    Fix label sync                      iar-bug, urgent     open    #140 [merged]
+  40    Update docs                          iar-docs            closed  —
+```
+
+### 示例：全仓扫描（cwd 不是 iAR 项目仓）
+
+```bash
+$ cd /tmp
+$ iar issue list
+  REPO              #     TITLE                              STATE   PRS
+  owner/repo-a      12    Refactor init                       open    #55 [open]
+  owner/repo-a      11    Add tests                            open    —
+  owner/repo-b      7     Fix crash                            open    #22 [merged]
+```
+
+### 示例：JSON 输出（脚本消费）
+
+```bash
+$ iar issue list --with-pr --output json | jq -c '.number, .pulls[0].state'
+12
+open
+7
+merged
+```
+
+JSON 输出每行一个 `IssueWithPulls` 对象，字段稳定：`repo?`、`number`、`title`、`state`、`labels`、`updated_at`、`url`、`pulls[]`（每个 pull 含 `number` / `state` / `url` / `is_draft` / `merged` / `title`）。
+
+### 错误行为
+
+- `--repo` 与 `--repo-id` 同时传 → 退出码非零，提示互斥
+- `--with-pr` 与 `--without-pr` 同时传 → 退出码非零，提示互斥
+- 单仓调用失败（gh 不可用、网络错误）→ 退出码非零，错误信息包含 repo 路径和错误原因
+- 全仓模式下某仓 API 失败不影响其他仓，最终退出码非零，stderr 含该仓错误
+
 ## 常用命令
 
 ```bash

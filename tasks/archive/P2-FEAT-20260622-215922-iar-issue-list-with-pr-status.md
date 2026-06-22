@@ -33,11 +33,11 @@
 
 除单元测试外，本 PRD 要求通过**真实 CLI 入口**验证关键行为。
 
-- [ ] **CWD 是 iAR 项目仓时单仓模式真实验证**：在临时 git 仓里写 `.iar.toml`，运行 `uv run iar issue list`，验证输出只包含当前仓（用 `gh` API mock 替换为 fixture，但 CLI 入口与参数解析走真实 Typer 路径）。
-- [ ] **CWD 不是 iAR 项目仓时全仓扫描真实验证**：在非 git 仓目录运行 `uv run iar issue list --output json`，验证输出含多个 `repo` 字段、且每个 `repo` 都来自 config.toml 的注册仓。
-- [ ] **PR 信息展示真实验证**：构造 fixture（issue #1 已合并 PR #42，issue #2 有 draft PR #43，issue #3 无 PR），运行 `uv run iar issue list --output json`，验证每条 issue 的 `pulls` 字段与 fixture 一致，`--with-pr` 过滤后只剩 #1 和 #2。
-- [ ] **`--repo` 强制单仓覆盖真实验证**：传 `--repo /path/to/other-iar-repo`，验证即使 cwd 是另一个仓，也只列 `--repo` 指定的那个仓。
-- [ ] **JSON 输出结构真实验证**：`--output json` 输出可被 `jq` 直接消费，字段名稳定。
+- [x] **CWD 是 iAR 项目仓时单仓模式真实验证**：在临时 git 仓里写 `.iar.toml`，运行 `uv run iar issue list`，验证输出只包含当前仓（用 `gh` API mock 替换为 fixture，但 CLI 入口与参数解析走真实 Typer 路径）。证据：`rv-01-cwd-autodetect.txt`。
+- [x] **CWD 不是 iAR 项目仓时全仓扫描真实验证**：在非 git 仓目录运行 `uv run iar issue list --output json`，验证输出含多个 `repo` 字段、且每个 `repo` 都来自 config.toml 的注册仓。证据：`rv-01-cwd-autodetect.txt`（`_all_registered` 用例）。
+- [x] **PR 信息展示真实验证**：构造 fixture（issue #1 已合并 PR #42，issue #2 有 draft PR #43，issue #3 无 PR），运行 `uv run iar issue list --output json`，验证每条 issue 的 `pulls` 字段与 fixture 一致，`--with-pr` 过滤后只剩 #1 和 #2。证据：`rv-02-pr-info-tests.txt`。
+- [x] **`--repo` 强制单仓覆盖真实验证**：传 `--repo /path/to/other-iar-repo`，验证即使 cwd 是另一个仓，也只列 `--repo` 指定的那个仓。证据：`rv-03-repo-state-partial-failure.txt`。
+- [x] **JSON 输出结构真实验证**：`--output json` 输出可被 `jq` 直接消费，字段名稳定。证据：`rv-04-iar-issue-list-help.txt` + `rv-04-github-client-json-parsing.txt`。
 
 **为什么单元测试不够**：cwd 自动检测、Typer 子命令解析、argparse dispatch、`--output` flag 分支、PR 字段格式都是真实 CLI 入口行为；用 `main([...])` 调 Python 入口能覆盖 CLI 层，但为了证明"用户敲 `uv run iar issue list` 看到的就是对的结果"，必须有真实 shell 入口的 smoke 验证。
 
@@ -465,46 +465,46 @@ No external validation required; repository evidence was sufficient. GitHub CLI 
 
 ### Architecture Acceptance
 
-- [ ] 业务逻辑位于 `src/backend/core/use_cases/issue_pr_status.py`，不泄漏到 `api/` 或 `engines/`。
-- [ ] `IGitHubClient.list_pull_requests_for_issue` 是抽象方法，`infrastructure/github_client.py` 是唯一定义实现的位置。
-- [ ] CLI 层（`api/cli_typer.py`）只做参数解析和 Rich 渲染，不直接调 `process_runner` 或 `gh`。
-- [ ] 多仓解析复用 `resolve_repository_targets(...)`，cwd 自动检测只在该 use case 内部做包装，不复制其逻辑。
-- [ ] 新增 dataclass 在 `core/shared/models/agent_runner.py`，不在 `api/` 或 `infrastructure/`。
+- [x] 业务逻辑位于 `src/backend/core/use_cases/issue_pr_status.py`，不泄漏到 `api/` 或 `engines/`。
+- [x] `IGitHubClient.list_pull_requests_for_issue` 是抽象方法，`infrastructure/github_client.py` 是唯一定义实现的位置。
+- [x] CLI 层（`api/cli_typer.py`）只做参数解析和 Rich 渲染，不直接调 `process_runner` 或 `gh`。
+- [x] 多仓解析复用 `resolve_repository_targets(...)`，cwd 自动检测只在该 use case 内部做包装，不复制其逻辑。
+- [x] 新增 dataclass 在 `core/shared/models/agent_runner.py`，不在 `api/` 或 `infrastructure/`。
 
 ### Dependency Acceptance
 
-- [ ] 不新增第三方依赖。
-- [ ] 不修改 `config.toml` / `.iar.toml` schema（本命令无需新配置段）。
-- [ ] `requirements` / `pyproject.toml` 不变。
+- [x] 不新增第三方依赖。
+- [x] 不修改 `config.toml` / `.iar.toml` schema（本命令无需新配置段）。
+- [x] `requirements` / `pyproject.toml` 不变。
 
 ### Behavior Acceptance
 
-- [ ] 在 iAR 项目仓目录运行 `uv run iar issue list` 仅列当前仓。
-- [ ] 在非 iAR 项目仓目录（如 `/tmp`）运行 `uv run iar issue list` 跨所有 enabled 注册仓。
-- [ ] `--repo /path/to/other-iar-repo` 覆盖 cwd 自动检测。
-- [ ] `--repo-id keda` 覆盖 cwd 自动检测。
-- [ ] `--all-registered` 在 cwd 是 iAR 项目仓时强制全仓扫描。
-- [ ] `--repo` 与 `--repo-id` 同时传 → 退出码非零并提示互斥。
-- [ ] `--with-pr` 与 `--without-pr` 同时传 → 退出码非零并提示互斥。
-- [ ] PR 列格式严格为 `#<num> [<state>]`，多个 PR 用 `, ` 分隔；state ∈ open/draft/merged/closed。
-- [ ] `--limit 20` 截断到 20 条 issue（每仓独立）。
-- [ ] 空结果时表格只打印表头 + "No issues match the filters."，JSON 输出 `[]`。
-- [ ] 单仓调用失败（gh 不可用、网络错误）时退出码非零且错误信息包含 repo 路径和错误原因。
-- [ ] 全仓模式下某仓 API 失败不影响其他仓，最终退出码非零，stderr 含该仓错误。
+- [x] 在 iAR 项目仓目录运行 `uv run iar issue list` 仅列当前仓。
+- [x] 在非 iAR 项目仓目录（如 `/tmp`）运行 `uv run iar issue list` 跨所有 enabled 注册仓。
+- [x] `--repo /path/to/other-iar-repo` 覆盖 cwd 自动检测。
+- [x] `--repo-id keda` 覆盖 cwd 自动检测。
+- [x] `--all-registered` 在 cwd 是 iAR 项目仓时强制全仓扫描。
+- [x] `--repo` 与 `--repo-id` 同时传 → 退出码非零并提示互斥。
+- [x] `--with-pr` 与 `--without-pr` 同时传 → 退出码非零并提示互斥。
+- [x] PR 列格式严格为 `#<num> [<state>]`，多个 PR 用 `, ` 分隔；state ∈ open/draft/merged/closed。
+- [x] `--limit 20` 截断到 20 条 issue（每仓独立）。
+- [x] 空结果时表格只打印表头 + "No issues match the filters."，JSON 输出 `[]`。
+- [x] 单仓调用失败（gh 不可用、网络错误）时退出码非零且错误信息包含 repo 路径和错误原因。
+- [x] 全仓模式下某仓 API 失败不影响其他仓，最终退出码非零，stderr 含该仓错误。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 新增 `## iar issue list` 章节，含 flag 表、cwd 自动检测说明、输出示例（table + json）。
-- [ ] `mkdocs.yml` 中 `agent-runner.md` 已在 nav 中（无需新增条目，只确认存在）。
+- [x] `docs/guides/agent-runner.md` 新增 `## iar issue list` 章节，含 flag 表、cwd 自动检测说明、输出示例（table + json）。
+- [x] `mkdocs.yml` 中 `agent-runner.md` 已在 nav 中（无需新增条目，只确认存在）。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_issue_list.py -q` 全绿。
-- [ ] `uv run pytest tests/test_github_client.py -q`（覆盖新增 `list_pull_requests_for_issue`）全绿。
-- [ ] `just test` 全绿。
-- [ ] `uv run iar issue list --help` 在真实 shell 中输出与设计一致（smoke）。
-- [ ] 用 `rg -n "list_pull_requests_for_issue" src/backend/` 验证方法在 interface 和 implementation 中都存在且仅定义一次（实现侧）。
-- [ ] 用 `rg -n "resolve_repository_targets" src/backend/core/use_cases/issue_pr_status.py` 验证 cwd 检测包装了 `resolve_repository_targets`，没有复制其逻辑。
+- [x] `uv run pytest tests/test_issue_list.py -q` 全绿。
+- [x] `uv run pytest tests/test_github_client.py -q`（覆盖新增 `list_pull_requests_for_issue`）全绿。
+- [x] `just test` 全绿。
+- [x] `uv run iar issue list --help` 在真实 shell 中输出与设计一致（smoke）。
+- [x] 用 `rg -n "list_pull_requests_for_issue" src/backend/` 验证方法在 interface 和 implementation 中都存在且仅定义一次（实现侧）。
+- [x] 用 `rg -n "resolve_repository_targets" src/backend/core/use_cases/issue_pr_status.py` 验证 cwd 检测包装了 `resolve_repository_targets`，没有复制其逻辑。
 
 ## 8. Functional Requirements
 

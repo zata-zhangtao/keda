@@ -606,3 +606,147 @@ def test_create_issue_gives_up_after_max_retries(tmp_path: Path) -> None:
             github_client.create_issue(title="title", body="body", labels=[])
 
     assert runner.attempts == 3
+
+
+def test_list_pull_requests_for_issue_normalises_states(tmp_path: Path) -> None:
+    """list_pull_requests_for_issue maps gh states to the 4-bucket view model."""
+    command = (
+        "gh",
+        "pr",
+        "list",
+        "--repo",
+        "owner/repo",
+        "--search",
+        "closes:#7 OR fixes:#7 OR resolves:#7 OR refs:#7",
+        "--state",
+        "all",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,state,url,isDraft,mergedAt",
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            command: CommandResult(
+                command=command,
+                return_code=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "number": 42,
+                            "title": "merged PR",
+                            "state": "MERGED",
+                            "url": "https://example/pr/42",
+                            "isDraft": False,
+                            "mergedAt": "2026-05-01T00:00:00Z",
+                        },
+                        {
+                            "number": 43,
+                            "title": "draft PR",
+                            "state": "OPEN",
+                            "url": "https://example/pr/43",
+                            "isDraft": True,
+                            "mergedAt": "",
+                        },
+                        {
+                            "number": 44,
+                            "title": "closed PR",
+                            "state": "CLOSED",
+                            "url": "https://example/pr/44",
+                            "isDraft": False,
+                            "mergedAt": "",
+                        },
+                    ]
+                ),
+                stderr="",
+            )
+        }
+    )
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    pulls = github_client.list_pull_requests_for_issue("owner/repo", 7)
+
+    states = [pull.state for pull in pulls]
+    # Open/draft sort before closed, merged last.
+    assert states == ["draft", "closed", "merged"]
+    assert pulls[0].is_draft is True
+    assert pulls[-1].merged is True
+    assert fake_runner.calls == [list(command)]
+
+
+def test_list_pull_requests_for_issue_empty_when_no_prs(tmp_path: Path) -> None:
+    """An empty gh response is reported as an empty list."""
+    command = (
+        "gh",
+        "pr",
+        "list",
+        "--repo",
+        "owner/repo",
+        "--search",
+        "closes:#7 OR fixes:#7 OR resolves:#7 OR refs:#7",
+        "--state",
+        "all",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,state,url,isDraft,mergedAt",
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            command: CommandResult(
+                command=command,
+                return_code=0,
+                stdout="[]",
+                stderr="",
+            )
+        }
+    )
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    pulls = github_client.list_pull_requests_for_issue("owner/repo", 7)
+
+    assert pulls == []
+    assert fake_runner.calls == [list(command)]
+
+
+def test_list_issues_by_label_omits_label_flag_when_none(tmp_path: Path) -> None:
+    """When label is None the gh command must not include --label."""
+    command_without_label = (
+        "gh",
+        "issue",
+        "list",
+        "--state",
+        "all",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,url,labels,body,state",
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            command_without_label: CommandResult(
+                command=command_without_label,
+                return_code=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "number": 1,
+                            "title": "all-issues",
+                            "url": "https://example/1",
+                            "labels": [],
+                            "body": "",
+                            "state": "OPEN",
+                        }
+                    ]
+                ),
+                stderr="",
+            )
+        }
+    )
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    issues = github_client.list_issues_by_label(label=None, limit=100, state="all")
+
+    assert len(issues) == 1
+    assert issues[0].number == 1
+    assert fake_runner.calls == [list(command_without_label)]
