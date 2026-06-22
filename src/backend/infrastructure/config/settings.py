@@ -536,6 +536,52 @@ class AgentRunnerInteractiveDecisionSettings(BaseModel):
     allow_execute_yes: bool = True  # Allow --yes to skip confirmation.
 
 
+class AgentRunnerReplSettings(BaseModel):
+    """Interactive REPL (`iar` with no subcommand) configuration.
+
+    The REPL entrypoint lets the user chat with a configured agent and
+    grants the agent the ability to request execution of whitelisted IAR
+    subcommands via ``<<IAR_EXEC>> ... <<END_IAR_EXEC>>`` markers. This
+    settings block isolates the REPL's risk surface (default agent,
+    command allow/confirm lists, audit directory) from the ``iar ask``
+    decision planner.
+    """
+
+    enabled: bool = True
+    default_agent: str = "claude"
+    default_output_dir: str = "logs/agent-runner/repl"
+    max_context_chars: int = 24000
+    agent_timeout_seconds: int = 120
+    # Commands that the executor may run without explicit confirmation.
+    # Each entry is a *prefix* matched against the argv tail (everything
+    # after ``iar``), so ``"labels sync --dry-run"`` auto-confirms only
+    # that exact form. Anything not listed here is either matched against
+    # ``confirm_commands`` (which prompts) or rejected outright.
+    auto_confirm_commands: list[str] = Field(
+        default_factory=lambda: [
+            "labels sync --dry-run",
+            "run --dry-run",
+            "review --dry-run",
+            "ask --plan-only",
+        ]
+    )
+    # Commands whose execution prompts the user for confirmation. Matched
+    # with the same prefix rules as ``auto_confirm_commands``.
+    confirm_commands: list[str] = Field(
+        default_factory=lambda: [
+            "run",
+            "daemon",
+            "review",
+            "review-daemon",
+            "issue create",
+            "recover",
+            "blocked-continue",
+            "worktree create",
+            "worktree remove",
+        ]
+    )
+
+
 class AgentRunnerDeliberationSettings(BaseModel):
     """Multi-agent deliberation configuration."""
 
@@ -647,6 +693,7 @@ class _AgentRunnerRepositoryOverrideSettings(BaseModel):
     generated_content: AgentRunnerGeneratedContentSettings | None = None
     interactive_decision: AgentRunnerInteractiveDecisionSettings | None = None
     deliberation: AgentRunnerDeliberationSettings | None = None
+    repl: AgentRunnerReplSettings | None = None
 
 
 class AgentRunnerRepositorySettings(_AgentRunnerRepositoryOverrideSettings):
@@ -725,6 +772,7 @@ def load_agent_runner_local_settings(
         generated_content=local_settings.generated_content,
         interactive_decision=local_settings.interactive_decision,
         deliberation=local_settings.deliberation,
+        repl=local_settings.repl,
     )
 
 
@@ -767,6 +815,7 @@ class AgentRunnerSettings(BaseSettings):
     interactive_decision: AgentRunnerInteractiveDecisionSettings = Field(
         default_factory=AgentRunnerInteractiveDecisionSettings
     )
+    repl: AgentRunnerReplSettings = Field(default_factory=AgentRunnerReplSettings)
     repositories: dict[str, AgentRunnerRepositorySettings] = Field(default_factory=dict)
 
     @classmethod
@@ -940,6 +989,7 @@ __all__ = [
     "AgentRunnerGitSettings",
     "AgentRunnerLabelSettings",
     "AgentRunnerPromptSettings",
+    "AgentRunnerReplSettings",
     "AgentRunnerRepositorySettings",
     "AgentRunnerRunnerSettings",
     "AgentRunnerSafetySettings",

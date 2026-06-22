@@ -221,3 +221,72 @@ def test_content_generation_command_defaults_to_claude() -> None:
 
     kimi_command = _build_content_generation_command("kimi", "prompt", Path("/tmp"))
     assert kimi_command[0] == "kimi"
+
+
+def test_content_generation_command_codex_read_only_flag() -> None:
+    """read_only=True (default) keeps the codex read-only sandbox; False drops it."""
+    from backend.engines.agent_runner.factory import _build_content_generation_command
+
+    read_only_command = _build_content_generation_command(
+        "codex", "prompt", Path("/tmp"), read_only=True
+    )
+    assert "read-only" in read_only_command
+    assert "--ask-for-approval" in read_only_command
+
+    write_command = _build_content_generation_command(
+        "codex", "prompt", Path("/tmp"), read_only=False
+    )
+    assert "read-only" not in write_command
+    assert "--ask-for-approval" not in write_command
+
+
+def test_build_repl_command_matches_write_mode() -> None:
+    """``_build_repl_command`` must use ``read_only=False`` for codex."""
+    from backend.engines.agent_runner.factory import (
+        _build_content_generation_command,
+        _build_repl_command,
+    )
+
+    repl_command = _build_repl_command("codex", "prompt", Path("/tmp"))
+    write_command = _build_content_generation_command(
+        "codex", "prompt", Path("/tmp"), read_only=False
+    )
+    assert repl_command == write_command
+
+
+def test_local_iar_toml_can_override_repl_section(tmp_path: Path) -> None:
+    """.iar.toml's [agent_runner.repl] must be honored by load_agent_runner_local_settings."""
+    from backend.infrastructure.config.settings import (
+        load_agent_runner_local_settings,
+    )
+
+    (tmp_path / ".iar.toml").write_text(
+        "[agent_runner]\n"
+        "[agent_runner.repository]\n"
+        'id = "repl-local-test"\n'
+        "[agent_runner.repl]\n"
+        'default_agent = "codex"\n'
+        "agent_timeout_seconds = 30\n"
+        "max_context_chars = 8000\n",
+        encoding="utf-8",
+    )
+    settings = load_agent_runner_local_settings(tmp_path)
+    assert settings is not None
+    assert settings.repl is not None
+    assert settings.repl.default_agent == "codex"
+    assert settings.repl.agent_timeout_seconds == 30
+    assert settings.repl.max_context_chars == 8000
+
+
+def test_app_config_repl_propagates_from_pydantic_settings() -> None:
+    """build_app_config must surface the REPL settings on the frozen AppConfig."""
+    from backend.core.shared.models.agent_decision import ReplConfig
+    from backend.engines.agent_runner.factory import build_app_config_from_settings
+
+    settings = AgentRunnerSettings()
+    settings.repl.default_agent = "kimi"  # type: ignore[misc]
+    settings.repl.agent_timeout_seconds = 45  # type: ignore[misc]
+    app_config = build_app_config_from_settings(settings)
+    assert isinstance(app_config.repl, ReplConfig)
+    assert app_config.repl.default_agent == "kimi"
+    assert app_config.repl.agent_timeout_seconds == 45

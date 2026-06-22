@@ -70,7 +70,7 @@ _HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
 app = typer.Typer(
     name="iar",
     help="Issue Agent Runner CLI.",
-    no_args_is_help=True,
+    no_args_is_help=False,
     rich_markup_mode="rich",
     context_settings=_HELP_CONTEXT,
 )
@@ -195,15 +195,42 @@ def _run_typer_repository_command(
     return _run_typer_command(command, **selector_options, **kwargs)
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def _app_callback(
     ctx: typer.Context,
     repo: RepoOption = None,
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
+    agent: Annotated[
+        RunAgentChoice | None,
+        typer.Option(
+            "--agent",
+            help="Override the REPL default agent. "
+            "Accepts codex/claude/kimi; 'auto' falls back to "
+            "[agent_runner.repl].default_agent.",
+        ),
+    ] = None,
 ) -> None:
-    """Store top-level options so legacy and modern forms both work."""
+    """Store top-level options and dispatch the no-arg REPL entrypoint."""
     ctx.obj = {"repo": repo, "repo_id": repo_id, "config": config}
+    if ctx.invoked_subcommand is not None:
+        return
+    # No subcommand and the user did not pass --help. The REPL entrypoint
+    # only makes sense inside an interactive terminal; otherwise fall back
+    # to Typer's standard help-and-exit behaviour so CI / pipe-driven
+    # scripts keep working.
+    agent_override = _enum_value(agent) if agent is not None else None
+    if sys.stdin.isatty():
+        _run_typer_command(
+            "repl",
+            repo=repo,
+            repo_id=repo_id,
+            config=config,
+            agent=agent_override,
+        )
+        return
+    typer.echo(ctx.get_help())
+    raise typer.Exit(code=1)
 
 
 @app.command("init")
@@ -869,6 +896,31 @@ def ask_command(
         execute=execute,
         yes=yes,
         output=output,
+    )
+
+
+@app.command("repl")
+def repl_command(
+    ctx: typer.Context,
+    agent: Annotated[
+        RunAgentChoice,
+        typer.Option(
+            "--agent",
+            help="Override the REPL agent (defaults to [agent_runner.repl].default_agent).",
+        ),
+    ] = RunAgentChoice.claude,
+    repo: RepoOption = None,
+    repo_id: RepoIdOption = None,
+    config: ConfigOption = None,
+) -> int:
+    """Run the interactive REPL session."""
+    selector_options = _typer_selector_options(
+        ctx, repo=repo, repo_id=repo_id, config=config
+    )
+    return _run_typer_command(
+        "repl",
+        **selector_options,
+        agent=_enum_value(agent),
     )
 
 

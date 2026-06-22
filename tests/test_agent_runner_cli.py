@@ -607,17 +607,20 @@ def test_cli_parser_repo_and_repo_id_individually_parseable() -> None:
     assert parsed_id.repo is None
 
 
-def test_main_no_args_shows_help_without_traceback(capsys) -> None:
+def test_main_no_args_shows_help_without_traceback(monkeypatch, capsys) -> None:
     """No-argument Typer entrypoint should show help without leaking internals."""
     from backend.api.cli import main
 
+    # In non-TTY mode (CI / pipe) we now exit non-zero after showing
+    # help, mirroring the PRD's "non-TTY → non-zero exit" requirement.
+    # The TTY-mode no-args case is covered by ``test_main_no_args_tty_*``.
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
     exit_code = main([])
     captured = capsys.readouterr()
     combined_output = _strip_ansi(f"{captured.out}\n{captured.err}")
 
-    assert exit_code == 0
-    assert "Usage: iar" in combined_output
-    assert "Commands" in combined_output
+    assert exit_code == 1
+    assert "Usage: iar" in combined_output or "Commands" in combined_output
     assert "Traceback" not in combined_output
     assert "NoArgsIsHelpError" not in combined_output
 
@@ -3825,3 +3828,215 @@ def test_main_run_dry_run_skips_deliberation_phase(monkeypatch, tmp_path: Path) 
     assert exit_code == 0
     comments = fake_github.list_issue_comments(77)
     assert comments == [], "dry-run must not post any Issue comments"
+
+
+# ---------------------------------------------------------------------------
+# REPL (`iar` no args / `iar repl`)
+# ---------------------------------------------------------------------------
+
+
+def _init_iar_repo(tmp_path: Path) -> Path:
+    """Create a bare git repository and seed ``.iar.toml``."""
+    from tests.test_agent_runner_cli import _init_bare_git_repository
+
+    repo_path = _init_bare_git_repository(tmp_path, "repl-test-repo")
+    (repo_path / ".iar.toml").write_text(
+        "[agent_runner]\n"
+        "[agent_runner.repository]\n"
+        'id = "repl-test-repo"\n'
+        'display_name = "REPL Test"\n',
+        encoding="utf-8",
+    )
+    return repo_path
+
+
+def test_main_repl_subcommand_starts_session(monkeypatch, tmp_path: Path) -> None:
+    """`iar repl --repo <path>` should drive the REPL use case once."""
+    from backend.api.cli import main
+    from backend.core.use_cases.repl_session import (
+        EXIT_COMMAND,
+        IAR_EXEC_CLOSE_MARKER,
+        IAR_EXEC_OPEN_MARKER,
+    )
+
+    repo_path = _init_iar_repo(tmp_path)
+
+    user_inputs = iter(["sync labels", EXIT_COMMAND])
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(user_inputs))
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+    ) as mock_resolve, patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
+        "backend.api.cli.create_github_client"
+    ), patch("backend.api.cli.create_content_generator") as mock_content, patch(
+        "backend.api.cli.create_repl_command_executor"
+    ) as mock_executor_factory:
+        mock_context = MagicMock()
+        mock_context.repo_path = repo_path
+        mock_context.repo_id = "repl-test-repo"
+        mock_context.display_name = "REPL Test"
+        mock_context.config.repl.default_agent = "claude"
+        mock_resolve.return_value = [mock_context]
+
+        mock_content.return_value.generate.return_value = MagicMock(
+            return_code=0,
+            stdout=(
+                "I'll sync the labels.\n"
+                f"{IAR_EXEC_OPEN_MARKER} iar labels sync --dry-run "
+                f"{IAR_EXEC_CLOSE_MARKER}"
+            ),
+            stderr="",
+        )
+        mock_executor = MagicMock()
+        mock_executor.execute.return_value = MagicMock(
+            argv=("labels", "sync", "--dry-run"),
+            return_code=0,
+            stdout="Labels synced",
+            stderr="",
+            rejected=False,
+            rejection_reason="",
+            confirmation_prompted=False,
+            confirmation_granted=None,
+        )
+        mock_executor_factory.return_value = mock_executor
+
+        with patch(
+            "backend.api.cli.run_repl_session",
+            return_value=0,
+        ) as mock_run:
+            exit_code = main(["repl", "--repo", str(repo_path)])
+
+    assert exit_code == 0
+    mock_run.assert_called_once()
+    inputs_obj = mock_run.call_args.args[0]
+    deps_obj = mock_run.call_args.args[1]
+    assert inputs_obj.agent == "claude"
+    assert deps_obj.github_client is not None
+    assert deps_obj.command_executor is mock_executor
+
+
+def test_main_repl_rejects_auto_agent_override(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    """`iar repl --agent auto` should fall back to the config default."""
+    from backend.api.cli import main
+
+    repo_path = _init_iar_repo(tmp_path)
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "/exit")
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+    ) as mock_resolve, patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
+        "backend.api.cli.create_github_client"
+    ), patch("backend.api.cli.create_content_generator"), patch(
+        "backend.api.cli.create_repl_command_executor"
+    ) as mock_executor_factory, patch(
+        "backend.core.use_cases.repl_session.run_repl_session",
+        return_value=0,
+    ) as mock_run:
+        mock_context = MagicMock()
+        mock_context.repo_path = repo_path
+        mock_context.repo_id = "repl-test-repo"
+        mock_context.display_name = "REPL Test"
+        mock_context.config.repl.default_agent = "claude"
+        mock_resolve.return_value = [mock_context]
+        mock_executor_factory.return_value = MagicMock()
+
+        with patch(
+            "backend.api.cli.run_repl_session",
+            return_value=0,
+        ) as mock_run:
+            exit_code = main(["repl", "--agent", "auto", "--repo", str(repo_path)])
+
+    assert exit_code == 0
+    inputs = mock_run.call_args.args[0]
+    assert inputs.agent == "claude"
+
+
+def test_main_no_args_non_tty_shows_help_and_exits_nonzero(monkeypatch, capsys) -> None:
+    """`iar` with no args in non-TTY mode prints help and exits non-zero."""
+    from backend.api.cli import main
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    exit_code = main([])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    combined = captured.out + captured.err
+    assert "Usage:" in combined or "iar" in combined
+
+
+def test_main_no_args_tty_dispatches_repl(monkeypatch, tmp_path: Path) -> None:
+    """`iar` with no args in TTY mode should drive the REPL use case."""
+    from backend.api.cli import main
+
+    repo_path = _init_iar_repo(tmp_path)
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "/exit")
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+    ) as mock_resolve, patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
+        "backend.api.cli.create_github_client"
+    ), patch("backend.api.cli.create_content_generator"), patch(
+        "backend.api.cli.create_repl_command_executor"
+    ) as mock_executor_factory, patch(
+        "backend.api.cli.run_repl_session",
+        return_value=0,
+    ) as mock_run:
+        mock_context = MagicMock()
+        mock_context.repo_path = repo_path
+        mock_context.repo_id = "repl-test-repo"
+        mock_context.display_name = "REPL Test"
+        mock_context.config.repl.default_agent = "claude"
+        mock_resolve.return_value = [mock_context]
+        mock_executor_factory.return_value = MagicMock()
+
+        exit_code = main(["--repo", str(repo_path)])
+
+    assert exit_code == 0
+    mock_run.assert_called_once()
+    inputs_obj = mock_run.call_args.args[0]
+    assert inputs_obj.agent == "claude"
+
+
+def test_main_repl_requires_initialized_repo(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    """Uninitialized repos must show a friendly error."""
+    from backend.api.cli import main
+    from backend.engines.agent_runner.repository_local import (
+        IARRepositoryNotInitializedError,
+    )
+
+    repo_path = _init_iar_repo(tmp_path)
+    (repo_path / ".iar.toml").unlink()
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "/exit")
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+    ) as mock_resolve, patch("backend.api.cli.create_process_runner"):
+        mock_context = MagicMock()
+        mock_context.repo_path = repo_path
+        mock_resolve.return_value = [mock_context]
+        # Force require_iar_repository_initialized to raise
+        with patch(
+            "backend.api.cli.require_iar_repository_initialized",
+            side_effect=IARRepositoryNotInitializedError(
+                repo_root_path=repo_path,
+                config_path=repo_path / ".iar.toml",
+            ),
+        ):
+            exit_code = main(["repl", "--repo", str(repo_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    combined = (captured.out + captured.err).lower()
+    assert "init" in combined

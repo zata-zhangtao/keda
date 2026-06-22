@@ -427,6 +427,39 @@ max_context_chars = 24000
 # Whether `iar ask --yes` is allowed to skip interactive confirmation.
 allow_execute_yes = true
 
+# =============================================================================
+# Agent Runner REPL Configuration (`iar` with no subcommand)
+# =============================================================================
+# Controls the interactive REPL entrypoint. Default agent is `claude`;
+# `--agent codex|kimi` overrides it per invocation. `--agent auto` is
+# rejected here (use `iar run` for that).
+[agent_runner.repl]
+enabled = true
+default_agent = "claude"
+default_output_dir = "logs/agent-runner/repl"
+max_context_chars = 24000
+agent_timeout_seconds = 120
+# Commands the REPL executor may run without explicit confirmation.
+# Each entry is a prefix matched against the argv tail after `iar`.
+auto_confirm_commands = [
+  "labels sync --dry-run",
+  "run --dry-run",
+  "review --dry-run",
+  "ask --plan-only",
+]
+# Commands that prompt the user for confirmation before execution.
+confirm_commands = [
+  "run",
+  "daemon",
+  "review",
+  "review-daemon",
+  "issue create",
+  "recover",
+  "blocked-continue",
+  "worktree create",
+  "worktree remove",
+]
+
 [agent_runner.deliberation]
 default_rounds = 2
 default_synthesizer = "claude"

@@ -1156,6 +1156,90 @@ iar recover --issue 5
 iar recover --issue 5 --branch issue-5
 ```
 
+## REPL 入口
+
+直接运行 `iar`（不带任何子命令）会进入交互式 REPL 入口。底层调用
+[`claude` / `codex` / `kimi`](#repl-agent--command-protocol) 等本地
+agent，把仓库上下文与自然语言指令直接转成 IAR 子命令并执行。
+
+### 行为差异
+
+| 触发方式 | 行为 |
+|---|---|
+| `iar`（TTY） | 启动 REPL，循环读取用户输入，调用 agent，把 agent 标注的 `<<IAR_EXEC>>` 命令翻译成 `iar <subcommand>` 并执行 |
+| `iar`（非 TTY） | 打印 Typer 帮助文本并以非零退出码失败，避免 CI / pipe 脚本 hang 住 |
+| `iar --help` / `iar -h` | 仍然打印帮助（不进入 REPL） |
+| `iar repl` | 显式启动 REPL 的子命令形式 |
+| `iar repl --agent codex` | 显式覆盖 REPL 默认 agent |
+
+非 TTY 行为保证现有脚本（如 `cd repo && iar --help`）继续工作。
+
+### REPL Agent & Command Protocol
+
+- 默认 agent 来自 `[agent_runner.repl].default_agent`（默认 `claude`）。
+- `--agent codex|kimi` 可覆盖；`--agent auto` 在 REPL 入口被拒绝并回退
+  到 `[agent_runner.repl].default_agent`（auto 仅用于 `iar run`）。
+- agent 的回复里通过标记协议请求执行 IAR 子命令：
+
+  ```
+  <<IAR_EXEC>> iar labels sync --dry-run <<END_IAR_EXEC>>
+  ```
+
+  REPL 把标记里的命令交给命令执行器，执行器按白名单与确认策略运行：
+  - 默认白名单覆盖 `init` / `labels` / `issue` / `run` / `daemon` /
+    `review` / `review-daemon` / `recover` / `blocked-continue` / `ask` /
+    `deliberate` / `takeover` / `worktree` / `registry` / `workflow` /
+    `completion`。
+  - 只读 / dry-run 命令自动执行（`labels sync --dry-run`、
+    `run --dry-run`、`ask --plan-only` 等）。
+  - 写操作 / 高风险命令（`run`、`daemon`、`issue create`、`recover`、
+    `blocked-continue`、`worktree create/remove` 等）执行前会询问
+    `Execute? [y/N]`。
+  - 不在白名单内的命令、含 shell 元字符的请求、`git push` / `git merge`
+    / `git reset` 等直接 git 写操作都会被拒绝并反馈给 agent。
+
+每次执行的结果以 `[IAR_EXEC_RESULT]` 块回写到对话历史；agent 在下一轮
+回复里就能看到 stdout / stderr / exit_code。
+
+### 退出与审计
+
+- 用户输入 `/exit` 或 `Ctrl+C` / EOF 时退出 REPL，返回码为 0。
+- 会话元数据、对话历史、命令执行记录写入
+  `logs/agent-runner/repl/<session-id>/`，包含 `session.json`、
+  `transcript.md` 与 `commands.json`。可通过 `[agent_runner.repl].default_output_dir`
+  覆盖。
+- REPL 内部最大 64 轮（防御性封顶），防止 agent 卡在循环里无限增长。
+
+### 与 `iar ask` 的边界
+
+- `iar ask <prompt>` 是单次决策入口：要求 agent 输出结构化 JSON
+  DecisionPlan + 受控执行；适合 CI / 一次性自动执行场景。
+- `iar`（REPL）是持续多轮对话入口：agent 可以反复请求执行 IAR 子命令，
+  每轮都把结果反馈回对话；适合本地探索与人工协作场景。
+- 二者共享 `[agent_runner.interactive_decision]` 与
+  `[agent_runner.repl]` 配置段，但 settings 完全独立（默认 agent、
+  超时、白名单都分开）。
+
+### 示例：同步 Labels 并启动 daemon
+
+```bash
+$ cd /path/to/repo
+$ iar
+iar> sync the labels for me, then start the daemon.
+I'll sync the labels.
+<<IAR_EXEC>> iar labels sync <<END_IAR_EXEC>>
+[Executed] iar labels sync
+stdout: ✅ labels synced
+
+Now I'll start the daemon.
+<<IAR_EXEC>> iar daemon <<END_IAR_EXEC>>
+This command starts a long-running daemon. Execute? [y/N] y
+[Executed] iar daemon
+stdout: Daemon started with PID 12345
+
+iar> /exit
+```
+
 ## PRD Rework Workflow
 
 `iar` supports the reverse of `iar issue create`: automatically generating or rewriting a PRD from an existing GitHub Issue. This is useful when an Issue is created directly on GitHub and later needs a canonical PRD, or when an existing Issue receives new comments that require updating its PRD.
