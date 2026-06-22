@@ -301,7 +301,9 @@ class GeneratedContentConfig:
         default_factory=GeneratedContentTargetConfig
     )
     prd_from_issue: GeneratedContentTargetConfig = field(
-        default_factory=GeneratedContentTargetConfig
+        # PRD 生成没有可用的内置 template，唯一有意义的模式是 agent；
+        # agent 不可用时 generate_prd_content 会优雅退回 fallback。
+        default_factory=lambda: GeneratedContentTargetConfig(mode="agent")
     )
 
 

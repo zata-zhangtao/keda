@@ -43,19 +43,21 @@ quality_head_hash() {
 }
 
 quality_staged_file_paths() {
-    git diff --cached --name-only
+    # core.quotePath=false：避免 git 对含非 ASCII（如中文）的路径加双引号并做
+    # 八进制转义，否则下游 .md$ 等后缀正则与 git add 都会失配。
+    git -c core.quotePath=false diff --cached --name-only
 }
 
 quality_working_file_paths() {
     if quality_has_head; then
         {
-            git diff --name-only HEAD
-            git ls-files --others --exclude-standard
+            git -c core.quotePath=false diff --name-only HEAD
+            git -c core.quotePath=false ls-files --others --exclude-standard
         } | awk 'NF && !seen[$0]++'
         return 0
     fi
 
-    git ls-files --cached --others --exclude-standard
+    git -c core.quotePath=false ls-files --cached --others --exclude-standard
 }
 
 quality_effective_tree() {
@@ -155,7 +157,7 @@ quality_has_staged_archive_prd_transition() {
         if [[ "$staged_file_path" =~ $QUALITY_ARCHIVED_PRD_PATH_PATTERN ]]; then
             return 0
         fi
-    done < <(git diff --cached --name-only --diff-filter=ACR -- tasks/archive)
+    done < <(git -c core.quotePath=false diff --cached --name-only --diff-filter=ACR -- tasks/archive)
 
     return 1
 }

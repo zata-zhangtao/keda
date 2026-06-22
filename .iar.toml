@@ -169,7 +169,7 @@ include_diff_stat = true
 
 [agent_runner.generated_content.prd_from_issue]
 enabled = true
-mode = "agnet"
+mode = "agent"
 output = "json"
 title_template = ""
 body_template = ""

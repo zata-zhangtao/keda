@@ -176,6 +176,7 @@ _IAR_SECTION_COMMENTS: dict[str, str] = {
 _IAR_SUBTABLE_COMMENTS: dict[str, str] = {
     "generated_content.issue_from_prd": "从 PRD 生成 GitHub Issue 的模板",
     "generated_content.draft_pr": "从 commit 信息生成 Draft PR 的模板",
+    "generated_content.prd_from_issue": "从 GitHub Issue 生成 / 重写 PRD（rework-prd 流程）",
 }
 
 # 字段路径 -> 字段说明注释（中文为主，关键术语保留英文）。
@@ -239,6 +240,16 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "generated_content.draft_pr.prompt": "agent 模式使用的 prompt",
     "generated_content.draft_pr.include_commit_log": "PR 生成时是否包含 commit log",
     "generated_content.draft_pr.include_diff_stat": "PR 生成时是否包含 diff stat",
+    "generated_content.prd_from_issue.enabled": "是否从 Issue 生成 / 重写 PRD",
+    "generated_content.prd_from_issue.mode": "生成模式：agent（调用 AI，推荐）或 template；PRD 无内置模板，template 会退回 fallback",
+    "generated_content.prd_from_issue.output": "输出格式：json / markdown",
+    "generated_content.prd_from_issue.title_template": "PRD 标题模板（template 模式用）",
+    "generated_content.prd_from_issue.body_template": "PRD 正文模板（template 模式用；留空则退回 fallback）",
+    "generated_content.prd_from_issue.agent": "执行生成的 agent",
+    "generated_content.prd_from_issue.timeout_seconds": "生成超时秒数",
+    "generated_content.prd_from_issue.prompt": "agent 模式 prompt（留空则用内置 prd skill 规范）",
+    "generated_content.prd_from_issue.include_commit_log": "（PRD 生成未使用）",
+    "generated_content.prd_from_issue.include_diff_stat": "（PRD 生成未使用）",
 }
 
 # 注释掉的常用覆盖示例：[agent_runner.labels]。

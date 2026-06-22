@@ -9,7 +9,7 @@
 import os
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote_plus
 
 from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validator
@@ -573,7 +573,9 @@ class AgentRunnerGeneratedContentTargetSettings(BaseModel):
     """Generated-content target configuration supporting TOML string-list syntax."""
 
     enabled: bool = True
-    mode: str = "template"
+    # 仅接受 template / agent；非法值（如手误 "agnet"）在配置加载期直接报错，
+    # 而不是静默退回 fallback。
+    mode: Literal["template", "agent"] = "template"
     output: str = "json"
     title_template: str | list[str] = ""
     body_template: str | list[str] = ""
@@ -607,7 +609,9 @@ class AgentRunnerGeneratedContentSettings(BaseModel):
         default_factory=AgentRunnerGeneratedContentTargetSettings
     )
     prd_from_issue: AgentRunnerGeneratedContentTargetSettings = Field(
-        default_factory=AgentRunnerGeneratedContentTargetSettings
+        # PRD 生成没有可用的内置 template，唯一有意义的模式是 agent；
+        # agent 不可用时 generate_prd_content 会优雅退回 fallback。
+        default_factory=lambda: AgentRunnerGeneratedContentTargetSettings(mode="agent")
     )
 
 

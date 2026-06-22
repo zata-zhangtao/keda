@@ -81,6 +81,13 @@ _TYPE_ACRONYMS: dict[str, str] = {
 
 _DEFAULT_PRD_PREFIX = "P2-FEAT"
 
+# PRD 生成来源（GeneratedPrdContent.source）到面向人类展示标签的映射。
+_PRD_SOURCE_LABELS: dict[str, str] = {
+    "agent": "AI agent",
+    "template": "template",
+    "fallback": "fallback template",
+}
+
 
 def _generate_slug(issue_title: str) -> str:
     """将 Issue 标题转换为 URL 安全的 slug。
@@ -396,8 +403,10 @@ def create_prd_from_issue(
             cwd=gc_cwd,
         )
         prd_text = generated.text
+        prd_source = generated.source
     else:
         prd_text = _build_fallback_prd(issue)
+        prd_source = "fallback"
 
     prd_path.write_text(prd_text, encoding="utf-8")
     _logger.info("%s PRD at %s", "Rewrote" if is_rewrite else "Created", prd_path)
@@ -434,11 +443,8 @@ def create_prd_from_issue(
     )
 
     action = "rewritten" if is_rewrite else "generated"
-    source_label = (
-        "AI agent"
-        if gc_config is not None and gc_config.enabled
-        else "fallback template"
-    )
+    # 反映本次实际生成来源，而非仅依据开关：agent 失败退回 fallback 时不再误报 "AI agent"。
+    source_label = _PRD_SOURCE_LABELS.get(prd_source, prd_source)
     comment_lines = [
         f"PRD {action} successfully.",
         "",
