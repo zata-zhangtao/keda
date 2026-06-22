@@ -441,7 +441,7 @@ def labels_sync_command(
 def _run_issue_create_command(
     ctx: typer.Context,
     *,
-    prd_path: str,
+    prd_paths: list[str],
     issue_type: IssueTypeChoice,
     title: str | None,
     ready: bool,
@@ -461,7 +461,7 @@ def _run_issue_create_command(
         repo=repo,
         repo_id=repo_id,
         config=config,
-        prd_path=prd_path,
+        prd_paths=prd_paths,
         type=_enum_value(issue_type),
         title=title,
         ready=ready,
@@ -476,7 +476,9 @@ def _run_issue_create_command(
 @issue_app.command("create")
 def issue_create_command(
     ctx: typer.Context,
-    prd_path: Annotated[str, typer.Argument(help="PRD Markdown path.")],
+    prd_paths: Annotated[
+        list[str], typer.Argument(help="One or more PRD Markdown paths.")
+    ],
     issue_type: Annotated[
         IssueTypeChoice,
         typer.Option("--type", help="Issue type label."),
@@ -512,10 +514,10 @@ def issue_create_command(
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
 ) -> int:
-    """Create a GitHub Issue from a PRD file."""
+    """Create GitHub Issues from one or more PRD files."""
     return _run_issue_create_command(
         ctx,
-        prd_path=prd_path,
+        prd_paths=prd_paths,
         issue_type=issue_type,
         title=title,
         ready=ready,

@@ -653,7 +653,7 @@ implement prd_file ai_tool prompt="":
 #   just ai check <file_path>                 # review a file against project standards, then stay interactive
 #   just ai check <file_path> kimi            # use kimi
 #   just ai check <file_path> claude "prompt" # custom prompt (still interactive)
-#   just ai fix                               # resolve rebase conflicts with claude
+#   just ai fix                               # resolve git conflicts (rebase, merge, stash pop, cherry-pick, revert) with claude
 #   just ai fix kimi "custom prompt"          # resolve conflicts with kimi
 #   just ai commit                            # run `just test`, then commit with claude
 #   just ai commit kimi "custom prompt"        # use kimi with a custom prompt
@@ -688,7 +688,7 @@ ai subcommand arg1="" arg2="" arg3="" :
         *)
             echo "Usage:"
             echo "  just ai check <file>  # review file against project standards, stay interactive"
-            echo "  just ai fix           # resolve rebase conflicts"
+            echo "  just ai fix           # resolve git conflicts (rebase, merge, stash pop, etc.)"
             echo "  just ai commit        # run just test, then commit"
             echo "  just ai push          # run just test, then commit and push"
             echo "  just ai implement     # implement a PRD"
@@ -734,33 +734,35 @@ _ai_fix ai_tool="claude" prompt="" :
 
     prompt_text="{{prompt}}"
 
-    # Check if a rebase or merge is in progress
-    rebase_dir=""
-    if [ -d "$(git rev-parse --git-dir)/rebase-merge" ]; then
-        rebase_dir="$(git rev-parse --git-dir)/rebase-merge"
-    elif [ -d "$(git rev-parse --git-dir)/rebase-apply" ]; then
-        rebase_dir="$(git rev-parse --git-dir)/rebase-apply"
-    fi
-
-    if [ -z "$rebase_dir" ]; then
-        echo "No rebase or merge in progress."
-        exit 0
-    fi
-
-    # List unmerged files
+    # Detect any unresolved conflicts (works for rebase, merge, cherry-pick, revert, stash pop)
     unmerged_files="$(git diff --name-only --diff-filter=U 2>/dev/null || true)"
     if [ -z "$unmerged_files" ]; then
         echo "No conflict files found — all clear."
         exit 0
     fi
 
-    echo "Conflicts in:"
+    # Identify the conflict source for clearer messaging and prompt context
+    conflict_source="git conflict"
+    git_dir="$(git rev-parse --git-dir)"
+    if [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ]; then
+        conflict_source="git rebase"
+    elif [ -f "$git_dir/MERGE_HEAD" ]; then
+        conflict_source="git merge"
+    elif [ -f "$git_dir/CHERRY_PICK_HEAD" ]; then
+        conflict_source="git cherry-pick"
+    elif [ -f "$git_dir/REVERT_HEAD" ]; then
+        conflict_source="git revert"
+    elif [ -n "$(git stash list)" ]; then
+        conflict_source="git stash pop"
+    fi
+
+    echo "Conflicts from $conflict_source in:"
     printf '%s\n' "$unmerged_files"
     echo ""
 
     # Auto-generate default prompt
     if [ -z "$prompt_text" ]; then
-        prompt_text="Resolve all git rebase conflicts. For each conflict file, read it, merge correctly preserving the intent of both sides where possible, remove all conflict markers, then git add the resolved file. Do NOT commit — just stage. After all files are done, run git diff --cached to show what you resolved. Finally, run 'just test' and ensure it passes."
+        prompt_text="Resolve all git conflicts from $conflict_source. For each conflict file, read it, merge correctly preserving the intent of both sides where possible, remove all conflict markers, then git add the resolved file. Do NOT commit — just stage. After all files are done, run git diff --cached to show what you resolved. Finally, run 'just test' and ensure it passes."
     fi
 
     ./scripts/shared/just/ai_run.sh "{{ai_tool}}" "$prompt_text"
@@ -899,13 +901,26 @@ sync-template flags="":
     set -euo pipefail
     ./scripts/sync_template.sh {{flags}}
 
-# Run tests after `just lint --full` (usage: just test [all|local|real])
-#   just test        - Run local tests (no API keys needed)
+# Run tests after `just lint --full` (usage: just test [local|all|real])
+#   just test        - Run local tests (no API keys needed; skip if code unchanged)
 #   just test all    - Run all tests
 #   just test real   - Run tests requiring API keys
 @test type="local": _check-completion
     #!/usr/bin/env bash
     set -euo pipefail
+
+    source ./scripts/shared/hooks/quality_flag.sh
+
+    git_dir="$(quality_git_dir)"
+    flag_file="$git_dir/.last_tested_commit"
+    branch_name="$(quality_branch_name)"
+    head_hash="$(quality_head_hash)"
+    test_tree="$(quality_effective_tree working test)"
+
+    if [ "{{type}}" = "local" ] && quality_flag_matches "$flag_file" "$branch_name" "$head_hash" "$test_tree"; then
+        echo "✅ just test flag valid: $branch_name @ ${head_hash:0:8} (tree: ${test_tree:0:8}); skipping tests."
+        exit 0
+    fi
 
     echo "🔍 Running full lint checks..."
     if ! SKIP=check-test-flag just lint --full >/dev/null 2>&1; then
@@ -913,7 +928,6 @@ sync-template flags="":
         echo "   Run: just lint --full"
         exit 1
     fi
-    source ./scripts/shared/hooks/quality_flag.sh
     lint_tree_after_lint="$(quality_effective_tree working lint)"
     echo "✅ Lint passed. Proceeding to tests..."
 
@@ -930,18 +944,28 @@ sync-template flags="":
         fi
     fi
 
+    pytest_exit_code=0
     if [ "{{type}}" = "all" ]; then
-        uv run pytest tests/ -v
+        uv run pytest tests/ -v -m '' -n auto || pytest_exit_code=$?
     elif [ "{{type}}" = "real" ]; then
-        uv run pytest tests/ -v -k "expensive or not expensive"
+        uv run pytest tests/ -v -m 'real_api' -n auto || pytest_exit_code=$?
+        if [ "$pytest_exit_code" -eq 5 ]; then
+            echo "ℹ️  No real_api tests collected; treating as success."
+            pytest_exit_code=0
+        fi
     else
-        uv run pytest tests/ -v
+        # Local mode relies on pyproject.toml addopts to exclude slow/real_api
+        # and to enable pytest-xdist parallel execution.
+        uv run pytest tests/ -v || pytest_exit_code=$?
+    fi
+
+    if [ "$pytest_exit_code" -ne 0 ]; then
+        exit "$pytest_exit_code"
     fi
 
     # Write flag after tests pass, binding branch, HEAD and effective tree.
     # Effective tree includes only files that may enter test/lint, excluding
     # docs, images and other unrelated types so .md edits don't trigger retest.
-    git_dir="$(quality_git_dir)"
     branch_name="$(quality_branch_name)"
     head_hash="$(quality_head_hash)"
     test_tree="$(quality_effective_tree working test)"

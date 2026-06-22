@@ -85,10 +85,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     issue_subparsers = issue_parser.add_subparsers(dest="issue_command", required=True)
     issue_create_parser = issue_subparsers.add_parser(
-        "create", help="Create a GitHub Issue from a PRD file."
+        "create", help="Create GitHub Issues from one or more PRD files."
     )
     issue_create_parser.set_defaults(command="issue create")
-    issue_create_parser.add_argument("prd_path")
+    issue_create_parser.add_argument(
+        "prd_paths",
+        nargs="+",
+        help="One or more PRD Markdown paths.",
+    )
     issue_create_parser.add_argument(
         "--type", choices=("feature", "refactor", "bug"), default="feature"
     )

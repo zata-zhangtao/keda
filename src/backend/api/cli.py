@@ -538,6 +538,13 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             return 0
 
         if parsed.command == "issue create":
+            prd_paths = getattr(parsed, "prd_paths", [])
+            if len(prd_paths) > 1 and parsed.title is not None:
+                logger.error(
+                    "--title cannot be used when creating Issues from multiple PRDs."
+                )
+                return 1
+
             context = resolve_issue_from_prd_target(
                 runner_settings,
                 repo_id=repo_id,
@@ -547,66 +554,91 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             require_iar_repository_initialized(context.repo_path, process_runner)
             _ensure_gh_auth_or_prompt(context.repo_path, process_runner)
             github_client = create_github_client(context.repo_path, process_runner)
-            _, relative_prd_path = resolve_prd_paths(
-                context.repo_path, Path(parsed.prd_path)
-            )
             gc_config = context.config.generated_content
             content_generator = None
             if gc_config.enabled and gc_config.issue_from_prd.enabled:
                 if gc_config.issue_from_prd.mode == "agent":
                     content_generator = create_content_generator(process_runner)
-            # publish_prd 默认开启；仅当用户显式 --no-publish-prd 时，
-            # 先把 queue_ready 压成 False，避免 Issue 还没发布就已经 ready，
-            # runner 在 worktree 里读到过时 PRD。交互式 prompt 在 push 成功后再补 ready。
-            queue_ready_for_request = parsed.ready if parsed.publish_prd else False
-            issue_url = create_issue_from_prd(
-                request=IssueFromPrdRequest(
-                    repo_path=context.repo_path,
-                    prd_path=Path(parsed.prd_path),
-                    issue_type=parsed.type,
-                    title_override=parsed.title,
-                    queue_ready=queue_ready_for_request,
-                    issue_agent=parsed.agent,
-                    labels_config=context.config.labels,
-                    force=parsed.force,
-                    publish_prd=parsed.publish_prd,
-                    git_remote=context.config.git.remote,
-                    git_base_branch=context.config.git.base_branch,
-                    generated_content_config=gc_config,
-                    depends_on=tuple(getattr(parsed, "depends_on", []) or []),
-                    depends_on_group=tuple(
-                        getattr(parsed, "depends_on_group", []) or []
-                    ),
-                    parse_evidence_format_with_agent=context.config.validation.parse_evidence_format_with_agent,
-                    validation_language=context.config.validation.language,
-                    structured_evidence=context.config.validation.structured_evidence,
-                ),
-                github_client=github_client,
-                process_runner=process_runner,
-                content_generator=content_generator,
-            )
-            published = False
-            if not parsed.publish_prd:
-                published = _prompt_and_publish_prd_if_needed(
-                    repo_path=context.repo_path,
-                    relative_prd_path=relative_prd_path,
-                    issue_url=issue_url,
-                    queue_ready=parsed.ready,
-                    git_remote=context.config.git.remote,
-                    labels_config=context.config.labels,
-                    github_client=github_client,
-                    process_runner=process_runner,
+
+            failed_prd_paths: list[str] = []
+            for prd_path_text in prd_paths:
+                # publish_prd 默认开启；仅当用户显式 --no-publish-prd 时，
+                # 先把 queue_ready 压成 False，避免 Issue 还没发布就已经 ready，
+                # runner 在 worktree 里读到过时 PRD。交互式 prompt 在 push 成功后再补 ready。
+                queue_ready_for_request = parsed.ready if parsed.publish_prd else False
+                try:
+                    _, relative_prd_path = resolve_prd_paths(
+                        context.repo_path, Path(prd_path_text)
+                    )
+                    issue_url = create_issue_from_prd(
+                        request=IssueFromPrdRequest(
+                            repo_path=context.repo_path,
+                            prd_path=Path(prd_path_text),
+                            issue_type=parsed.type,
+                            title_override=parsed.title,
+                            queue_ready=queue_ready_for_request,
+                            issue_agent=parsed.agent,
+                            labels_config=context.config.labels,
+                            force=parsed.force,
+                            publish_prd=parsed.publish_prd,
+                            git_remote=context.config.git.remote,
+                            git_base_branch=context.config.git.base_branch,
+                            generated_content_config=gc_config,
+                            depends_on=tuple(getattr(parsed, "depends_on", []) or []),
+                            depends_on_group=tuple(
+                                getattr(parsed, "depends_on_group", []) or []
+                            ),
+                            parse_evidence_format_with_agent=context.config.validation.parse_evidence_format_with_agent,
+                            validation_language=context.config.validation.language,
+                            structured_evidence=context.config.validation.structured_evidence,
+                        ),
+                        github_client=github_client,
+                        process_runner=process_runner,
+                        content_generator=content_generator,
+                    )
+
+                    published = False
+                    if not parsed.publish_prd:
+                        published = _prompt_and_publish_prd_if_needed(
+                            repo_path=context.repo_path,
+                            relative_prd_path=relative_prd_path,
+                            issue_url=issue_url,
+                            queue_ready=parsed.ready,
+                            git_remote=context.config.git.remote,
+                            labels_config=context.config.labels,
+                            github_client=github_client,
+                            process_runner=process_runner,
+                        )
+                    if not parsed.ready or (
+                        parsed.ready and not parsed.publish_prd and not published
+                    ):
+                        logger.info(
+                            "Issue created without '%s' label. "
+                            "Use --ready if you want a runner to pick it up.",
+                            context.config.labels.ready,
+                        )
+                    logger.info("Created GitHub Issue: %s", issue_url)
+                    console.print(f"[green]Created GitHub Issue:[/] {issue_url}")
+                except Exception as exc:  # noqa: BLE001 - batch should continue.
+                    failed_prd_paths.append(prd_path_text)
+                    error_detail = _format_cli_exception(exc)
+                    logger.error(
+                        "Failed to create Issue from %s:\n%s",
+                        prd_path_text,
+                        error_detail,
+                    )
+                    error_console.print(
+                        f"[red]Failed to create Issue from {prd_path_text}:[/]"
+                    )
+                    error_console.print(error_detail, markup=False)
+
+            if failed_prd_paths:
+                logger.error(
+                    "Issue creation failed for %d PRD(s): %s",
+                    len(failed_prd_paths),
+                    ", ".join(failed_prd_paths),
                 )
-            if not parsed.ready or (
-                parsed.ready and not parsed.publish_prd and not published
-            ):
-                logger.info(
-                    "Issue created without '%s' label. "
-                    "Use --ready if you want a runner to pick it up.",
-                    context.config.labels.ready,
-                )
-            logger.info("Created GitHub Issue: %s", issue_url)
-            console.print(f"[green]Created GitHub Issue:[/] {issue_url}")
+                return 1
             return 0
 
         if parsed.command == "run":

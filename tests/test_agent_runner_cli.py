@@ -74,12 +74,24 @@ def test_cli_parser_issue_create_defaults() -> None:
     parsed = parser.parse_args(["issue", "create", "tasks/example.md"])
     assert parsed.command == "issue create"
     assert parsed.issue_command == "create"
-    assert parsed.prd_path == "tasks/example.md"
+    assert parsed.prd_paths == ["tasks/example.md"]
     assert parsed.type == "feature"
     assert parsed.ready is False
     assert parsed.agent == "auto"
     assert parsed.publish_prd is True
     assert parsed.force is False
+
+
+def test_cli_parser_issue_create_multiple_paths() -> None:
+    """issue create should accept multiple PRD paths."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["issue", "create", "tasks/a.md", "tasks/b.md", "--ready"]
+    )
+    assert parsed.command == "issue create"
+    assert parsed.issue_command == "create"
+    assert parsed.prd_paths == ["tasks/a.md", "tasks/b.md"]
+    assert parsed.ready is True
 
 
 def test_cli_parser_issue_create_publish_prd() -> None:
@@ -708,7 +720,7 @@ def test_main_issue_create_failure_prints_command_output(capsys) -> None:
     combined_output = f"{captured.out}\n{captured.err}"
 
     assert exit_code == 1
-    assert "iar failed:" in combined_output
+    assert "Failed to create Issue from tasks/example.md:" in combined_output
     assert (
         "Command: git commit -m 'docs(prd): publish example' -- tasks/example.md"
         in (combined_output)
@@ -801,6 +813,99 @@ def test_main_issue_create_ready_with_publish_keeps_label() -> None:
         assert mock_create.call_args.kwargs["request"].queue_ready is True
         # prompt should not be called when --publish-prd is used
         mock_prompt.assert_not_called()
+
+
+def test_main_issue_create_multiple_prds() -> None:
+    """issue create should create an Issue for each supplied PRD path."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path.cwd()
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd",
+        return_value="https://github.com/example/issues/1",
+    ) as mock_create, patch(
+        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
+    ):
+        exit_code = main(["issue", "create", "tasks/a.md", "tasks/b.md", "--ready"])
+
+    assert exit_code == 0
+    assert mock_create.call_count == 2
+    created_prd_paths = [
+        call.kwargs["request"].prd_path for call in mock_create.call_args_list
+    ]
+    assert created_prd_paths == [Path("tasks/a.md"), Path("tasks/b.md")]
+
+
+def test_main_issue_create_multiple_prds_rejects_shared_title() -> None:
+    """--title cannot be shared across multiple PRD-created Issues."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path.cwd()
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client") as mock_client, patch(
+        "backend.api.cli.create_issue_from_prd"
+    ) as mock_create:
+        exit_code = main(
+            [
+                "issue",
+                "create",
+                "tasks/a.md",
+                "tasks/b.md",
+                "--title",
+                "Shared Title",
+            ]
+        )
+
+    assert exit_code == 1
+    mock_client.assert_not_called()
+    mock_create.assert_not_called()
+
+
+def test_main_issue_create_multiple_prds_continues_on_failure() -> None:
+    """A failure for one PRD should not stop creation for the remaining PRDs."""
+    from backend.api.cli import main
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path.cwd()
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    def _fake_create(*, request, **kwargs):
+        if request.prd_path.name == "bad.md":
+            raise ValueError("bad PRD")
+        return "https://github.com/example/issues/1"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd", side_effect=_fake_create
+    ) as mock_create, patch(
+        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
+    ):
+        exit_code = main(
+            ["issue", "create", "tasks/bad.md", "tasks/good.md", "--ready"]
+        )
+
+    assert exit_code == 1
+    assert mock_create.call_count == 2
+    created_prd_paths = [
+        call.kwargs["request"].prd_path.name for call in mock_create.call_args_list
+    ]
+    assert created_prd_paths == ["bad.md", "good.md"]
 
 
 def test_cli_parser_deliberate_defaults() -> None:
