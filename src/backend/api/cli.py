@@ -777,6 +777,10 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             if contexts:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             content_generator = create_content_generator(process_runner)
+
+            def transcript_runner_factory(repo_path: Path) -> object:
+                return create_transcript_runner(process_runner)
+
             return run_agent_repositories_once(
                 contexts=contexts,
                 dry_run=parsed.dry_run,
@@ -788,6 +792,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 run_history_store=_create_run_history_store_or_none(),
                 run_trigger=_resolve_run_trigger("run"),
                 max_prd_issues=1,
+                transcript_runner_factory=transcript_runner_factory,
+                max_deliberation_issues=runner_settings.daemon.max_deliberation_issues,
             )
 
         if parsed.command == "daemon":
@@ -810,6 +816,9 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             def content_generator_factory(repo_path: Path):
                 return create_content_generator(process_runner)
 
+            def transcript_runner_factory(repo_path: Path) -> object:
+                return create_transcript_runner(process_runner)
+
             run_agent_daemon(
                 contexts=contexts,
                 interval=interval,
@@ -821,6 +830,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 run_history_store=_create_run_history_store_or_none(),
                 run_trigger=_resolve_run_trigger("daemon"),
                 max_prd_issues=1,
+                transcript_runner_factory=transcript_runner_factory,
+                max_deliberation_issues=runner_settings.daemon.max_deliberation_issues,
             )
             return 0
 

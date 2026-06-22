@@ -604,3 +604,98 @@ def test_run_agent_deliberation_continues_when_synthesizer_fails(
     assert result.recommendation == ""
     assert result.failed_agents[0].profile_id == "synthesizer"
     assert result.failed_agents[0].attempted_agent == "synth"
+
+
+def test_run_agent_deliberation_uses_injected_synthesis_prompt_builder(
+    tmp_path: Path,
+) -> None:
+    """A custom synthesis_prompt_builder should override the default prompt."""
+    request = _make_request(agents=("skeptic",), rounds=1)
+    config = _make_config()
+    fake_runner = FakeTranscriptRunner(
+        responses={"kimi": "skeptic output", "claude": "summary"}
+    )
+
+    seen_prompts: list[str] = []
+
+    def _custom_builder(req: DeliberationRequest, transcript: str) -> str:
+        seen_prompts.append("custom")
+        return f"Custom synthesis prompt for {req.prompt!r} with {transcript!r}"
+
+    run_agent_deliberation(
+        request=request,
+        config=config,
+        transcript_runner=fake_runner,
+        event_sink=lambda _: None,
+        target_repo_path=tmp_path,
+        synthesis_prompt_builder=_custom_builder,
+    )
+
+    assert seen_prompts == ["custom"]
+    # The synthesizer call received the custom prompt, not the default one.
+    synth_call = fake_runner.calls[-1]
+    assert "Custom synthesis prompt" in synth_call["prompt"]
+    assert "## Recommendation" not in synth_call["prompt"]
+
+
+def test_run_agent_deliberation_default_synthesis_when_builder_omitted(
+    tmp_path: Path,
+) -> None:
+    """No builder → existing 5-section ``_build_synthesis_prompt`` is used."""
+    request = _make_request(agents=("skeptic",), rounds=1)
+    config = _make_config()
+    fake_runner = FakeTranscriptRunner(
+        responses={"kimi": "skeptic output", "claude": "summary"}
+    )
+
+    run_agent_deliberation(
+        request=request,
+        config=config,
+        transcript_runner=fake_runner,
+        event_sink=lambda _: None,
+        target_repo_path=tmp_path,
+    )
+
+    synth_call = fake_runner.calls[-1]
+    # Default builder still injects the canonical 5 sections.
+    assert "## Recommendation" in synth_call["prompt"]
+    assert "## Consensus" in synth_call["prompt"]
+    assert "## Next Actions" in synth_call["prompt"]
+
+
+def test_run_agent_deliberation_custom_synthesis_propagates_to_result(
+    tmp_path: Path,
+) -> None:
+    """A custom builder doesn't change the section parser; result sections reflect it."""
+    # Use the canonical 5-section header so the parser still extracts content.
+    custom_synthesis = (
+        "## Recommendation\nUse canonical headers.\n\n"
+        "## Consensus\n- Q1\n\n"
+        "## Disagreements\n- Q2\n\n"
+        "## Risks\n- Q3\n\n"
+        "## Next Actions\n- Q4"
+    )
+    request = _make_request(agents=("skeptic",), rounds=1)
+    config = _make_config()
+    fake_runner = FakeTranscriptRunner(
+        responses={"kimi": "skeptic output", "claude": custom_synthesis}
+    )
+
+    def _question_list_builder(req: DeliberationRequest, transcript: str) -> str:
+        return "Synthesize a structured clarifying-question list."
+
+    result = run_agent_deliberation(
+        request=request,
+        config=config,
+        transcript_runner=fake_runner,
+        event_sink=lambda _: None,
+        target_repo_path=tmp_path,
+        synthesis_prompt_builder=_question_list_builder,
+    )
+
+    # With canonical headers the parser populates the standard fields.
+    assert "Use canonical headers" in result.recommendation
+    assert "Q1" in result.consensus
+    assert "Q2" in result.disagreements
+    assert "Q3" in result.risks
+    assert "Q4" in result.next_actions

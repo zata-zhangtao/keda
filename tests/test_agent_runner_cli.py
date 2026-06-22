@@ -3446,3 +3446,203 @@ def test_main_takeover_noninteractive_repos(capsys, monkeypatch) -> None:
     mock_execute.assert_called_once()
     captured = capsys.readouterr()
     assert "Takeover complete" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Phase 0 deliberation wiring tests
+# ---------------------------------------------------------------------------
+
+
+def test_main_run_passes_transcript_runner_factory(monkeypatch) -> None:
+    """``iar run`` should inject a transcript runner factory so Phase 0 runs."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch(
+        "backend.api.cli.run_agent_repositories_once", return_value=0
+    ) as mock_run, patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
+        exit_code = main(["run", "--all"])
+
+    assert exit_code == 0
+    factory = mock_run.call_args.kwargs["transcript_runner_factory"]
+    assert callable(factory), "transcript_runner_factory must be callable"
+
+
+def test_main_daemon_passes_transcript_runner_factory(monkeypatch) -> None:
+    """``iar daemon`` should also inject a transcript runner factory."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon, patch(
+        "backend.api.cli.create_github_client"
+    ), patch("backend.api.cli.require_iar_repository_initialized"):
+        exit_code = main(["daemon", "--all"])
+
+    assert exit_code == 0
+    factory = mock_daemon.call_args.kwargs["transcript_runner_factory"]
+    assert callable(factory)
+
+
+def test_main_run_phase0_deliberation_real_entry_point(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A ``agent/deliberate`` Issue encountered by ``iar run`` gets a question list."""
+    from backend.api.cli import main
+    from backend.core.shared.models.agent_runner import (
+        AppConfig,
+        CommandResult,
+        IssueSummary,
+        RepositoryRunContext,
+    )
+    from tests.conftest import FakeGitHubClient
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    issue = IssueSummary(
+        number=42,
+        title="Discuss async X",
+        url="https://github.com/example/repo/issues/42",
+        body="Need to design X carefully",
+        labels=("agent/deliberate",),
+    )
+    fake_github = FakeGitHubClient()
+
+    def _seed(label: str, limit: int, state: str = "all") -> list[IssueSummary]:
+        fake_github.calls.append(
+            {
+                "method": "list_issues_by_label",
+                "label": label,
+                "limit": limit,
+                "state": state,
+            }
+        )
+        return [issue] if label == "agent/deliberate" else []
+
+    fake_github.list_issues_by_label = _seed  # type: ignore[assignment]
+
+    config = AppConfig()
+    mock_context = RepositoryRunContext(
+        repo_id="repo",
+        display_name="Repo",
+        repo_path=tmp_path,
+        config=config,
+    )
+
+    question_text = (
+        "## 范围边界\n- Q1\n\n## 约束\n- Q2\n\n## 验收标准\n- Q3\n\n"
+        "## 技术选型\n- Q4\n\n## 风险\n- Q5"
+    )
+
+    class _StubTranscript:
+        def run(
+            self,
+            agent_name: str,
+            prompt: str,
+            *,
+            cwd: Path,
+            event_sink,
+            output_sink=None,
+            display_sink=None,
+        ) -> CommandResult:
+            return CommandResult(
+                command=(agent_name,),
+                return_code=0,
+                stdout=question_text,
+                stderr="",
+            )
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client", return_value=fake_github), patch(
+        "backend.api.cli.create_content_generator"
+    ), patch(
+        "backend.api.cli.create_transcript_runner", return_value=_StubTranscript()
+    ), patch("backend.api.cli.require_iar_repository_initialized"):
+        # Exit code may be non-zero (downstream phases may fail in this
+        # sandbox), but Phase 0 should still have posted its comment.
+        main(["run", "--all"])
+
+    comments = fake_github.list_issue_comments(42)
+    assert len(comments) >= 1, "Phase 0 should post at least one comment"
+    question_comment = comments[-1]
+    assert "## 范围边界" in question_comment
+    assert "phase=deliberation_question_posted" in question_comment
+    assert "cycle=1" in question_comment
+
+
+def test_main_run_dry_run_skips_deliberation_phase(monkeypatch, tmp_path: Path) -> None:
+    """``iar run --dry-run`` must not actually run Phase 0 deliberation."""
+    from backend.api.cli import main
+    from backend.core.shared.models.agent_runner import (
+        AppConfig,
+        IssueSummary,
+        RepositoryRunContext,
+    )
+    from tests.conftest import FakeGitHubClient
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    issue = IssueSummary(
+        number=77,
+        title="Discuss async Y",
+        url="https://github.com/example/repo/issues/77",
+        body="Body",
+        labels=("agent/deliberate",),
+    )
+    fake_github = FakeGitHubClient()
+
+    def _seed(label: str, limit: int, state: str = "all") -> list[IssueSummary]:
+        fake_github.calls.append(
+            {
+                "method": "list_issues_by_label",
+                "label": label,
+                "limit": limit,
+                "state": state,
+            }
+        )
+        return [issue] if label == "agent/deliberate" else []
+
+    fake_github.list_issues_by_label = _seed  # type: ignore[assignment]
+
+    config = AppConfig()
+    mock_context = RepositoryRunContext(
+        repo_id="repo",
+        display_name="Repo",
+        repo_path=tmp_path,
+        config=config,
+    )
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_github_client", return_value=fake_github), patch(
+        "backend.api.cli.create_content_generator"
+    ), patch("backend.api.cli.create_transcript_runner"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ):
+        exit_code = main(["run", "--all", "--dry-run"])
+
+    assert exit_code == 0
+    comments = fake_github.list_issue_comments(77)
+    assert comments == [], "dry-run must not post any Issue comments"

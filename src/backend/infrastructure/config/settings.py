@@ -358,6 +358,7 @@ class AgentRunnerLabelSettings(BaseModel):
     claude: str = "agent/claude"
     kimi: str = "agent/kimi"
     rework_prd: str = "agent/rework-prd"
+    deliberate: str = "agent/deliberate"
 
     @property
     def agent_labels(self) -> dict[str, str]:
@@ -448,6 +449,7 @@ class AgentRunnerDaemonSettings(BaseModel):
 
     review_interval_seconds: int = 120
     run_interval_seconds: int = 120
+    max_deliberation_issues: int = 1
 
 
 class AgentRunnerPromptSettings(BaseModel):
@@ -542,6 +544,7 @@ class AgentRunnerDeliberationSettings(BaseModel):
     default_output_dir: str = "logs/agent-runner/deliberations"
     continue_on_agent_error: bool = True
     agent_failure_timeout_seconds: int = 300
+    stale_rounds_before_hint: int = 3
     profiles: dict[str, AgentRunnerDeliberationProfileSettings] = Field(
         default_factory=lambda: {
             "architect": AgentRunnerDeliberationProfileSettings(

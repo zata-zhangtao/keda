@@ -105,6 +105,7 @@ iar completion show --shell zsh
 | | `agent/claude` | 🩵 浅蓝 | 指定使用 Claude Code 执行 |
 | | `agent/kimi` | 🩷 粉色 | 指定使用 Kimi 执行 |
 | **来源标识** | `source/prd` | 🔵 深蓝 | Issue 关联了仓库内的 PRD 文件 |
+| **异步讨论** | `agent/deliberate` | 🩶 浅灰 | 复杂需求先走 Issue 评论区异步讨论，收敛后换 `agent/rework-prd` 落地 PRD |
 | **任务类型** | `type/feature` | 🔵 | 功能需求 |
 | | `type/refactor` | 🟣 | 代码重构 |
 | | `type/bug` | 🔴 | Bug 修复 |
@@ -225,6 +226,36 @@ rebase 到最新 base 时进程退出），会把 Issue 的 worktree 留在 **de
 
 > 局限：认领锁基于 PID 存活判断，对「进程仍在但已放弃该任务」的情形无法自动接管；
 > 此类需要 operator 介入或后续引入心跳/时间戳过期机制。
+
+## 复杂需求：异步 Issue 评论讨论（`agent/deliberate`）
+
+`agent/rework-prd` 是一次性读 Issue 体 + 全部评论直接生成 PRD 的全自动管道，**适合简单需求**。
+对需要来回澄清才能定清楚的复杂 Issue（"先讨论清楚再写 PRD"），请改用 Issue 评论区异步多轮讨论：
+
+1. 创建 Issue 时打上 **`agent/deliberate`** 标签。系统不自动分诊，由人显式声明"这是需要讨论的复杂需求"。
+2. `iar run --once` / `iar daemon` 在 Phase 0 发现带 `agent/deliberate` 的开放 Issue，会复用 `run_agent_deliberation` 引擎（后台 NoOp 视图，不弹 TTY）跑多角色内部互辩，并把 synthesizer 的输出贴成一条结构化"澄清问题清单"评论，类别固定为 5 个：
+   `## 范围边界` / `## 约束` / `## 验收标准` / `## 技术选型` / `## 风险`。
+3. 每条 AI 评论尾部追加一个隐藏的 `<!-- iar:event version=1 phase=deliberation_question_posted cycle=N issue_comments_count=K -->` marker；后续轮询靠它判断"轮到谁"。
+4. 人直接在 GitHub 上回复评论补充信息。下一次轮询发现 `当前评论数 > marker.issue_comments_count`，轮到 AI 续问，`cycle` 递增。
+5. 连续 `stale_rounds_before_hint`（默认 3）轮 AI 提问但用户回复信息量很少时，问题清单评论末尾会自动追加"讨论接近完成，可将标签改为 `agent/rework-prd` 落地"的软提示。
+6. 讨论清楚后，**人手动**把 `agent/deliberate` 换成 `agent/rework-prd`。Phase 1 接管，把 Issue 体 + 完整讨论评论生成为 PRD 并 push draft PR。
+7. 收敛完全由人换标签触发——AI 不自动判定信息够了、不自动改标签、不自动产 PRD。
+
+> 失败隔离：单个 Issue 跑合议失败时打 `agent/failed` 标签 + 失败说明评论，不污染其它 Issue 也不中断 Phase 1/Phase 2。
+> 成本：`max_deliberation_issues`（默认 1）+ `[agent_runner.deliberation].default_rounds`（默认 2）共同决定每轮合议 agent×rounds 次调用；高复杂度 Issue 临时调小 rounds 可以节能。
+
+### 实现阶段 prompt 内联 PRD 全文
+
+不论走的是 `agent/rework-prd` 还是 `agent/deliberate`，最终都会进入 Phase 2 写代码。
+原本实现/恢复/续作 prompt 里只有一行"读 PRD 路径"的指针；现在
+`agent_runner_feedback._build_prd_context_block` 会**把 worktree 内 PRD 文件正文直接内联进
+prompt**（带长度上限，缺省 20 000 字符）。超过上限会尾部截断并附"完整 PRD 见 `<path>`"提示。
+
+内联实现的好处：
+
+- 实现 agent 冷启动时不再需要先 `cat` 整个 PRD，节省一轮文件 I/O 与上下文切换。
+- PRD/讨论沉淀的上下文一步到位地到达写代码阶段，避免"PRD 全在 Issue 评论里、实现阶段只剩几行指针"的丢失。
+- 内联受长度上限保护，且 PRD 文件缺失时优雅回退到原有指针文案。
 
 ## 仓库本地配置
 

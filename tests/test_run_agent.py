@@ -49,6 +49,13 @@ from backend.core.use_cases.run_agent_once import (
     validate_safe_changes,
     _reconcile_worktree_with_remote_branch,
 )
+from backend.core.use_cases.agent_runner_feedback import (
+    build_progress_continuation_prompt,
+)
+from backend.core.use_cases.agent_runner_feedback import (
+    _build_prd_context_block,
+    _DEFAULT_PRD_INLINE_MAX_CHARS,
+)
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
@@ -525,7 +532,7 @@ def test_build_recovery_prompt_includes_prd_closeout() -> None:
     )
     assert "tasks/pending/example.md" in prompt
     assert "Acceptance Checklist" in prompt
-    assert "archived if complete" in prompt
+    assert "tasks/archive/" in prompt
 
 
 def test_resolve_prd_archive_path_converts_pending() -> None:
@@ -6404,3 +6411,217 @@ def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> 
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "-c", "core.editor=true", "rebase", "--continue") in commands
     assert ("git", "commit", "-m", "agent: resolve rebase conflicts") in commands
+
+
+# ---------------------------------------------------------------------------
+# PRD inlining tests (deliberate-async-discussion PRD, Section 5 / FR-12/13)
+# ---------------------------------------------------------------------------
+
+
+def _write_prd(worktree_path: Path, relative_path: str, content: str) -> None:
+    prd_path = worktree_path / relative_path
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(content, encoding="utf-8")
+
+
+def test_build_prd_context_block_inlines_existing_prd(tmp_path: Path) -> None:
+    """When the worktree contains the PRD, the helper inlines its full body."""
+    _write_prd(tmp_path, "tasks/pending/example.md", "# Example PRD\n\nBody line.\n")
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="- PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "--- BEGIN PRD ---" in block
+    assert "--- END PRD ---" in block
+    assert "Body line." in block
+    assert "tasks/pending/example.md" in block
+    assert "Acceptance Checklist" in block
+    assert "tasks/archive/" in block
+
+
+def test_build_prd_context_block_truncates_oversized_prd(tmp_path: Path) -> None:
+    """PRDs above the ceiling are tail-truncated with a pointer note."""
+    big = "x" * 5000
+    _write_prd(tmp_path, "tasks/pending/big.md", big)
+    issue = IssueSummary(
+        number=2,
+        title="T",
+        url="U",
+        body="- PRD path: `tasks/pending/big.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path, max_chars=200)
+    assert "--- BEGIN PRD ---" in block
+    assert "truncated" in block
+    assert "tasks/pending/big.md" in block
+    # The first 200 chars of the body are present, the rest is dropped.
+    assert big[:200] in block
+    assert big[300:] not in block
+
+
+def test_build_prd_context_block_falls_back_when_prd_missing(tmp_path: Path) -> None:
+    """Missing PRD file → pointer line only, no BEGIN/END marker."""
+    issue = IssueSummary(
+        number=3,
+        title="T",
+        url="U",
+        body="- PRD path: `tasks/pending/missing.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "BEGIN PRD" not in block
+    assert "tasks/pending/missing.md" in block
+    assert "Acceptance Checklist" in block
+
+
+def test_build_prd_context_block_handles_no_prd_anchor(tmp_path: Path) -> None:
+    """Issue without a PRD anchor gets the generic pointer line."""
+    issue = IssueSummary(
+        number=4,
+        title="T",
+        url="U",
+        body="No PRD here.",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "BEGIN PRD" not in block
+    assert "If the Issue references a PRD" in block
+
+
+def test_build_prd_context_block_handles_archived_prd(tmp_path: Path) -> None:
+    """Archive-path PRDs inline the same way but don't mention tasks/archive/."""
+    _write_prd(tmp_path, "tasks/archive/done.md", "archived body\n")
+    issue = IssueSummary(
+        number=5,
+        title="T",
+        url="U",
+        body="- PRD path: `tasks/archive/done.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "--- BEGIN PRD ---" in block
+    assert "archived body" in block
+    # No archive instruction for already-archived PRDs.
+    assert "move the PRD from `tasks/pending/" not in block
+
+
+def test_build_prompt_inlines_prd(tmp_path: Path) -> None:
+    """``build_prompt`` should embed the worktree's PRD body, not just a pointer."""
+    _write_prd(tmp_path, "tasks/pending/feature.md", "# Feature PRD\n\nDetail A.\n")
+    issue = IssueSummary(
+        number=10,
+        title="Feature",
+        url="https://example/repo/issues/10",
+        body="- PRD path: `tasks/pending/feature.md`",
+        labels=(),
+    )
+    prompt = build_prompt(issue, tmp_path, PromptConfig())
+    assert "Detail A." in prompt
+    assert "BEGIN PRD" in prompt
+    assert "tasks/pending/feature.md" in prompt
+
+
+def test_build_prompt_inlines_prd_uses_default_ceiling(tmp_path: Path) -> None:
+    """The default ceiling is large enough for normal PRDs (no truncation)."""
+    body = "line\n" * 1000
+    _write_prd(tmp_path, "tasks/pending/normal.md", body)
+    issue = IssueSummary(
+        number=11,
+        title="Normal",
+        url="https://example/repo/issues/11",
+        body="- PRD path: `tasks/pending/normal.md`",
+        labels=(),
+    )
+    prompt = build_prompt(issue, tmp_path, PromptConfig())
+    assert "truncated" not in prompt
+    assert body in prompt
+    # Sanity-check the default ceiling is at least the published value.
+    assert _DEFAULT_PRD_INLINE_MAX_CHARS >= 20000
+
+
+def test_build_recovery_prompt_inlines_prd(tmp_path: Path) -> None:
+    """``build_recovery_prompt`` should also inline the PRD body."""
+    _write_prd(tmp_path, "tasks/pending/feature.md", "# Feature PRD\n\nRecover hint.\n")
+    issue = IssueSummary(
+        number=12,
+        title="Feature",
+        url="https://example/repo/issues/12",
+        body="- PRD path: `tasks/pending/feature.md`",
+        labels=(),
+    )
+    prompt = build_recovery_prompt(
+        issue,
+        tmp_path,
+        recovery_attempt=1,
+        max_recovery_attempts=2,
+        failure_summary="Something broke.",
+    )
+    assert "Recover hint." in prompt
+    assert "BEGIN PRD" in prompt
+
+
+def test_build_recovery_prompt_no_prd_uses_fallback(tmp_path: Path) -> None:
+    """Without a PRD anchor, recovery prompt uses the existing fallback line."""
+    issue = IssueSummary(
+        number=13,
+        title="No PRD",
+        url="https://example/repo/issues/13",
+        body="Plain body",
+        labels=(),
+    )
+    prompt = build_recovery_prompt(
+        issue,
+        tmp_path,
+        recovery_attempt=1,
+        max_recovery_attempts=2,
+        failure_summary="x",
+    )
+    assert "If the Issue references a PRD" in prompt
+
+
+def test_build_progress_continuation_prompt_inlines_prd(tmp_path: Path) -> None:
+    """``build_progress_continuation_prompt`` should also inline the PRD body."""
+    _write_prd(tmp_path, "tasks/pending/feature.md", "# Feature PRD\n\nContinue.\n")
+    issue = IssueSummary(
+        number=14,
+        title="Feature",
+        url="https://example/repo/issues/14",
+        body="- PRD path: `tasks/pending/feature.md`",
+        labels=(),
+    )
+    prompt = build_progress_continuation_prompt(issue, tmp_path)
+    assert "Continue." in prompt
+    assert "BEGIN PRD" in prompt
+
+
+def test_build_prompt_no_prd_keeps_pointer_line(tmp_path: Path) -> None:
+    """Without a PRD anchor, build_prompt keeps the existing generic line."""
+    issue = IssueSummary(
+        number=15,
+        title="No PRD",
+        url="https://example/repo/issues/15",
+        body="no PRD anchor here",
+        labels=(),
+    )
+    prompt = build_prompt(issue, tmp_path, PromptConfig())
+    assert "If the Issue references a PRD" in prompt
+    assert "BEGIN PRD" not in prompt
+
+
+def test_build_prd_context_block_handles_unicode_prd(tmp_path: Path) -> None:
+    """Reading the PRD uses UTF-8 explicitly (project rule)."""
+    _write_prd(tmp_path, "tasks/pending/cn.md", "# 中文 PRD\n\n详细描述。\n")
+    issue = IssueSummary(
+        number=16,
+        title="中文",
+        url="https://example/repo/issues/16",
+        body="- PRD path: `tasks/pending/cn.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "中文 PRD" in block
+    assert "详细描述。" in block
