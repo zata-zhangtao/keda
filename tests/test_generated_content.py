@@ -920,3 +920,13 @@ def test_generate_prd_content_agent_fallback_to_template() -> None:
     )
     assert "- [ ] template item" in result.text
     assert result.source == "template"
+
+
+def test_resolve_generation_agent_auto_resolves_to_claude() -> None:
+    """auto/auto 收敛到 claude；显式 target / 默认值按优先级生效。"""
+    from backend.core.use_cases.generated_content import _resolve_generation_agent
+
+    assert _resolve_generation_agent("auto", "auto") == "claude"
+    assert _resolve_generation_agent("auto", "codex") == "codex"
+    assert _resolve_generation_agent("kimi", "auto") == "kimi"
+    assert _resolve_generation_agent("claude", "codex") == "claude"

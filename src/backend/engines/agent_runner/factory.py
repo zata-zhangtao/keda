@@ -747,24 +747,26 @@ class SubprocessContentGenerator(IContentGenerator):
 def _build_content_generation_command(
     agent_name: str, prompt: str, cwd: Path
 ) -> list[str]:
-    if agent_name == "claude":
+    # codex / kimi 需显式指定；其余（"claude"、已解析的 "auto"、或任何未识别值）
+    # 一律构造 claude 命令，绝不静默落到 codex。
+    if agent_name == "codex":
         return [
-            "claude",
-            "--dangerously-skip-permissions",
-            "-p",
+            "codex",
+            "--cd",
+            str(cwd),
+            "--sandbox",
+            "read-only",
+            "--ask-for-approval",
+            "never",
+            "exec",
             prompt,
         ]
     if agent_name == "kimi":
         return ["kimi", "--prompt", prompt]
     return [
-        "codex",
-        "--cd",
-        str(cwd),
-        "--sandbox",
-        "read-only",
-        "--ask-for-approval",
-        "never",
-        "exec",
+        "claude",
+        "--dangerously-skip-permissions",
+        "-p",
         prompt,
     ]
 

@@ -513,6 +513,34 @@ def _validate_pr_body(body: str, issue_number: int) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# 当 target 与全局默认 agent 都为 "auto" 时收敛到的首选 agent。与
+# run_agent_once.choose_agent 的最终兜底保持一致（auto -> claude），避免把 "auto"
+# 透传到命令构造处被静默当作 codex。
+_DEFAULT_AUTO_AGENT = "claude"
+
+
+def _resolve_generation_agent(target_agent: str, default_agent: str) -> str:
+    """解析内容生成使用的具体 agent 名称。
+
+    解析顺序与 :func:`backend.core.use_cases.run_agent_once.choose_agent` 的兜底
+    语义保持一致：target 级显式 agent 优先，其次 generated-content 的全局
+    ``default_agent``；两者都为 ``"auto"`` 时收敛到 :data:`_DEFAULT_AUTO_AGENT`
+    （``claude``），而不是把 ``"auto"`` 透传到命令构造处被静默当作 codex。
+
+    Args:
+        target_agent: 目标级配置的 agent（``GeneratedContentTargetConfig.agent``）。
+        default_agent: generated-content 的全局默认 agent（``default_agent``）。
+
+    Returns:
+        具体 agent 名称（如 ``"claude"`` / ``"codex"`` / ``"kimi"``）。
+    """
+    if target_agent != "auto":
+        return target_agent
+    if default_agent != "auto":
+        return default_agent
+    return _DEFAULT_AUTO_AGENT
+
+
 def _run_content_generator(
     generator: IContentGenerator,
     agent_name: str,
@@ -788,7 +816,7 @@ def generate_prd_content(
         except (KeyError, ValueError):
             pass
     elif target.mode == "agent" and generator is not None and cwd is not None:
-        agent_name = target.agent if target.agent != "auto" else config.default_agent
+        agent_name = _resolve_generation_agent(target.agent, config.default_agent)
         # PRD 规范单一来源：优先注入 prd skill 规范；不可达时回退到配置模板 prompt。
         skill_spec = load_prd_skill_spec(prd_skill_path)
         if skill_spec:
@@ -873,8 +901,8 @@ def generate_issue_content(
     if target.mode == "template":
         generated_title, generated_body = _try_render_templates(target, context)
     elif target.mode == "agent" and generator is not None and cwd is not None:
-        # 确定 agent 名称：配置中显式指定，或回退到全局默认值。
-        agent_name = target.agent if target.agent != "auto" else config.default_agent
+        # 解析 agent：显式优先 → 全局默认 → 两者皆 auto 时收敛到 claude。
+        agent_name = _resolve_generation_agent(target.agent, config.default_agent)
         # 渲染 prompt 模板并截断，防止超出模型上下文限制。
         prompt = _render_template(target.prompt, context)
         prompt = _truncate_text(prompt, config.max_input_chars)
@@ -1077,7 +1105,7 @@ def generate_pr_content(
     if target.mode == "template":
         generated_title, generated_body = _try_render_templates(target, context)
     elif target.mode == "agent" and generator is not None and cwd is not None:
-        agent_name = target.agent if target.agent != "auto" else config.default_agent
+        agent_name = _resolve_generation_agent(target.agent, config.default_agent)
         prompt = _render_template(target.prompt, context)
         prompt = _truncate_text(prompt, config.max_input_chars)
         output_text = _run_content_generator(

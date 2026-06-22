@@ -180,3 +180,20 @@ def test_interactive_decision_settings_have_sane_defaults() -> None:
     assert ids.default_agent == "codex"
     assert ids.planner_timeout_seconds > 0
     assert ids.allow_execute_yes is True
+
+
+def test_content_generation_command_defaults_to_claude() -> None:
+    """内容生成命令构造器：codex 需显式指定，其余（含已解析的 auto / 未识别值）都走 claude。"""
+    from backend.engines.agent_runner.factory import _build_content_generation_command
+
+    for agent_name in ("auto", "claude", "gpt-unknown"):
+        command = _build_content_generation_command(agent_name, "prompt", Path("/tmp"))
+        assert command[0] == "claude", f"{agent_name} should build the claude command"
+        assert "--dangerously-skip-permissions" in command
+
+    codex_command = _build_content_generation_command("codex", "prompt", Path("/tmp"))
+    assert codex_command[0] == "codex"
+    assert "exec" in codex_command
+
+    kimi_command = _build_content_generation_command("kimi", "prompt", Path("/tmp"))
+    assert kimi_command[0] == "kimi"
