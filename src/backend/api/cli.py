@@ -20,6 +20,11 @@ from backend.api.cli_init import (
     _print_workflow_config_plan,
     _run_init_command,
 )
+from backend.api.cli_registry import (
+    _run_registry_list_command,
+    _run_registry_reinit_command,
+    _run_registry_remove_command,
+)
 from backend.api.cli_takeover import _run_takeover_command
 from backend.core.use_cases.create_issue_from_prd import (
     IssueFromPrdRequest,
@@ -53,7 +58,6 @@ from backend.core.use_cases.worktree_env import copy_missing_env_files
 from backend.core.shared.models.agent_deliberation import DeliberationSession
 from backend.core.shared.models.agent_runner import LabelConfig
 from backend.engines.agent_runner.factory import (
-    build_deliberation_config_from_settings,
     create_console_store,
     create_content_generator,
     create_event_sink,
@@ -438,6 +442,15 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             console.print(f"[green]Registered:[/] {entry.repo_id}")
         console.print(f"[green]Registered {added} repository(s).[/]")
         return 0
+
+    if parsed.command == "registry reinit":
+        return _run_registry_reinit_command(parsed, process_runner)
+
+    if parsed.command == "registry remove":
+        return _run_registry_remove_command(parsed, process_runner)
+
+    if parsed.command == "registry list":
+        return _run_registry_list_command(process_runner)
 
     if parsed.command == "worktree":
         try:
@@ -839,9 +852,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             output_dir = None
             if parsed.output:
                 output_dir = Path(parsed.output)
-            deliberation_config = build_deliberation_config_from_settings(
-                runner_settings
-            )
+            deliberation_config = context.config.deliberation
             transcript_runner = create_transcript_runner(process_runner)
             output_view = create_output_view()
             event_sink = create_event_sink(
@@ -871,13 +882,21 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             )
 
         if parsed.command == "deliberate":
-            deliberate_repo_root_path = detect_git_repository_root(
-                Path.cwd(), process_runner
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
+                repo_id=repo_id,
+                repo_override=repo_override,
             )
-            require_iar_repository_initialized(
-                deliberate_repo_root_path, process_runner
-            )
-            deliberation_settings = runner_settings.deliberation
+            if len(contexts) != 1:
+                logger.error(
+                    "deliberate requires exactly one target repository. "
+                    "Use --repo or --repo-id to specify."
+                )
+                return 1
+            context = contexts[0]
+            require_iar_repository_initialized(context.repo_path, process_runner)
+            deliberation_settings = context.config.deliberation
             output_dir = parsed.output or deliberation_settings.default_output_dir
             rounds = (
                 parsed.rounds
@@ -898,9 +917,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 output_dir=str(output_path),
                 session_id=session_id,
             )
-            deliberation_config = build_deliberation_config_from_settings(
-                runner_settings
-            )
+            deliberation_config = context.config.deliberation
             transcript_runner = create_transcript_runner(process_runner)
             output_path.mkdir(parents=True, exist_ok=True)
             output_view = create_output_view()
@@ -910,7 +927,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 config=deliberation_config,
                 transcript_runner=transcript_runner,
                 event_sink=event_sink,
-                target_repo_path=Path.cwd(),
+                target_repo_path=context.repo_path,
                 output_view=output_view,
             )
             selected_profile_ids = tuple(

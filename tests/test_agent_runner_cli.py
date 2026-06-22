@@ -176,6 +176,51 @@ def test_cli_parser_registry_sync_dry_run() -> None:
     assert parsed.scan_root == "/tmp"
 
 
+def test_cli_parser_registry_reinit() -> None:
+    """registry reinit should accept repo-id, remote, base-branch, and start-daemons."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        [
+            "registry",
+            "reinit",
+            "--repo-id",
+            "zata-zhangtao-fsense",
+            "--remote",
+            "upstream",
+            "--base-branch",
+            "develop",
+            "--start-daemons",
+        ]
+    )
+    assert parsed.command == "registry"
+    assert parsed.registry_command == "reinit"
+    assert parsed.repo_id == "zata-zhangtao-fsense"
+    assert parsed.remote == "upstream"
+    assert parsed.base_branch == "develop"
+    assert parsed.start_daemons is True
+
+
+def test_cli_parser_registry_reinit_defaults() -> None:
+    """registry reinit should default remote to origin and not start daemons."""
+    parser = build_parser()
+    parsed = parser.parse_args(["registry", "reinit", "--repo-id", "foo-bar"])
+    assert parsed.remote == "origin"
+    assert parsed.base_branch is None
+    assert parsed.start_daemons is False
+
+
+def test_cli_parser_registry_remove() -> None:
+    """registry remove should accept repo-id and optional --delete."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["registry", "remove", "--repo-id", "zata-zhangtao-fsense", "--delete"]
+    )
+    assert parsed.command == "registry"
+    assert parsed.registry_command == "remove"
+    assert parsed.repo_id == "zata-zhangtao-fsense"
+    assert parsed.delete is True
+
+
 def test_cli_parser_daemon() -> None:
     """daemon should accept interval and max-issues."""
     parser = build_parser()
@@ -764,8 +809,10 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     from backend.api.cli import main
     from backend.core.shared.models.agent_deliberation import (
         DeliberationAgentProfile,
+        DeliberationConfig,
         DeliberationResult,
     )
+    from backend.core.shared.models.agent_runner import AppConfig
 
     output_root = tmp_path / "deliberations"
     expected_output_path = output_root / "sid-1"
@@ -794,11 +841,40 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
             finished_at="2026-05-23T00:01:00+00:00",
         )
 
+    mock_config = AppConfig(
+        deliberation=DeliberationConfig(
+            default_output_dir=str(output_root),
+            default_rounds=2,
+            default_synthesizer="claude",
+            profiles=(
+                DeliberationAgentProfile(
+                    profile_id="architect",
+                    agent="claude",
+                    role="architect",
+                    behavior_prompt="be an architect",
+                ),
+                DeliberationAgentProfile(
+                    profile_id="skeptic",
+                    agent="kimi",
+                    role="skeptic",
+                    behavior_prompt="be a skeptic",
+                ),
+            ),
+        )
+    )
+    mock_context = MagicMock()
+    mock_context.repo_path = tmp_path / "repo"
+    mock_context.config = mock_config
+
     with patch("backend.api.cli.create_process_runner"), patch(
-        "backend.api.cli.detect_git_repository_root", return_value=tmp_path / "repo"
-    ), patch("backend.api.cli.get_agent_runner_settings") as mock_settings, patch(
-        "backend.api.cli.build_deliberation_config_from_settings"
-    ) as mock_config, patch("backend.api.cli.create_transcript_runner"), patch(
+        "backend.api.cli.get_agent_runner_settings"
+    ), patch(
+        "backend.engines.agent_runner.factory.build_app_config_from_settings",
+        return_value=mock_config,
+    ), patch(
+        "backend.api.cli._resolve_cli_repository_targets",
+        return_value=[mock_context],
+    ), patch("backend.api.cli.create_transcript_runner"), patch(
         "backend.api.cli.create_event_sink"
     ) as mock_event_sink, patch(
         "backend.api.cli.run_agent_deliberation",
@@ -806,23 +882,6 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     ), patch("backend.api.cli.write_deliberation_outputs") as mock_write, patch(
         "backend.api.cli.require_iar_repository_initialized"
     ):
-        mock_settings.return_value.deliberation.default_output_dir = str(output_root)
-        mock_settings.return_value.deliberation.default_rounds = 2
-        mock_settings.return_value.deliberation.default_synthesizer = "claude"
-        mock_config.return_value.profiles = (
-            DeliberationAgentProfile(
-                profile_id="architect",
-                agent="claude",
-                role="architect",
-                behavior_prompt="be an architect",
-            ),
-            DeliberationAgentProfile(
-                profile_id="skeptic",
-                agent="kimi",
-                role="skeptic",
-                behavior_prompt="be a skeptic",
-            ),
-        )
         mock_event_sink.return_value = MagicMock()
 
         exit_code = main(["deliberate", "test prompt", "--session-id", "sid-1"])
@@ -1573,6 +1632,209 @@ def test_main_registry_sync_registers_new_repo(
     assert exit_code == 0
     config_text = config_path.read_text(encoding="utf-8")
     assert "[agent_runner.repositories.baz]" in config_text
+
+
+def test_main_registry_reinit_updates_remote(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry reinit` should rewrite .iar.toml with the given remote."""
+    monkeypatch.chdir(tmp_path)
+    repo_path = _init_bare_git_repository(tmp_path, "fsense")
+    _write_iar_toml(repo_path, "zata-zhangtao-fsense")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[agent_runner]\n[agent_runner.repositories.zata-zhangtao-fsense]\n"
+        f'path = "{repo_path}"\nenabled = true\ndisplay_name = "fsense"\n',
+        encoding="utf-8",
+    )
+
+    exit_code = main(["registry", "reinit", "--repo-id", "zata-zhangtao-fsense"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    assert "Reinitialized" in _strip_ansi(captured.out)
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "[agent_runner.repositories.zata-zhangtao-fsense]" in config_text
+    iar_toml_text = (repo_path / ".iar.toml").read_text(encoding="utf-8")
+    assert 'remote = "origin"' in iar_toml_text
+
+
+def test_main_registry_reinit_missing_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry reinit` should fail when repo_id is not in registry."""
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent_runner]\n", encoding="utf-8")
+
+    exit_code = main(["registry", "reinit", "--repo-id", "no-such-repo"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "not found in registry" in _strip_ansi(captured.out + captured.err)
+
+
+def test_main_registry_remove_deletes_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry remove` should remove the registry entry but keep files."""
+    monkeypatch.chdir(tmp_path)
+    repo_path = _init_bare_git_repository(tmp_path, "fsense")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[agent_runner]\n[agent_runner.repositories.zata-zhangtao-fsense]\n"
+        f'path = "{repo_path}"\nenabled = true\ndisplay_name = "fsense"\n',
+        encoding="utf-8",
+    )
+
+    exit_code = main(["registry", "remove", "--repo-id", "zata-zhangtao-fsense"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    assert "Removed" in _strip_ansi(captured.out)
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "[agent_runner.repositories.zata-zhangtao-fsense]" not in config_text
+    assert repo_path.exists()
+
+
+def test_main_registry_remove_delete_removes_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry remove --delete` should remove the entry and the clone."""
+    monkeypatch.chdir(tmp_path)
+    repo_path = _init_bare_git_repository(tmp_path, "fsense")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[agent_runner]\n[agent_runner.repositories.zata-zhangtao-fsense]\n"
+        f'path = "{repo_path}"\nenabled = true\ndisplay_name = "fsense"\n',
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        ["registry", "remove", "--repo-id", "zata-zhangtao-fsense", "--delete"]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    assert "Deleted" in _strip_ansi(captured.out)
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "[agent_runner.repositories.zata-zhangtao-fsense]" not in config_text
+    assert not repo_path.exists()
+
+
+def test_cli_parser_registry_list() -> None:
+    """registry list should be recognized as a subcommand."""
+    parser = build_parser()
+    parsed = parser.parse_args(["registry", "list"])
+    assert parsed.command == "registry"
+    assert parsed.registry_command == "list"
+
+
+def test_main_registry_list_shows_repositories_and_daemon_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry list` should print registered repos and daemon status."""
+    monkeypatch.chdir(tmp_path)
+    repo_a = _init_bare_git_repository(tmp_path, "repo-a")
+    repo_b = _init_bare_git_repository(tmp_path, "repo-b")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[agent_runner]\n"
+        "[agent_runner.repositories.repo-a]\n"
+        f'path = "{repo_a}"\nenabled = true\ndisplay_name = "Repo A"\n'
+        "[agent_runner.repositories.repo-b]\n"
+        f'path = "{repo_b}"\nenabled = true\ndisplay_name = "Repo B"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    from backend.infrastructure.console.process_supervisor import RunnerProcessRecord
+
+    records = [
+        RunnerProcessRecord(
+            process_id="daemon-1",
+            repo_id="repo-a",
+            kind="daemon",
+            pid=123,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/d1.log",
+            command=("iar", "daemon"),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        ),
+        RunnerProcessRecord(
+            process_id="review-1",
+            repo_id="repo-a",
+            kind="review-daemon",
+            pid=124,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/r1.log",
+            command=("iar", "review-daemon"),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        ),
+    ]
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = records
+
+    with patch(
+        "backend.api.cli_registry.create_process_supervisor",
+        return_value=mock_supervisor,
+    ):
+        exit_code = main(["registry", "list"])
+
+    captured = capsys.readouterr()
+    output = _strip_ansi(captured.out)
+
+    assert exit_code == 0, captured.err
+    assert "repo-a" in output
+    assert "Repo A" in output
+    assert repo_a.name in output
+    assert "repo-b" in output
+    assert "Repo B" in output
+    assert repo_b.name in output
+    assert "running" in output
+    assert "daemon-1" in output
+    assert "review-1" in output
+    assert "stopped" in output
+
+
+def test_main_registry_list_empty_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry list` should succeed with an empty registry."""
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent_runner]\n", encoding="utf-8")
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = []
+
+    with patch(
+        "backend.api.cli_registry.create_process_supervisor",
+        return_value=mock_supervisor,
+    ):
+        exit_code = main(["registry", "list"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0, captured.err
+    assert "Registered repositories" in _strip_ansi(captured.out)
 
 
 def test_cli_parser_workflow_install() -> None:

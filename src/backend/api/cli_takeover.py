@@ -72,10 +72,14 @@ def _run_takeover_command(
     candidates = filter_unregistered_candidates(candidates, editor, options.clone_root)
 
     if not options.selected_repos:
-        candidates = select_repositories_interactive(candidates)
+        candidates = select_repositories_interactive(candidates, console=console)
         if not candidates:
             console.print("[yellow]No repositories selected. Aborting.[/]")
             return 0
+        console.print(
+            "Taking over: "
+            + ", ".join(f"[cyan]{candidate.full_name}[/]" for candidate in candidates)
+        )
 
     def _start_daemons_for_repo(repo_id: str, repo_path: Path) -> None:
         """Start managed daemon and review-daemon for a freshly registered repo."""
@@ -106,6 +110,17 @@ def _run_takeover_command(
                     f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}"
                 )
 
+    def _print_takeover_progress(full_name: str, stage: str) -> None:
+        stage_labels = {
+            "clone": "Cloned",
+            "init": "Initialized",
+            "register": "Registered",
+            "start_daemons": "Started daemons",
+            "complete": "Complete",
+        }
+        label = stage_labels.get(stage, stage)
+        console.print(f"  [dim]{label}[/] {full_name}")
+
     try:
         result = execute_takeover(
             options=options,
@@ -115,6 +130,7 @@ def _run_takeover_command(
             start_daemon_callback=_start_daemons_for_repo
             if options.start_daemons
             else None,
+            progress_callback=_print_takeover_progress,
         )
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
         logger.error("iar takeover failed: %s", exc)

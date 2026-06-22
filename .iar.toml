@@ -167,17 +167,79 @@ include_commit_log = true
 # PR 生成时是否包含 diff stat
 include_diff_stat = true
 
+# 从 GitHub Issue 生成 / 重写 PRD（rework-prd 流程）
 [agent_runner.generated_content.prd_from_issue]
+# 是否从 Issue 生成 / 重写 PRD
 enabled = true
+# 生成模式：agent（调用 AI，推荐）或 template；PRD 无内置模板，template 会退回 fallback
 mode = "agent"
+# 输出格式：json / markdown
 output = "json"
+# PRD 标题模板（template 模式用）
 title_template = ""
+# PRD 正文模板（template 模式用；留空则退回 fallback）
 body_template = ""
+# 执行生成的 agent
 agent = "auto"
+# 生成超时秒数
 timeout_seconds = 120
+# agent 模式 prompt（留空则用内置 prd skill 规范）
 prompt = ""
+# （PRD 生成未使用）
 include_commit_log = true
+# （PRD 生成未使用）
 include_diff_stat = true
+
+# 交互式决策（iar ask）配置：默认 agent、输出目录、执行确认等
+[agent_runner.interactive_decision]
+# 是否启用 iar ask 交互式决策
+enabled = true
+# iar ask 默认使用的 agent：auto / claude / codex / kimi
+default_agent = "claude"
+# 决策日志与审计文件的默认输出目录
+default_output_dir = "logs/agent-runner/decisions"
+# 规划 agent 的最长运行秒数
+planner_timeout_seconds = 120
+# 输入 prompt 的最大字符数
+max_context_chars = 24000
+# 是否允许 `iar ask --yes` 跳过人工确认
+allow_execute_yes = true
+
+# 多 agent 审议（iar deliberate）配置：轮数、合成 agent、参与角色
+[agent_runner.deliberation]
+# 默认审议轮数
+default_rounds = 2
+# 汇总最终结论的默认 agent
+default_synthesizer = "claude"
+# 审议会话输出目录
+default_output_dir = "logs/agent-runner/deliberations"
+
+# 审议角色：架构师，关注系统设计与可维护性
+[agent_runner.deliberation.profiles.architect]
+# 该角色使用的 agent
+agent = "claude"
+# 角色标识
+role = "architect"
+# 角色行为 prompt
+behavior_prompt = "You are an experienced software architect. Analyze the requirement from a system design perspective. Focus on modularity, scalability, and maintainability."
+
+# 审议角色：质疑者，挑战假设与风险
+[agent_runner.deliberation.profiles.skeptic]
+# 该角色使用的 agent
+agent = "kimi"
+# 角色标识
+role = "skeptic"
+# 角色行为 prompt
+behavior_prompt = "You are a skeptical reviewer. Challenge assumptions, identify risks, and point out edge cases. Ask hard questions that others might miss."
+
+# 审议角色：实现者，关注可行性与落地步骤
+[agent_runner.deliberation.profiles.implementer]
+# 该角色使用的 agent
+agent = "codex"
+# 角色标识
+role = "implementer"
+# 角色行为 prompt
+behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concrete steps, and implementation details. Highlight what can be built and what resources are needed."
 
 # GitHub labels 状态流转配置（如你的仓库使用不同标签名，可取消注释并覆盖）
 # [agent_runner.labels]

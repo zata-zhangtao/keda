@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend.core.shared.models.agent_runner import AppConfig, GitConfig, RunnerConfig
+from backend.core.shared.models.agent_deliberation import DeliberationConfig
 from backend.engines.agent_runner.factory import (
     build_app_config_from_settings,
     merge_repository_config,
@@ -20,6 +21,8 @@ from backend.engines.agent_runner.repository_local import (
 )
 from backend.infrastructure.config import settings as settings_module
 from backend.infrastructure.config.settings import (
+    AgentRunnerDeliberationProfileSettings,
+    AgentRunnerDeliberationSettings,
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerGitSettings,
@@ -614,3 +617,81 @@ structured_evidence = false
     assert len(contexts) == 1
     assert contexts[0].config.validation.language == "en-US"
     assert contexts[0].config.validation.structured_evidence is False
+
+
+def test_build_app_config_from_settings_maps_deliberation() -> None:
+    """build_app_config_from_settings should expose default deliberation profiles."""
+    settings = AgentRunnerSettings()
+    app_config = build_app_config_from_settings(settings)
+    assert isinstance(app_config.deliberation, DeliberationConfig)
+    profile_ids = {p.profile_id for p in app_config.deliberation.profiles}
+    assert profile_ids == {"architect", "skeptic", "implementer"}
+
+
+def test_merge_repository_config_overrides_deliberation() -> None:
+    """Repository-level deliberation overrides should merge with global defaults."""
+    global_config = AppConfig(
+        deliberation=DeliberationConfig(default_rounds=2, default_synthesizer="claude")
+    )
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        deliberation=AgentRunnerDeliberationSettings(
+            default_rounds=5,
+            profiles={
+                **AgentRunnerDeliberationSettings().profiles,
+                "reviewer": AgentRunnerDeliberationProfileSettings(
+                    agent="claude",
+                    role="reviewer",
+                    behavior_prompt="Review the output.",
+                ),
+            },
+        ),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.deliberation.default_rounds == 5
+    assert merged.deliberation.default_synthesizer == "claude"
+    merged_profile_ids = {p.profile_id for p in merged.deliberation.profiles}
+    assert merged_profile_ids == {"architect", "skeptic", "implementer", "reviewer"}
+
+
+def test_merge_repository_config_inherits_deliberation_profiles() -> None:
+    """Unoverridden deliberation profiles should inherit from global config."""
+    from dataclasses import replace
+
+    custom_profile = replace(DeliberationConfig().profiles[0], agent="custom-claude")
+    global_config = AppConfig(
+        deliberation=DeliberationConfig(profiles=(custom_profile,))
+    )
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        deliberation=AgentRunnerDeliberationSettings(default_rounds=3),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.deliberation.default_rounds == 3
+    assert merged.deliberation.profiles[0].agent == "custom-claude"
+
+
+def test_resolve_repository_targets_merges_local_deliberation(
+    tmp_path: Path,
+) -> None:
+    """Repository-local .iar.toml can override deliberation settings."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "target-local"
+
+[agent_runner.deliberation]
+default_rounds = 7
+default_synthesizer = "kimi"
+""",
+    )
+    settings = _make_settings()
+    contexts = resolve_repository_targets(settings, repo_path_override=str(repo_path))
+    assert len(contexts) == 1
+    assert contexts[0].config.deliberation.default_rounds == 7
+    assert contexts[0].config.deliberation.default_synthesizer == "kimi"
+    # Profiles fall back to global defaults when not overridden.
+    profile_ids = {p.profile_id for p in contexts[0].config.deliberation.profiles}
+    assert "architect" in profile_ids

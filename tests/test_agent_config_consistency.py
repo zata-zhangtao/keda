@@ -146,8 +146,19 @@ def test_deliberation_profiles_reference_runnable_agents() -> None:
         ), f"Deliberation profile '{profile_id}' references unrunnable agent '{profile.agent}'"
 
 
-def test_default_planner_agent_has_safe_command_builder() -> None:
-    """Default planner agent must have a verified read-only command builder."""
+def test_app_config_has_deliberation() -> None:
+    """AppConfig must expose deliberation config used by iar deliberate."""
+    from backend.core.shared.models.agent_deliberation import DeliberationConfig
+    from backend.core.shared.models.agent_runner import AppConfig
+
+    app_config = AppConfig()
+    assert isinstance(app_config.deliberation, DeliberationConfig)
+    profile_ids = {p.profile_id for p in app_config.deliberation.profiles}
+    assert profile_ids == {"architect", "skeptic", "implementer"}
+
+
+def test_default_planner_agent_has_command_builder() -> None:
+    """Default planner agent must have a supported command builder."""
     from backend.engines.agent_runner.factory import _build_planner_command
 
     settings = AgentRunnerSettings()
@@ -156,17 +167,26 @@ def test_default_planner_agent_has_safe_command_builder() -> None:
     command = _build_planner_command(default_agent, "test prompt", Path("/tmp"))
     assert isinstance(command, list)
     assert len(command) > 0
+    assert command[0] == default_agent
 
 
-def test_unsafe_planner_agent_fails_fast() -> None:
-    """Unsafe agents must raise ValueError for planner command builder."""
+def test_planner_command_builders_for_supported_agents() -> None:
+    """All supported agents can build planner commands."""
     from backend.engines.agent_runner.factory import _build_planner_command
 
-    with pytest.raises(ValueError, match="does not have a verified read-only"):
-        _build_planner_command("claude", "test prompt", Path("/tmp"))
+    for agent_name in ("claude", "codex", "kimi"):
+        command = _build_planner_command(agent_name, "test prompt", Path("/tmp"))
+        assert isinstance(command, list)
+        assert len(command) > 0
+        assert command[0] == agent_name
 
-    with pytest.raises(ValueError, match="does not have a verified read-only"):
-        _build_planner_command("kimi", "test prompt", Path("/tmp"))
+
+def test_unknown_planner_agent_fails_fast() -> None:
+    """Unsupported agents must raise ValueError for planner command builder."""
+    from backend.engines.agent_runner.factory import _build_planner_command
+
+    with pytest.raises(ValueError, match="does not have a command builder"):
+        _build_planner_command("unknown-agent", "test prompt", Path("/tmp"))
 
 
 def test_interactive_decision_settings_have_sane_defaults() -> None:
@@ -177,7 +197,7 @@ def test_interactive_decision_settings_have_sane_defaults() -> None:
 
     ids = AgentRunnerInteractiveDecisionSettings()
     assert ids.enabled is True
-    assert ids.default_agent == "codex"
+    assert ids.default_agent == "claude"
     assert ids.planner_timeout_seconds > 0
     assert ids.allow_execute_yes is True
 

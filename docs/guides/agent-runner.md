@@ -418,6 +418,48 @@ include_commit_log = true
 # PR 生成时是否包含 diff stat
 include_diff_stat = true
 
+# 交互式决策（iar ask）配置
+[agent_runner.interactive_decision]
+# 是否启用 iar ask
+enabled = true
+# 默认 planner agent
+default_agent = "claude"
+# 决策日志输出目录
+default_output_dir = "logs/agent-runner/decisions"
+# 规划 agent 超时秒数
+planner_timeout_seconds = 120
+# 输入上下文最大字符数
+max_context_chars = 24000
+# 是否允许 iar ask --yes 跳过确认
+allow_execute_yes = true
+
+# 多 agent 审议（iar deliberate）配置
+[agent_runner.deliberation]
+# 默认审议轮数
+default_rounds = 2
+# 默认汇总 agent
+default_synthesizer = "claude"
+# 审议会话输出目录
+default_output_dir = "logs/agent-runner/deliberations"
+
+# 审议角色：架构师
+[agent_runner.deliberation.profiles.architect]
+agent = "claude"
+role = "architect"
+behavior_prompt = "You are an experienced software architect. Analyze the requirement from a system design perspective. Focus on modularity, scalability, and maintainability."
+
+# 审议角色：质疑者
+[agent_runner.deliberation.profiles.skeptic]
+agent = "kimi"
+role = "skeptic"
+behavior_prompt = "You are a skeptical reviewer. Challenge assumptions, identify risks, and point out edge cases. Ask hard questions that others might miss."
+
+# 审议角色：实现者
+[agent_runner.deliberation.profiles.implementer]
+agent = "codex"
+role = "implementer"
+behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concrete steps, and implementation details. Highlight what can be built and what resources are needed."
+
 # GitHub labels 状态流转配置（如你的仓库使用不同标签名，可取消注释并覆盖）
 # [agent_runner.labels]
 # ready = "agent/ready"
@@ -431,7 +473,7 @@ include_diff_stat = true
 # kimi = "agent/kimi"
 ```
 
-仓库本地 `.iar.toml` 可覆盖 `git`、`runner`、`labels`、`worktree`、`safety`、`prompts`、`pre_pr_review`、`post_pr_supervisor` 和 `generated_content`。`config.toml` 继续保存全局默认值、环境级设置和 legacy registry，不应保存 token、API key 或账号凭据。
+仓库本地 `.iar.toml` 可覆盖 `git`、`runner`、`labels`、`worktree`、`safety`、`prompts`、`pre_pr_review`、`post_pr_supervisor`、`generated_content`、`interactive_decision` 和 `deliberation`。`config.toml` 继续保存全局默认值、环境级设置和 legacy registry，不应保存 token、API key 或账号凭据。
 
 单仓库命令的目标解析规则：
 
@@ -617,6 +659,60 @@ base_branch = "main"
 [agent_runner.runner]
 verification_commands = ["git diff --check", "uv run pytest"]
 ```
+
+### Registry 生命周期管理
+
+已注册仓库可以通过 `iar registry` 子命令重新初始化或取消托管，无需手动编辑 `config.toml` 或进目录改 `.iar.toml`。
+
+#### 重新初始化（`iar registry reinit`）
+
+当已接管仓库的 `.iar.toml` 配置（如 `git.remote`）与实际情况不一致时，可以重新初始化：
+
+```bash
+# 默认把 remote 重置为 origin，覆盖现有 .iar.toml
+iar registry reinit --repo-id zata-zhangtao-fsense
+
+# 显式指定 remote 和 base_branch
+iar registry reinit --repo-id zata-zhangtao-fsense --remote upstream --base-branch develop
+
+# 重新初始化后立刻重启 daemon 和 review-daemon
+iar registry reinit --repo-id zata-zhangtao-fsense --start-daemons
+```
+
+#### 取消托管（`iar registry remove`）
+
+停止 daemon/review-daemon 并从 registry 移除条目：
+
+```bash
+# 仅取消托管，保留本地 clone
+iar registry remove --repo-id zata-zhangtao-fsense
+
+# 取消托管并删除本地 clone 目录
+iar registry remove --repo-id zata-zhangtao-fsense --delete
+```
+
+`--delete` 只会删除 registry 中记录的克隆路径，且会校验路径与 registry 记录一致，防止误删其他目录。
+
+#### 查看已注册仓库与运行状态（`iar registry list`）
+
+```bash
+iar registry list
+```
+
+输出会列出 `~/.iar/config.toml` 中所有已注册仓库，并显示每个仓库的 `daemon` / `review-daemon` 是否在运行，以及对应的进程 ID：
+
+```
+                            Registered repositories
+┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ repo_id               ┃ display... ┃ path                   ┃ daemon  ┃ review-daemon ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ zata-zhangtao-fsense  │ fsense     │ /Users/.../fsense      │ running │ running       │
+│                       │            │                        │ (p123)  │ (p124)        │
+│ another-owner-repo    │ another    │ /Users/.../another     │ stopped │ stopped       │
+└───────────────────────┴────────────┴────────────────────────┴─────────┴───────────────┘
+```
+
+这可以帮助你确认哪些仓库当前正在后台跑 agent，以及是否重复启动了 daemon。
 
 ## 全局多仓库接管（`iar takeover`）
 

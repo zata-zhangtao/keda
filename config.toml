@@ -419,7 +419,7 @@ prompt = [
 
 [agent_runner.interactive_decision]
 enabled = true
-default_agent = "codex"
+default_agent = "claude"
 default_output_dir = "logs/agent-runner/decisions"
 planner_timeout_seconds = 120
 max_context_chars = 24000
@@ -488,6 +488,11 @@ enabled = false
 path = "/Users/zata/code/keda"
 enabled = true
 display_name = "Keda Main"
+
+[agent_runner.repositories.zata-zhangtao-fsense]
+path = "/Users/zata/.iar/repos/zata-zhangtao/fsense"
+enabled = true
+display_name = "fsense"
 [agent_runner.console]
 # 运行历史与审计日志的 SQLite 文件路径（CLI 直跑与面板托管共用）。
 history_db_path = "~/.iar/console.db"

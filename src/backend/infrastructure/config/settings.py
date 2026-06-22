@@ -523,7 +523,7 @@ class AgentRunnerInteractiveDecisionSettings(BaseModel):
     """Interactive decision (`iar ask`) configuration."""
 
     enabled: bool = True
-    default_agent: str = "codex"
+    default_agent: str = "claude"
     default_output_dir: str = "logs/agent-runner/decisions"
     planner_timeout_seconds: int = 120
     max_context_chars: int = 24000
@@ -637,6 +637,7 @@ class _AgentRunnerRepositoryOverrideSettings(BaseModel):
     post_pr_supervisor: AgentRunnerPostPrSupervisorSettings | None = None
     generated_content: AgentRunnerGeneratedContentSettings | None = None
     interactive_decision: AgentRunnerInteractiveDecisionSettings | None = None
+    deliberation: AgentRunnerDeliberationSettings | None = None
 
 
 class AgentRunnerRepositorySettings(_AgentRunnerRepositoryOverrideSettings):
@@ -714,6 +715,7 @@ def load_agent_runner_local_settings(
         post_pr_supervisor=local_settings.post_pr_supervisor,
         generated_content=local_settings.generated_content,
         interactive_decision=local_settings.interactive_decision,
+        deliberation=local_settings.deliberation,
     )
 
 

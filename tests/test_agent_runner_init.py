@@ -10,6 +10,7 @@ import pytest
 from backend.api.cli import main
 from backend.engines.agent_runner.repository_local import (
     RepositoryInitOptions,
+    _detect_default_remote,
     build_repository_local_config_text,
     detect_verification_commands,
 )
@@ -409,3 +410,35 @@ def test_iar_init_renders_detected_commands_and_validation_section(
     assert "[agent_runner.validation]" in config_text
     assert "enabled = true" in config_text
     assert 'evidence_dir = ".iar/evidence"' in config_text
+
+
+def test_iar_init_renders_interactive_decision_and_deliberation_sections(
+    tmp_path: Path,
+) -> None:
+    """The rendered .iar.toml template includes ask and deliberate config."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    _, config_text = build_repository_local_config_text(
+        RepositoryInitOptions(cwd=repo_path, dry_run=True)
+    )
+
+    assert "[agent_runner.interactive_decision]" in config_text
+    assert 'default_agent = "claude"' in config_text
+    assert 'default_output_dir = "logs/agent-runner/decisions"' in config_text
+    assert "[agent_runner.deliberation]" in config_text
+    assert "default_rounds = 2" in config_text
+    assert 'default_synthesizer = "claude"' in config_text
+    assert "[agent_runner.deliberation.profiles.architect]" in config_text
+    assert "[agent_runner.deliberation.profiles.skeptic]" in config_text
+    assert "[agent_runner.deliberation.profiles.implementer]" in config_text
+
+
+def test_detect_default_remote_falls_back_when_upstream_missing(
+    tmp_path: Path,
+) -> None:
+    """A stale branch upstream remote that no longer exists should fall back."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    _run_git(repo_path, "config", "branch.main.remote", "zata")
+
+    remote = _detect_default_remote(repo_path, None)
+
+    assert remote == "origin"

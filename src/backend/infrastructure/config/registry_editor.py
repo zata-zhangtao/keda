@@ -107,3 +107,13 @@ class TomlRegistryEditor:
             raise KeyError(f"Repository '{repo_id}' not found in the registry.")
         repositories_table[repo_id]["enabled"] = enabled
         self._write_document(document)
+
+    def remove_repository(self, repo_id: str) -> None:
+        """从 registry 中删除一个仓库条目。"""
+        document = self._read_document()
+        agent_runner_table = document.get("agent_runner") or {}
+        repositories_table = agent_runner_table.get("repositories")
+        if repositories_table is None or repo_id not in repositories_table:
+            raise KeyError(f"Repository '{repo_id}' not found in the registry.")
+        del repositories_table[repo_id]
+        self._write_document(document)

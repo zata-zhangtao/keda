@@ -341,6 +341,51 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print candidates without writing to config.toml.",
     )
 
+    registry_reinit_parser = registry_subparsers.add_parser(
+        "reinit",
+        help="Re-initialize an already registered repository's local config.",
+    )
+    registry_reinit_parser.add_argument(
+        "--repo-id",
+        required=True,
+        help="Registry identifier of the repository to reinitialize.",
+    )
+    registry_reinit_parser.add_argument(
+        "--remote",
+        default="origin",
+        help="Git remote name to write into .iar.toml (default: origin).",
+    )
+    registry_reinit_parser.add_argument(
+        "--base-branch",
+        default=None,
+        help="Base branch to write into .iar.toml.",
+    )
+    registry_reinit_parser.add_argument(
+        "--start-daemons",
+        action="store_true",
+        help="Restart daemon and review-daemon after reinitialization.",
+    )
+
+    registry_remove_parser = registry_subparsers.add_parser(
+        "remove",
+        help="Remove a repository from the registry and stop its daemons.",
+    )
+    registry_remove_parser.add_argument(
+        "--repo-id",
+        required=True,
+        help="Registry identifier of the repository to remove.",
+    )
+    registry_remove_parser.add_argument(
+        "--delete",
+        action="store_true",
+        help="Also delete the cloned repository directory.",
+    )
+
+    registry_subparsers.add_parser(
+        "list",
+        help="List registered repositories and their daemon status.",
+    )
+
     workflow_parser = subparsers.add_parser(
         "workflow",
         help="Install and manage bundled workflow templates.",

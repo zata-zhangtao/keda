@@ -149,3 +149,32 @@ def test_set_enabled_unknown_repo(config_with_repo: tuple[Path, Path]) -> None:
         set_registry_repository_enabled(
             editor=TomlRegistryEditor(config_path), repo_id="ghost", enabled=True
         )
+
+
+def test_remove_repository_deletes_entry_and_preserves_comments(
+    config_with_repo: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """Removing an entry must delete its table while keeping other comments."""
+    config_path, _ = config_with_repo
+    new_repo = tmp_path / "new-repo"
+    (new_repo / ".git").mkdir(parents=True)
+    editor = TomlRegistryEditor(config_path)
+    editor.add_repository(
+        repo_id="new-repo", path=str(new_repo), display_name="New Repo"
+    )
+
+    editor.remove_repository("existing")
+
+    entries = list_registry_repositories(editor)
+    assert [entry.repo_id for entry in entries] == ["new-repo"]
+    written_text = config_path.read_text(encoding="utf-8")
+    assert "# 顶部注释必须保留" in written_text
+    assert "# registry 注释也必须保留" in written_text
+    assert "[agent_runner.repositories.existing]" not in written_text
+
+
+def test_remove_repository_unknown_repo(config_with_repo: tuple[Path, Path]) -> None:
+    """Removing an unknown repo_id must raise KeyError."""
+    config_path, _ = config_with_repo
+    with pytest.raises(KeyError, match="not found"):
+        TomlRegistryEditor(config_path).remove_repository("ghost")

@@ -265,6 +265,15 @@ class IRepositoryRegistryEditor(ABC):
         """
         ...
 
+    @abstractmethod
+    def remove_repository(self, repo_id: str) -> None:
+        """从 registry 中删除一个仓库条目。
+
+        Raises:
+            KeyError: repo_id 不存在。
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class RoadmapQueueEntry:

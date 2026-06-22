@@ -77,15 +77,21 @@ def select_repositories_interactive(
     while True:
         console.clear()
         _render_menu(console, items)
+        console.print()
         raw_input = console.input("Takeover> ").strip().lower()
 
         if raw_input in ("done", "d", ""):
             selected = [item.candidate for item in items if item.selected]
             if selected:
+                console.print(
+                    f"\n[green]Confirmed {len(selected)} selected "
+                    f"repositor{'y' if len(selected) == 1 else 'ies'}.[/]"
+                )
                 return selected
             console.print(
                 "[yellow]No repositories selected. Please select at least one.[/]"
             )
+            console.print()
             console.input("Press Enter to continue...")
             continue
 
@@ -108,7 +114,9 @@ def select_repositories_interactive(
                 items[index].selected = not items[index].selected
             else:
                 console.print(f"[red]Invalid number: {raw_input}[/]")
+                console.print()
                 console.input("Press Enter to continue...")
         except ValueError:
             console.print(f"[red]Unknown command: {raw_input}[/]")
+            console.print()
             console.input("Press Enter to continue...")

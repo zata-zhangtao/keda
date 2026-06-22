@@ -130,7 +130,7 @@ behavior_prompt = "You are a pragmatic implementer..."
 ```toml
 [agent_runner.interactive_decision]
 enabled = true
-default_agent = "codex"
+default_agent = "claude"
 default_output_dir = "logs/agent-runner/decisions"
 planner_timeout_seconds = 120
 max_context_chars = 24000
@@ -138,7 +138,7 @@ allow_execute_yes = true
 ```
 
 - `enabled`：是否启用 `iar ask`。
-- `default_agent`：默认 planner agent（当前仅 `codex` 有验证安全的只读命令）。
+- `default_agent`：默认 planner agent（支持 `claude`、`codex`、`kimi`）。
 - `default_output_dir`：决策审计文件默认输出目录。
 - `planner_timeout_seconds`：planner agent 超时时间（秒）。
 - `max_context_chars`：传入 planner 的上下文最大字符数。

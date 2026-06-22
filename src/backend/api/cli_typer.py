@@ -352,6 +352,56 @@ def registry_sync_command(
     )
 
 
+@registry_app.command("reinit")
+def registry_reinit_command(
+    repo_id: Annotated[
+        str, typer.Option("--repo-id", help="Registry identifier to reinitialize.")
+    ],
+    remote: Annotated[
+        str, typer.Option("--remote", help="Git remote name to write.")
+    ] = "origin",
+    base_branch: Annotated[
+        str | None, typer.Option("--base-branch", help="Base branch to write.")
+    ] = None,
+    start_daemons: Annotated[
+        bool,
+        typer.Option("--start-daemons", help="Restart daemon processes."),
+    ] = False,
+) -> int:
+    """Re-initialize an already registered repository's local config."""
+    return _run_typer_command(
+        "registry reinit",
+        repo_id=repo_id,
+        remote=remote,
+        base_branch=base_branch,
+        start_daemons=start_daemons,
+    )
+
+
+@registry_app.command("remove")
+def registry_remove_command(
+    repo_id: Annotated[
+        str, typer.Option("--repo-id", help="Registry identifier to remove.")
+    ],
+    delete: Annotated[
+        bool,
+        typer.Option("--delete", help="Also delete the cloned repository directory."),
+    ] = False,
+) -> int:
+    """Remove a repository from the registry and stop its daemons."""
+    return _run_typer_command(
+        "registry remove",
+        repo_id=repo_id,
+        delete=delete,
+    )
+
+
+@registry_app.command("list")
+def registry_list_command() -> int:
+    """List registered repositories and their daemon status."""
+    return _run_typer_command("registry list")
+
+
 @labels_app.command("sync")
 def labels_sync_command(
     ctx: typer.Context,

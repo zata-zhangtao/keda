@@ -48,6 +48,7 @@ from backend.engines.agent_runner.repository_local import detect_git_repository_
 from backend.engines.agent_runner.transcript_runner import create_transcript_runner
 from backend.infrastructure.config.registry_editor import TomlRegistryEditor
 from backend.infrastructure.config.settings import (
+    AgentRunnerDeliberationSettings,
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerLabelSettings,
@@ -131,6 +132,27 @@ def _build_generated_content_config(
     )
 
 
+def _build_deliberation_config(
+    deliberation_settings: AgentRunnerDeliberationSettings,
+) -> DeliberationConfig:
+    """Convert pydantic deliberation settings to frozen core config."""
+    profiles = tuple(
+        DeliberationAgentProfile(
+            profile_id=profile_id,
+            agent=profile.agent,
+            role=profile.role,
+            behavior_prompt=profile.behavior_prompt,
+        )
+        for profile_id, profile in deliberation_settings.profiles.items()
+    )
+    return DeliberationConfig(
+        default_rounds=deliberation_settings.default_rounds,
+        default_synthesizer=deliberation_settings.default_synthesizer,
+        default_output_dir=deliberation_settings.default_output_dir,
+        profiles=profiles,
+    )
+
+
 def build_app_config_from_settings(
     agent_runner_settings: AgentRunnerSettings,
 ) -> AppConfig:
@@ -149,6 +171,7 @@ def build_app_config_from_settings(
         agent_runner_settings.generated_content
     )
     interactive_decision = agent_runner_settings.interactive_decision
+    deliberation = _build_deliberation_config(agent_runner_settings.deliberation)
 
     return AppConfig(
         labels=LabelConfig(
@@ -228,6 +251,7 @@ def build_app_config_from_settings(
             max_context_chars=interactive_decision.max_context_chars,
             allow_execute_yes=interactive_decision.allow_execute_yes,
         ),
+        deliberation=deliberation,
     )
 
 
@@ -434,6 +458,39 @@ def _merge_generated_content_config(
     )
 
 
+def _merge_deliberation_config(
+    base_config: DeliberationConfig,
+    override: AgentRunnerDeliberationSettings | None,
+) -> DeliberationConfig:
+    """Merge repository-specific deliberation overrides into a base config."""
+    if override is None:
+        return base_config
+    override_data = _pydantic_override_dict(override)
+    profiles = {profile.profile_id: profile for profile in base_config.profiles}
+    if "profiles" in override_data:
+        profiles.update(
+            {
+                profile_id: DeliberationAgentProfile(
+                    profile_id=profile_id,
+                    agent=profile.agent,
+                    role=profile.role,
+                    behavior_prompt=profile.behavior_prompt,
+                )
+                for profile_id, profile in override.profiles.items()
+            }
+        )
+    return DeliberationConfig(
+        default_rounds=override_data.get("default_rounds", base_config.default_rounds),
+        default_synthesizer=override_data.get(
+            "default_synthesizer", base_config.default_synthesizer
+        ),
+        default_output_dir=override_data.get(
+            "default_output_dir", base_config.default_output_dir
+        ),
+        profiles=tuple(profiles.values()),
+    )
+
+
 def merge_repository_config(
     global_config: AppConfig, repo_settings: AgentRunnerRepositorySettings
 ) -> AppConfig:
@@ -467,6 +524,9 @@ def merge_repository_config(
     interactive_decision = _merge_optional_model(
         global_config.interactive_decision, repo_settings.interactive_decision
     )
+    deliberation = _merge_deliberation_config(
+        global_config.deliberation, repo_settings.deliberation
+    )
     return AppConfig(
         labels=labels,
         git=git,
@@ -479,6 +539,7 @@ def merge_repository_config(
         post_pr_supervisor=post_pr_supervisor,
         generated_content=generated_content,
         interactive_decision=interactive_decision,
+        deliberation=deliberation,
     )
 
 
@@ -772,11 +833,11 @@ def _build_content_generation_command(
 
 
 class SafePlannerContentGenerator(IContentGenerator):
-    """Generate decision plans via a verified read-only agent subprocess.
+    """Generate decision plans via a local agent subprocess.
 
-    Only agents that can be run with a verifiably read-only command are
-    accepted.  Unsafe agents raise ``ValueError`` instead of silently
-    downgrading safety.
+    The planner delegates to the same agent command builders used for content
+    generation.  Callers are responsible for validating and sandboxing the
+    resulting plan; this runner does not enforce read-only execution.
     """
 
     def __init__(self, process_runner: SubprocessRunner) -> None:
@@ -790,7 +851,7 @@ class SafePlannerContentGenerator(IContentGenerator):
         cwd: Path,
         timeout: int | None = None,
     ) -> CommandResult:
-        """Run a verified read-only planner and return its output."""
+        """Run a planner agent and return its output."""
         command = _build_planner_command(agent_name, prompt, cwd)
         return self._process_runner.run(
             command, cwd=cwd, capture_output=True, timeout=timeout, check=False
@@ -798,27 +859,21 @@ class SafePlannerContentGenerator(IContentGenerator):
 
 
 def _build_planner_command(agent_name: str, prompt: str, cwd: Path) -> list[str]:
-    """Return a verified read-only command for the given planner agent.
+    """Return a command for the given planner agent.
+
+    The planner reuses the content-generation command builders so that all
+    supported agents can act as planners.  Planner output is still expected
+    to be a JSON DecisionPlan and is validated by the core use case.
 
     Raises:
-        ValueError: If the agent does not have a safe read-only command builder.
+        ValueError: If the agent is not one of the supported planner agents.
     """
-    if agent_name == "codex":
-        return [
-            "codex",
-            "--cd",
-            str(cwd),
-            "--sandbox",
-            "read-only",
-            "--ask-for-approval",
-            "never",
-            "exec",
-            prompt,
-        ]
-    raise ValueError(
-        f"Agent '{agent_name}' does not have a verified read-only command builder "
-        f"for interactive decision planning. Use 'codex' instead."
-    )
+    if agent_name not in ("claude", "codex", "kimi"):
+        raise ValueError(
+            f"Agent '{agent_name}' does not have a command builder "
+            f"for interactive decision planning. Use 'claude', 'codex', or 'kimi'."
+        )
+    return _build_content_generation_command(agent_name, prompt, cwd)
 
 
 def create_planner_runner(
@@ -911,22 +966,7 @@ def build_deliberation_config_from_settings(
     agent_runner_settings: AgentRunnerSettings,
 ) -> DeliberationConfig:
     """Convert pydantic-settings deliberation config to frozen core config."""
-    deliberation_settings = agent_runner_settings.deliberation
-    profiles = tuple(
-        DeliberationAgentProfile(
-            profile_id=profile_id,
-            agent=profile.agent,
-            role=profile.role,
-            behavior_prompt=profile.behavior_prompt,
-        )
-        for profile_id, profile in deliberation_settings.profiles.items()
-    )
-    return DeliberationConfig(
-        default_rounds=deliberation_settings.default_rounds,
-        default_synthesizer=deliberation_settings.default_synthesizer,
-        default_output_dir=deliberation_settings.default_output_dir,
-        profiles=profiles,
-    )
+    return _build_deliberation_config(agent_runner_settings.deliberation)
 
 
 def create_event_sink(

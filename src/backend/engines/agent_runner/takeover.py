@@ -291,6 +291,7 @@ def ensure_repository_initialized(
             cwd=repo_path,
             repo_id_override=repo_id,
             display_name_override=display_name,
+            remote_override="origin",
         ),
         process_runner,
     )
@@ -364,6 +365,7 @@ def execute_takeover(
     editor: IRepositoryRegistryEditor,
     process_runner: SubprocessRunner,
     start_daemon_callback: "Callable[[str, Path], None] | None" = None,
+    progress_callback: "Callable[[str, str], None] | None" = None,
 ) -> TakeoverResult:
     """Execute the takeover plan for a list of candidates.
 
@@ -375,6 +377,10 @@ def execute_takeover(
         start_daemon_callback: Optional callback invoked for each repository
             when ``options.start_daemons`` is ``True``. Receives ``repo_id``
             and ``repo_path``.
+        progress_callback: Optional callback invoked as stages complete for
+            each repository. Receives ``full_name`` and a stage identifier
+            such as ``"clone"``, ``"init"``, ``"register"``,
+            ``"start_daemons"``, or ``"complete"``.
 
     Returns:
         Summary of the takeover batch.
@@ -383,6 +389,10 @@ def execute_takeover(
     succeeded = 0
     started_daemons = 0
     started_review_daemons = 0
+
+    def _report_progress(stage: str) -> None:
+        if progress_callback is not None:
+            progress_callback(candidate.full_name, stage)
 
     for candidate in candidates:
         repo_path = _repository_path(options.clone_root, candidate)
@@ -407,6 +417,7 @@ def execute_takeover(
                     process_runner=process_runner,
                 )
             result = dataclasses.replace(result, cloned=True)
+            _report_progress("clone")
 
             ensure_repository_initialized(
                 repo_path=repo_path,
@@ -416,6 +427,7 @@ def execute_takeover(
                 dry_run=options.dry_run,
             )
             result = dataclasses.replace(result, initialized=True)
+            _report_progress("init")
 
             registered = register_repository(
                 repo_id=repo_id,
@@ -425,6 +437,7 @@ def execute_takeover(
                 dry_run=options.dry_run,
             )
             result = dataclasses.replace(result, registered=registered)
+            _report_progress("register")
 
             if options.start_daemons and not options.dry_run:
                 if start_daemon_callback is not None:
@@ -436,9 +449,11 @@ def execute_takeover(
                     )
                     started_daemons += 1
                     started_review_daemons += 1
+                    _report_progress("start_daemons")
 
             if result.error is None:
                 succeeded += 1
+            _report_progress("complete")
 
         except Exception as exc:  # noqa: BLE001 - batch should isolate failures.
             _logger.error("Takeover failed for %s: %s", candidate.full_name, exc)

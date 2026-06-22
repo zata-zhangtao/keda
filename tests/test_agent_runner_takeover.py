@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from backend.core.shared.interfaces.runner_console import IRepositoryRegistryEditor
+from backend.engines.agent_runner.repository_local import RepositoryInitOptions
 from backend.engines.agent_runner.takeover import (
     GitHubRepositoryCandidate,
     build_takeover_options,
@@ -17,6 +21,9 @@ from backend.engines.agent_runner.takeover import (
     list_github_repositories,
     parse_selected_repositories,
     register_repository,
+)
+from backend.engines.agent_runner.takeover_interactive import (
+    select_repositories_interactive,
 )
 from backend.infrastructure.config.registry_editor import RegistryRepositoryEntry
 from backend.infrastructure.process_runner import CommandResult
@@ -57,6 +64,13 @@ class _InMemoryRegistryEditor(IRepositoryRegistryEditor):
                     display_name=entry.display_name,
                     path_exists=entry.path_exists,
                 )
+                return
+        raise KeyError(f"Repository '{repo_id}' not found in the registry.")
+
+    def remove_repository(self, repo_id: str) -> None:
+        for index, entry in enumerate(self._entries):
+            if entry.repo_id == repo_id:
+                self._entries.pop(index)
                 return
         raise KeyError(f"Repository '{repo_id}' not found in the registry.")
 
@@ -423,3 +437,149 @@ def test_execute_takeover_starts_daemons(tmp_path: Path) -> None:
     assert result.started_review_daemons == 1
     assert len(started) == 1
     assert started[0][0] == "owner-repo-a"
+
+
+def _candidate(full_name: str) -> GitHubRepositoryCandidate:
+    owner, _, name = full_name.partition("/")
+    return GitHubRepositoryCandidate(
+        owner=owner,
+        name=name,
+        full_name=full_name,
+        description=None,
+        viewer_permission=None,
+    )
+
+
+def _run_select_with_input(input_lines: list[str]) -> list[GitHubRepositoryCandidate]:
+    """Run interactive selection with simulated stdin and suppress Rich output."""
+    old_stdin = sys.stdin
+    sys.stdin = io.StringIO("\n".join(input_lines) + "\n")
+    try:
+        return select_repositories_interactive(
+            [
+                _candidate("owner/repo-a"),
+                _candidate("owner/repo-b"),
+                _candidate("owner/repo-c"),
+            ]
+        )
+    finally:
+        sys.stdin = old_stdin
+
+
+def test_select_repositories_interactive_done_returns_selection() -> None:
+    """Selecting a repository and typing done should return the selection."""
+    selected = _run_select_with_input(["2", "done"])
+    assert [candidate.full_name for candidate in selected] == ["owner/repo-b"]
+
+
+def test_select_repositories_interactive_done_without_selection_warns() -> None:
+    """Typing done without selecting anything should require an extra Enter."""
+    selected = _run_select_with_input(["done", "", "1", "done"])
+    assert [candidate.full_name for candidate in selected] == ["owner/repo-a"]
+
+
+def test_select_repositories_interactive_quit_returns_empty() -> None:
+    """Typing quit should cancel selection and return an empty list."""
+    selected = _run_select_with_input(["quit"])
+    assert selected == []
+
+
+def test_select_repositories_interactive_all_and_done() -> None:
+    """The all command should select every repository."""
+    selected = _run_select_with_input(["all", "done"])
+    assert [candidate.full_name for candidate in selected] == [
+        "owner/repo-a",
+        "owner/repo-b",
+        "owner/repo-c",
+    ]
+
+
+def test_select_repositories_interactive_toggle_and_none() -> None:
+    """Toggling a selection and then using none should clear it."""
+    selected = _run_select_with_input(["2", "none", "done", "", "1", "done"])
+    assert [candidate.full_name for candidate in selected] == ["owner/repo-a"]
+
+
+def test_select_repositories_interactive_empty_candidates() -> None:
+    """An empty candidate list should return immediately."""
+    assert select_repositories_interactive([]) == []
+
+
+def test_execute_takeover_progress_callback(tmp_path: Path) -> None:
+    """execute_takeover should invoke the progress callback for each stage."""
+    clone_root = tmp_path / "repos"
+    repo_path = _prepare_cloned_repo(clone_root, "owner/repo-a")
+    editor = _InMemoryRegistryEditor()
+    runner = _fake_git_runner(repo_path)
+    options = build_takeover_options(
+        clone_root=str(clone_root), start_daemons=True, dry_run=False
+    )
+    candidate = _candidate("owner/repo-a")
+    progress: list[tuple[str, str]] = []
+
+    def _capture_progress(full_name: str, stage: str) -> None:
+        progress.append((full_name, stage))
+
+    def _start(_repo_id: str, _repo_path: Path) -> None:
+        pass
+
+    result = execute_takeover(
+        options=options,
+        candidates=[candidate],
+        editor=editor,
+        process_runner=runner,
+        start_daemon_callback=_start,
+        progress_callback=_capture_progress,
+    )
+    assert result.succeeded == 1
+    assert ("owner/repo-a", "clone") in progress
+    assert ("owner/repo-a", "init") in progress
+    assert ("owner/repo-a", "register") in progress
+    assert ("owner/repo-a", "start_daemons") in progress
+    assert ("owner/repo-a", "complete") in progress
+
+
+def test_execute_takeover_initializes_with_origin_remote(
+    tmp_path: Path,
+) -> None:
+    """Takeover should force remote='origin' for freshly cloned GitHub repos.
+
+    This guards against stale branch upstream remotes (e.g. a local branch
+    tracking a no-longer-existent remote named after the old owner) being
+    written into .iar.toml.
+    """
+    clone_root = tmp_path / "repos"
+    repo_path = _prepare_cloned_repo(clone_root, "owner/repo-a")
+    editor = _InMemoryRegistryEditor()
+    runner = _fake_git_runner(repo_path)
+    options = build_takeover_options(
+        clone_root=str(clone_root), start_daemons=False, dry_run=False
+    )
+    candidate = _candidate("owner/repo-a")
+    captured_options: RepositoryInitOptions | None = None
+
+    def _fake_initialize(options: RepositoryInitOptions, _runner) -> None:
+        nonlocal captured_options
+        captured_options = options
+        repo_root = repo_path
+        config_path = repo_root / ".iar.toml"
+        config_path.write_text(
+            f'[agent_runner.repository]\nid = "{options.repo_id_override}"\n'
+            f'[agent_runner.git]\nremote = "{options.remote_override}"\n',
+            encoding="utf-8",
+        )
+
+    with patch(
+        "backend.engines.agent_runner.takeover.initialize_repository_local_config",
+        side_effect=_fake_initialize,
+    ):
+        result = execute_takeover(
+            options=options,
+            candidates=[candidate],
+            editor=editor,
+            process_runner=runner,
+        )
+
+    assert result.succeeded == 1
+    assert captured_options is not None
+    assert captured_options.remote_override == "origin"

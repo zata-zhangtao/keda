@@ -7,6 +7,7 @@ from enum import Enum
 from pathlib import Path
 
 from backend.core.shared.models.agent_decision import InteractiveDecisionConfig
+from backend.core.shared.models.agent_deliberation import DeliberationConfig
 
 
 @dataclass(frozen=True)
@@ -344,6 +345,7 @@ class AppConfig:
     interactive_decision: InteractiveDecisionConfig = field(
         default_factory=InteractiveDecisionConfig
     )
+    deliberation: DeliberationConfig = field(default_factory=DeliberationConfig)
 
 
 @dataclass(frozen=True)

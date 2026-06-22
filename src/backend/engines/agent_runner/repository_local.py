@@ -12,8 +12,10 @@ from typing import Any
 import tomli_w
 
 from backend.infrastructure.config.settings import (
+    AgentRunnerDeliberationSettings,
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGitSettings,
+    AgentRunnerInteractiveDecisionSettings,
     AgentRunnerLocalSettings,
     AgentRunnerPostPrSupervisorSettings,
     AgentRunnerPrePrReviewSettings,
@@ -156,6 +158,8 @@ _IAR_SECTION_ORDER = (
     "pre_pr_review",
     "post_pr_supervisor",
     "generated_content",
+    "interactive_decision",
+    "deliberation",
 )
 
 # section -> 段前说明注释（中文为主，关键术语保留英文）。
@@ -170,6 +174,8 @@ _IAR_SECTION_COMMENTS: dict[str, str] = {
     "pre_pr_review": "Draft PR 创建前的 AI review 门禁（push 之后、PR 之前）",
     "post_pr_supervisor": "Draft PR 创建后的自动 supervisor 配置",
     "generated_content": "GitHub Issue / PR 内容生成（面向人类阅读，不影响实现 Agent）",
+    "interactive_decision": "交互式决策（iar ask）配置：默认 agent、输出目录、执行确认等",
+    "deliberation": "多 agent 审议（iar deliberate）配置：轮数、合成 agent、参与角色",
 }
 
 # 子表路径 -> 子表说明注释。
@@ -177,6 +183,9 @@ _IAR_SUBTABLE_COMMENTS: dict[str, str] = {
     "generated_content.issue_from_prd": "从 PRD 生成 GitHub Issue 的模板",
     "generated_content.draft_pr": "从 commit 信息生成 Draft PR 的模板",
     "generated_content.prd_from_issue": "从 GitHub Issue 生成 / 重写 PRD（rework-prd 流程）",
+    "deliberation.profiles.architect": "审议角色：架构师，关注系统设计与可维护性",
+    "deliberation.profiles.skeptic": "审议角色：质疑者，挑战假设与风险",
+    "deliberation.profiles.implementer": "审议角色：实现者，关注可行性与落地步骤",
 }
 
 # 字段路径 -> 字段说明注释（中文为主，关键术语保留英文）。
@@ -250,6 +259,24 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "generated_content.prd_from_issue.prompt": "agent 模式 prompt（留空则用内置 prd skill 规范）",
     "generated_content.prd_from_issue.include_commit_log": "（PRD 生成未使用）",
     "generated_content.prd_from_issue.include_diff_stat": "（PRD 生成未使用）",
+    "interactive_decision.enabled": "是否启用 iar ask 交互式决策",
+    "interactive_decision.default_agent": "iar ask 默认使用的 agent：auto / claude / codex / kimi",
+    "interactive_decision.default_output_dir": "决策日志与审计文件的默认输出目录",
+    "interactive_decision.planner_timeout_seconds": "规划 agent 的最长运行秒数",
+    "interactive_decision.max_context_chars": "输入 prompt 的最大字符数",
+    "interactive_decision.allow_execute_yes": "是否允许 `iar ask --yes` 跳过人工确认",
+    "deliberation.default_rounds": "默认审议轮数",
+    "deliberation.default_synthesizer": "汇总最终结论的默认 agent",
+    "deliberation.default_output_dir": "审议会话输出目录",
+    "deliberation.profiles.architect.agent": "该角色使用的 agent",
+    "deliberation.profiles.architect.role": "角色标识",
+    "deliberation.profiles.architect.behavior_prompt": "角色行为 prompt",
+    "deliberation.profiles.skeptic.agent": "该角色使用的 agent",
+    "deliberation.profiles.skeptic.role": "角色标识",
+    "deliberation.profiles.skeptic.behavior_prompt": "角色行为 prompt",
+    "deliberation.profiles.implementer.agent": "该角色使用的 agent",
+    "deliberation.profiles.implementer.role": "角色标识",
+    "deliberation.profiles.implementer.behavior_prompt": "角色行为 prompt",
 }
 
 # 注释掉的常用覆盖示例：[agent_runner.labels]。
@@ -610,6 +637,8 @@ def build_repository_local_config_text(
         pre_pr_review=AgentRunnerPrePrReviewSettings(),
         post_pr_supervisor=AgentRunnerPostPrSupervisorSettings(),
         generated_content=AgentRunnerGeneratedContentSettings(),
+        interactive_decision=AgentRunnerInteractiveDecisionSettings(),
+        deliberation=AgentRunnerDeliberationSettings(),
     )
 
     return repo_root_path, settings_to_toml_string(settings)
@@ -675,6 +704,8 @@ def _detect_default_remote(
     repo_root_path: Path,
     process_runner: SubprocessRunner | None,
 ) -> str:
+    configured_remotes = _list_git_remotes(repo_root_path, process_runner)
+
     current_branch_result = _run_git(
         ["branch", "--show-current"], repo_root_path, process_runner
     )
@@ -686,10 +717,9 @@ def _detect_default_remote(
             process_runner,
         )
         upstream_remote = upstream_remote_result.stdout.strip()
-        if upstream_remote:
+        if upstream_remote and upstream_remote in configured_remotes:
             return upstream_remote
 
-    configured_remotes = _list_git_remotes(repo_root_path, process_runner)
     if "origin" in configured_remotes:
         return "origin"
     if configured_remotes:
