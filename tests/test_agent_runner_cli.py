@@ -9,7 +9,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
-from backend.api.cli import main
+from backend.api.cli import _expand_prd_paths, main
 from backend.api.cli_parser import build_parser
 from backend.core.shared.interfaces.runner_console import RunnerProcessKind
 from backend.infrastructure.logging.logger import Logger
@@ -135,6 +135,72 @@ def test_cli_parser_issue_create_dependency_options() -> None:
     )
     assert parsed.depends_on == [42, 43]
     assert parsed.depends_on_group == ["upstream-a"]
+
+
+def test_cli_parser_issue_create_accepts_directory() -> None:
+    """issue create should accept a directory as a PRD path argument."""
+    parser = build_parser()
+    parsed = parser.parse_args(["issue", "create", "tasks/pending"])
+    assert parsed.command == "issue create"
+    assert parsed.issue_command == "create"
+    assert parsed.prd_paths == ["tasks/pending"]
+
+
+def test_expand_prd_paths_directory(tmp_path: Path) -> None:
+    """_expand_prd_paths should expand a directory to its *.md files sorted."""
+    (tmp_path / "tasks" / "pending").mkdir(parents=True)
+    (tmp_path / "tasks" / "pending" / "b.md").write_text("# B", encoding="utf-8")
+    (tmp_path / "tasks" / "pending" / "a.md").write_text("# A", encoding="utf-8")
+    (tmp_path / "tasks" / "pending" / ".gitkeep").write_text("", encoding="utf-8")
+
+    expanded = _expand_prd_paths(tmp_path, ["tasks/pending"])
+
+    assert expanded == ["tasks/pending/a.md", "tasks/pending/b.md"]
+
+
+def test_expand_prd_paths_mixed_file_and_directory(tmp_path: Path) -> None:
+    """_expand_prd_paths should preserve input order when mixing files and dirs."""
+    (tmp_path / "tasks" / "pending").mkdir(parents=True)
+    (tmp_path / "tasks" / "pending" / "a.md").write_text("# A", encoding="utf-8")
+    (tmp_path / "tasks" / "root.md").write_text("# Root", encoding="utf-8")
+
+    expanded = _expand_prd_paths(tmp_path, ["tasks/root.md", "tasks/pending"])
+
+    assert expanded == ["tasks/root.md", "tasks/pending/a.md"]
+
+
+def test_expand_prd_paths_deduplicates(tmp_path: Path) -> None:
+    """_expand_prd_paths should deduplicate repeated files."""
+    (tmp_path / "tasks" / "pending").mkdir(parents=True)
+    (tmp_path / "tasks" / "pending" / "a.md").write_text("# A", encoding="utf-8")
+
+    expanded = _expand_prd_paths(tmp_path, ["tasks/pending", "tasks/pending/a.md"])
+
+    assert expanded == ["tasks/pending/a.md"]
+
+
+def test_expand_prd_paths_empty_directory_rejected(tmp_path: Path) -> None:
+    """_expand_prd_paths should reject a directory with no *.md files."""
+    (tmp_path / "tasks" / "pending").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="contains no PRD Markdown files"):
+        _expand_prd_paths(tmp_path, ["tasks/pending"])
+
+
+def test_expand_prd_paths_missing_path_passed_through(tmp_path: Path) -> None:
+    """_expand_prd_paths should pass through non-existent paths unchanged."""
+    expanded = _expand_prd_paths(tmp_path, ["tasks/missing.md"])
+
+    assert expanded == ["tasks/missing.md"]
+
+
+def test_expand_prd_paths_non_md_file_rejected(tmp_path: Path) -> None:
+    """_expand_prd_paths should reject an existing non-Markdown file."""
+    (tmp_path / "tasks").mkdir(parents=True)
+    (tmp_path / "tasks" / "readme.txt").write_text("txt", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must be a Markdown file"):
+        _expand_prd_paths(tmp_path, ["tasks/readme.txt"])
 
 
 def test_cli_parser_run() -> None:
@@ -906,6 +972,46 @@ def test_main_issue_create_multiple_prds_continues_on_failure() -> None:
         call.kwargs["request"].prd_path.name for call in mock_create.call_args_list
     ]
     assert created_prd_paths == ["bad.md", "good.md"]
+
+
+def test_main_issue_create_directory_expansion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """issue create should expand a directory argument to its *.md files."""
+    from backend.api.cli import main
+
+    pending_dir = tmp_path / "tasks" / "pending"
+    pending_dir.mkdir(parents=True)
+    (pending_dir / "b.md").write_text("# B", encoding="utf-8")
+    (pending_dir / "a.md").write_text("# A", encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+
+    mock_context = MagicMock()
+    mock_context.repo_path = tmp_path
+    mock_context.config.labels = MagicMock()
+    mock_context.config.git.remote = "origin"
+    mock_context.config.git.base_branch = "main"
+
+    with patch(
+        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
+    ), patch("backend.api.cli.create_github_client"), patch(
+        "backend.api.cli.create_issue_from_prd",
+        return_value="https://github.com/example/issues/1",
+    ) as mock_create, patch(
+        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
+    ), patch("backend.api.cli.require_iar_repository_initialized"):
+        exit_code = main(["issue", "create", "tasks/pending", "--ready"])
+
+    assert exit_code == 0
+    assert mock_create.call_count == 2
+    created_prd_paths = [
+        call.kwargs["request"].prd_path for call in mock_create.call_args_list
+    ]
+    assert created_prd_paths == [
+        Path("tasks/pending/a.md"),
+        Path("tasks/pending/b.md"),
+    ]
 
 
 def test_cli_parser_deliberate_defaults() -> None:

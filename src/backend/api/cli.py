@@ -296,6 +296,72 @@ def _handle_not_initialized_error(exc: IARRepositoryNotInitializedError) -> int:
     return 1
 
 
+def _expand_prd_paths(repo_path: Path, prd_paths: list[str]) -> list[str]:
+    """Expand directories in ``prd_paths`` to their ``*.md`` files.
+
+    Files are returned as repo-relative paths. Directories are expanded to
+    their immediate ``*.md`` children, sorted by filename. Non-existent
+    paths are passed through unchanged so that downstream validation can
+    report them with its usual diagnostics.
+
+    Args:
+        repo_path: Repository root used to resolve relative paths.
+        prd_paths: Raw CLI arguments, each may be a file or a directory.
+
+    Returns:
+        Repo-relative paths of PRD Markdown files, preserving input order
+        and deduplicated while keeping the first occurrence.
+
+    Raises:
+        ValueError: When a directory is empty of ``*.md`` files or the
+            final expanded list is empty.
+    """
+
+    expanded_paths: list[str] = []
+    seen_paths: set[str] = set()
+
+    for prd_path_text in prd_paths:
+        candidate_path = (repo_path / prd_path_text).resolve()
+
+        if not candidate_path.exists():
+            expanded_paths.append(prd_path_text)
+            continue
+
+        if candidate_path.is_file():
+            if candidate_path.suffix.lower() != ".md":
+                raise ValueError(f"PRD file must be a Markdown file: {prd_path_text}")
+            file_entries = [candidate_path]
+        elif candidate_path.is_dir():
+            file_entries = sorted(
+                [
+                    entry
+                    for entry in candidate_path.iterdir()
+                    if entry.is_file() and entry.suffix.lower() == ".md"
+                ],
+                key=lambda entry: entry.name,
+            )
+            if not file_entries:
+                raise ValueError(
+                    f"Directory contains no PRD Markdown files: {prd_path_text}"
+                )
+        else:
+            raise ValueError(
+                f"PRD path is neither a file nor a directory: {prd_path_text}"
+            )
+
+        for file_entry in file_entries:
+            relative_path = file_entry.relative_to(repo_path.resolve()).as_posix()
+            if relative_path in seen_paths:
+                continue
+            seen_paths.add(relative_path)
+            expanded_paths.append(relative_path)
+
+    if not expanded_paths:
+        raise ValueError("No PRD Markdown files found.")
+
+    return expanded_paths
+
+
 def _run_parsed_command(parsed: argparse.Namespace) -> int:
     """Run a command after CLI arguments have been parsed."""
     if parsed.config:
@@ -538,12 +604,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             return 0
 
         if parsed.command == "issue create":
-            prd_paths = getattr(parsed, "prd_paths", [])
-            if len(prd_paths) > 1 and parsed.title is not None:
-                logger.error(
-                    "--title cannot be used when creating Issues from multiple PRDs."
-                )
-                return 1
+            raw_prd_paths = getattr(parsed, "prd_paths", [])
 
             context = resolve_issue_from_prd_target(
                 runner_settings,
@@ -551,6 +612,18 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_path_override=repo_override,
                 cwd=Path.cwd(),
             )
+            try:
+                prd_paths = _expand_prd_paths(context.repo_path, raw_prd_paths)
+            except ValueError as exc:
+                logger.error("iar issue create failed: %s", exc)
+                return 1
+
+            if len(prd_paths) > 1 and parsed.title is not None:
+                logger.error(
+                    "--title cannot be used when creating Issues from multiple PRDs."
+                )
+                return 1
+
             require_iar_repository_initialized(context.repo_path, process_runner)
             _ensure_gh_auth_or_prompt(context.repo_path, process_runner)
             github_client = create_github_client(context.repo_path, process_runner)

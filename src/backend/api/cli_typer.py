@@ -477,7 +477,10 @@ def _run_issue_create_command(
 def issue_create_command(
     ctx: typer.Context,
     prd_paths: Annotated[
-        list[str], typer.Argument(help="One or more PRD Markdown paths.")
+        list[str],
+        typer.Argument(
+            help="One or more PRD Markdown files or directories containing PRD files."
+        ),
     ],
     issue_type: Annotated[
         IssueTypeChoice,

@@ -952,8 +952,12 @@ iar issue create tasks/pending/example.md --repo-id keda --type feature --agent 
 # 一次从多个 PRD 创建 ready Issue（支持 shell glob）
 iar issue create tasks/pending/*.md --repo-id keda --type feature --agent codex --ready
 
+# 直接传文件夹，自动展开其中所有 *.md PRD
+iar issue create tasks/pending --repo-id keda --type feature --agent codex --ready
+
 # 多个 PRD 时不能共用 --title（每个 PRD 仍从自身的 H1 标题生成 Issue 标题）
 # iar issue create tasks/pending/*.md --title "Shared"   # 会报错
+# iar issue create tasks/pending --title "Shared"        # 同样会报错
 
 # 单次执行（dry-run 预览）
 iar run --dry-run

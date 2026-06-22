@@ -91,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     issue_create_parser.add_argument(
         "prd_paths",
         nargs="+",
-        help="One or more PRD Markdown paths.",
+        help="One or more PRD Markdown files or directories containing PRD files.",
     )
     issue_create_parser.add_argument(
         "--type", choices=("feature", "refactor", "bug"), default="feature"
