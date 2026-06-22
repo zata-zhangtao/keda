@@ -1,5 +1,7 @@
 # PRD: deliberate 异步讨论接管复杂 Issue + 实现阶段上下文内联
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/104
+
 ## 1. Introduction & Goals
 
 ### Problem Statement
