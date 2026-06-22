@@ -36,12 +36,12 @@ Complexity intentionally avoided: no new recipe, no new CLI command, no source-t
 
 ### Realistic Validation
 
-- [ ] **Real entry-point validation — cold start**: From a clean checkout (no `.testmondata`), `just test` runs the entire suite and exits 0; `.testmondata` exists afterward.
-- [ ] **Real entry-point validation — hot run**: After editing exactly one file under `src/backend/` and saving, `just test` runs strictly fewer test files than the cold start (verified by counting the number of `tests/test_*.py` paths in `-v` output) and exits 0.
-- [ ] **Real entry-point validation — `just test all` force-full**: After editing one source file, `just test all` runs the entire suite (no testmon filtering) and exits 0.
-- [ ] **Real entry-point validation — `just test real` force-full**: `just test real` exits 0 (or 5 with the "no real_api tests" notice if none exist) and ignores `.testmondata` selection.
-- [ ] **Real entry-point validation — gitignore**: `git check-ignore .testmondata` exits 0 from the repo root.
-- [ ] **Real entry-point validation — docs build**: `uv run mkdocs build --strict` exits 0 with no warnings after the documentation updates.
+- [x] **Real entry-point validation — cold start**: From a clean checkout (no `.testmondata`), `just test` runs the entire suite and exits 0; `.testmondata` exists afterward.
+- [x] **Real entry-point validation — hot run**: After editing exactly one file under `src/backend/` and saving, `just test` runs strictly fewer test files than the cold start (verified by counting the number of `tests/test_*.py` paths in `-v` output) and exits 0.
+- [x] **Real entry-point validation — `just test all` force-full**: After editing one source file, `just test all` runs the entire suite (no testmon filtering) and exits 0.
+- [x] **Real entry-point validation — `just test real` force-full**: `just test real` exits 0 (or 5 with the "no real_api tests" notice if none exist) and ignores `.testmondata` selection.
+- [x] **Real entry-point validation — gitignore**: `git check-ignore .testmondata` exits 0 from the repo root.
+- [x] **Real entry-point validation — docs build**: `uv run mkdocs build --strict` exits 0 with no warnings after the documentation updates.
 
 **Why unit tests are insufficient**: The behavior under test is end-to-end pytest invocation, including testmon's import-tracing, db persistence, and selection algorithm. None of these can be exercised by isolated unit tests inside `tests/` without simulating pytest itself. Real entry-point runs are required.
 
@@ -301,44 +301,44 @@ No external validation required; repository evidence was sufficient. `pytest-tes
 
 ### Architecture Acceptance
 
-- [ ] No file under `src/backend/{api,core,engines,infrastructure}/` is modified by this PRD.
-- [ ] `justfile.shared` is byte-identical before and after this PRD (verified via `git diff justfile.shared` empty).
-- [ ] `tests/conftest.py` is byte-identical before and after this PRD.
-- [ ] `@test type="local"` exists in keda `justfile` (recipe override takes precedence over shared per just's resolution rules).
+- [x] No file under `src/backend/{api,core,engines,infrastructure}/` is modified by this PRD.
+- [x] `justfile.shared` is byte-identical before and after this PRD (verified via `git diff justfile.shared` empty).
+- [x] `tests/conftest.py` is byte-identical before and after this PRD.
+- [x] `@test type="local"` exists in keda `justfile` (recipe override takes precedence over shared per just's resolution rules).
 
 ### Dependency Acceptance
 
-- [ ] `pyproject.toml` `[dependency-groups].dev` contains `pytest-testmon>=2.1.0` (or newer compatible version) on a line by itself.
-- [ ] `uv.lock` contains a `pytest-testmon` entry resolved against the version pin (verified via `rg -n "pytest-testmon" uv.lock`).
-- [ ] `uv sync` succeeds from a clean checkout with no errors.
+- [x] `pyproject.toml` `[dependency-groups].dev` contains `pytest-testmon>=2.1.0` (or newer compatible version) on a line by itself.
+- [x] `uv.lock` contains a `pytest-testmon` entry resolved against the version pin (verified via `rg -n "pytest-testmon" uv.lock`).
+- [x] `uv sync` succeeds from a clean checkout with no errors.
 
 ### Behavior Acceptance
 
-- [ ] `[tool.pytest.ini_options]` block exists in `pyproject.toml` with `addopts = "--testmon"`.
-- [ ] `just test` (local mode) recipe body calls `uv run pytest tests/ -v` with no explicit `--testmon` (picked up from addopts).
-- [ ] `just test all` recipe body calls `uv run pytest tests/ -v -m '' --no-testmon` (force-full + no markers).
-- [ ] `just test real` recipe body calls `uv run pytest tests/ -v -m 'real_api' --no-testmon` (force-full + real_api only).
-- [ ] The override recipe does NOT include `-n auto` in any of the three pytest invocations (keda has no xdist).
-- [ ] Cold-start run via `just test` (no `.testmondata`) executes the full suite and creates `.testmondata` at the repo root.
-- [ ] Hot-run via `just test` after editing exactly one file under `src/backend/` selects a strict subset (fewer than 62 test files touched in `-v` output, more than 0).
-- [ ] `just test all` after editing a source file still runs all 62 test files (no testmon filtering).
-- [ ] `just test real` exits 0 (or 5 with the documented "no real_api tests" notice) and ignores `.testmondata` selection.
-- [ ] Removing `.testmondata` and re-running `just test` performs a fresh cold start (recovers gracefully from cache loss).
+- [x] `[tool.pytest.ini_options]` block exists in `pyproject.toml` with `addopts = "--testmon"`.
+- [x] `just test` (local mode) recipe body calls `uv run pytest tests/ -v` with no explicit `--testmon` (picked up from addopts).
+- [x] `just test all` recipe body calls `uv run pytest tests/ -v -m '' --no-testmon` (force-full + no markers).
+- [x] `just test real` recipe body calls `uv run pytest tests/ -v -m 'real_api' --no-testmon` (force-full + real_api only).
+- [x] The override recipe does NOT include `-n auto` in any of the three pytest invocations (keda has no xdist).
+- [x] Cold-start run via `just test` (no `.testmondata`) executes the full suite and creates `.testmondata` at the repo root.
+- [x] Hot-run via `just test` after editing exactly one file under `src/backend/` selects a strict subset (fewer than 62 test files touched in `-v` output, more than 0).
+- [x] `just test all` after editing a source file still runs all 62 test files (no testmon filtering).
+- [x] `just test real` exits 0 (or 5 with the documented "no real_api tests" notice) and ignores `.testmondata` selection.
+- [x] Removing `.testmondata` and re-running `just test` performs a fresh cold start (recovers gracefully from cache loss).
 
 ### Documentation Acceptance
 
-- [ ] `docs/ai-standards/testing.md` documents that `just test` is change-aware via testmon and that `just test all` / `just test real` force full runs.
-- [ ] `README.md` "测试" section (around line 277) updates the `just test` description to reflect the testmon behavior.
-- [ ] `uv run mkdocs build --strict` succeeds with no warnings.
+- [x] `docs/ai-standards/testing.md` documents that `just test` is change-aware via testmon and that `just test all` / `just test real` force full runs.
+- [x] `README.md` "测试" section (around line 277) updates the `just test` description to reflect the testmon behavior.
+- [x] `uv run mkdocs build --strict` succeeds with no warnings.
 
 ### Validation Acceptance
 
-- [ ] **Real entry-point validation — cold start**: `rm -f .testmondata && just test` exits 0; `test -f .testmondata` succeeds.
-- [ ] **Real entry-point validation — hot run**: After editing `src/backend/core/shared/models/agent_runner.py` (adding a no-op function to change the AST), `just test` exits 0 and runs a strict subset of tests.
-- [ ] **Real entry-point validation — `just test all` force-full**: After editing a source file, `just test all` exits 0 and runs all 62 test files.
-- [ ] **Real entry-point validation — `just test real` force-full**: `just test real` exits 0 or 5.
-- [ ] **Real entry-point validation — gitignore**: `git check-ignore .testmondata` exits 0.
-- [ ] **Real entry-point validation — docs build**: `uv run mkdocs build --strict` exits 0.
+- [x] **Real entry-point validation — cold start**: `rm -f .testmondata && just test` exits 0; `test -f .testmondata` succeeds.
+- [x] **Real entry-point validation — hot run**: After editing `src/backend/core/shared/models/agent_runner.py` (adding a no-op function to change the AST), `just test` exits 0 and runs a strict subset of tests.
+- [x] **Real entry-point validation — `just test all` force-full**: After editing a source file, `just test all` exits 0 and runs all 62 test files.
+- [x] **Real entry-point validation — `just test real` force-full**: `just test real` exits 0 or 5.
+- [x] **Real entry-point validation — gitignore**: `git check-ignore .testmondata` exits 0.
+- [x] **Real entry-point validation — docs build**: `uv run mkdocs build --strict` exits 0.
 
 ## 8. Functional Requirements
 

@@ -14,9 +14,12 @@
 
 优先使用仓库现有命令：
 
-- `just test`
-- `just test all`
-- `uv run pytest ...`
+- `just test` — 基于 `pytest-testmon` 的 change-aware 测试选择，仅运行与本次变更相关的测试
+- `just test all` — 强制运行 `tests/` 下全部测试，忽略 `.testmondata`
+- `just test real` — 强制运行标记为 `real_api` 的测试，忽略 `.testmondata`
+- `uv run pytest ...` — 直接调用 pytest，同样会默认启用 `--testmon`
+
+第一次运行 `just test` 时会完整执行全部测试并生成 `.testmondata` 缓存；后续修改文件后再次运行将自动选择受影响的最小测试子集。若 `.testmondata` 异常或需要重建，可直接删除该文件（已加入 `.gitignore`）。
 
 验证架构和规范时，也常用：
 

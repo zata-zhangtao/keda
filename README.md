@@ -278,13 +278,17 @@ cp tasks/pending/feature-x.md ../tasks/feature-x/tasks/pending/feature-x.md
 
 ```bash
 # 运行本地测试（无需 API Key）
-uv run pytest tests/ -v
+# 第一次会完整执行并生成 .testmondata；后续仅运行与当前变更相关的测试
+just test
 
-# 运行全部测试
-uv run pytest tests/ -v
+# 强制运行全部测试，忽略 .testmondata
+just test all
 
-# 运行需要真实 API 的测试
-uv run pytest tests/ -v -k "expensive or not expensive"
+# 强制运行需要真实 API 的测试，忽略 .testmondata
+just test real
+
+# 直接调用 pytest（同样默认启用 --testmon）
+uv run pytest tests/ -v
 
 # 运行 Playwright E2E 测试（需先安装）
 cd tests/playwright-e2e && npm install && npx playwright install chromium
