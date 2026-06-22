@@ -73,26 +73,42 @@ class CompletionShellChoice(str, Enum):
     fish = "fish"
 
 
+_HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
+
 app = typer.Typer(
     name="iar",
     help="Issue Agent Runner CLI.",
     no_args_is_help=True,
     rich_markup_mode="rich",
+    context_settings=_HELP_CONTEXT,
 )
-labels_app = typer.Typer(help="Manage GitHub labels.", no_args_is_help=True)
-issue_app = typer.Typer(help="Create and manage GitHub Issues.", no_args_is_help=True)
-completion_app = typer.Typer(help="Manage shell completion.", no_args_is_help=True)
+labels_app = typer.Typer(
+    help="Manage GitHub labels.", no_args_is_help=True, context_settings=_HELP_CONTEXT
+)
+issue_app = typer.Typer(
+    help="Create and manage GitHub Issues.",
+    no_args_is_help=True,
+    context_settings=_HELP_CONTEXT,
+)
+completion_app = typer.Typer(
+    help="Manage shell completion.",
+    no_args_is_help=True,
+    context_settings=_HELP_CONTEXT,
+)
 worktree_app = typer.Typer(
     help="Manage iAR-owned Git worktrees for the current repository.",
     no_args_is_help=True,
+    context_settings=_HELP_CONTEXT,
 )
 registry_app = typer.Typer(
     help="Manage the repository registry in config.toml.",
     no_args_is_help=True,
+    context_settings=_HELP_CONTEXT,
 )
 workflow_app = typer.Typer(
     help="Install and manage bundled workflow templates.",
     no_args_is_help=True,
+    context_settings=_HELP_CONTEXT,
 )
 app.add_typer(labels_app, name="labels")
 app.add_typer(issue_app, name="issue")

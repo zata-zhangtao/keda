@@ -354,6 +354,45 @@ def test_main_no_args_shows_help_without_traceback(capsys) -> None:
     assert "NoArgsIsHelpError" not in combined_output
 
 
+def test_main_top_level_help_alias_h(capsys) -> None:
+    """Top-level -h should behave like --help."""
+    from backend.api.cli import main
+
+    exit_code = main(["-h"])
+    captured = capsys.readouterr()
+    combined_output = _strip_ansi(f"{captured.out}\n{captured.err}")
+
+    assert exit_code == 0
+    assert "Usage: iar" in combined_output
+    assert "Commands" in combined_output
+
+
+def test_main_worktree_help_alias_h(capsys) -> None:
+    """Subcommand group worktree -h should behave like --help."""
+    from backend.api.cli import main
+
+    exit_code = main(["worktree", "-h"])
+    captured = capsys.readouterr()
+    combined_output = _strip_ansi(f"{captured.out}\n{captured.err}")
+
+    assert exit_code == 0
+    assert "Usage: iar worktree" in combined_output
+    assert "create" in combined_output
+
+
+def test_main_worktree_create_help_alias_h(capsys) -> None:
+    """Leaf subcommand worktree create -h should behave like --help."""
+    from backend.api.cli import main
+
+    exit_code = main(["worktree", "create", "-h"])
+    captured = capsys.readouterr()
+    combined_output = _strip_ansi(f"{captured.out}\n{captured.err}")
+
+    assert exit_code == 0
+    assert "Usage: iar worktree create" in combined_output
+    assert "--branch" in combined_output
+
+
 def test_main_completion_show_zsh_outputs_script(capsys) -> None:
     """completion show should print a zsh script for iAR."""
     from backend.api.cli import main
