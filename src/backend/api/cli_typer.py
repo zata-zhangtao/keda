@@ -9,7 +9,6 @@ entry point behave the same way.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
 from enum import Enum
 from importlib import metadata as importlib_metadata
@@ -17,9 +16,10 @@ from typing import Annotated, Any
 
 import typer
 from typer import _click as typer_click
-from typer.completion import get_completion_script
-
 from backend.api.cli import _run_parsed_command, error_console
+from backend.api.cli_completion import (
+    register_completion_commands,
+)
 
 
 def _resolve_keda_version() -> str:
@@ -65,14 +65,6 @@ class IssueTypeChoice(str, Enum):
     bug = "bug"
 
 
-class CompletionShellChoice(str, Enum):
-    """Shells supported by the explicit completion installer."""
-
-    bash = "bash"
-    zsh = "zsh"
-    fish = "fish"
-
-
 _HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
 
 app = typer.Typer(
@@ -113,6 +105,7 @@ workflow_app = typer.Typer(
 app.add_typer(labels_app, name="labels")
 app.add_typer(issue_app, name="issue")
 app.add_typer(completion_app, name="completion")
+register_completion_commands(completion_app)
 app.add_typer(worktree_app, name="worktree")
 app.add_typer(registry_app, name="registry")
 app.add_typer(workflow_app, name="workflow")
@@ -148,10 +141,6 @@ MaxIssuesOption = Annotated[
 DaemonIntervalOption = Annotated[
     int | None,
     typer.Option("--interval", help="Polling interval."),
-]
-CompletionShellOption = Annotated[
-    CompletionShellChoice,
-    typer.Option("--shell", "-s", help="Shell to generate completion for."),
 ]
 
 
@@ -200,60 +189,6 @@ def _run_typer_repository_command(
     return _run_typer_command(command, **selector_options, **kwargs)
 
 
-def _completion_script(shell: CompletionShellChoice) -> str:
-    """Return the shell completion script for the iAR executable."""
-    return get_completion_script(
-        prog_name="iar",
-        complete_var="_IAR_COMPLETE",
-        shell=_enum_value(shell),
-    )
-
-
-def _append_unique_line(file_path: Path, line: str) -> bool:
-    """Append a shell profile line when it is not already present."""
-    existing_text = ""
-    if file_path.exists():
-        existing_text = file_path.read_text(encoding="utf-8")
-        if line in existing_text.splitlines():
-            return False
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    with file_path.open("a", encoding="utf-8") as profile_file:
-        if existing_text and not existing_text.endswith("\n"):
-            profile_file.write("\n")
-        profile_file.write(f"{line}\n")
-    return True
-
-
-def _install_completion_script(
-    shell: CompletionShellChoice,
-) -> tuple[Path, Path | None]:
-    """Install iAR shell completion and return the script/profile paths."""
-    script_content = _completion_script(shell)
-    home_path = Path.home()
-    if shell is CompletionShellChoice.zsh:
-        completion_dir = home_path / ".zsh" / "completions"
-        completion_path = completion_dir / "_iar"
-        completion_path.parent.mkdir(parents=True, exist_ok=True)
-        completion_path.write_text(f"{script_content}\n", encoding="utf-8")
-        zshrc_path = home_path / ".zshrc"
-        _append_unique_line(zshrc_path, "autoload -Uz compinit && compinit")
-        source_line = f'[ -f "{completion_path}" ] && source "{completion_path}"'
-        _append_unique_line(zshrc_path, source_line)
-        return completion_path, zshrc_path
-    if shell is CompletionShellChoice.bash:
-        completion_path = home_path / ".config" / "iar" / "iar_completion.bash"
-        completion_path.parent.mkdir(parents=True, exist_ok=True)
-        completion_path.write_text(f"{script_content}\n", encoding="utf-8")
-        bashrc_path = home_path / ".bashrc"
-        source_line = f'[ -f "{completion_path}" ] && source "{completion_path}"'
-        _append_unique_line(bashrc_path, source_line)
-        return completion_path, bashrc_path
-    completion_path = home_path / ".config" / "fish" / "completions" / "iar.fish"
-    completion_path.parent.mkdir(parents=True, exist_ok=True)
-    completion_path.write_text(f"{script_content}\n", encoding="utf-8")
-    return completion_path, None
-
-
 @app.callback()
 def _app_callback(
     ctx: typer.Context,
@@ -263,29 +198,6 @@ def _app_callback(
 ) -> None:
     """Store top-level options so legacy and modern forms both work."""
     ctx.obj = {"repo": repo, "repo_id": repo_id, "config": config}
-
-
-@completion_app.command("show")
-def completion_show_command(
-    shell: CompletionShellOption = CompletionShellChoice.zsh,
-) -> int:
-    """Print a shell completion script."""
-    typer.echo(_completion_script(shell))
-    return 0
-
-
-@completion_app.command("install")
-def completion_install_command(
-    shell: CompletionShellOption = CompletionShellChoice.zsh,
-) -> int:
-    """Install shell completion for the current user."""
-    completion_path, profile_path = _install_completion_script(shell)
-    typer.echo(f"Installed {shell.value} completion: {completion_path}")
-    if profile_path is not None:
-        typer.echo(f"Reload your shell with: source {profile_path}")
-    else:
-        typer.echo("Open a new terminal session to activate completion.")
-    return 0
 
 
 @app.command("init")
