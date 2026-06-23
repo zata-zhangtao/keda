@@ -1,5 +1,7 @@
 # 修改 `iar daemon` 默认行为：未指定 `--all` 时仅处理当前已初始化仓库
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/111
+
 ## 1. Introduction & Goals
 
 ### Problem Statement
