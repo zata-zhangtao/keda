@@ -61,3 +61,6 @@ Thumbs.db
 # Realistic validation evidence and runner state (local only)
 .iar
 .agent-runner/
+
+# pytest-testmon SQLite cache
+.testmondata
