@@ -11,7 +11,10 @@ import pytest
 
 from backend.api.cli import _expand_prd_paths, main
 from backend.api.cli_parser import build_parser
-from backend.core.shared.interfaces.runner_console import RunnerProcessKind
+from backend.core.shared.interfaces.runner_console import (
+    RunnerProcessKind,
+    RunnerProcessRecord,
+)
 from backend.engines.agent_runner.repository_local import (
     IARRepositoryNotInitializedError,
 )
@@ -359,18 +362,41 @@ def test_cli_parser_registry_remove() -> None:
 
 
 def test_cli_parser_daemon() -> None:
-    """daemon should accept interval and max-issues."""
+    """daemon should accept interval and max-issues and default to run subcommand."""
     parser = build_parser()
     parsed = parser.parse_args(["daemon", "--interval", "300", "--max-issues", "2"])
     assert parsed.command == "daemon"
+    assert parsed.daemon_command == "run"
     assert parsed.interval == 300
     assert parsed.max_issues == 2
+
+
+def test_cli_parser_daemon_run_explicit() -> None:
+    """daemon run should accept the same options as the legacy daemon form."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["daemon", "run", "--interval", "300", "--max-issues", "2"]
+    )
+    assert parsed.command == "daemon"
+    assert parsed.daemon_command == "run"
+    assert parsed.interval == 300
+    assert parsed.max_issues == 2
+
+
+def test_cli_parser_daemon_status() -> None:
+    """daemon status should accept repository selectors."""
+    parser = build_parser()
+    parsed = parser.parse_args(["daemon", "status", "--repo-id", "keda"])
+    assert parsed.command == "daemon"
+    assert parsed.daemon_command == "status"
+    assert parsed.repo_id == "keda"
 
 
 def test_cli_parser_daemon_default_interval_is_none() -> None:
     """daemon --interval should default to None so config supplies the value."""
     parser = build_parser()
     parsed = parser.parse_args(["daemon"])
+    assert parsed.daemon_command == "run"
     assert parsed.interval is None
 
 
@@ -448,6 +474,111 @@ def test_main_daemon_interval_override(monkeypatch) -> None:
 
     assert exit_code == 0
     assert mock_daemon.call_args.kwargs["interval"] == 300
+
+
+def test_main_daemon_status_shows_managed_and_unmanaged(capsys, monkeypatch) -> None:
+    """daemon status should list running managed and unmanaged processes."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    managed_record = RunnerProcessRecord(
+        process_id="abc123",
+        repo_id="repo",
+        kind=RunnerProcessKind.DAEMON,
+        pid=1234,
+        status="running",
+        exit_code=None,
+        log_path="/tmp/log",
+        command=("iar", "daemon", "--repo-id", "repo"),
+        started_at="2026-06-23T10:00:00Z",
+        stopped_at=None,
+    )
+    unmanaged_record = RunnerProcessRecord(
+        process_id="unmanaged-5678",
+        repo_id="repo",
+        kind=RunnerProcessKind.REVIEW_DAEMON,
+        pid=5678,
+        status="running",
+        exit_code=None,
+        log_path="",
+        command=("/usr/bin/iar", "review-daemon", "--repo-id", "repo"),
+        started_at="2026-06-23T11:00:00Z",
+        stopped_at=None,
+    )
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = [managed_record]
+    mock_supervisor.list_unmanaged_processes.return_value = [unmanaged_record]
+
+    mock_editor = MagicMock()
+    mock_editor.list_repositories.return_value = []
+
+    monkeypatch.setenv("COLUMNS", "200")
+
+    with patch(
+        "backend.api.cli_registry.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch(
+        "backend.api.cli_registry.create_process_supervisor",
+        return_value=mock_supervisor,
+    ), patch(
+        "backend.api.cli_registry.create_registry_editor",
+        return_value=mock_editor,
+    ):
+        exit_code = main(["daemon", "status", "--repo-id", "repo"])
+
+    captured = capsys.readouterr()
+    output = _strip_ansi(captured.out)
+    assert exit_code == 0
+    assert "abc123" in output
+    assert "managed running" in output
+    assert "unmanaged-5678" in output
+    assert "unmanaged running" in output
+    assert "1234" in output
+    assert "5678" in output
+    assert "/usr/bin/iar" in output
+
+
+def test_main_daemon_status_empty(capsys, monkeypatch) -> None:
+    """daemon status should report when no processes are running."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = []
+    mock_supervisor.list_unmanaged_processes.return_value = []
+
+    mock_editor = MagicMock()
+    mock_editor.list_repositories.return_value = []
+
+    with patch(
+        "backend.api.cli_registry.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch(
+        "backend.api.cli_registry.create_process_supervisor",
+        return_value=mock_supervisor,
+    ), patch(
+        "backend.api.cli_registry.create_registry_editor",
+        return_value=mock_editor,
+    ):
+        exit_code = main(["daemon", "status", "--repo-id", "repo"])
+
+    captured = capsys.readouterr()
+    output = _strip_ansi(captured.out)
+    assert exit_code == 0
+    assert "No running daemon processes" in output
 
 
 def test_cli_parser_repo_id() -> None:

@@ -724,6 +724,44 @@ iar registry list
 
 > **不要混用**：同一时间、同一仓库，建议要么只使用 `iar registry start` 管理 daemon，要么只手动运行 `iar daemon`。混用可能导致两个进程同时 claim 同一仓库的 Issues，且 `registry stop` 不会清理手动启动的进程。
 
+#### 查看 daemon 进程明细（`iar daemon status`）
+
+`iar registry list` 只显示每个仓库 daemon / review-daemon 的汇总状态。如果你需要查看具体进程的 PID、启动时间、可执行路径、命令行，以及该进程是托管还是未托管，使用：
+
+```bash
+# 在当前仓库目录下查看当前仓库
+iar daemon status
+
+# 查看指定仓库
+iar daemon status --repo-id keda-main
+
+# 查看所有 enabled 注册仓库
+iar daemon status --all
+```
+
+输出示例：
+
+```
+                                 Daemon status
+┏━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ repo_id ┃ kind          ┃ status        ┃  pid ┃ process_id ┃ started_at ┃ executable ┃ command              ┃
+┡━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ keda-m… │ daemon        │ managed run…  │ 1234 │ abc123def  │ 2026-06-2… │ iar        │ iar daemon --repo-i… │
+│ keda-m… │ review_daemon │ unmanaged r…  │ 5678 │ unmanaged… │ 2026-06-2… │ /usr/bin…  │ /usr/bin/iar review… │
+└─────────┴───────────────┴───────────────┴──────┴────────────┴────────────┴────────────┴──────────────────────┘
+```
+
+- `managed running`：通过 `iar registry start` / `iar takeover` / console 启动的托管进程。
+- `unmanaged running`：直接在命令行执行 `iar daemon` / `iar review-daemon` 启动的进程。
+
+`iar daemon` 本身继续作为启动 daemon 的快捷命令，等效于 `iar daemon run`。例如：
+
+```bash
+iar daemon --repo-id keda-main --interval 300
+# 等效于
+iar daemon run --repo-id keda-main --interval 300
+```
+
 #### 启动与停止托管 daemon（`iar registry start` / `iar registry stop`）
 
 对于已经在 registry 中注册且已 init 的本地仓库（例如你手动 `iar init` 过的 `keda-main`），可以直接用 `start` / `stop` 管理 daemon 生命周期，无需 `reinit --start-daemons`（后者会重置 `.iar.toml`）：

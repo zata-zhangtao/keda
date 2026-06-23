@@ -191,14 +191,25 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(run_parser)
     add_all_repositories_option(run_parser)
 
-    daemon_parser = subparsers.add_parser("daemon")
-    daemon_parser.add_argument("--interval", type=int, default=None)
-    daemon_parser.add_argument(
+    daemon_run_options = argparse.ArgumentParser(add_help=False)
+    daemon_run_options.add_argument("--interval", type=int, default=None)
+    daemon_run_options.add_argument(
         "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
     )
-    daemon_parser.add_argument("--max-issues", type=int)
-    add_common_options(daemon_parser)
-    add_all_repositories_option(daemon_parser)
+    daemon_run_options.add_argument("--max-issues", type=int)
+    add_common_options(daemon_run_options)
+    add_all_repositories_option(daemon_run_options)
+
+    daemon_parser = subparsers.add_parser("daemon", parents=[daemon_run_options])
+    daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command")
+
+    daemon_subparsers.add_parser("run", parents=[daemon_run_options])
+
+    daemon_status_parser = daemon_subparsers.add_parser("status")
+    add_common_options(daemon_status_parser)
+    add_all_repositories_option(daemon_status_parser)
+
+    daemon_parser.set_defaults(daemon_command="run")
 
     review_parser = subparsers.add_parser("review")
     review_parser.add_argument("--dry-run", action="store_true")

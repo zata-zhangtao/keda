@@ -105,6 +105,11 @@ registry_app = typer.Typer(
     no_args_is_help=True,
     context_settings=_HELP_CONTEXT,
 )
+daemon_app = typer.Typer(
+    help="Run the agent runner continuously or inspect daemon status.",
+    no_args_is_help=False,
+    context_settings=_HELP_CONTEXT,
+)
 workflow_app = typer.Typer(
     help="Install and manage bundled workflow templates.",
     no_args_is_help=True,
@@ -115,6 +120,7 @@ app.add_typer(issue_app, name="issue")
 app.add_typer(completion_app, name="completion")
 app.add_typer(worktree_app, name="worktree")
 app.add_typer(registry_app, name="registry")
+app.add_typer(daemon_app, name="daemon")
 app.add_typer(workflow_app, name="workflow")
 
 RepoOption = Annotated[
@@ -742,8 +748,36 @@ def _run_daemon_command(
     )
 
 
-@app.command("daemon")
-def daemon_command(
+@daemon_app.callback(invoke_without_command=True)
+def daemon_callback(
+    ctx: typer.Context,
+    interval: DaemonIntervalOption = None,
+    agent: RunAgentOption = RunAgentChoice.auto,
+    max_issues: MaxIssuesOption = None,
+    repo: RepoOption = None,
+    repo_id: RepoIdOption = None,
+    config: ConfigOption = None,
+    all_repositories: AllRepositoriesOption = False,
+) -> None:
+    """Backward-compatible default: `iar daemon` runs the daemon."""
+    if ctx.invoked_subcommand is not None:
+        return
+    exit_code = _run_daemon_command(
+        ctx,
+        command="daemon",
+        interval=interval,
+        agent=agent,
+        max_issues=max_issues,
+        repo=repo,
+        repo_id=repo_id,
+        config=config,
+        all_repositories=all_repositories,
+    )
+    raise typer.Exit(code=exit_code)
+
+
+@daemon_app.command("run")
+def daemon_run_command(
     ctx: typer.Context,
     interval: DaemonIntervalOption = None,
     agent: RunAgentOption = RunAgentChoice.auto,
@@ -764,6 +798,26 @@ def daemon_command(
         repo_id=repo_id,
         config=config,
         all_repositories=all_repositories,
+    )
+
+
+@daemon_app.command("status")
+def daemon_status_command(
+    ctx: typer.Context,
+    repo: RepoOption = None,
+    repo_id: RepoIdOption = None,
+    config: ConfigOption = None,
+    all_repositories: AllRepositoriesOption = False,
+) -> int:
+    """Show running daemon and review-daemon processes."""
+    selector_options = _typer_selector_options(
+        ctx, repo=repo, repo_id=repo_id, config=config
+    )
+    return _run_typer_command(
+        "daemon",
+        daemon_command="status",
+        all_repositories=all_repositories,
+        **selector_options,
     )
 
 

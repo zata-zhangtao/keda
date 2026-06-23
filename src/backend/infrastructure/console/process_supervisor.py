@@ -109,6 +109,10 @@ _UNMANAGED_KIND_PATTERNS = (
     ("daemon", "daemon"),
 )
 
+#: 这些 runner 子命令下还带有非 runner 的嵌套子命令（如 ``daemon status``），
+#: 不应被识别为常驻 runner 进程。
+_NON_RUNNER_NESTED_COMMANDS = frozenset({"status"})
+
 
 def _find_iar_command_index(cmdline: tuple[str, ...]) -> int | None:
     """在命令行中定位 ``iar`` 可执行文件的位置。
@@ -133,11 +137,17 @@ def _parse_unmanaged_kind(cmdline: tuple[str, ...]) -> str | None:
         return None
     candidate_args = cmdline[iar_index + 1 :]
     # 跳过选项参数（如 --repo /path/to/repo），定位子命令。
-    for arg in candidate_args:
+    for index, arg in enumerate(candidate_args):
         if arg.startswith("-"):
             continue
         for pattern, kind in _UNMANAGED_KIND_PATTERNS:
             if arg == pattern:
+                # 检查是否是嵌套的非 runner 子命令（如 ``iar daemon status``）。
+                for next_candidate in candidate_args[index + 1 :]:
+                    if not next_candidate.startswith("-"):
+                        if next_candidate in _NON_RUNNER_NESTED_COMMANDS:
+                            return None
+                        break
                 return kind
         # 第一个非选项非 runner 子命令的参数说明不是目标进程。
         return None
@@ -388,6 +398,7 @@ class PidfileProcessSupervisor:
             current_username = psutil.Process().username()
         except Exception:  # noqa: BLE001 - 用户名读取失败时不阻断扫描。
             current_username = None
+        current_pid = os.getpid()
 
         unmanaged_records: list[RunnerProcessRecord] = []
         for proc in psutil.process_iter(
@@ -401,6 +412,8 @@ class PidfileProcessSupervisor:
                 username = proc_info.get("username")
                 cmdline = proc_info.get("cmdline")
                 if not isinstance(pid, int) or pid <= 0:
+                    continue
+                if pid == current_pid:
                     continue
                 if current_username is not None and username != current_username:
                     continue

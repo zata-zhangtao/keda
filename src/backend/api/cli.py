@@ -26,6 +26,7 @@ from backend.api.cli_prd_utils import (
     _prompt_and_publish_prd_if_needed,
 )
 from backend.api.cli_registry import (
+    _run_daemon_status_command,
     _run_registry_list_command,
     _run_registry_reinit_command,
     _run_registry_remove_command,
@@ -791,6 +792,15 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             )
 
         if parsed.command == "daemon":
+            daemon_command = getattr(parsed, "daemon_command", "run")
+            if daemon_command == "status":
+                return _run_daemon_status_command(
+                    parsed=parsed,
+                    process_runner=process_runner,
+                    runner_settings=runner_settings,
+                    repo_id=repo_id,
+                    repo_override=repo_override,
+                )
             contexts = _resolve_cli_repository_targets(
                 parsed=parsed,
                 runner_settings=runner_settings,

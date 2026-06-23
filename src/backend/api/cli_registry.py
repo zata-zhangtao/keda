@@ -7,10 +7,13 @@ repository registry in ``config.toml``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from backend.api.cli_console import console, error_console
-from backend.core.shared.interfaces.runner_console import RunnerProcessKind
+from backend.core.shared.interfaces.runner_console import (
+    RunnerProcessKind,
+    RunnerProcessRecord,
+)
 from backend.core.use_cases.console_processes import (
     start_runner_process,
     stop_runner_process,
@@ -20,6 +23,7 @@ from backend.engines.agent_runner.factory import (
     create_registry_editor,
     load_fresh_agent_runner_settings,
     resolve_config_toml_path,
+    resolve_repository_targets,
     resolve_repository_targets_with_diagnostics,
 )
 from backend.engines.agent_runner.repository_local import (
@@ -405,4 +409,100 @@ def _restart_daemons(repo_id: str, repo_path: Path, process_runner) -> int:
                 f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}"
             )
             return 1
+    return 0
+
+
+def _resolve_executable_from_command(command: tuple[str, ...]) -> str:
+    """Return the executable script path from a process command line.
+
+    For direct invocations such as ``/path/bin/iar daemon ...`` the first
+    argument is returned. For Python wrapper invocations such as
+    ``/path/python /path/bin/iar daemon ...`` the ``iar`` script path is
+    returned.
+    """
+    if not command:
+        return ""
+    first = command[0]
+    if len(command) >= 2 and ("python" in Path(first).name.lower()):
+        second = command[1]
+        if Path(second).name == "iar" or second.endswith("/iar"):
+            return second
+    return first
+
+
+def _run_daemon_status_command(
+    parsed: argparse.Namespace,
+    process_runner: IProcessRunner,
+    runner_settings: Any,
+    repo_id: str | None,
+    repo_override: str | None,
+) -> int:
+    """Show running daemon and review-daemon processes for selected repos."""
+    from rich.table import Table
+
+    contexts = resolve_repository_targets(
+        runner_settings,
+        repo_id=repo_id,
+        repo_path_override=repo_override,
+        all_repositories=getattr(parsed, "all_repositories", False),
+    )
+    if not contexts:
+        console.print("[yellow]No repositories selected.[/]")
+        return 0
+
+    target_repo_ids = {context.repo_id for context in contexts}
+    registry_entries = list(create_registry_editor().list_repositories())
+    supervisor = create_process_supervisor()
+
+    running_records: list[tuple[RunnerProcessRecord, bool]] = []
+    for record in supervisor.list_processes():
+        if (
+            record.status == "running"
+            and record.repo_id in target_repo_ids
+            and record.kind in (_DAEMON_KIND, _REVIEW_DAEMON_KIND)
+        ):
+            running_records.append((record, True))
+    for record in supervisor.list_unmanaged_processes(registry_entries):
+        if (
+            record.status == "running"
+            and record.repo_id in target_repo_ids
+            and record.kind in (_DAEMON_KIND, _REVIEW_DAEMON_KIND)
+        ):
+            running_records.append((record, False))
+
+    if not running_records:
+        console.print(
+            "[yellow]No running daemon processes for the selected repositories.[/]"
+        )
+        return 0
+
+    table = Table(title="Daemon status")
+    table.add_column("repo_id", style="cyan")
+    table.add_column("kind", style="green")
+    table.add_column("status")
+    table.add_column("pid", justify="right")
+    table.add_column("process_id")
+    table.add_column("started_at")
+    table.add_column("executable", overflow="fold")
+    table.add_column("command", overflow="fold")
+
+    for record, is_managed in running_records:
+        status_text = (
+            "[green]managed running[/]"
+            if is_managed
+            else "[yellow]unmanaged running[/]"
+        )
+        executable = _resolve_executable_from_command(record.command)
+        table.add_row(
+            record.repo_id,
+            record.kind,
+            status_text,
+            str(record.pid),
+            record.process_id,
+            record.started_at,
+            executable,
+            " ".join(record.command),
+        )
+
+    console.print(table)
     return 0
