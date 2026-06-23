@@ -71,10 +71,20 @@ from backend.core.use_cases.worktree_cleanup import (
 )
 from backend.core.use_cases.worktree_env import copy_missing_env_files
 from backend.core.shared.models.agent_deliberation import DeliberationSession
+from backend.core.shared.models.agent_runner import RepositoryRunContext
+from backend.api.cli_loop import (
+    run_loop_cancel_command,
+    run_loop_create_command,
+    run_loop_daemon_command,
+    run_loop_list_command,
+    run_loop_run_now_command,
+)
 from backend.engines.agent_runner.factory import (
     create_content_generator,
     create_event_sink,
     create_github_client,
+    create_loop_clock,
+    create_loop_state_store,
     create_planner_runner,
     create_process_runner,
     create_registry_editor,
@@ -106,6 +116,122 @@ from backend.engines.agent_runner.workflow_install import (
 
 if TYPE_CHECKING:
     from backend.core.shared.interfaces.agent_runner import IGitHubClient
+
+
+def _resolve_loop_target_repository(
+    *,
+    loop_repo_id: str | None,
+    loop_repo_path: str | None,
+    runner_settings,
+) -> "RepositoryRunContext | None":
+    """Resolve the repository that the loop command targets.
+
+    Loops may carry their own ``repo_id`` (resolved from the recipe when
+    not overridden on the CLI). When the user did not pass ``--repo-id``
+    or ``--repo``, we infer the target from the current working directory
+    the same way ``iar daemon`` does, falling back to ``None`` so the
+    per-loop ``repo_id`` is honored.
+    """
+    if loop_repo_path:
+        contexts = resolve_repository_targets(
+            runner_settings,
+            repo_path_override=loop_repo_path,
+            fallback_path=loop_repo_path,
+        )
+        return contexts[0] if contexts else None
+    if loop_repo_id:
+        contexts = resolve_repository_targets(
+            runner_settings,
+            repo_id=loop_repo_id,
+        )
+        return contexts[0] if contexts else None
+    cwd_target = _resolve_default_daemon_target()
+    if cwd_target.repo_id:
+        contexts = resolve_repository_targets(
+            runner_settings,
+            repo_id=cwd_target.repo_id,
+        )
+        return contexts[0] if contexts else None
+    return None
+
+
+def _run_loop_command(parsed: argparse.Namespace, process_runner) -> int:
+    """Dispatch ``iar loop ...`` and ``iar loop-daemon`` commands."""
+    from backend.api.cli_loop import build_schedule_from_args, logger as loop_logger
+
+    runner_settings = get_agent_runner_settings()
+
+    def _state_store_factory():
+        return create_loop_state_store()
+
+    def _github_client_factory(repo_path: Path) -> "IGitHubClient":
+        return create_github_client(repo_path, process_runner)
+
+    def _content_generator_factory(repo_path: Path):
+        return create_content_generator(process_runner)
+
+    def _repo_resolver(task):
+        """Resolve the on-disk path of the repository a loop targets."""
+        explicit_repo_id = getattr(parsed, "loop_repo_id", None)
+        explicit_repo = getattr(parsed, "loop_repo", None)
+        context = _resolve_loop_target_repository(
+            loop_repo_id=explicit_repo_id or task.repo_id,
+            loop_repo_path=explicit_repo,
+            runner_settings=runner_settings,
+        )
+        if context is None:
+            raise ValueError(
+                f"Loop '{task.id}' targets repo_id {task.repo_id!r} which is "
+                "not registered. Run `iar registry list` or pass "
+                "`--repo-id` / `--repo` to target a specific repository."
+            )
+        return context.repo_path
+
+    command = parsed.command
+
+    if command == "loop create":
+        return run_loop_create_command(parsed, state_store_factory=_state_store_factory)
+
+    if command == "loop list":
+        return run_loop_list_command(state_store_factory=_state_store_factory)
+
+    if command == "loop cancel":
+        return run_loop_cancel_command(parsed, state_store_factory=_state_store_factory)
+
+    # The remaining commands need clock + repo resolution. Validate the
+    # --cron/--every combination up front so the user gets a friendly
+    # error before we touch the loop state.
+    if command == "loop run":
+        try:
+            build_schedule_from_args(parsed)
+        except ValueError as exc:
+            loop_logger.error("%s", exc)
+            return 1
+        return run_loop_run_now_command(
+            parsed,
+            state_store_factory=_state_store_factory,
+            github_client_factory=_github_client_factory,
+            process_runner=process_runner,
+            clock=create_loop_clock(),
+            repo_resolver=_repo_resolver,
+            content_generator_factory=_content_generator_factory,
+            labels_config=None,
+        )
+
+    if command == "loop-daemon":
+        return run_loop_daemon_command(
+            parsed,
+            state_store_factory=_state_store_factory,
+            github_client_factory=_github_client_factory,
+            process_runner=process_runner,
+            clock=create_loop_clock(),
+            repo_resolver=_repo_resolver,
+            content_generator_factory=_content_generator_factory,
+            labels_config=None,
+        )
+
+    loop_logger.error("Unsupported loop command: %s", command)
+    return 1
 
 
 def _run_parsed_command(parsed: argparse.Namespace) -> int:
@@ -213,6 +339,15 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
 
     if parsed.command == "takeover":
         return _run_takeover_command(parsed, process_runner)
+
+    if parsed.command in (
+        "loop create",
+        "loop list",
+        "loop cancel",
+        "loop run",
+        "loop-daemon",
+    ):
+        return _run_loop_command(parsed, process_runner)
 
     if parsed.command == "registry scan":
         try:
@@ -935,6 +1070,127 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             return run_repl_session(inputs, deps)
 
         if parsed.command == "deliberate":
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
+                repo_id=repo_id,
+                repo_override=repo_override,
+            )
+            if len(contexts) != 1:
+                logger.error(
+                    "deliberate requires exactly one target repository. "
+                    "Use --repo or --repo-id to specify."
+                )
+                return 1
+            context = contexts[0]
+            require_iar_repository_initialized(context.repo_path, process_runner)
+            deliberation_settings = context.config.deliberation
+            output_dir = parsed.output or deliberation_settings.default_output_dir
+            rounds = (
+                parsed.rounds
+                if parsed.rounds is not None
+                else deliberation_settings.default_rounds
+            )
+            synthesizer = (
+                parsed.synthesizer or deliberation_settings.default_synthesizer
+            )
+            agents = tuple(a.strip() for a in parsed.agents.split(",") if a.strip())
+            session_id = parsed.session_id or create_default_session_id()
+            output_path = Path(output_dir) / session_id
+            request = DeliberationRequest(
+                prompt=parsed.prompt,
+                agents=agents,
+                rounds=rounds,
+                synthesizer=synthesizer,
+                output_dir=str(output_path),
+                session_id=session_id,
+            )
+            deliberation_config = context.config.deliberation
+            transcript_runner = create_transcript_runner(process_runner)
+            output_path.mkdir(parents=True, exist_ok=True)
+            output_view = create_output_view()
+            event_sink = create_event_sink(output_path, output_view)
+            resolver = AgentFailureResolver()
+            result = run_agent_deliberation(
+                request=request,
+                config=deliberation_config,
+                transcript_runner=transcript_runner,
+                event_sink=event_sink,
+                target_repo_path=context.repo_path,
+                output_view=output_view,
+                resolver=resolver.resolve,
+            )
+            selected_profile_ids = tuple(
+                dict.fromkeys(
+                    profile_id
+                    for outputs in result.agent_outputs.values()
+                    for profile_id in outputs
+                )
+            )
+            profiles_by_id = {
+                profile.profile_id: profile for profile in deliberation_config.profiles
+            }
+            session_profiles = tuple(
+                profiles_by_id[profile_id]
+                for profile_id in selected_profile_ids
+                if profile_id in profiles_by_id
+            )
+            session = DeliberationSession(
+                session_id=result.session_id,
+                prompt=result.prompt,
+                profiles=session_profiles,
+                rounds=request.rounds,
+                synthesizer=request.synthesizer,
+                output_dir=output_path,
+                started_at=result.started_at,
+                finished_at=result.finished_at,
+            )
+            write_deliberation_outputs(result, session, output_path)
+            console.print(f"\n[green]Deliberation complete:[/] {output_path}")
+            if result.failed_agents:
+                for failure in result.failed_agents:
+                    logger.warning(
+                        "Deliberation agent failed: profile=%s attempted=%s "
+                        "fallback=%s reason=%s",
+                        failure.profile_id,
+                        failure.attempted_agent,
+                        failure.fallback_agent,
+                        failure.reason,
+                    )
+                    console.print(
+                        f"[yellow]Agent '{failure.profile_id}' failed "
+                        f"(attempted={failure.attempted_agent}, "
+                        f"fallback={failure.fallback_agent or 'none'}, "
+                        f"reason={failure.reason}).[/]"
+                    )
+            strict_mode = (
+                parsed.strict or not deliberation_config.continue_on_agent_error
+            )
+            all_participants_failed = len(selected_profile_ids) > 0 and all(
+                profile_id in {f.profile_id for f in result.failed_agents}
+                for profile_id in selected_profile_ids
+            )
+            synthesizer_failed = any(
+                failure.profile_id == "synthesizer" for failure in result.failed_agents
+            )
+            if strict_mode and result.failed_agents:
+                return 1
+            if all_participants_failed:
+                return 1
+            if synthesizer_failed and not any(
+                failure.profile_id != "synthesizer" for failure in result.failed_agents
+            ):
+                return 1
+            return 0
+
+        if parsed.command in (
+            "loop create",
+            "loop list",
+            "loop cancel",
+            "loop run",
+            "loop-daemon",
+        ):
+            return _run_loop_command(parsed, process_runner)
             contexts = _resolve_cli_repository_targets(
                 parsed=parsed,
                 runner_settings=runner_settings,

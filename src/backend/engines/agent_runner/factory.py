@@ -70,8 +70,13 @@ from backend.infrastructure.console.process_supervisor import (
 )
 from backend.infrastructure.github_client import GitHubCliClient
 from backend.infrastructure.persistence.console_store import SqliteConsoleStore
+from backend.engines.agent_runner.persistence.loop_state_json import (
+    JsonLoopStateStore,
+    resolve_loop_state_path,
+)
 from backend.infrastructure.logging.logger import logger
 from backend.infrastructure.process_runner import SubprocessRunner
+from backend.engines.agent_runner.scheduler.loop_clock import SystemClock
 from backend.engines.agent_runner.deliberation_outputs import (
     write_deliberation_outputs,
 )
@@ -82,6 +87,8 @@ __all__ = [
     "create_content_generator",
     "create_event_sink",
     "create_github_client",
+    "create_loop_clock",
+    "create_loop_state_store",
     "create_process_runner",
     "create_transcript_runner",
     "create_planner_runner",
@@ -1215,3 +1222,21 @@ def create_repl_command_executor(
     return ReplCommandExecutor(
         process_runner=process_runner or SubprocessRunner(), config=config
     )
+
+
+def create_loop_state_store(state_path: Path | None = None) -> JsonLoopStateStore:
+    """Create a JSON-backed loop state store.
+
+    Args:
+        state_path: Optional override for the on-disk JSON path. Defaults
+            to ``~/.iar/loop-state.json``.
+
+    Returns:
+        A :class:`JsonLoopStateStore` instance.
+    """
+    return JsonLoopStateStore(state_path or resolve_loop_state_path())
+
+
+def create_loop_clock() -> SystemClock:
+    """Create the production wall-clock implementation for the loop daemon."""
+    return SystemClock()
