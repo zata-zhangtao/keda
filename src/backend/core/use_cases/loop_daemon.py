@@ -128,16 +128,24 @@ def run_loop_daemon(
         raise ValueError("Daemon interval must be positive.")
     passes_completed = 0
     while True:
-        outcomes = _run_daemon_tick(
-            state_store=state_store,
-            github_client_factory=github_client_factory,
-            process_runner=process_runner,
-            clock=clock,
-            content_generator_factory=content_generator_factory,
-            labels_config=labels_config,
-            dry_run=dry_run,
-            repo_resolver=repo_resolver,
-        )
+        try:
+            outcomes = _run_daemon_tick(
+                state_store=state_store,
+                github_client_factory=github_client_factory,
+                process_runner=process_runner,
+                clock=clock,
+                content_generator_factory=content_generator_factory,
+                labels_config=labels_config,
+                dry_run=dry_run,
+                repo_resolver=repo_resolver,
+            )
+        except Exception as exc:  # noqa: BLE001 - daemon must survive.
+            _logger.error(
+                "Loop daemon pass raised; continuing after backoff: %s",
+                exc,
+                exc_info=True,
+            )
+            outcomes = []
         if outcomes:
             _logger.info(
                 "Loop daemon pass: %s", ", ".join(f"{i}={s}" for i, s in outcomes)

@@ -359,10 +359,16 @@ def _effective_extra_labels(
     task: LoopTask,
     recipe,
 ) -> Sequence[str]:
-    """Return the deduped label set to apply on top of the create_issue defaults."""
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for label in (*recipe.all_labels(), *task.labels):
+    """Return the deduped label set to apply on top of the create_issue defaults.
+
+    ``recipe.all_labels()`` is already deduplicated and ordered, so this
+    helper only has to merge the loop-task-level ``labels`` (which the
+    CLI stores verbatim) into the recipe's set without re-deduping the
+    recipe half.
+    """
+    seen: set[str] = set(recipe.all_labels())
+    ordered: list[str] = list(seen)
+    for label in task.labels:
         if label and label not in seen:
             seen.add(label)
             ordered.append(label)
