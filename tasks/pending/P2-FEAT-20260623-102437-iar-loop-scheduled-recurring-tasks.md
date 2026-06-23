@@ -1,6 +1,7 @@
 # PRD: IAR Loop — 定时循环任务
 
-- GitHub Issue: (to be created)
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/110
+
 - PRD path: `tasks/pending/P2-FEAT-20260623-102437-iar-loop-scheduled-recurring-tasks.md`
 
 ## 1. Introduction & Goals
