@@ -76,12 +76,12 @@ else
             # swallows non-zero exits so a truncated stream doesn't
             # surface as a recipe failure.
             claude --dangerously-skip-permissions --print --verbose --output-format stream-json --include-partial-messages < <(printf '%s' "$prompt_text") 2>&1 | \
-                jq --unbuffered -r '
+                jq -n --unbuffered -r '
                     # Stateful: track per-block type and input byte count across the stream.
                     # content_block_start ships an empty `input: {}`; the real parameters
                     # arrive via `input_json_delta` fragments, then content_block_stop closes
                     # the line — so we open on start, stream on deltas, close on stop.
-                    foreach (inputs) as $evt (
+                    foreach inputs as $evt (
                         {index_types: {}, index_chars: {}};
 
                         if $evt.type == "stream_event" and $evt.event.type == "content_block_start" then
@@ -95,14 +95,18 @@ else
 
                         if $evt.type == "stream_event" and $evt.event.type == "content_block_start" and $evt.event.content_block.type == "tool_use" then
                             "\n🔧 \($evt.event.content_block.name)("
+                        elif $evt.type == "stream_event" and $evt.event.type == "content_block_start" and $evt.event.content_block.type == "thinking" then
+                            "💭 "
                         elif $evt.type == "stream_event" and $evt.event.type == "content_block_delta" and $evt.event.delta.type == "thinking_delta" then
-                            "💭 \($evt.event.delta.thinking)\n"
+                            $evt.event.delta.thinking
                         elif $evt.type == "stream_event" and $evt.event.type == "content_block_delta" and $evt.event.delta.type == "input_json_delta" then
                             if (.index_chars[($evt.event.index | tostring)] // 0) <= 120 then
                                 $evt.event.delta.partial_json
                             else
                                 empty
                             end
+                        elif $evt.type == "stream_event" and $evt.event.type == "content_block_stop" and .index_types[($evt.event.index | tostring)] == "thinking" then
+                            "\n"
                         elif $evt.type == "stream_event" and $evt.event.type == "content_block_stop" and .index_types[($evt.event.index | tostring)] == "tool_use" then
                             if (.index_chars[($evt.event.index | tostring)] // 0) > 120 then
                                 "…)\n"

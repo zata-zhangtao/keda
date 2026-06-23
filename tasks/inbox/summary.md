@@ -1,6 +1,6 @@
 # Idea Inbox — 总结（AI 派生，可重写；事实以 ideas.md 为准）
 
-_最后更新：2026-06-17_
+_最后更新：2026-06-23_
 
 ## 主题聚类
 - **前端 PRD 路线图可视化** — 在前端查看 PRD 的执行情况、完成/未完成状态、依赖关系、顺序与路线图；默认重点看未归档 PRD，同时可通过开关查看全部 PRD（来源：2026-06-14 19:07）
@@ -16,6 +16,7 @@ _最后更新：2026-06-17_
 - **路线图依赖图/流程图视图** — 在路线图页面新增拓扑视图，用节点和连线展示 PRD 依赖关系，支持主链路与并行分支，作为现有列表/时间轴视图的补充（来源：2026-06-15 00:50）
 - **Agent 上下文注入可视化与可控性** — 用户当前看不到 runner agent / supervisor / review 等各类 agent 在执行时实际被注入的上下文（system prompt、PRD 摘要、PR 上下文等），需要在终端/日志/前端给出注入上下文的可审计视图，避免"黑盒执行"（来源：2026-06-15 09:30）
 - **模型额度触底时的自动切换** — Claude Code plan 额度触顶后所有任务失败；希望 iar / agent-runner 在检测到额度错误时能通过 cc-switch（或等价机制）自动切换到备用模型继续执行（来源：2026-06-17 09:44）
+- **IAR Loop 定时循环任务** — 在 iar 上增加 loop 能力，用于定时生成项目任务（如每天早上 8 点更新 GitHub Trending 介绍），每天创建新的 PRD/Issue/PR；CLI 设计参考 Claude Code `/loop` 与 Desktop scheduled task 以降低心智成本（来源：2026-06-23 10:21）
 
 ## 可执行候选
 - ~~前端路线图 + 交互式 PRD 执行编排~~ → **已归档**：`tasks/archive/P1-FEAT-20260614-200054-frontend-prd-roadmap.md`（PR #81，2026-06-14 合并），路线图展示、开始按钮、review 高亮、依赖调度与 iar 封装属于同一条 PRD 生命周期体验
@@ -27,7 +28,8 @@ _最后更新：2026-06-17_
 - CLI 运营输出透传与封装改进 → 建议 PRD：P?-FEAT，理由：影响 `process_runner`、`transcript_runner`、`iar` CLI 以及可能的前端日志拉取，需要先明确是透传原始输出还是结构化展示再成 PRD（来源：2026-06-15 00:48）
 - 路线图依赖图/流程图视图 → 建议并入现有 Roadmap PRD 或作为独立 UI 增强 PRD，理由：是 Roadmap 的第三种视图（与列表/时间轴并列），依赖已有 PRD 数据模型，适合作为 Roadmap PRD 的后续切片（来源：2026-06-15 00:50）
 - Agent 上下文注入可视化 → 建议 PRD：P?-FEAT，理由：用户痛点是"黑盒执行"，现有 unified-ops-console PRD 只覆盖了运行日志/进程/审计，但没有暴露"实际注入到 runner / supervisor / review 的 prompt 与上下文内容"；需要在 `transcript_runner` / `process_runner` 增加上下文快照落盘，并在 ops console 或独立页面给出可审计视图；同时需定义"上下文快照"的脱敏边界（来源：2026-06-15 09:30）
-- cc-switch 模型自动切换 → 建议 PRD：P?-FEAT，理由：解决 code plan 额度触底后整体失败的硬性问题，需要先调研 cc-switch 是否提供 CLI / API 接口（如无接口，需评估"调用 `cc-switch` CLI"或"通过 `config.toml` 配置多个模型 fallback"两种替代路径），再决定落地方案；建议作为独立 PRD 而非塞进 ops console（来源：2026-06-17 09:44）
+- cc-switch 模型自动切换 → 建议 PRD：P?-FEAT，理由：解决 code plan 额度触底后整体失败的硬性问题，需要先调研 cc-switch 是否提供 CLI / API 接口（如无接口，需评估"调用 `cc-switch` CLI"或"通过 `config.toml` 配置多个模型 fallback 链"两种替代路径），再决定落地方案；建议作为独立 PRD 而非塞进 ops console（来源：2026-06-17 09:44）
+- ~~IAR Loop 定时循环任务~~ → **已升级为 PRD**：`tasks/pending/P2-FEAT-20260623-102437-iar-loop-scheduled-recurring-tasks.md`，理由：用户已明确需求并同意按 Claude `/loop` 心智设计持久 loop；默认由 `iar loop-daemon` 驱动，复用现有 Issue/PRD/Runner 闭环（来源：2026-06-23 10:21）
 
 ## 待澄清问题
 - CLI 输出封装的目标：是透传原始 agent CLI 输出，还是提供结构化运营进度？是否需要输出到前端实时展示？（来源：2026-06-15 00:48）
@@ -50,3 +52,4 @@ _最后更新：2026-06-17_
 - ~~Idea Inbox 前端化与跨平台采集 → `tasks/pending/P1-FEAT-20260614-203810-frontend-idea-inbox-cross-platform.md`（来源：2026-06-14 20:15）~~ → 已合并归档，详见上节
 - ~~Realistic Validation 结构化证据可信度增强 → `tasks/pending/P1-FEAT-20260614-203811-structured-validation-evidence.md`（来源：2026-06-14 20:24）~~ → 已合并归档，详见上节
 - ~~PR 审阅预览部署能力（含 Docker+Traefik 部署模板首切片）→ `tasks/pending/P1-FEAT-20260614-224914-pr-preview-deployment.md`（来源：2026-06-14 21:16、2026-06-14 21:17）~~ → 已合并归档，详见上节
+- IAR Loop 定时循环任务 → `tasks/pending/P2-FEAT-20260623-102437-iar-loop-scheduled-recurring-tasks.md`（来源：2026-06-23 10:21） → 已升级为 PRD，待实现

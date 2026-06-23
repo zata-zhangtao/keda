@@ -19,7 +19,7 @@ from backend.engines.agent_runner.factory import (
     create_process_supervisor,
     create_registry_editor,
     load_fresh_agent_runner_settings,
-    resolve_console_spawn_cwd,
+    resolve_config_toml_path,
     resolve_repository_targets_with_diagnostics,
 )
 from backend.engines.agent_runner.repository_local import (
@@ -161,6 +161,8 @@ def _run_registry_list_command(process_runner: IProcessRunner) -> int:
 
     running: dict[str, dict[str, list[str]]] = {}
     for record in supervisor.list_processes():
+        if record.status != "running":
+            continue
         kind_name = record.kind
         if not isinstance(kind_name, str):
             kind_name = kind_name.value
@@ -236,6 +238,7 @@ def _run_registry_start_command(
         kinds.append(RunnerProcessKind.REVIEW_DAEMON)
 
     exit_code = 0
+    spawn_cwd = resolve_config_toml_path().parent
     for repo_id in repo_ids:
         repo_entry = settings.repositories[repo_id]
         repo_path = Path(repo_entry.path).expanduser()
@@ -253,7 +256,7 @@ def _run_registry_start_command(
                     contexts=contexts,
                     supervisor=supervisor,
                     runner_command=runner_command,
-                    spawn_cwd=repo_path,
+                    spawn_cwd=spawn_cwd,
                 )
                 console.print(
                     f"[green]Started {kind.value}[/] for {repo_id} "
@@ -354,7 +357,7 @@ def _restart_daemons(repo_id: str, repo_path: Path, process_runner) -> int:
                     f"[yellow]Failed to stop old {record.kind} {record.process_id}:[/] {exc}"
                 )
 
-    spawn_cwd = resolve_console_spawn_cwd()
+    spawn_cwd = resolve_config_toml_path().parent
     for kind in (RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON):
         try:
             record = start_runner_process(

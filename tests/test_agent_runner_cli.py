@@ -2451,12 +2451,12 @@ def test_main_registry_reinit_missing_repo(
     assert "not found in registry" in _strip_ansi(captured.out + captured.err)
 
 
-def test_main_registry_reinit_start_daemons_uses_project_root_cwd(
+def test_main_registry_reinit_start_daemons_uses_config_directory_cwd(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`iar registry reinit --start-daemons` should spawn daemons from the keda project root so they read the same config.toml as the parent CLI."""
+    """`iar registry reinit --start-daemons` should spawn daemons from the directory containing the effective config.toml so they read the same registry as the parent CLI."""
     monkeypatch.chdir(tmp_path)
     repo_path = _init_bare_git_repository(tmp_path, "fsense")
     _write_iar_toml(repo_path, "zata-zhangtao-fsense")
@@ -2466,9 +2466,6 @@ def test_main_registry_reinit_start_daemons_uses_project_root_cwd(
         f'path = "{repo_path}"\nenabled = true\ndisplay_name = "fsense"\n',
         encoding="utf-8",
     )
-
-    project_root_cwd = tmp_path / "project-root"
-    project_root_cwd.mkdir()
 
     fake_context = MagicMock()
     fake_context.repo_id = "zata-zhangtao-fsense"
@@ -2521,9 +2518,9 @@ def test_main_registry_reinit_start_daemons_uses_project_root_cwd(
             side_effect=_fake_start,
         ) as mock_start,
         patch(
-            "backend.api.cli_registry.resolve_console_spawn_cwd",
-            return_value=project_root_cwd,
-        ) as mock_spawn_cwd,
+            "backend.api.cli_registry.resolve_config_toml_path",
+            return_value=config_path,
+        ) as mock_resolve_config,
     ):
         mock_supervisor = MagicMock()
         mock_supervisor.list_processes.return_value = []
@@ -2548,11 +2545,12 @@ def test_main_registry_reinit_start_daemons_uses_project_root_cwd(
     # The local config initializer was invoked as part of reinit.
     mock_init.assert_called_once()
 
-    # spawn_cwd must come from resolve_console_spawn_cwd(), not the repository path.
-    mock_spawn_cwd.assert_called_once()
+    # spawn_cwd must come from the effective config.toml directory, not the repository path.
+    mock_resolve_config.assert_called_once()
     assert mock_start.call_count == 2
     for call in mock_start.call_args_list:
-        assert call.kwargs["spawn_cwd"] == project_root_cwd
+        assert call.kwargs["spawn_cwd"] == config_path.parent
+        assert call.kwargs["spawn_cwd"] != repo_path
         assert isinstance(call.kwargs["kind"], RunnerProcessKind)
 
 
@@ -2832,7 +2830,8 @@ def test_main_registry_start_single_repo(
     assert kinds == {RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON}
     for call in mock_start.call_args_list:
         assert call.kwargs["repo_id"] == "keda-main"
-        assert call.kwargs["spawn_cwd"] == repo_path
+        assert call.kwargs["spawn_cwd"] == config_path.parent
+        assert call.kwargs["spawn_cwd"] != repo_path
 
 
 def test_main_registry_start_no_review_daemon(

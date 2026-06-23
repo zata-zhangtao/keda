@@ -15,6 +15,7 @@ from backend.engines.agent_runner.factory import (
     create_registry_editor,
     load_fresh_agent_runner_settings,
     logger,
+    resolve_config_toml_path,
     resolve_repository_targets_with_diagnostics,
 )
 from backend.engines.agent_runner.takeover import (
@@ -30,6 +31,39 @@ from backend.engines.agent_runner.takeover_interactive import (
 
 if TYPE_CHECKING:
     from backend.core.shared.interfaces.agent_runner import IProcessRunner
+
+
+def _start_daemons_for_repo(repo_id: str, _repo_path: Path) -> None:
+    """Start managed daemon and review-daemon for a freshly registered repo.
+
+    The daemon is spawned from the directory containing the effective
+    ``config.toml`` so the subprocess resolves the same registry that was just
+    updated by ``takeover``.
+    """
+    settings = load_fresh_agent_runner_settings()
+    contexts, _failures = resolve_repository_targets_with_diagnostics(settings)
+    supervisor = create_process_supervisor()
+    spawn_cwd = resolve_config_toml_path().parent
+    runner_command = settings.console.runner_command
+    for kind in (RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON):
+        try:
+            record = start_runner_process(
+                repo_id=repo_id,
+                kind=kind,
+                contexts=contexts,
+                supervisor=supervisor,
+                runner_command=runner_command,
+                spawn_cwd=spawn_cwd,
+            )
+            console.print(
+                f"[green]Started {kind.value}[/] for {repo_id} "
+                f"(process {record.process_id})"
+            )
+        except Exception as exc:  # noqa: BLE001 - daemon start is best effort.
+            logger.warning("Failed to start %s for %s: %s", kind.value, repo_id, exc)
+            error_console.print(
+                f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}"
+            )
 
 
 def _run_takeover_command(
@@ -80,35 +114,6 @@ def _run_takeover_command(
             "Taking over: "
             + ", ".join(f"[cyan]{candidate.full_name}[/]" for candidate in candidates)
         )
-
-    def _start_daemons_for_repo(repo_id: str, repo_path: Path) -> None:
-        """Start managed daemon and review-daemon for a freshly registered repo."""
-        settings = load_fresh_agent_runner_settings()
-        contexts, _failures = resolve_repository_targets_with_diagnostics(settings)
-        supervisor = create_process_supervisor()
-        spawn_cwd = repo_path
-        runner_command = settings.console.runner_command
-        for kind in (RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON):
-            try:
-                record = start_runner_process(
-                    repo_id=repo_id,
-                    kind=kind,
-                    contexts=contexts,
-                    supervisor=supervisor,
-                    runner_command=runner_command,
-                    spawn_cwd=spawn_cwd,
-                )
-                console.print(
-                    f"[green]Started {kind.value}[/] for {repo_id} "
-                    f"(process {record.process_id})"
-                )
-            except Exception as exc:  # noqa: BLE001 - daemon start is best effort.
-                logger.warning(
-                    "Failed to start %s for %s: %s", kind.value, repo_id, exc
-                )
-                error_console.print(
-                    f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}"
-                )
 
     def _print_takeover_progress(full_name: str, stage: str) -> None:
         stage_labels = {
