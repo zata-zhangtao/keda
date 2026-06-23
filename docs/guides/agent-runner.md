@@ -755,6 +755,8 @@ iar registry list
 
 > **不要混用**：同一时间、同一仓库，建议要么只使用 `iar registry start` 管理 daemon，要么只手动运行 `iar daemon`。混用可能导致两个进程同时 claim 同一仓库的 Issues，且 `registry stop` 不会清理手动启动的进程。
 
+> **单实例保护（self-guard）**：`iar daemon` / `iar daemon run` 启动时会按 `repo_id` 获取单实例锁（`~/.iar/daemon-locks/<repo_id>.lock`）。若该仓库已有存活的 daemon（无论托管还是手动启动），新进程会**直接拒绝启动并返回非零退出码**，而不会与既有 daemon 并发轮询、重复 claim 同一仓库的 Issues。不同 `repo_id` 的 daemon 互不影响、可并行运行。被 `kill -9` 等异常终止后残留的过期锁，会在下次启动时自动回收（按记录的 PID 判活，死进程的锁可被抢占）。该保护用于防止反复执行 `iar daemon` 堆积出大量并发实例、成倍消耗 agent 调用与 token 预算。
+
 #### 查看 daemon 进程明细（`iar daemon status`）
 
 `iar registry list` 只显示每个仓库 daemon / review-daemon 的汇总状态。如果你需要查看具体进程的 PID、启动时间、可执行路径、命令行，以及该进程是托管还是未托管，使用：

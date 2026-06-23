@@ -47,6 +47,12 @@ from backend.core.use_cases.create_issue_from_prd import (
     create_issue_from_prd,
     resolve_prd_paths,
 )
+from backend.core.use_cases.daemon_single_instance import (
+    DaemonAlreadyRunningError,
+    acquire_daemon_locks,
+    daemon_lock_dir,
+    release_daemon_locks,
+)
 from backend.core.use_cases.run_agent_daemon import run_agent_daemon
 from backend.core.use_cases.run_agent_deliberation import (
     DeliberationRequest,
@@ -793,20 +799,37 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             def transcript_runner_factory(repo_path: Path) -> object:
                 return create_transcript_runner(process_runner)
 
-            run_agent_daemon(
-                contexts=contexts,
-                interval=interval,
-                agent=parsed.agent,
-                max_issues=parsed.max_issues or runner_settings.runner.max_issues,
-                process_runner=process_runner,
-                github_client_factory=github_client_factory,
-                content_generator_factory=content_generator_factory,
-                run_history_store=_create_run_history_store_or_none(),
-                run_trigger=_resolve_run_trigger("daemon"),
-                max_prd_issues=1,
-                transcript_runner_factory=transcript_runner_factory,
-                max_deliberation_issues=runner_settings.daemon.max_deliberation_issues,
+            # Single-instance guard: a second daemon for an already-served
+            # repository would double the queue polling and agent spawns, so
+            # refuse to start rather than pile up duplicate daemons.
+            daemon_repo_ids = [context.repo_id for context in contexts]
+            daemon_locks_dir = daemon_lock_dir(
+                runner_settings.console.process_registry_path
             )
+            try:
+                acquired_daemon_locks = acquire_daemon_locks(
+                    daemon_locks_dir, daemon_repo_ids
+                )
+            except DaemonAlreadyRunningError as already_running:
+                error_console.print(f"[red]{already_running}[/]")
+                return 1
+            try:
+                run_agent_daemon(
+                    contexts=contexts,
+                    interval=interval,
+                    agent=parsed.agent,
+                    max_issues=parsed.max_issues or runner_settings.runner.max_issues,
+                    process_runner=process_runner,
+                    github_client_factory=github_client_factory,
+                    content_generator_factory=content_generator_factory,
+                    run_history_store=_create_run_history_store_or_none(),
+                    run_trigger=_resolve_run_trigger("daemon"),
+                    max_prd_issues=1,
+                    transcript_runner_factory=transcript_runner_factory,
+                    max_deliberation_issues=runner_settings.daemon.max_deliberation_issues,
+                )
+            finally:
+                release_daemon_locks(acquired_daemon_locks)
             return 0
 
         if parsed.command == "review":
