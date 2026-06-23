@@ -37,10 +37,10 @@
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **默认只处理当前仓库**：在已 `iar init` 的 keda 仓库根执行 `uv run iar daemon --interval 300 --dry-run`（dry-run 不执行副作用），确认日志/输出仅出现当前仓库。
-- [ ] **未初始化目录报错退出**：在 `/tmp` 或任意非 git 目录执行 `uv run iar daemon --interval 300`，确认命令以非零退出码退出并提示缺少初始化仓库。
-- [ ] **未注册但已 init 的仓库报错退出**：在一个已 `iar init` 但不在 `config.toml` registry 中的临时仓库执行 `uv run iar daemon --interval 300`，确认命令以非零退出码退出并提示当前目录不是 enabled registry target。
-- [ ] **显式 `--all` 仍循环所有项目**：在任意目录执行 `uv run iar daemon --all --interval 300 --dry-run`，确认对所有 enabled registry entries 产生轮询日志/输出。
+- [x] **默认只处理当前仓库**：在已 `iar init` 的 keda 仓库根执行 `uv run iar daemon --interval 300 --dry-run`（dry-run 不执行副作用），确认日志/输出仅出现当前仓库。证据：`.iar/evidence/rv-1-current-repo-only.txt`。
+- [x] **未初始化目录报错退出**：在 `/tmp` 或任意非 git 目录执行 `uv run iar daemon --interval 300`，确认命令以非零退出码退出并提示缺少初始化仓库。证据：`.iar/evidence/rv-2-not-git-dir.txt`。
+- [x] **未注册但已 init 的仓库报错退出**：在一个已 `iar init` 但不在 `config.toml` registry 中的临时仓库执行 `uv run iar daemon --interval 300`，确认命令以非零退出码退出并提示当前目录不是 enabled registry target。证据：`.iar/evidence/rv-3-unregistered-init-repo.txt`。
+- [x] **显式 `--all` 仍循环所有项目**：在任意目录执行 `uv run iar daemon --all --interval 300 --dry-run`，确认对所有 enabled registry entries 产生轮询日志/输出。证据：`.iar/evidence/rv-4-all-enabled-entries.txt`。
 
 **为什么单元测试不够**：单元测试只能验证 `resolve_default_daemon_target()` 或 `_run_parsed_command()` 的返回值/退出码，无法证明真实的 `uv run iar daemon` 入口在完整配置加载、typer/argparse 解析、日志输出链路中的端到端行为。真实入口验证能发现文档与 CLI help 不一致、参数传递错位、工作目录解析差异等问题。
 
@@ -327,12 +327,12 @@ No external validation required; repository evidence was sufficient.
 
 ## 6. Definition Of Done
 
-- [ ] `src/backend/api/cli.py` 中 `_resolve_default_daemon_target()` 与 `_run_parsed_command()` 的 daemon 分支已按推荐方案修改。
-- [ ] `src/backend/api/cli_typer.py` 与 `src/backend/api/cli_parser.py` 的 help 文本已同步。
-- [ ] `docs/guides/agent-runner.md` 中 daemon/review-daemon 目标解析描述已统一。
-- [ ] `tests/test_agent_runner_cli.py` 已新增/更新相关测试用例，且 `just test` 全部通过。
-- [ ] `just lint` 通过，无新增超过 1000 行非空行的文件。
-- [ ] 真实 CLI 验证条目（见 Realistic Validation Plan）至少完成 3 项并记录结果。
+- [x] `src/backend/api/cli.py` 中 `_resolve_default_daemon_target()` 与 `_run_parsed_command()` 的 daemon 分支已按推荐方案修改。
+- [x] `src/backend/api/cli_typer.py` 与 `src/backend/api/cli_parser.py` 的 help 文本已同步。
+- [x] `docs/guides/agent-runner.md` 中 daemon/review-daemon 目标解析描述已统一。
+- [x] `tests/test_agent_runner_cli.py` 已新增/更新相关测试用例，且 `just test` 全部通过。
+- [x] `just lint` 通过，无新增超过 1000 行非空行的文件。
+- [x] 真实 CLI 验证条目（见 Realistic Validation Plan）至少完成 3 项并记录结果。
 
 ## 7. Acceptance Checklist
 
@@ -361,9 +361,11 @@ No external validation required; repository evidence was sufficient.
 ### Validation Acceptance
 
 - [x] `just test` 通过，且新增/更新的测试用例覆盖了未初始化、未注册、非 git、ambiguous、`--all` 等路径。
-- [ ] 真实 CLI 验证：在已 init 的 keda 仓库根执行 `iar daemon`，确认只处理当前仓库。
-- [ ] 真实 CLI 验证：在 `/tmp` 或任意非 git 目录执行 `iar daemon`，确认报错退出。
-- [ ] 真实 CLI 验证：执行 `iar daemon --all --dry-run`（或等效命令），确认对所有 enabled entries 生效。
+- [x] 真实 CLI 验证：在已 init 的 keda 仓库根执行 `iar daemon`，确认只处理当前仓库。证据：`.iar/evidence/rv-1-current-repo-only.txt`（stdout 唯一出现 `Daemon pass for repository 'keda-main' (keda).`）。
+- [x] 真实 CLI 验证：在 `/tmp` 或任意非 git 目录执行 `iar daemon`，确认报错退出。证据：`.iar/evidence/rv-2-not-git-dir.txt`（exit_code=1，stderr/stdout 提示 `Current directory is not a Git repository.`）。
+- [x] 真实 CLI 验证：执行 `iar daemon --all`（命令无 `--dry-run`，用 `--interval 1` + 短窗口），确认对所有 enabled entries 生效。证据：`.iar/evidence/rv-4-all-enabled-entries.txt`（stdout 中出现 keda-main、zata-zhangtao-fsense 等多个 enabled repo_id 的 `Daemon pass for repository` 日志）。
+
+> 结构化证据 manifest：`.iar/evidence/evidence.json`（`version: 1`，`language: "zh-CN"`，按 4 个 checklist item 分组，每项含 `item_number` / `item_name` / `command` / `evidence_files` / `output_summary` / `explanation` / `risks`）。
 
 ## 8. Functional Requirements
 
