@@ -564,3 +564,8 @@ review_interval_seconds = 120
 run_interval_seconds = 120
 # Maximum `agent/deliberate` Issues to drive through Phase 0 per pass.
 max_deliberation_issues = 1
+
+[agent_runner.repositories.test-repo]
+path = "/tmp/iar-loop-test-77813"
+enabled = true
+display_name = "Loop Test Repo"

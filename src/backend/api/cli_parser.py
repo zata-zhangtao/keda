@@ -585,4 +585,131 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preview the takeover plan without making changes.",
     )
 
+    loop_parser = subparsers.add_parser(
+        "loop",
+        help="Register and manage recurring task generators.",
+    )
+    loop_subparsers = loop_parser.add_subparsers(dest="loop_command", required=True)
+
+    loop_create_parser = loop_subparsers.add_parser(
+        "create",
+        help="Register a loop recipe as a persistent scheduler entry.",
+    )
+    loop_create_parser.set_defaults(command="loop create")
+    loop_create_parser.add_argument(
+        "loop_id",
+        help="Short kebab-case identifier for the loop.",
+    )
+    loop_create_parser.add_argument(
+        "--recipe",
+        required=True,
+        help="Path to the loop recipe Markdown file (with YAML frontmatter).",
+    )
+    loop_create_parser.add_argument(
+        "--cron",
+        default=None,
+        help="5-field cron expression overriding the recipe's schedule.",
+    )
+    loop_create_parser.add_argument(
+        "--every",
+        default=None,
+        help="Interval shorthand ('10m', '1h', '1d') overriding the schedule.",
+    )
+    loop_create_parser.add_argument(
+        "--repo-id",
+        dest="loop_repo_id",
+        default=None,
+        help="Override the recipe's repo_id when registering the loop.",
+    )
+    loop_create_parser.add_argument(
+        "--repo",
+        dest="loop_repo",
+        default=None,
+        help="Override the local path of the target repository.",
+    )
+    loop_create_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing loop entry with the same id.",
+    )
+
+    loop_list_parser = loop_subparsers.add_parser(
+        "list",
+        help="List all registered loops with their schedules and next fires.",
+    )
+    loop_list_parser.set_defaults(command="loop list")
+
+    loop_cancel_parser = loop_subparsers.add_parser(
+        "cancel",
+        help="Remove a loop entry from the local scheduler state.",
+    )
+    loop_cancel_parser.set_defaults(command="loop cancel")
+    loop_cancel_parser.add_argument(
+        "loop_id",
+        help="Identifier of the loop to cancel.",
+    )
+
+    loop_run_parser = loop_subparsers.add_parser(
+        "run",
+        help="Trigger a loop manually for testing or recovery.",
+    )
+    loop_run_parser.set_defaults(command="loop run")
+    loop_run_parser.add_argument(
+        "--now",
+        dest="now",
+        action="store_true",
+        required=True,
+        help="Fire the loop once immediately.",
+    )
+    loop_run_parser.add_argument(
+        "loop_id",
+        help="Identifier of the loop to fire.",
+    )
+    loop_run_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Render the PRD and report what would happen, no side effects.",
+    )
+    loop_run_parser.add_argument(
+        "--repo-id",
+        dest="loop_repo_id",
+        default=None,
+        help="Override the recipe's repo_id when running the loop.",
+    )
+    loop_run_parser.add_argument(
+        "--repo",
+        dest="loop_repo",
+        default=None,
+        help="Override the local path of the target repository.",
+    )
+
+    loop_daemon_parser = subparsers.add_parser(
+        "loop-daemon",
+        help="Run the loop scheduler continuously (polls ~/.iar/loop-state.json).",
+    )
+    loop_daemon_parser.set_defaults(command="loop-daemon")
+    loop_daemon_parser.add_argument(
+        "--interval",
+        type=int,
+        default=None,
+        help="Seconds between polling passes (default: 60 or $IAR_LOOP_DAEMON_INTERVAL).",
+    )
+    loop_daemon_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Inspect the next fire plan once and exit without writing anything.",
+    )
+    loop_daemon_parser.add_argument(
+        "--repo-id",
+        dest="loop_repo_id",
+        default=None,
+        help="Override the repository used to resolve all loop targets.",
+    )
+    loop_daemon_parser.add_argument(
+        "--repo",
+        dest="loop_repo",
+        default=None,
+        help="Override the local path of the target repository.",
+    )
+
     return parser
