@@ -390,6 +390,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="List registered repositories and their daemon status.",
     )
 
+    registry_start_parser = registry_subparsers.add_parser(
+        "start",
+        help="Start daemon and review-daemon for registered repositories.",
+    )
+    registry_start_group = registry_start_parser.add_mutually_exclusive_group(
+        required=True
+    )
+    registry_start_group.add_argument(
+        "--repo-id",
+        help="Registry identifier of the repository to start daemons for.",
+    )
+    registry_start_group.add_argument(
+        "--all",
+        action="store_true",
+        help="Start daemons for all enabled repositories.",
+    )
+    registry_start_parser.add_argument(
+        "--no-review-daemon",
+        action="store_true",
+        help="Only start/stop the agent daemon, skip the review daemon.",
+    )
+
+    registry_stop_parser = registry_subparsers.add_parser(
+        "stop",
+        help="Stop daemon and review-daemon for registered repositories.",
+    )
+    registry_stop_group = registry_stop_parser.add_mutually_exclusive_group(
+        required=True
+    )
+    registry_stop_group.add_argument(
+        "--repo-id",
+        help="Registry identifier of the repository to stop daemons for.",
+    )
+    registry_stop_group.add_argument(
+        "--all",
+        action="store_true",
+        help="Stop daemons for all repositories with running processes.",
+    )
+    registry_stop_parser.add_argument(
+        "--no-review-daemon",
+        action="store_true",
+        help="Only start/stop the agent daemon, skip the review daemon.",
+    )
+
     workflow_parser = subparsers.add_parser(
         "workflow",
         help="Install and manage bundled workflow templates.",

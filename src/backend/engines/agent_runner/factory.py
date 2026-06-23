@@ -543,6 +543,85 @@ def merge_repository_config(
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class _RepositoryMatchResult:
+    """Result of matching a local path against the registry."""
+
+    matched_repo_id: str | None
+    matched_entry: AgentRunnerRepositorySettings | None
+    disabled_repo_id: str | None
+    disabled_entry: AgentRunnerRepositorySettings | None
+    enabled_candidates: tuple[tuple[str, AgentRunnerRepositorySettings], ...]
+
+    @property
+    def is_unique_enabled(self) -> bool:
+        return self.matched_repo_id is not None
+
+    @property
+    def is_disabled(self) -> bool:
+        return self.matched_repo_id is None and self.disabled_repo_id is not None
+
+    @property
+    def is_ambiguous(self) -> bool:
+        return len(self.enabled_candidates) >= 2
+
+    @property
+    def is_no_match(self) -> bool:
+        return self.matched_repo_id is None and self.disabled_repo_id is None
+
+
+def find_repository_match_for_path(
+    settings: AgentRunnerSettings,
+    candidate_path: Path,
+) -> _RepositoryMatchResult:
+    """Match a local path against enabled registry entries.
+
+    Args:
+        settings: Agent runner settings.
+        candidate_path: Path to match (typically the git root of cwd).
+
+    Returns:
+        Structured match result indicating unique enabled match, disabled match,
+        multiple enabled matches, or no match.
+    """
+    resolved_candidate = candidate_path.expanduser().resolve()
+    enabled_hits: list[tuple[str, AgentRunnerRepositorySettings]] = []
+    disabled_hits: list[tuple[str, AgentRunnerRepositorySettings]] = []
+    for repo_id, repo_settings in settings.repositories.items():
+        resolved_path = Path(repo_settings.path).expanduser().resolve()
+        if resolved_path != resolved_candidate:
+            continue
+        if repo_settings.enabled:
+            enabled_hits.append((repo_id, repo_settings))
+        else:
+            disabled_hits.append((repo_id, repo_settings))
+    if len(enabled_hits) == 1 and not disabled_hits:
+        matched_repo_id, matched_entry = enabled_hits[0]
+        return _RepositoryMatchResult(
+            matched_repo_id=matched_repo_id,
+            matched_entry=matched_entry,
+            disabled_repo_id=None,
+            disabled_entry=None,
+            enabled_candidates=tuple(enabled_hits),
+        )
+    if not enabled_hits and len(disabled_hits) == 1:
+        disabled_repo_id, disabled_entry = disabled_hits[0]
+        return _RepositoryMatchResult(
+            matched_repo_id=None,
+            matched_entry=None,
+            disabled_repo_id=disabled_repo_id,
+            disabled_entry=disabled_entry,
+            enabled_candidates=(),
+        )
+    return _RepositoryMatchResult(
+        matched_repo_id=None,
+        matched_entry=None,
+        disabled_repo_id=None,
+        disabled_entry=None,
+        enabled_candidates=tuple(enabled_hits),
+    )
+
+
 def resolve_repository_targets(
     settings: AgentRunnerSettings,
     *,

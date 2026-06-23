@@ -484,7 +484,7 @@ behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concre
 | `iar --repo /path/to/repo run` | 等价的顶层 selector 写法，适合把目标仓库放在命令前 |
 | `iar run --repo-id keda` | 从 legacy registry 找到路径，再合并目标仓库 `.iar.toml` |
 | `iar run --all` | 显式处理 `config.toml` 中所有 enabled registry entries |
-| `iar daemon` / `iar review-daemon` | 默认处理 `config.toml` 中所有 enabled registry entries |
+| `iar daemon` / `iar review-daemon` | 在当前 `.iar.toml` 仓库目录下默认只处理该仓库；不在任何注册仓时处理所有 enabled registry entries |
 | `iar daemon --repo-id keda` | 仅处理指定仓库 |
 
 历史命令 `iar run-once`、`iar review-once`、`iar issue-from-prd` 和 `iar recover-publish` 已被删除；请改用 `iar run` / `iar review` / `iar issue create` / `iar recover`。
@@ -714,6 +714,33 @@ iar registry list
 
 这可以帮助你确认哪些仓库当前正在后台跑 agent，以及是否重复启动了 daemon。
 
+#### 启动与停止托管 daemon（`iar registry start` / `iar registry stop`）
+
+对于已经在 registry 中注册且已 init 的本地仓库（例如你手动 `iar init` 过的 `keda-main`），可以直接用 `start` / `stop` 管理 daemon 生命周期，无需 `reinit --start-daemons`（后者会重置 `.iar.toml`）：
+
+```bash
+# 启动单个仓库的 daemon + review-daemon
+iar registry start --repo-id keda-main
+
+# 只启动 daemon（不启动 review-daemon）
+iar registry start --repo-id keda-main --no-review-daemon
+
+# 启动所有 enabled 注册仓的 daemon + review-daemon
+iar registry start --all
+
+# 停止单个仓库的 daemon + review-daemon
+iar registry stop --repo-id keda-main
+
+# 停止所有 running 的 daemon + review-daemon
+iar registry stop --all
+```
+
+`start` 会把进程登记到 `~/.iar/processes.json`，因此 `iar registry list` 会显示 `running`；`stop` 会从 processes.json 读取 running 记录并优雅停止对应进程。连续两次 `start --repo-id` 会因"已存在 running 进程"失败，需先 `stop`。
+
+> **与 `reinit --start-daemons` / `takeover` 的区别**：`registry start` 不修改 `.iar.toml`，不重新初始化仓库配置，仅负责 spawn / stop 托管进程。适合本地开发目录或已经 init 过的仓库。
+
+> **重启后恢复**：`iar` 不会自动复活重启前的 daemon。把 `iar registry start --repo-id <id>` 写进 macOS `launchd` plist 或 Linux systemd service，可实现开机自启。
+
 ## 全局多仓库接管（`iar takeover`）
 
 全局安装 `iar` 后，你可以从任意目录直接接管 GitHub 仓库，无需手动 `git clone`、`iar init` 和编辑 registry。
@@ -741,7 +768,7 @@ iar takeover
    - `gh repo clone <owner>/<repo> ~/.iar/repos/<owner>/<repo>`
    - 在新 clone 的仓库执行 `iar init`
    - 写入 `~/.iar/config.toml` 的 `[agent_runner.repositories.<repo_id>]`
-6. 默认启动 `iar daemon` 和 `iar review-daemon` 两个托管子进程（默认监控所有已注册仓库）。
+6. 默认启动 `iar daemon` 和 `iar review-daemon` 两个托管子进程（若仓库路径已在 registry 中启用，默认只监控该仓库；否则监控所有 enabled registry entries）。
 
 ### 非交互式与批量接管
 
@@ -2185,7 +2212,7 @@ Overview 还会按 severity 汇总 `anomaly_count` 和 `anomaly_summary`（`warn
 
 管理终端按 `(repo_id, kind)` 托管 runner 子进程。**每个仓库一个
 daemon 进程**即获得多项目并发——不同仓库的 Issue 同时执行，互不阻塞
-（CLI 的 `iar daemon` 默认监控所有已注册仓库，但在单个进程内串行轮询）。
+（CLI 的 `iar daemon` 在 cwd 命中已启用注册仓时默认只监控该仓，否则监控所有 enabled registry entries，但在单个进程内串行轮询）。
 
 - 子进程以 `start_new_session` 脱离后端进程组：后端重启不影响执行中
   的 runner；重启后从 pidfile registry（`~/.iar/processes.json`）复活

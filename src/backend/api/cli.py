@@ -9,6 +9,7 @@ point and its help text stay consistent.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import shlex
 import subprocess
@@ -24,6 +25,8 @@ from backend.api.cli_registry import (
     _run_registry_list_command,
     _run_registry_reinit_command,
     _run_registry_remove_command,
+    _run_registry_start_command,
+    _run_registry_stop_command,
 )
 from backend.api.cli_takeover import _run_takeover_command
 from backend.core.use_cases.create_issue_from_prd import (
@@ -67,7 +70,9 @@ from backend.engines.agent_runner.factory import (
     create_process_runner,
     create_registry_editor,
     create_transcript_runner,
+    find_repository_match_for_path,
     get_agent_runner_settings,
+    load_fresh_agent_runner_settings,
     logger,
     resolve_issue_from_prd_target,
     resolve_repository_targets,
@@ -152,6 +157,54 @@ def _format_cli_exception(exc: BaseException) -> str:
     if not stdout_text and not stderr_text:
         lines.append("No stdout or stderr was captured.")
     return "\n".join(lines)
+
+
+@dataclasses.dataclass(frozen=True)
+class _DefaultDaemonTarget:
+    """Result of inferring a daemon target from cwd."""
+
+    repo_id: str | None
+    error: str
+
+
+def _resolve_default_daemon_target() -> _DefaultDaemonTarget:
+    """Infer the daemon target repository from the current working directory.
+
+    Returns:
+        _DefaultDaemonTarget: when ``repo_id`` is set, use that repository;
+        when ``error`` is set, fail early with the error message. If both are
+        None/empty, fall back to --all.
+    """
+    try:
+        cwd_git_root = detect_git_repository_root(Path.cwd())
+    except ValueError:
+        # Not inside a git repository: keep the legacy --all fallback so that
+        # commands like nohup iar daemon still work outside a repository.
+        return _DefaultDaemonTarget(repo_id=None, error="")
+    settings = load_fresh_agent_runner_settings()
+    match = find_repository_match_for_path(settings, cwd_git_root)
+    if match.is_unique_enabled:
+        assert match.matched_repo_id is not None  # noqa: S101
+        return _DefaultDaemonTarget(repo_id=match.matched_repo_id, error="")
+    if match.is_disabled:
+        assert match.disabled_repo_id is not None  # noqa: S101
+        return _DefaultDaemonTarget(
+            repo_id=None,
+            error=(
+                f"Repository '{match.disabled_repo_id}' is disabled. "
+                "Use --repo-id to target it explicitly or enable it in config.toml."
+            ),
+        )
+    if match.is_ambiguous:
+        candidates = ", ".join(repo_id for repo_id, _ in match.enabled_candidates)
+        return _DefaultDaemonTarget(
+            repo_id=None,
+            error=(
+                f"Current directory matches multiple enabled repositories: {candidates}. "
+                "Use --repo-id to target one, or --all to target all."
+            ),
+        )
+    return _DefaultDaemonTarget(repo_id=None, error="")
 
 
 def _prompt_and_publish_prd_if_needed(
@@ -398,11 +451,21 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
         logger.error("--repo and --repo-id are mutually exclusive.")
         return 1
 
-    # daemon / review-daemon 在未指定仓库时默认监控所有已注册仓库，
-    # 而不是退回到当前目录的 Git 仓库。
+    # daemon / review-daemon 在未指定仓库时：
+    # 1. cwd 命中唯一 enabled 注册仓 → 仅处理该仓（与 --repo-id 等价）
+    # 2. cwd 命中 disabled 注册仓 → 报错
+    # 3. cwd 命中多个 enabled 注册仓 → 报错，要求显式选择
+    # 4. cwd 未命中任何注册仓 → 回退到 --all
     if parsed.command in ("daemon", "review-daemon"):
         if repo_id is None and repo_override is None:
-            parsed.all_repositories = True
+            default_target = _resolve_default_daemon_target()
+            if default_target.error:
+                logger.error(default_target.error)
+                return 1
+            if default_target.repo_id is not None:
+                repo_id = default_target.repo_id
+            else:
+                parsed.all_repositories = True
 
     process_runner = create_process_runner()
 
@@ -539,6 +602,12 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
 
     if parsed.command == "registry list":
         return _run_registry_list_command(process_runner)
+
+    if parsed.command == "registry start":
+        return _run_registry_start_command(parsed, process_runner)
+
+    if parsed.command == "registry stop":
+        return _run_registry_stop_command(parsed, process_runner)
 
     if parsed.command == "worktree":
         try:

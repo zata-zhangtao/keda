@@ -418,6 +418,78 @@ def registry_list_command() -> int:
     return _run_typer_command("registry list")
 
 
+@registry_app.command("start")
+def registry_start_command(
+    repo_id: Annotated[
+        str | None,
+        typer.Option("--repo-id", help="Registry identifier to start daemons for."),
+    ] = None,
+    all: Annotated[
+        bool,
+        typer.Option("--all", help="Start daemons for all enabled repositories."),
+    ] = False,
+    no_review_daemon: Annotated[
+        bool,
+        typer.Option(
+            "--no-review-daemon",
+            help="Only start/stop the agent daemon, skip the review daemon.",
+        ),
+    ] = False,
+) -> int:
+    """Start daemon and review-daemon for registered repositories."""
+    if not repo_id and not all:
+        error_console.print(
+            "[red]Either --repo-id or --all is required for iar registry start.[/]"
+        )
+        return 1
+    if repo_id and all:
+        error_console.print("[red]--repo-id and --all are mutually exclusive.[/]")
+        return 1
+    return _run_typer_command(
+        "registry start",
+        repo_id=repo_id,
+        all=all,
+        no_review_daemon=no_review_daemon,
+    )
+
+
+@registry_app.command("stop")
+def registry_stop_command(
+    repo_id: Annotated[
+        str | None,
+        typer.Option("--repo-id", help="Registry identifier to stop daemons for."),
+    ] = None,
+    all: Annotated[
+        bool,
+        typer.Option(
+            "--all", help="Stop daemons for all repositories with running processes."
+        ),
+    ] = False,
+    no_review_daemon: Annotated[
+        bool,
+        typer.Option(
+            "--no-review-daemon",
+            help="Only start/stop the agent daemon, skip the review daemon.",
+        ),
+    ] = False,
+) -> int:
+    """Stop daemon and review-daemon for registered repositories."""
+    if not repo_id and not all:
+        error_console.print(
+            "[red]Either --repo-id or --all is required for iar registry stop.[/]"
+        )
+        return 1
+    if repo_id and all:
+        error_console.print("[red]--repo-id and --all are mutually exclusive.[/]")
+        return 1
+    return _run_typer_command(
+        "registry stop",
+        repo_id=repo_id,
+        all=all,
+        no_review_daemon=no_review_daemon,
+    )
+
+
 @labels_app.command("sync")
 def labels_sync_command(
     ctx: typer.Context,

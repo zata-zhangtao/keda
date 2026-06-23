@@ -191,6 +191,135 @@ def _run_registry_list_command(process_runner: IProcessRunner) -> int:
     return 0
 
 
+def _run_registry_start_command(
+    parsed: argparse.Namespace, process_runner: IProcessRunner
+) -> int:
+    """Start daemon and review-daemon for registered repositories."""
+    settings = load_fresh_agent_runner_settings()
+    supervisor = create_process_supervisor()
+    runner_command = settings.console.runner_command
+
+    repo_ids: list[str]
+    if parsed.all:
+        repo_ids = [
+            repo_id
+            for repo_id, repo_settings in settings.repositories.items()
+            if repo_settings.enabled
+        ]
+    else:
+        repo_id = parsed.repo_id
+        if repo_id not in settings.repositories:
+            error_console.print(
+                f"[red]Repository '{repo_id}' not found in registry.[/]"
+            )
+            return 1
+        repo_entry = settings.repositories[repo_id]
+        if not repo_entry.enabled:
+            error_console.print(f"[red]Repository '{repo_id}' is disabled.[/]")
+            return 1
+        repo_ids = [repo_id]
+
+    if not repo_ids:
+        console.print("[yellow]No enabled repositories to start.[/]")
+        return 0
+
+    contexts, failures = resolve_repository_targets_with_diagnostics(settings)
+    if failures:
+        for failure in failures:
+            error_console.print(
+                f"[yellow]Skipping unresolvable repository '{failure.repo_id}': "
+                f"{failure.error}[/]"
+            )
+
+    kinds = [RunnerProcessKind.DAEMON]
+    if not parsed.no_review_daemon:
+        kinds.append(RunnerProcessKind.REVIEW_DAEMON)
+
+    exit_code = 0
+    for repo_id in repo_ids:
+        repo_entry = settings.repositories[repo_id]
+        repo_path = Path(repo_entry.path).expanduser()
+        if not repo_path.exists():
+            error_console.print(f"[red]Repository path does not exist:[/] {repo_path}")
+            exit_code = 1
+            continue
+
+        repo_success = True
+        for kind in kinds:
+            try:
+                record = start_runner_process(
+                    repo_id=repo_id,
+                    kind=kind,
+                    contexts=contexts,
+                    supervisor=supervisor,
+                    runner_command=runner_command,
+                    spawn_cwd=repo_path,
+                )
+                console.print(
+                    f"[green]Started {kind.value}[/] for {repo_id} "
+                    f"(process {record.process_id})"
+                )
+            except Exception as exc:  # noqa: BLE001 - best effort start.
+                repo_success = False
+                error_console.print(
+                    f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}"
+                )
+        if not repo_success:
+            exit_code = 1
+
+    return exit_code
+
+
+def _run_registry_stop_command(
+    parsed: argparse.Namespace, process_runner: IProcessRunner
+) -> int:
+    """Stop daemon and review-daemon for registered repositories."""
+    supervisor = create_process_supervisor()
+    records = supervisor.list_processes()
+
+    target_kinds = {_DAEMON_KIND}
+    if not parsed.no_review_daemon:
+        target_kinds.add(_REVIEW_DAEMON_KIND)
+
+    matched_records = []
+    for record in records:
+        kind = record.kind if isinstance(record.kind, str) else record.kind.value
+        if kind not in target_kinds:
+            continue
+        if parsed.all or record.repo_id == parsed.repo_id:
+            matched_records.append(record)
+
+    if not matched_records:
+        console.print("[yellow]No running daemon processes to stop.[/]")
+        return 0
+
+    exit_code = 0
+    for record in matched_records:
+        if record.status != "running":
+            console.print(
+                f"[dim]Skipped[/] {record.kind} {record.process_id} for {record.repo_id} "
+                f"(not running)"
+            )
+            continue
+        try:
+            stop_runner_process(
+                process_id=record.process_id,
+                supervisor=supervisor,
+                stop_timeout_seconds=30,
+            )
+            console.print(
+                f"[green]Stopped[/] {record.kind} {record.process_id} for {record.repo_id}"
+            )
+        except Exception as exc:  # noqa: BLE001 - best effort stop.
+            error_console.print(
+                f"[yellow]Failed to stop {record.kind} {record.process_id} "
+                f"for {record.repo_id}:[/] {exc}"
+            )
+            exit_code = 1
+
+    return exit_code
+
+
 def _format_process_status(running: dict[str, list[str]], kind: str) -> str:
     """Return a human-readable status string for a daemon kind."""
     process_ids = running.get(kind, [])

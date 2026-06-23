@@ -639,8 +639,125 @@ def test_main_run_passes_all_repositories_selector() -> None:
     assert mock_run.call_args.kwargs["agent"] == "codex"
 
 
-def test_main_daemon_defaults_to_all_repositories(monkeypatch) -> None:
-    """daemon without selectors should default to all configured repositories."""
+def test_main_daemon_cwd_matches_enabled_single_repo(monkeypatch) -> None:
+    """daemon without selectors should target cwd when it matches one enabled repo."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "keda-main"
+    mock_context.display_name = "Keda Main"
+
+    settings = MagicMock()
+    settings.repositories = {
+        "keda-main": MagicMock(path="/tmp/repo", enabled=True),
+    }
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ), patch(
+        "backend.api.cli.detect_git_repository_root",
+        return_value=Path("/tmp/repo"),
+    ), patch(
+        "backend.api.cli.load_fresh_agent_runner_settings",
+        return_value=settings,
+    ):
+        exit_code = main(["daemon"])
+
+    assert exit_code == 0
+    assert mock_resolve.call_args.kwargs["repo_id"] == "keda-main"
+    assert mock_resolve.call_args.kwargs["all_repositories"] is False
+
+
+def test_main_review_daemon_cwd_matches_enabled_single_repo(monkeypatch) -> None:
+    """review-daemon without selectors should target cwd when it matches one enabled repo."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "keda-main"
+    mock_context.display_name = "Keda Main"
+
+    settings = MagicMock()
+    settings.repositories = {
+        "keda-main": MagicMock(path="/tmp/repo", enabled=True),
+    }
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+        return_value=[mock_context],
+    ) as mock_resolve, patch("backend.api.cli.run_review_daemon"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ), patch(
+        "backend.api.cli.detect_git_repository_root",
+        return_value=Path("/tmp/repo"),
+    ), patch(
+        "backend.api.cli.load_fresh_agent_runner_settings",
+        return_value=settings,
+    ):
+        exit_code = main(["review-daemon"])
+
+    assert exit_code == 0
+    assert mock_resolve.call_args.kwargs["repo_id"] == "keda-main"
+    assert mock_resolve.call_args.kwargs["all_repositories"] is False
+
+
+def test_main_daemon_cwd_disabled_repo_rejected(monkeypatch) -> None:
+    """daemon should reject cwd when it matches a disabled repository."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    settings = MagicMock()
+    settings.repositories = {
+        "keda-main": MagicMock(path="/tmp/repo", enabled=False),
+    }
+
+    with patch(
+        "backend.api.cli.detect_git_repository_root",
+        return_value=Path("/tmp/repo"),
+    ), patch(
+        "backend.api.cli.load_fresh_agent_runner_settings",
+        return_value=settings,
+    ):
+        exit_code = main(["daemon"])
+
+    assert exit_code == 1
+
+
+def test_main_daemon_cwd_ambiguous_repo_rejected(monkeypatch) -> None:
+    """daemon should reject cwd when it matches multiple enabled repositories."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    settings = MagicMock()
+    settings.repositories = {
+        "keda-main": MagicMock(path="/tmp/repo", enabled=True),
+        "keda-alias": MagicMock(path="/tmp/repo", enabled=True),
+    }
+
+    with patch(
+        "backend.api.cli.detect_git_repository_root",
+        return_value=Path("/tmp/repo"),
+    ), patch(
+        "backend.api.cli.load_fresh_agent_runner_settings",
+        return_value=settings,
+    ):
+        exit_code = main(["daemon"])
+
+    assert exit_code == 1
+
+
+def test_main_daemon_cwd_no_match_falls_back_to_all(monkeypatch) -> None:
+    """daemon should fall back to --all when cwd matches no registry entry."""
     from backend.api.cli import main
 
     monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
@@ -650,11 +767,22 @@ def test_main_daemon_defaults_to_all_repositories(monkeypatch) -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
+    settings = MagicMock()
+    settings.repositories = {
+        "other-repo": MagicMock(path="/tmp/other", enabled=True),
+    }
+
     with patch(
         "backend.api.cli.resolve_repository_targets",
         return_value=[mock_context],
     ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
         "backend.api.cli.require_iar_repository_initialized"
+    ), patch(
+        "backend.api.cli.detect_git_repository_root",
+        return_value=Path("/tmp/repo"),
+    ), patch(
+        "backend.api.cli.load_fresh_agent_runner_settings",
+        return_value=settings,
     ):
         exit_code = main(["daemon"])
 
@@ -662,8 +790,8 @@ def test_main_daemon_defaults_to_all_repositories(monkeypatch) -> None:
     assert mock_resolve.call_args.kwargs["all_repositories"] is True
 
 
-def test_main_review_daemon_defaults_to_all_repositories(monkeypatch) -> None:
-    """review-daemon without selectors should default to all configured repositories."""
+def test_main_review_daemon_cwd_no_match_falls_back_to_all(monkeypatch) -> None:
+    """review-daemon should fall back to --all when cwd matches no registry entry."""
     from backend.api.cli import main
 
     monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
@@ -673,11 +801,22 @@ def test_main_review_daemon_defaults_to_all_repositories(monkeypatch) -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
+    settings = MagicMock()
+    settings.repositories = {
+        "other-repo": MagicMock(path="/tmp/other", enabled=True),
+    }
+
     with patch(
         "backend.api.cli.resolve_repository_targets",
         return_value=[mock_context],
     ) as mock_resolve, patch("backend.api.cli.run_review_daemon"), patch(
         "backend.api.cli.require_iar_repository_initialized"
+    ), patch(
+        "backend.api.cli.detect_git_repository_root",
+        return_value=Path("/tmp/repo"),
+    ), patch(
+        "backend.api.cli.load_fresh_agent_runner_settings",
+        return_value=settings,
     ):
         exit_code = main(["review-daemon"])
 
@@ -2323,6 +2462,454 @@ def test_main_registry_list_empty_registry(
     captured = capsys.readouterr()
     assert exit_code == 0, captured.err
     assert "Registered repositories" in _strip_ansi(captured.out)
+
+
+def test_cli_parser_registry_start() -> None:
+    """registry start should accept --repo-id, --all, and --no-review-daemon."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["registry", "start", "--repo-id", "keda-main", "--no-review-daemon"]
+    )
+    assert parsed.command == "registry"
+    assert parsed.registry_command == "start"
+    assert parsed.repo_id == "keda-main"
+    assert parsed.all is False
+    assert parsed.no_review_daemon is True
+
+    parsed_all = parser.parse_args(["registry", "start", "--all"])
+    assert parsed_all.all is True
+    assert parsed_all.repo_id is None
+
+
+def test_cli_parser_registry_stop() -> None:
+    """registry stop should accept --repo-id, --all, and --no-review-daemon."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["registry", "stop", "--repo-id", "keda-main", "--no-review-daemon"]
+    )
+    assert parsed.command == "registry"
+    assert parsed.registry_command == "stop"
+    assert parsed.repo_id == "keda-main"
+    assert parsed.all is False
+    assert parsed.no_review_daemon is True
+
+    parsed_all = parser.parse_args(["registry", "stop", "--all"])
+    assert parsed_all.all is True
+    assert parsed_all.repo_id is None
+
+
+def test_main_registry_start_single_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry start --repo-id` should start daemon + review-daemon."""
+    monkeypatch.chdir(tmp_path)
+    repo_path = _init_bare_git_repository(tmp_path, "keda")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[agent_runner]\n"
+        "[agent_runner.repositories.keda-main]\n"
+        f'path = "{repo_path}"\n'
+        "enabled = true\n"
+        'display_name = "Keda Main"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    fake_context = MagicMock()
+    fake_context.repo_id = "keda-main"
+
+    fake_settings = MagicMock()
+    fake_settings.console.runner_command = ["iar"]
+    fake_settings.repositories = {
+        "keda-main": MagicMock(path=str(repo_path), enabled=True),
+    }
+
+    from backend.infrastructure.console.process_supervisor import RunnerProcessRecord
+
+    def _fake_start(
+        *,
+        repo_id,
+        kind,
+        contexts,
+        supervisor,
+        runner_command,
+        spawn_cwd,
+        issue_number=None,
+    ):
+        return RunnerProcessRecord(
+            process_id=f"fake-{kind.value}",
+            repo_id=repo_id,
+            kind=kind.value,
+            pid=1,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/fake.log",
+            command=tuple(runner_command) + (kind.value, "--repo-id", repo_id),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        )
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = []
+
+    with (
+        patch(
+            "backend.api.cli_registry.load_fresh_agent_runner_settings",
+            return_value=fake_settings,
+        ),
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
+            return_value=([fake_context], []),
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.start_runner_process",
+            side_effect=_fake_start,
+        ) as mock_start,
+    ):
+        exit_code = main(["registry", "start", "--repo-id", "keda-main"])
+        captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    assert mock_start.call_count == 2
+    kinds = {call.kwargs["kind"] for call in mock_start.call_args_list}
+    assert kinds == {RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON}
+    for call in mock_start.call_args_list:
+        assert call.kwargs["repo_id"] == "keda-main"
+        assert call.kwargs["spawn_cwd"] == repo_path
+
+
+def test_main_registry_start_no_review_daemon(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry start --repo-id --no-review-daemon` should only start daemon."""
+    monkeypatch.chdir(tmp_path)
+    repo_path = _init_bare_git_repository(tmp_path, "keda")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[agent_runner]\n"
+        "[agent_runner.repositories.keda-main]\n"
+        f'path = "{repo_path}"\n'
+        "enabled = true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    fake_settings = MagicMock()
+    fake_settings.console.runner_command = ["iar"]
+    fake_settings.repositories = {
+        "keda-main": MagicMock(path=str(repo_path), enabled=True),
+    }
+
+    from backend.infrastructure.console.process_supervisor import RunnerProcessRecord
+
+    def _fake_start(
+        *,
+        repo_id,
+        kind,
+        contexts,
+        supervisor,
+        runner_command,
+        spawn_cwd,
+        issue_number=None,
+    ):
+        return RunnerProcessRecord(
+            process_id=f"fake-{kind.value}",
+            repo_id=repo_id,
+            kind=kind.value,
+            pid=1,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/fake.log",
+            command=tuple(runner_command) + (kind.value, "--repo-id", repo_id),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        )
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = []
+
+    with (
+        patch(
+            "backend.api.cli_registry.load_fresh_agent_runner_settings",
+            return_value=fake_settings,
+        ),
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
+            return_value=([], []),
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.start_runner_process",
+            side_effect=_fake_start,
+        ) as mock_start,
+    ):
+        exit_code = main(
+            ["registry", "start", "--repo-id", "keda-main", "--no-review-daemon"]
+        )
+        captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    assert mock_start.call_count == 1
+    assert mock_start.call_args.kwargs["kind"] == RunnerProcessKind.DAEMON
+
+
+def test_main_registry_start_all(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry start --all` should start daemons for all enabled repos."""
+    monkeypatch.chdir(tmp_path)
+    repo_a = _init_bare_git_repository(tmp_path, "repo-a")
+    repo_b = _init_bare_git_repository(tmp_path, "repo-b")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[agent_runner]\n"
+        f'[agent_runner.repositories.repo-a]\npath = "{repo_a}"\nenabled = true\n'
+        f'[agent_runner.repositories.repo-b]\npath = "{repo_b}"\nenabled = true\n'
+        "[agent_runner.repositories.disabled-repo]\n"
+        f'path = "{tmp_path / "disabled"}"\nenabled = false\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    fake_settings = MagicMock()
+    fake_settings.console.runner_command = ["iar"]
+    fake_settings.repositories = {
+        "repo-a": MagicMock(path=str(repo_a), enabled=True),
+        "repo-b": MagicMock(path=str(repo_b), enabled=True),
+        "disabled-repo": MagicMock(path=str(tmp_path / "disabled"), enabled=False),
+    }
+
+    from backend.infrastructure.console.process_supervisor import RunnerProcessRecord
+
+    def _fake_start(
+        *,
+        repo_id,
+        kind,
+        contexts,
+        supervisor,
+        runner_command,
+        spawn_cwd,
+        issue_number=None,
+    ):
+        return RunnerProcessRecord(
+            process_id=f"fake-{repo_id}-{kind.value}",
+            repo_id=repo_id,
+            kind=kind.value,
+            pid=1,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/fake.log",
+            command=tuple(runner_command) + (kind.value, "--repo-id", repo_id),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        )
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = []
+
+    with (
+        patch(
+            "backend.api.cli_registry.load_fresh_agent_runner_settings",
+            return_value=fake_settings,
+        ),
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
+            return_value=([], []),
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.start_runner_process",
+            side_effect=_fake_start,
+        ) as mock_start,
+    ):
+        exit_code = main(["registry", "start", "--all"])
+        captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    assert mock_start.call_count == 4
+    started_repo_ids = {call.kwargs["repo_id"] for call in mock_start.call_args_list}
+    assert started_repo_ids == {"repo-a", "repo-b"}
+
+
+def test_main_registry_stop_single_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry stop --repo-id` should stop daemon + review-daemon."""
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent_runner]\n", encoding="utf-8")
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    from backend.infrastructure.console.process_supervisor import RunnerProcessRecord
+
+    records = [
+        RunnerProcessRecord(
+            process_id="daemon-1",
+            repo_id="keda-main",
+            kind="daemon",
+            pid=123,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/d1.log",
+            command=("iar", "daemon", "--repo-id", "keda-main"),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        ),
+        RunnerProcessRecord(
+            process_id="review-1",
+            repo_id="keda-main",
+            kind="review_daemon",
+            pid=124,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/r1.log",
+            command=("iar", "review-daemon", "--repo-id", "keda-main"),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        ),
+        RunnerProcessRecord(
+            process_id="daemon-2",
+            repo_id="fsense",
+            kind="daemon",
+            pid=125,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/d2.log",
+            command=("iar", "daemon", "--repo-id", "fsense"),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        ),
+    ]
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = records
+
+    with (
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.stop_runner_process",
+        ) as mock_stop,
+    ):
+        exit_code = main(["registry", "stop", "--repo-id", "keda-main"])
+        captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    stopped_ids = {call.kwargs["process_id"] for call in mock_stop.call_args_list}
+    assert stopped_ids == {"daemon-1", "review-1"}
+
+
+def test_main_registry_stop_all(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry stop --all` should stop all running daemon processes."""
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent_runner]\n", encoding="utf-8")
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    from backend.infrastructure.console.process_supervisor import RunnerProcessRecord
+
+    records = [
+        RunnerProcessRecord(
+            process_id="daemon-1",
+            repo_id="keda-main",
+            kind="daemon",
+            pid=123,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/d1.log",
+            command=("iar", "daemon", "--repo-id", "keda-main"),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        ),
+        RunnerProcessRecord(
+            process_id="review-1",
+            repo_id="keda-main",
+            kind="review_daemon",
+            pid=124,
+            status="running",
+            exit_code=None,
+            log_path="/tmp/r1.log",
+            command=("iar", "review-daemon", "--repo-id", "keda-main"),
+            started_at="2026-06-22T00:00:00+00:00",
+            stopped_at=None,
+        ),
+    ]
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = records
+
+    with (
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.stop_runner_process",
+        ) as mock_stop,
+    ):
+        exit_code = main(["registry", "stop", "--all"])
+        captured = capsys.readouterr()
+
+    assert exit_code == 0, captured.err
+    assert mock_stop.call_count == 2
+
+
+def test_main_registry_start_rejects_disabled_repo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar registry start --repo-id` should fail for disabled repositories."""
+    monkeypatch.chdir(tmp_path)
+    repo_path = _init_bare_git_repository(tmp_path, "keda")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        "[agent_runner]\n"
+        "[agent_runner.repositories.keda-main]\n"
+        f'path = "{repo_path}"\n'
+        "enabled = false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    fake_settings = MagicMock()
+    fake_settings.repositories = {
+        "keda-main": MagicMock(path=str(repo_path), enabled=False),
+    }
+
+    with patch(
+        "backend.api.cli_registry.load_fresh_agent_runner_settings",
+        return_value=fake_settings,
+    ):
+        exit_code = main(["registry", "start", "--repo-id", "keda-main"])
+        captured = capsys.readouterr()
+
+    assert exit_code == 1, captured.err
+    assert "disabled" in _strip_ansi(captured.out + captured.err)
 
 
 def test_cli_parser_workflow_install() -> None:
