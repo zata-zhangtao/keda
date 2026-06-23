@@ -1140,13 +1140,13 @@ iar run
 # 显式处理所有 enabled registry entries
 iar run --all
 
-# Daemon 模式（默认每 120 秒轮询一次，所有已注册仓库）
+# Daemon 模式（默认每 120 秒轮询一次，仅当前已初始化注册仓库；加 --all 才处理所有 enabled registry entries）
 iar daemon
 
 # 单次 review 检查
 iar review
 
-# Review daemon 模式（默认每 120 秒轮询一次，所有已注册仓库）
+# Review daemon 模式（默认每 120 秒轮询一次，仅当前已初始化注册仓库；加 --all 才处理所有 enabled registry entries）
 iar review-daemon
 
 # 恢复发布失败（仅用于已完成审查后的 push/PR 收尾失败）

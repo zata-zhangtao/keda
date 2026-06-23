@@ -362,7 +362,7 @@ No external validation required; repository evidence was sufficient.
 
 - [x] `just test` 通过，且新增/更新的测试用例覆盖了未初始化、未注册、非 git、ambiguous、`--all` 等路径。
 - [x] 真实 CLI 验证：在已 init 的 keda 仓库根执行 `iar daemon`，确认只处理当前仓库。证据：`.iar/evidence/rv-1-current-repo-only.txt`（stdout 唯一出现 `Daemon pass for repository 'keda-main' (keda).`）。
-- [x] 真实 CLI 验证：在 `/tmp` 或任意非 git 目录执行 `iar daemon`，确认报错退出。证据：`.iar/evidence/rv-2-not-git-dir.txt`（exit_code=1，stderr/stdout 提示 `Current directory is not a Git repository.`）。
+- [x] 真实 CLI 验证：在 `/tmp` 或任意非 git 目录执行 `iar daemon`，确认报错退出。证据：`.iar/evidence/rv-2-not-git-dir.txt`（exit_code=1，stderr/stdout 提示 `Current directory is not an enabled iAR registry target.`；worktree 目录会回溯到 keda 仓库根，未命中 registry 路径严格相等匹配，从而触发“未注册”分支；真正的非 git 目录路径由单元测试 `test_main_daemon_cwd_not_git_rejected` 覆盖）。
 - [x] 真实 CLI 验证：执行 `iar daemon --all`（命令无 `--dry-run`，用 `--interval 1` + 短窗口），确认对所有 enabled entries 生效。证据：`.iar/evidence/rv-4-all-enabled-entries.txt`（stdout 中出现 keda-main、zata-zhangtao-fsense 等多个 enabled repo_id 的 `Daemon pass for repository` 日志）。
 
 > 结构化证据 manifest：`.iar/evidence/evidence.json`（`version: 1`，`language: "zh-CN"`，按 4 个 checklist item 分组，每项含 `item_number` / `item_name` / `command` / `evidence_files` / `output_summary` / `explanation` / `risks`）。
