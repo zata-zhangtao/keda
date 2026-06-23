@@ -54,6 +54,11 @@ from backend.core.use_cases.run_agent_deliberation import (
     run_agent_deliberation,
 )
 from backend.core.use_cases.interactive_decision import run_interactive_decision
+from backend.core.use_cases.repl_session import (
+    ReplSessionDeps,
+    ReplSessionInputs,
+    run_repl_session,
+)
 from backend.core.use_cases.run_agent_repositories_once import (
     run_agent_repositories_once,
 )
@@ -73,6 +78,7 @@ from backend.engines.agent_runner.factory import (
     create_planner_runner,
     create_process_runner,
     create_registry_editor,
+    create_repl_command_executor,
     create_transcript_runner,
     get_agent_runner_settings,
     logger,
@@ -880,6 +886,53 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     "output_view": output_view,
                 },
             )
+
+        if parsed.command == "repl":
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
+                repo_id=repo_id,
+                repo_override=repo_override,
+            )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
+            if len(contexts) != 1:
+                logger.error(
+                    "repl requires exactly one target repository. "
+                    "Use --repo or --repo-id to specify."
+                )
+                return 1
+            context = contexts[0]
+            _ensure_gh_auth_or_prompt(context.repo_path, process_runner)
+            github_client = create_github_client(context.repo_path, process_runner)
+            agent_override = getattr(parsed, "agent", None)
+            if agent_override == "auto":
+                logger.error(
+                    "`--agent auto` is not supported by the REPL entrypoint; "
+                    "use `claude`, `codex`, or `kimi`. "
+                    "Falling back to [agent_runner.repl].default_agent."
+                )
+                agent_override = None
+            effective_agent = agent_override or context.config.repl.default_agent
+            content_generator = create_content_generator(
+                process_runner, read_only=False
+            )
+            command_executor = create_repl_command_executor(
+                process_runner=process_runner,
+                config=context.config.repl,
+            )
+            inputs = ReplSessionInputs(
+                context=context,
+                agent=effective_agent,
+                config=context.config.repl,
+            )
+            deps = ReplSessionDeps(
+                process_runner=process_runner,
+                content_generator=content_generator,
+                command_executor=command_executor,
+                github_client=github_client,
+            )
+            return run_repl_session(inputs, deps)
 
         if parsed.command == "deliberate":
             contexts = _resolve_cli_repository_targets(

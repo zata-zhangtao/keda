@@ -296,6 +296,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_options(ask_parser)
 
+    repl_parser = subparsers.add_parser(
+        "repl",
+        help="Run the interactive REPL session (equivalent to `iar` with no subcommand).",
+    )
+    repl_parser.add_argument(
+        "--agent",
+        choices=("codex", "claude", "kimi"),
+        default=None,
+        help="Override the REPL agent (defaults to [agent_runner.repl].default_agent).",
+    )
+    add_common_options(repl_parser)
+
     deliberate_parser = subparsers.add_parser(
         "deliberate", help="Run a multi-agent deliberation session."
     )

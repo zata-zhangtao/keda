@@ -43,10 +43,10 @@
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **REPL 入口真实验证**：通过 `uv run iar --repo <fixture-repo>` 在 PATH 注入 fake `claude`，验证 CLI 组装正确的首条上下文并进入 REPL 循环。
-- [ ] **自然语言转命令执行真实验证**：在 fake `claude` 中返回 `<<IAR_EXEC>> iar labels sync --repo <fixture-repo> <<END_IAR_EXEC>>`，验证 REPL 执行该命令并把输出返回给 agent。
-- [ ] **非 TTY 回退真实验证**：通过 `uv run iar | cat` 验证命令非零退出并提示使用 `iar --help`。
-- [ ] **Agent 覆盖真实验证**：通过 `uv run iar --agent codex --repo <fixture-repo>` 验证调用 fake `codex` 而非 fake `claude`。
+- [x] **REPL 入口真实验证**：通过 `uv run iar --repo <fixture-repo>` 在 PATH 注入 fake `claude`，验证 CLI 组装正确的首条上下文并进入 REPL 循环。证据：`.iar/evidence/rv-1-tty.txt`（TTY 终端捕获）+ `rv-1-agent.log`（claude 真实 argv 记录）。
+- [x] **自然语言转命令执行真实验证**：在 fake `claude` 中返回 `<<IAR_EXEC>> iar labels sync --repo <fixture-repo> <<END_IAR_EXEC>>`，验证 REPL 执行该命令并把输出返回给 agent。证据：`.iar/evidence/rv-2-exec.txt` + `rv-2-inner-iar.log`（内层 `iar labels sync` 的真实 argv 记录）。
+- [x] **非 TTY 回退真实验证**：通过 `uv run iar | cat` 验证命令非零退出并提示使用 `iar --help`。证据：`.iar/evidence/rv-3-non-tty.txt`（包含 Typer 渲染的帮助文本 + `=== exit_code=1 ===`）。
+- [x] **Agent 覆盖真实验证**：通过 `uv run iar --agent codex --repo <fixture-repo>` 验证调用 fake `codex` 而非 fake `claude`。证据：`.iar/evidence/rv-4-codex.txt`（REPL banner 显示 `agent=codex`）+ `rv-4-agent.log`（codex 真实 argv 含 `exec` 且无 `--sandbox read-only`）。
 
 **为什么单元测试不够**：REPL 入口的核心行为是"真实 CLI 如何解析无参数状态、如何构造 agent 调用命令、如何把仓库上下文注入首条消息、如何解析命令标记并执行真实 `iar` 子命令"，这些必须通过真实子进程入口验证；单元测试无法证明 Typer 无参数分支、agent 命令构建和命令执行闭环在真实 shell 中生效。
 
@@ -529,55 +529,55 @@ No external validation required; repository evidence was sufficient.
 
 ## 6. Definition Of Done
 
-- [ ] `iar` 无参数在 TTY 中启动 REPL，非 TTY 中失败并显示帮助。
-- [ ] 默认 agent 为 `claude`，支持 `--agent codex|kimi` 覆盖；`--agent auto` 被 REPL 入口拒收。
-- [ ] 首条上下文包含仓库身份、`.iar.toml` 摘要、pending PRD 摘要、Issue 状态摘要。
-- [ ] agent 可通过 `<<IAR_EXEC>> ... <<END_IAR_EXEC>>` 请求执行 IAR 子命令。
-- [ ] 命令执行支持白名单校验和写操作确认。
-- [ ] agent 调用超过 `agent_timeout_seconds` 后被终止并把非零 exit_code 写回历史。
-- [ ] REPL 审计日志写入 `logs/agent-runner/repl/<session_id>/`。
-- [ ] `iar --help`、所有现有子命令、现有测试无回归。
-- [ ] `just test` 全绿。
-- [ ] `docs/guides/agent-runner.md` 新增 `## REPL 入口` 章节，`docs/guides/configuration.md` 新增 `## Agent Runner REPL 配置` 章节。
+- [x] `iar` 无参数在 TTY 中启动 REPL，非 TTY 中失败并显示帮助。
+- [x] 默认 agent 为 `claude`，支持 `--agent codex|kimi` 覆盖；`--agent auto` 被 REPL 入口拒收。
+- [x] 首条上下文包含仓库身份、`.iar.toml` 摘要、pending PRD 摘要、Issue 状态摘要。
+- [x] agent 可通过 `<<IAR_EXEC>> ... <<END_IAR_EXEC>>` 请求执行 IAR 子命令。
+- [x] 命令执行支持白名单校验和写操作确认。
+- [x] agent 调用超过 `agent_timeout_seconds` 后被终止并把非零 exit_code 写回历史。
+- [x] REPL 审计日志写入 `logs/agent-runner/repl/<session_id>/`。
+- [x] `iar --help`、所有现有子命令、现有测试无回归。
+- [x] `just test` 全绿。
+- [x] `docs/guides/agent-runner.md` 新增 `## REPL 入口` 章节，`docs/guides/configuration.md` 新增 `## Agent Runner REPL 配置` 章节。
 
 ## 7. Acceptance Checklist / 验收清单
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/api/cli_typer.py` 无参数入口通过 `@app.callback()` 实现，不破坏现有子命令树。
-- [ ] REPL 业务逻辑位于 `src/backend/core/use_cases/repl_session.py`，不在 `api/` 或 `engines/` 中。
-- [ ] Agent 启动命令构建复用 `src/backend/engines/agent_runner/factory.py`，不引入新的 agent 调用方式。
-- [ ] 新增 `[agent_runner.repl]` 配置段，与 `[agent_runner.interactive_decision]` 隔离。
+- [x] `src/backend/api/cli_typer.py` 无参数入口通过 `@app.callback()` 实现，不破坏现有子命令树。
+- [x] REPL 业务逻辑位于 `src/backend/core/use_cases/repl_session.py`，不在 `api/` 或 `engines/` 中。
+- [x] Agent 启动命令构建复用 `src/backend/engines/agent_runner/factory.py`，不引入新的 agent 调用方式。
+- [x] 新增 `[agent_runner.repl]` 配置段，与 `[agent_runner.interactive_decision]` 隔离。
 
 ### Behavior Acceptance
 
-- [ ] 直接运行 `iar`（TTY）进入 agent REPL。
-- [ ] `iar \| cat` 非 TTY 环境下非零退出并显示帮助。
-- [ ] `iar --agent codex` 调用 `codex` 作为 REPL agent。
-- [ ] `iar --agent kimi` 调用 `kimi` 作为 REPL agent。
-- [ ] `iar --agent auto` 在 REPL 入口被拒（auto 仅用于 `iar run`），退回 `[agent_runner.repl].default_agent`。
-- [ ] `iar --help` 正常显示帮助。
-- [ ] 未初始化仓库运行 `iar` 提示先执行 `iar init`。
-- [ ] agent 回复包含 `<<IAR_EXEC>> iar labels sync <<END_IAR_EXEC>>` 时，REPL 执行该命令。
-- [ ] agent 请求执行 `iar daemon` 时，REPL 先询问用户确认。
-- [ ] agent 请求执行不在白名单中的命令时，REPL 拒绝并告知 agent。
-- [ ] agent 调用超过 `agent_timeout_seconds` 后被 `process_runner` 终止，并把 `[IAR_EXEC_RESULT] exit_code=<nonzero> ...` 追加回历史。
+- [x] 直接运行 `iar`（TTY）进入 agent REPL。
+- [x] `iar | cat` 非 TTY 环境下非零退出并显示帮助。
+- [x] `iar --agent codex` 调用 `codex` 作为 REPL agent。
+- [x] `iar --agent kimi` 调用 `kimi` 作为 REPL agent。
+- [x] `iar --agent auto` 在 REPL 入口被拒（auto 仅用于 `iar run`），退回 `[agent_runner.repl].default_agent`。
+- [x] `iar --help` 正常显示帮助。
+- [x] 未初始化仓库运行 `iar` 提示先执行 `iar init`。
+- [x] agent 回复包含 `<<IAR_EXEC>> iar labels sync <<END_IAR_EXEC>>` 时，REPL 执行该命令。
+- [x] agent 请求执行 `iar daemon` 时，REPL 先询问用户确认。
+- [x] agent 请求执行不在白名单中的命令时，REPL 拒绝并告知 agent。
+- [x] agent 调用超过 `agent_timeout_seconds` 后被 `process_runner` 终止，并把 `[IAR_EXEC_RESULT] exit_code=<nonzero> ...` 追加回历史。
 
 ### Configuration Acceptance
 
-- [ ] `config.toml` 包含 `[agent_runner.repl]` 段，默认 `default_agent = "claude"`，并包含 `agent_timeout_seconds = 120`。
-- [ ] `.iar.toml` 可覆盖 `[agent_runner.repl]` 子配置（实现路径：`_AgentRunnerRepositoryOverrideSettings` 新增 `repl` 字段，`load_agent_runner_local_settings()` 末尾显式透传 `repl=local_settings.repl`，与现有 `interactive_decision` 透传链一致）。
+- [x] `config.toml` 包含 `[agent_runner.repl]` 段，默认 `default_agent = "claude"`，并包含 `agent_timeout_seconds = 120`。
+- [x] `.iar.toml` 可覆盖 `[agent_runner.repl]` 子配置（实现路径：`_AgentRunnerRepositoryOverrideSettings` 新增 `repl` 字段，`load_agent_runner_local_settings()` 末尾显式透传 `repl=local_settings.repl`，与现有 `interactive_decision` 透传链一致）。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 新增 `## REPL 入口` 章节（含 TTY/非 TTY 行为、可用子命令、IAR_EXEC 标记协议示例）。
-- [ ] `docs/guides/configuration.md` 新增 `## Agent Runner REPL 配置` 章节（列出 `enabled / default_agent / default_output_dir / max_context_chars / agent_timeout_seconds / auto_confirm_commands / confirm_commands`）。
+- [x] `docs/guides/agent-runner.md` 新增 `## REPL 入口` 章节（含 TTY/非 TTY 行为、可用子命令、IAR_EXEC 标记协议示例）。
+- [x] `docs/guides/configuration.md` 新增 `## Agent Runner REPL 配置` 章节（列出 `enabled / default_agent / default_output_dir / max_context_chars / agent_timeout_seconds / auto_confirm_commands / confirm_commands`）。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_agent_runner_cli.py -k "repl" -q` 通过。
-- [ ] `uv run pytest tests/test_repl_session.py -q` 通过。
-- [ ] `just test` 全绿。
+- [x] `uv run pytest tests/test_agent_runner_cli.py -k "repl" -q` 通过。
+- [x] `uv run pytest tests/test_repl_session.py -q` 通过。
+- [x] `just test` 全绿。
 
 ## 8. Functional Requirements
 

@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from backend.core.shared.models.agent_decision import InteractiveDecisionConfig
+from backend.core.shared.models.agent_decision import (
+    InteractiveDecisionConfig,
+    ReplConfig,
+)
 from backend.core.shared.models.agent_deliberation import DeliberationConfig
 
 
@@ -401,6 +404,7 @@ class AppConfig:
     interactive_decision: InteractiveDecisionConfig = field(
         default_factory=InteractiveDecisionConfig
     )
+    repl: ReplConfig = field(default_factory=ReplConfig)
     deliberation: DeliberationConfig = field(default_factory=DeliberationConfig)
 
 

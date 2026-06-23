@@ -21,7 +21,10 @@ from backend.core.shared.models.agent_deliberation import (
     DeliberationConfig,
     DeliberationEvent,
 )
-from backend.core.shared.models.agent_decision import InteractiveDecisionConfig
+from backend.core.shared.models.agent_decision import (
+    InteractiveDecisionConfig,
+    ReplConfig,
+)
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
@@ -53,6 +56,7 @@ from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerLabelSettings,
     AgentRunnerPromptSettings,
+    AgentRunnerReplSettings,
     AgentRunnerRepositorySettings,
     AgentRunnerSettings,
     IAR_REPOSITORY_CONFIG_FILENAME,
@@ -92,6 +96,7 @@ __all__ = [
     "write_deliberation_outputs",
     "create_event_sink",
     "create_roadmap_store",
+    "create_repl_command_executor",
 ]
 
 
@@ -156,6 +161,19 @@ def _build_deliberation_config(
     )
 
 
+def _build_repl_config(repl_settings: AgentRunnerReplSettings) -> ReplConfig:
+    """Convert pydantic REPL settings to frozen core config."""
+    return ReplConfig(
+        enabled=repl_settings.enabled,
+        default_agent=repl_settings.default_agent,
+        default_output_dir=repl_settings.default_output_dir,
+        max_context_chars=repl_settings.max_context_chars,
+        agent_timeout_seconds=repl_settings.agent_timeout_seconds,
+        auto_confirm_commands=tuple(repl_settings.auto_confirm_commands),
+        confirm_commands=tuple(repl_settings.confirm_commands),
+    )
+
+
 def build_app_config_from_settings(
     agent_runner_settings: AgentRunnerSettings,
 ) -> AppConfig:
@@ -174,6 +192,7 @@ def build_app_config_from_settings(
         agent_runner_settings.generated_content
     )
     interactive_decision = agent_runner_settings.interactive_decision
+    repl = _build_repl_config(agent_runner_settings.repl)
     deliberation = _build_deliberation_config(agent_runner_settings.deliberation)
 
     return AppConfig(
@@ -255,6 +274,7 @@ def build_app_config_from_settings(
             max_context_chars=interactive_decision.max_context_chars,
             allow_execute_yes=interactive_decision.allow_execute_yes,
         ),
+        repl=repl,
         deliberation=deliberation,
     )
 
@@ -540,6 +560,7 @@ def merge_repository_config(
     deliberation = _merge_deliberation_config(
         global_config.deliberation, repo_settings.deliberation
     )
+    repl = _merge_optional_model(global_config.repl, repo_settings.repl)
     return AppConfig(
         labels=labels,
         git=git,
@@ -552,6 +573,7 @@ def merge_repository_config(
         post_pr_supervisor=post_pr_supervisor,
         generated_content=generated_content,
         interactive_decision=interactive_decision,
+        repl=repl,
         deliberation=deliberation,
     )
 
@@ -879,8 +901,14 @@ class SubprocessContentGenerator(IContentGenerator):
     Implements ``IContentGenerator`` via duck typing.
     """
 
-    def __init__(self, process_runner: SubprocessRunner) -> None:
+    def __init__(
+        self,
+        process_runner: SubprocessRunner,
+        *,
+        read_only: bool = True,
+    ) -> None:
         self._process_runner = process_runner
+        self._read_only = read_only
 
     def generate(
         self,
@@ -890,27 +918,65 @@ class SubprocessContentGenerator(IContentGenerator):
         cwd: Path,
         timeout: int | None = None,
     ) -> CommandResult:
-        """Run a read-only content generator and return its output."""
-        command = _build_content_generation_command(agent_name, prompt, cwd)
+        """Run a content generator and return its output.
+
+        When the instance was constructed with ``read_only=True`` (the
+        default) the agent runs in its read-only sandbox. The REPL
+        entrypoint constructs the generator with ``read_only=False`` so
+        the agent can mutate files inside the user's confirmation model.
+        """
+        command = _build_content_generation_command(
+            agent_name, prompt, cwd, read_only=self._read_only
+        )
         return self._process_runner.run(
             command, cwd=cwd, capture_output=True, timeout=timeout, check=False
         )
 
 
 def _build_content_generation_command(
-    agent_name: str, prompt: str, cwd: Path
+    agent_name: str,
+    prompt: str,
+    cwd: Path,
+    *,
+    read_only: bool = True,
 ) -> list[str]:
+    """Build the agent command for content generation / REPL use.
+
+    Args:
+        agent_name: ``claude`` / ``codex`` / ``kimi`` (or any value that
+            should fall back to ``claude``).
+        prompt: Full prompt text passed to the agent.
+        cwd: Working directory for the agent subprocess.
+        read_only: When ``True`` (default), ``codex`` is invoked with
+            ``--sandbox read-only --ask-for-approval never`` so it cannot
+            modify the filesystem. When ``False`` (used by the REPL
+            entrypoint), the sandbox flag is dropped so the agent is free
+            to write files within the user's confirmation model. ``claude``
+            and ``kimi`` commands are unaffected by this flag because they
+            already have a single canonical invocation shape.
+
+    Returns:
+        Command argv ready to be handed to a process runner.
+    """
     # codex / kimi 需显式指定；其余（"claude"、已解析的 "auto"、或任何未识别值）
     # 一律构造 claude 命令，绝不静默落到 codex。
     if agent_name == "codex":
+        if read_only:
+            return [
+                "codex",
+                "--cd",
+                str(cwd),
+                "--sandbox",
+                "read-only",
+                "--ask-for-approval",
+                "never",
+                "exec",
+                prompt,
+            ]
         return [
             "codex",
             "--cd",
             str(cwd),
-            "--sandbox",
-            "read-only",
-            "--ask-for-approval",
-            "never",
             "exec",
             prompt,
         ]
@@ -922,6 +988,17 @@ def _build_content_generation_command(
         "-p",
         prompt,
     ]
+
+
+def _build_repl_command(agent_name: str, prompt: str, cwd: Path) -> list[str]:
+    """Build the agent command used by the ``iar`` REPL entrypoint.
+
+    Delegates to :func:`_build_content_generation_command` with
+    ``read_only=False`` so that REPL-managed sessions do not run inside
+    ``codex``'s read-only sandbox. The REPL's own command executor
+    provides the safety boundary for arbitrary IAR subcommands.
+    """
+    return _build_content_generation_command(agent_name, prompt, cwd, read_only=False)
 
 
 class SafePlannerContentGenerator(IContentGenerator):
@@ -977,9 +1054,13 @@ def create_planner_runner(
 
 def create_content_generator(
     process_runner: SubprocessRunner | None = None,
+    *,
+    read_only: bool = True,
 ) -> SubprocessContentGenerator:
     """Create a content generator instance."""
-    return SubprocessContentGenerator(process_runner or SubprocessRunner())
+    return SubprocessContentGenerator(
+        process_runner or SubprocessRunner(), read_only=read_only
+    )
 
 
 def resolve_issue_from_prd_target(
@@ -1112,3 +1193,25 @@ def create_github_client(
 ) -> GitHubCliClient:
     """Create a new GitHub CLI client instance."""
     return GitHubCliClient(repo_path, process_runner)
+
+
+def create_repl_command_executor(
+    process_runner: SubprocessRunner | None = None,
+    config: ReplConfig | None = None,
+):
+    """Create a :class:`ReplCommandExecutor` for the REPL entrypoint.
+
+    Imports the executor lazily to avoid a hard dependency from this
+    module's import time. ``config`` defaults to the merged global
+    ReplConfig (``config.agent_runner.repl`` translated via
+    ``build_app_config``).
+    """
+    from backend.engines.agent_runner.repl_command_executor import (
+        ReplCommandExecutor,
+    )
+
+    if config is None:
+        config = build_app_config().repl
+    return ReplCommandExecutor(
+        process_runner=process_runner or SubprocessRunner(), config=config
+    )
