@@ -540,6 +540,8 @@ class AgentRunnerDeliberationSettings(BaseModel):
     default_rounds: int = 2
     default_synthesizer: str = "claude"
     default_output_dir: str = "logs/agent-runner/deliberations"
+    continue_on_agent_error: bool = True
+    agent_failure_timeout_seconds: int = 300
     profiles: dict[str, AgentRunnerDeliberationProfileSettings] = Field(
         default_factory=lambda: {
             "architect": AgentRunnerDeliberationProfileSettings(

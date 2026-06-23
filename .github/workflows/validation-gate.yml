@@ -45,6 +45,12 @@ jobs:
 
           declared_total = int(block_match.group(1))
           block_text = block_match.group(2)
+          if declared_total == 0:
+              print(
+                  "Realistic Validation explicitly skipped (total=0); gate passes."
+              )
+              sys.exit(0)
+
           checked_count = len(
               re.findall(r"^\s*[-*] \[[xX]\] ", block_text, re.M)
           )

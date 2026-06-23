@@ -6,9 +6,19 @@ import json
 from pathlib import Path
 
 from backend.core.shared.models.agent_deliberation import (
+    DeliberationAgentFailure,
     DeliberationResult,
     DeliberationSession,
 )
+
+
+def _serialize_failure(failure: DeliberationAgentFailure) -> dict:
+    return {
+        "profile_id": failure.profile_id,
+        "attempted_agent": failure.attempted_agent,
+        "fallback_agent": failure.fallback_agent,
+        "reason": failure.reason,
+    }
 
 
 def write_deliberation_outputs(
@@ -91,6 +101,7 @@ def write_deliberation_outputs(
         "output_dir": str(session.output_dir),
         "started_at": session.started_at,
         "finished_at": session.finished_at,
+        "failed_agents": [_serialize_failure(f) for f in result.failed_agents],
     }
     session_path.write_text(
         json.dumps(session_data, indent=2, ensure_ascii=False),

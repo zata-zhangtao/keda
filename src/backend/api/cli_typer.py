@@ -869,6 +869,10 @@ def deliberate_command(
         str | None,
         typer.Option("--session-id", help="Optional session ID for reproducibility."),
     ] = None,
+    strict: Annotated[
+        bool,
+        typer.Option("--strict", help="Return non-zero exit code if any agent fails."),
+    ] = False,
     repo: RepoOption = None,
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
@@ -886,6 +890,7 @@ def deliberate_command(
         synthesizer=synthesizer,
         output=output,
         session_id=session_id,
+        strict=strict,
     )
 
 

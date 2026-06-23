@@ -53,7 +53,12 @@ def _run_init_command(
             markup=False,
         )
         return 0
-    console.print(f"[green]Wrote IAR local config:[/] {init_result.config_path}")
+    if init_result.wrote_file:
+        console.print(f"[green]Wrote IAR local config:[/] {init_result.config_path}")
+    else:
+        console.print(
+            f"[dim]IAR local config already up to date:[/] {init_result.config_path}"
+        )
     copy_skills_flag = (
         False
         if getattr(parsed, "skip_skills", False)

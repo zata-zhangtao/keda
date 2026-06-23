@@ -17,12 +17,24 @@ class DeliberationAgentProfile:
 
 
 @dataclass(frozen=True)
+class DeliberationAgentFailure:
+    """Record of a single agent failure during deliberation."""
+
+    profile_id: str
+    attempted_agent: str
+    fallback_agent: str | None
+    reason: str
+
+
+@dataclass(frozen=True)
 class DeliberationConfig:
     """Deliberation defaults and profiles."""
 
     default_rounds: int = 2
     default_synthesizer: str = "claude"
     default_output_dir: str = "logs/agent-runner/deliberations"
+    continue_on_agent_error: bool = True
+    agent_failure_timeout_seconds: int = 300
     profiles: tuple[DeliberationAgentProfile, ...] = field(
         default_factory=lambda: (
             DeliberationAgentProfile(
@@ -99,6 +111,7 @@ class DeliberationResult:
     output_dir: str
     started_at: str
     finished_at: str
+    failed_agents: tuple[DeliberationAgentFailure, ...] = ()
 
 
 @dataclass(frozen=True)

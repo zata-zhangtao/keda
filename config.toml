@@ -430,6 +430,8 @@ allow_execute_yes = true
 default_rounds = 2
 default_synthesizer = "claude"
 default_output_dir = "logs/agent-runner/deliberations"
+continue_on_agent_error = true
+agent_failure_timeout_seconds = 300
 
 [agent_runner.deliberation.profiles.architect]
 agent = "claude"

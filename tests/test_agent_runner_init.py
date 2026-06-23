@@ -64,11 +64,11 @@ def test_iar_init_dry_run_real_entry(tmp_path: Path) -> None:
     assert not (repo_path / ".iar.toml").exists()
 
 
-def test_iar_init_writes_protects_and_force_overwrites(
+def test_iar_init_writes_idempotent_and_force_overwrites(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """iar init should write once, protect existing files, and honor --force."""
+    """iar init should write once, stay idempotent when unchanged, and honor --force."""
     repo_path = _init_git_repository(tmp_path, "target")
     monkeypatch.chdir(repo_path)
 
@@ -106,13 +106,31 @@ def test_iar_init_writes_protects_and_force_overwrites(
     assert "[agent_runner.repository]" in first_config_text
     assert "[agent_runner.git]" in first_config_text
     assert "[agent_runner.runner]" in first_config_text
-    assert second_exit_code == 1
+    assert second_exit_code == 0
     assert protected_config_text == first_config_text
     assert force_exit_code == 0
     assert 'id = "replacement"' in overwritten_config_text
     assert 'display_name = "Replacement"' in overwritten_config_text
     assert 'remote = "upstream"' in overwritten_config_text
     assert 'base_branch = "develop"' in overwritten_config_text
+
+
+def test_iar_init_protects_diverged_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """iar init should fail without --force when the existing config diverged."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    monkeypatch.chdir(repo_path)
+
+    assert main(["init"]) == 0
+    config_path = repo_path / ".iar.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + "\n# extra", encoding="utf-8"
+    )
+
+    assert main(["init"]) == 1
+    assert "# extra" in config_path.read_text(encoding="utf-8")
 
 
 def test_detect_verification_commands_without_pyproject(tmp_path: Path) -> None:
