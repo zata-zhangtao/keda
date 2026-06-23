@@ -200,7 +200,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(daemon_run_options)
     add_all_repositories_option(daemon_run_options)
 
-    daemon_parser = subparsers.add_parser("daemon", parents=[daemon_run_options])
+    daemon_parser = subparsers.add_parser(
+        "daemon",
+        parents=[daemon_run_options],
+        help=(
+            "Run the agent runner continuously for the current initialized "
+            "repository (or pass --all to target every enabled registry entry)."
+        ),
+    )
     daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command")
 
     daemon_subparsers.add_parser("run", parents=[daemon_run_options])
@@ -220,7 +227,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(review_parser)
     add_all_repositories_option(review_parser)
 
-    review_daemon_parser = subparsers.add_parser("review-daemon")
+    review_daemon_parser = subparsers.add_parser(
+        "review-daemon",
+        help=(
+            "Run supervisor review continuously for the current initialized "
+            "repository (or pass --all to target every enabled registry entry)."
+        ),
+    )
     review_daemon_parser.add_argument("--interval", type=int, default=None)
     review_daemon_parser.add_argument(
         "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
