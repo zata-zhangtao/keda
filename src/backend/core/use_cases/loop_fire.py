@@ -263,7 +263,7 @@ def fire_loop(
     prd_path.parent.mkdir(parents=True, exist_ok=True)
     prd_path.write_text(rendered_body, encoding="utf-8")
 
-    if not task.run_now and _issue_already_exists(
+    if _issue_already_exists(
         github_client,
         loop_id=task.id,
         day_token=day_token,

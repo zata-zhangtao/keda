@@ -10,7 +10,6 @@ fire is logged but does not stop the daemon.
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -153,6 +152,3 @@ def run_loop_daemon(
             return
         _logger.info("Loop daemon sleeping for %d seconds.", interval)
         clock.sleep_seconds(interval)
-        # ``time.sleep`` is kept as a safety net so a buggy clock cannot
-        # accidentally spin the daemon.
-        time.sleep(0)

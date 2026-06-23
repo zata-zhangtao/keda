@@ -272,7 +272,6 @@ def _coerce_optional_string(value: Any) -> str | None:
 
 
 _VAR_PATTERN = re.compile(r"\{\{\s*(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
-_TITLE_VAR_PATTERN = re.compile(r"\{\{\s*(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 
 
 def render_loop_recipe(
