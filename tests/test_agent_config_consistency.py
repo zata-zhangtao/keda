@@ -135,7 +135,7 @@ def test_factory_build_app_config_maps_supervising() -> None:
     app_config = build_app_config()
     assert app_config.labels.supervising == "agent/supervising"
     assert app_config.pre_pr_review.enabled is True
-    assert app_config.pre_pr_review.timeout_seconds == 900
+    assert app_config.pre_pr_review.timeout_seconds == 1800
     assert app_config.post_pr_supervisor.enabled is True
 
 

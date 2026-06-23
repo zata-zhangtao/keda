@@ -342,7 +342,7 @@ allow_same_agent = true
 # review 不通过时的最大修复轮数（默认 2，最后一轮允许 reviewer 提供最终修复 commit request）
 max_attempts = 2
 # review agent 最长运行秒数
-timeout_seconds = 900
+timeout_seconds = 1800
 # reviewer 报出 findings 但未写 commit request 时，同一轮内追加提醒的最大次数（默认 1）
 commit_request_reminder_attempts = 1
 # 自定义 review 提示词；空列表走代码默认模板，默认模板会调用 code-reviewer skill 并要求输出 findings JSON 数组
@@ -1817,7 +1817,7 @@ enabled = true
 review_agent = "auto"
 allow_same_agent = true
 max_attempts = 2
-timeout_seconds = 900
+timeout_seconds = 1800
 commit_request_reminder_attempts = 1
 
 [agent_runner.post_pr_supervisor]

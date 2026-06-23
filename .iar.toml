@@ -92,7 +92,7 @@ allow_same_agent = true
 # review 不通过时的最大修复轮数
 max_attempts = 2
 # review agent 最长运行秒数
-timeout_seconds = 900
+timeout_seconds = 1800
 review_prompt_template = []
 
 # Draft PR 创建后的自动 supervisor 配置

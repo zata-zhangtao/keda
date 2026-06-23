@@ -199,7 +199,7 @@ enabled = true
 review_agent = "auto"
 allow_same_agent = true
 max_attempts = 2
-timeout_seconds = 900
+timeout_seconds = 1800
 # Review rules appended after the review packet. Empty list = use the
 # embedded default that calls the ``code-reviewer`` skill and asks the
 # reviewer to emit structured findings. Override line-by-line in
@@ -495,11 +495,6 @@ display_name = "Keda Main"
 path = "/Users/zata/.iar/repos/zata-zhangtao/fsense"
 enabled = true
 display_name = "fsense"
-
-[agent_runner.repositories.zata-zhangtao-keda]
-path = "/Users/zata/.iar/repos/zata-zhangtao/keda"
-enabled = true
-display_name = "keda"
 
 [agent_runner.repositories.zata-zhangtao-freshai]
 path = "/Users/zata/.iar/repos/zata-zhangtao/freshai"

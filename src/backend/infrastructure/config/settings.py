@@ -478,7 +478,7 @@ class AgentRunnerPrePrReviewSettings(BaseModel):
     review_agent: str = "auto"
     allow_same_agent: bool = True
     max_attempts: int = 2
-    timeout_seconds: int = 900
+    timeout_seconds: int = 1800
     # When the reviewer reports findings but fails to write a commit request,
     # the runner appends a reminder and re-invokes the reviewer up to this
     # many times within the same review cycle.
