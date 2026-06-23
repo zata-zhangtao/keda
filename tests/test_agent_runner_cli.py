@@ -543,7 +543,62 @@ def test_main_daemon_status_shows_managed_and_unmanaged(capsys, monkeypatch) -> 
     assert "1234" in output
     assert "5678" in output
     assert "/usr/bin/iar" in output
+    assert "log_path" in output
+    assert "/tmp/log" in output
 
+
+def test_main_daemon_status_shows_dash_for_unmanaged_log_path(
+    capsys, monkeypatch
+) -> None:
+    """Unmanaged processes with empty log_path should show '-' in the table."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+    mock_context.display_name = "Repo"
+
+    unmanaged_record = RunnerProcessRecord(
+        process_id="unmanaged-9999",
+        repo_id="repo",
+        kind=RunnerProcessKind.DAEMON,
+        pid=9999,
+        status="running",
+        exit_code=None,
+        log_path="",
+        command=("/usr/bin/iar", "daemon", "--repo-id", "repo"),
+        started_at="2026-06-23T11:00:00Z",
+        stopped_at=None,
+    )
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = []
+    mock_supervisor.list_unmanaged_processes.return_value = [unmanaged_record]
+
+    mock_editor = MagicMock()
+    mock_editor.list_repositories.return_value = []
+
+    monkeypatch.setenv("COLUMNS", "200")
+
+    with patch(
+        "backend.api.cli_registry.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch(
+        "backend.api.cli_registry.create_process_supervisor",
+        return_value=mock_supervisor,
+    ), patch(
+        "backend.api.cli_registry.create_registry_editor",
+        return_value=mock_editor,
+    ):
+        exit_code = main(["daemon", "status", "--repo-id", "repo"])
+
+    captured = capsys.readouterr()
+    output = _strip_ansi(captured.out)
+    assert exit_code == 0
+    assert "log_path" in output
+    assert "-" in output
 
 def test_main_daemon_status_empty(capsys, monkeypatch) -> None:
     """daemon status should report when no processes are running."""
@@ -3579,3 +3634,168 @@ def test_main_takeover_noninteractive_repos(capsys, monkeypatch) -> None:
     mock_execute.assert_called_once()
     captured = capsys.readouterr()
     assert "Takeover complete" in captured.out
+
+
+def test_cli_parser_logs() -> None:
+    """`iar logs` should accept --repo-id, --kind, --lines, --follow."""
+    parser = build_parser()
+    parsed = parser.parse_args(
+        ["logs", "--repo-id", "keda", "--kind", "review_daemon", "--lines", "50", "-f"]
+    )
+    assert parsed.command == "logs"
+    assert parsed.repo_id == "keda"
+    assert parsed.kind == "review_daemon"
+    assert parsed.lines == 50
+    assert parsed.follow is True
+
+
+def test_cli_parser_logs_defaults() -> None:
+    """`iar logs` should default --kind=daemon, --lines=200, --follow=False."""
+    parser = build_parser()
+    parsed = parser.parse_args(["logs", "--repo-id", "keda"])
+    assert parsed.command == "logs"
+    assert parsed.kind == "daemon"
+    assert parsed.lines == 200
+    assert parsed.follow is False
+
+
+def test_main_logs_prints_last_n_lines(capsys, monkeypatch) -> None:
+    """`iar logs` should print the last N lines of a managed process log."""
+    from backend.api.cli import main
+    from backend.core.shared.interfaces.runner_console import ProcessLogChunk
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    tmp_log = Path("/tmp/iar-test-logs-output.log")
+    log_lines = [f"line {i}\n" for i in range(1, 31)]
+    tmp_log.write_text("".join(log_lines), encoding="utf-8")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+
+    record = RunnerProcessRecord(
+        process_id="proc-logs",
+        repo_id="repo",
+        kind=RunnerProcessKind.DAEMON,
+        pid=1111,
+        status="running",
+        exit_code=None,
+        log_path=str(tmp_log),
+        command=("iar", "daemon", "--repo-id", "repo"),
+        started_at="2026-06-23T10:00:00Z",
+        stopped_at=None,
+    )
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = [record]
+    mock_supervisor.list_unmanaged_processes.return_value = []
+    mock_supervisor.get_process.return_value = record
+
+    def _fake_read_log(process_id, *, offset, max_bytes):
+        with open(tmp_log, "rb") as fh:
+            fh.seek(offset)
+            data = fh.read(max_bytes)
+        return ProcessLogChunk(
+            content=data.decode("utf-8", errors="replace"),
+            next_offset=offset + len(data),
+            eof=True,
+        )
+
+    mock_supervisor.read_log.side_effect = _fake_read_log
+
+    try:
+        with patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[mock_context],
+        ), patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ):
+            exit_code = main(
+                ["logs", "--repo-id", "repo", "--lines", "5"]
+            )
+
+        captured = capsys.readouterr()
+        output = _strip_ansi(captured.out)
+        assert exit_code == 0
+        assert "line 26" in output
+        assert "line 27" in output
+        assert "line 28" in output
+        assert "line 29" in output
+        assert "line 30" in output
+    finally:
+        if tmp_log.exists():
+            tmp_log.unlink()
+
+
+def test_main_logs_fallback_no_running_process(capsys, monkeypatch) -> None:
+    """`iar logs` should print fallback guidance when no running process exists."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = []
+    mock_supervisor.list_unmanaged_processes.return_value = []
+
+    with patch(
+        "backend.api.cli_registry.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch(
+        "backend.api.cli_registry.create_process_supervisor",
+        return_value=mock_supervisor,
+    ):
+        exit_code = main(["logs", "--repo-id", "repo"])
+
+    captured = capsys.readouterr()
+    output = _strip_ansi(captured.out)
+    assert exit_code == 0
+    assert "No running" in output or "app-" in output
+    assert "Traceback" not in output
+
+
+def test_main_logs_fallback_with_historical_log(capsys, monkeypatch) -> None:
+    """`iar logs` should fall back to historical log path when no running process."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    mock_context = MagicMock()
+    mock_context.repo_path = Path("/tmp/repo")
+    mock_context.repo_id = "repo"
+
+    historical_record = RunnerProcessRecord(
+        process_id="hist-proc",
+        repo_id="repo",
+        kind=RunnerProcessKind.DAEMON,
+        pid=2222,
+        status="exited",
+        exit_code=0,
+        log_path="/var/log/iar/historical.log",
+        command=("iar", "daemon", "--repo-id", "repo"),
+        started_at="2026-06-20T10:00:00Z",
+        stopped_at="2026-06-20T11:00:00Z",
+    )
+
+    mock_supervisor = MagicMock()
+    mock_supervisor.list_processes.return_value = [historical_record]
+    mock_supervisor.list_unmanaged_processes.return_value = []
+
+    with patch(
+        "backend.api.cli_registry.resolve_repository_targets",
+        return_value=[mock_context],
+    ), patch(
+        "backend.api.cli_registry.create_process_supervisor",
+        return_value=mock_supervisor,
+    ):
+        exit_code = main(["logs", "--repo-id", "repo"])
+
+    captured = capsys.readouterr()
+    output = _strip_ansi(captured.out)
+    assert exit_code == 0
+    assert "Traceback" not in output

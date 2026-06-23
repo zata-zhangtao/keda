@@ -27,6 +27,7 @@ from backend.api.cli_prd_utils import (
 )
 from backend.api.cli_registry import (
     _run_daemon_status_command,
+    _run_logs_command,
     _run_registry_list_command,
     _run_registry_reinit_command,
     _run_registry_remove_command,
@@ -298,7 +299,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
     # 2. cwd 命中 disabled 注册仓 → 报错
     # 3. cwd 命中多个 enabled 注册仓 → 报错，要求显式选择
     # 4. cwd 未命中任何注册仓或未初始化 → 报错，不再回退到 --all
-    if parsed.command in ("daemon", "review-daemon"):
+    if parsed.command in ("daemon", "review-daemon", "logs"):
         if (
             repo_id is None
             and repo_override is None
@@ -1160,6 +1161,15 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             ):
                 return 1
             return 0
+
+        if parsed.command == "logs":
+            return _run_logs_command(
+                parsed=parsed,
+                process_runner=process_runner,
+                runner_settings=runner_settings,
+                repo_id=repo_id,
+                repo_override=repo_override,
+            )
     except IARRepositoryNotInitializedError as exc:
         return _handle_not_initialized_error(exc)
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
