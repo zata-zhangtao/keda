@@ -388,6 +388,7 @@ def run_agent_deliberation(
     target_repo_path: Path,
     output_view: IAgentOutputView | None = None,
     resolver: "Callable[[DeliberationAgentProfile, str], DeliberationAgentProfile | None] | None" = None,
+    synthesis_prompt_builder: Callable[[DeliberationRequest, str], str] | None = None,
 ) -> DeliberationResult:
     """Run a multi-agent deliberation session.
 
@@ -403,6 +404,13 @@ def run_agent_deliberation(
             agent failure. Receives the failed profile and a reason string, and
             returns a fallback profile or None. If None, failures are recorded
             without retry.
+        synthesis_prompt_builder: Optional callable that builds the synthesizer
+            prompt from the original ``request`` and the full discussion
+            ``transcript``. When ``None`` the built-in
+            :func:`_build_synthesis_prompt` is used (the historical
+            ``iar deliberate`` 5-section report shape); callers such as the
+            Phase 0 ``agent/deliberate`` queue pass a custom builder that
+            asks for a structured clarifying-question list instead.
 
     Returns:
         DeliberationResult with the final report.
@@ -492,7 +500,10 @@ def run_agent_deliberation(
 
         # Synthesis
         full_transcript = "\n\n".join(transcript_parts)
-        synthesis_prompt = _build_synthesis_prompt(request, full_transcript)
+        if synthesis_prompt_builder is None:
+            synthesis_prompt = _build_synthesis_prompt(request, full_transcript)
+        else:
+            synthesis_prompt = synthesis_prompt_builder(request, full_transcript)
         synthesizer_workspace = workspace_root / "synthesizer"
         synthesizer_workspace.mkdir(parents=True, exist_ok=True)
         synthesis_output_path = synthesizer_workspace / "synthesis-output.md"

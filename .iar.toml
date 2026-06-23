@@ -41,7 +41,8 @@ recovery_retry_delay_seconds = 30
 # 提交前自动运行的验证命令；任一命令失败会进入 recovery
 verification_commands = [
     "git diff --check",
-    "uv run mkdocs build",
+    "uv run mkdocs build --strict",
+    "uv run python hooks/check_max_file_lines.py --max-lines 1000 $(find src/backend -name '*.py')",
     "just test",
 ]
 

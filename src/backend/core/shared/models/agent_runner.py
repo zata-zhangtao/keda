@@ -126,6 +126,7 @@ class LabelConfig:
     validation_passed: str = "validation/passed"
     group_prefix: str = "task-group/"
     rework_prd: str = "agent/rework-prd"
+    deliberate: str = "agent/deliberate"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",

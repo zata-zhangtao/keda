@@ -141,6 +141,7 @@ codex = "agent/codex"
 claude = "agent/claude"
 kimi = "agent/kimi"
 rework_prd = "agent/rework-prd"
+deliberate = "agent/deliberate"
 
 [agent_runner.git]
 remote = "zata"
@@ -432,6 +433,10 @@ default_synthesizer = "claude"
 default_output_dir = "logs/agent-runner/deliberations"
 continue_on_agent_error = true
 agent_failure_timeout_seconds = 300
+# After this many consecutive AI-asked rounds with no new user reply,
+# append a soft hint to the question-list comment suggesting the operator
+# swap `agent/deliberate` for `agent/rework-prd` to lock the scope in.
+stale_rounds_before_hint = 3
 
 [agent_runner.deliberation.profiles.architect]
 agent = "claude"
@@ -524,3 +529,5 @@ stop_timeout_seconds = 30
 [agent_runner.daemon]
 review_interval_seconds = 120
 run_interval_seconds = 120
+# Maximum `agent/deliberate` Issues to drive through Phase 0 per pass.
+max_deliberation_issues = 1

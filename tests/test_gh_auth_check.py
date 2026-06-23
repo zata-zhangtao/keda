@@ -142,9 +142,9 @@ def test_main_labels_sync_exits_on_auth_failure(capsys) -> None:
     mock_context.config.labels = MagicMock()
 
     with patch(
-        "backend.api.cli.resolve_repository_targets",
+        "backend.api.cli_helpers.resolve_repository_targets",
         return_value=[mock_context],
-    ), patch("backend.api.cli.create_github_client") as mock_gh_client, patch(
+    ), patch("backend.api.cli_helpers.create_github_client") as mock_gh_client, patch(
         "backend.api.cli.require_iar_repository_initialized"
     ):
         mock_gh_client.return_value.check_auth_status.return_value = GhAuthStatus(

@@ -41,10 +41,10 @@
 
 除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **Phase 0 提问真实验证**：通过 `uv run pytest tests/test_agent_runner_cli.py -k "deliberation" -q`，以真实 `backend.api.cli.main(["run", "--once", ...])` 入口 + fake `IGitHubClient`/fake transcript runner，验证带 `agent/deliberate` 的 Issue 被追加问题清单评论且写入 `deliberation_question_posted` marker。
-- [ ] **轮次状态机真实验证**：通过 `uv run pytest tests/test_agent_runner_deliberation_issues.py -q`，验证"AI 已问且用户未答 → 跳过"与"用户已答 → 续问"两条路径。
-- [ ] **实现 prompt 内联 PRD 真实验证**：通过 `uv run pytest tests/test_run_agent.py -k "prompt_inlines_prd" -q`，验证 `build_prompt` 输出包含 worktree 内 PRD 文件正文。
-- [ ] **无回归真实验证**：通过 `just test` 确认现有 daemon/run-once/deliberation/CLI 测试全部通过。
+- [x] **Phase 0 提问真实验证**：通过 `uv run pytest tests/test_agent_runner_cli.py -k "deliberation" -q`，以真实 `backend.api.cli.main(["run", "--once", ...])` 入口 + fake `IGitHubClient`/fake transcript runner，验证带 `agent/deliberate` 的 Issue 被追加问题清单评论且写入 `deliberation_question_posted` marker。
+- [x] **轮次状态机真实验证**：通过 `uv run pytest tests/test_agent_runner_deliberation_issues.py -q`，验证"AI 已问且用户未答 → 跳过"与"用户已答 → 续问"两条路径。
+- [x] **实现 prompt 内联 PRD 真实验证**：通过 `uv run pytest tests/test_run_agent.py -k "prompt_inlines_prd" -q`，验证 `build_prompt` 输出包含 worktree 内 PRD 文件正文。
+- [x] **无回归真实验证**：通过 `just test` 确认现有 daemon/run-once/deliberation/CLI 测试全部通过。
 
 **为什么单元测试不够**：Phase 0 的价值在于"真实 CLI 轮询入口如何按 marker 状态决定提问/跳过、如何把合议输出落成 Issue 评论"，必须经 `iar run --once` 入口 + 真实 marker 解析/格式化往返验证；孤立的纯函数单测无法证明轮询编排、标签队列与评论 marker 状态机在真实入口闭环。
 
@@ -426,52 +426,52 @@ No external validation required; repository evidence was sufficient.
 
 ## 6. Definition Of Done
 
-- [ ] Phase 0 `process_deliberation_issues` 接入 daemon 与 run-once,排在 PRD rework 之前。
-- [ ] `agent/deliberate` 标签存在于 `LabelConfig` 与 `config.toml`,并可被 `.iar.toml` 覆盖链路加载。
-- [ ] marker 状态机正确区分"等待用户"与"轮到 AI",等待时不追加评论。
-- [ ] 轮到 AI 时复用 `run_agent_deliberation` 内部互辩并以问题清单 synthesis 落评论 + 写 marker。
-- [ ] `run_agent_deliberation` 的 `synthesis_prompt_builder` 默认 `None` 时行为与现状一致(`iar deliberate` 回归)。
-- [ ] 未注入 transcript runner factory 时 Phase 0 安全跳过,现有 run-once/daemon 零回归。
-- [ ] 实现/恢复/续作 prompt 内联 PRD 全文(长度上限内),PRD 缺失时回退指针文案。
-- [ ] `just test` 全绿;`uv run mkdocs build --strict` 通过。
-- [ ] `docs/guides/agent-runner.md` 同步 deliberate 异步讨论与上下文内联说明。
+- [x] Phase 0 `process_deliberation_issues` 接入 daemon 与 run-once,排在 PRD rework 之前。
+- [x] `agent/deliberate` 标签存在于 `LabelConfig` 与 `config.toml`,并可被 `.iar.toml` 覆盖链路加载。
+- [x] marker 状态机正确区分"等待用户"与"轮到 AI",等待时不追加评论。
+- [x] 轮到 AI 时复用 `run_agent_deliberation` 内部互辩并以问题清单 synthesis 落评论 + 写 marker。
+- [x] `run_agent_deliberation` 的 `synthesis_prompt_builder` 默认 `None` 时行为与现状一致(`iar deliberate` 回归)。
+- [x] 未注入 transcript runner factory 时 Phase 0 安全跳过,现有 run-once/daemon 零回归。
+- [x] 实现/恢复/续作 prompt 内联 PRD 全文(长度上限内),PRD 缺失时回退指针文案。
+- [x] `just test` 全绿;`uv run mkdocs build --strict` 通过。
+- [x] `docs/guides/agent-runner.md` 同步 deliberate 异步讨论与上下文内联说明。
 
 ## 7. Acceptance Checklist
 
 ### Architecture Acceptance
 
-- [ ] `src/backend/core/use_cases/agent_runner_deliberation_issues.py` 不导入 `engines`/`infrastructure`/`api`,合议执行经注入的 `IAgentTranscriptRunner` 完成。
-- [ ] transcript runner 具体实现仍在 `engines`,由 `api/cli.py` 装配注入;`core` 仅依赖 `IAgentTranscriptRunner` 端口。
-- [ ] 复用 `list_issues_by_label`,未新增 `IGitHubClient` 列举方法(`rg -n "list_deliberate_issues" src/backend` 无结果)。
-- [ ] `LabelConfig.deliberate` 与现有 `rework_prd` 同模型定义,`config.toml` `[agent_runner.labels]` 含 `deliberate`。
+- [x] `src/backend/core/use_cases/agent_runner_deliberation_issues.py` 不导入 `engines`/`infrastructure`/`api`,合议执行经注入的 `IAgentTranscriptRunner` 完成。
+- [x] transcript runner 具体实现仍在 `engines`,由 `api/cli.py` 装配注入;`core` 仅依赖 `IAgentTranscriptRunner` 端口。
+- [x] 复用 `list_issues_by_label`,未新增 `IGitHubClient` 列举方法(`rg -n "list_deliberate_issues" src/backend` 无结果)。
+- [x] `LabelConfig.deliberate` 与现有 `rework_prd` 同模型定义,`config.toml` `[agent_runner.labels]` 含 `deliberate`。
 
 ### Dependency Acceptance
 
-- [ ] Section 1 `Delivery Dependencies` 记录对 resilience PRD 的 soft 依赖,且实现说明里给出 kimi 未修时的临时 skeptic profile 替换方案。
-- [ ] 与 `iar-repl-interactive-entry`、`agent-runner-issue-context-logs` 的关系在 Section 3 说明,且 `agent_runner_feedback.py` 改动不串改 `run_agent_once.py` 的 `run_agent_with_prompt` 签名(`rg -n "def run_agent_with_prompt" src/backend/core/use_cases/run_agent_once.py` 与预期一致)。
+- [x] Section 1 `Delivery Dependencies` 记录对 resilience PRD 的 soft 依赖,且实现说明里给出 kimi 未修时的临时 skeptic profile 替换方案。
+- [x] 与 `iar-repl-interactive-entry`、`agent-runner-issue-context-logs` 的关系在 Section 3 说明,且 `agent_runner_feedback.py` 改动不串改 `run_agent_once.py` 的 `run_agent_with_prompt` 签名(`rg -n "def run_agent_with_prompt" src/backend/core/use_cases/run_agent_once.py` 与预期一致)。
 
 ### Behavior Acceptance
 
-- [ ] 带 `agent/deliberate`、无 AI 提问的 Issue,经一次 `iar run --once` 新增一条问题清单评论且含 `deliberation_question_posted` marker。
-- [ ] 最新 marker 后无新用户评论时,再次 `iar run --once` 不新增评论。
-- [ ] 用户回评论后,下一次轮询追加新一轮问题清单,marker `cycle` 递增、`issue_comments_count` 更新。
-- [ ] 问题清单包含范围边界/约束/验收标准/技术选型/风险五类小标题。
-- [ ] 连续达到 `stale_rounds_before_hint` 轮时评论附带"可换 `agent/rework-prd` 落地"软提示。
-- [ ] 单个 deliberate Issue 处理失败被隔离:打 `labels.failed` + 评论,不影响 Phase 1/Phase 2。
-- [ ] `build_prompt` 在 worktree 含 PRD 时,输出包含 PRD 文件正文(上限内);PRD 缺失时输出回退指针文案。
+- [x] 带 `agent/deliberate`、无 AI 提问的 Issue,经一次 `iar run --once` 新增一条问题清单评论且含 `deliberation_question_posted` marker。
+- [x] 最新 marker 后无新用户评论时,再次 `iar run --once` 不新增评论。
+- [x] 用户回评论后,下一次轮询追加新一轮问题清单,marker `cycle` 递增、`issue_comments_count` 更新。
+- [x] 问题清单包含范围边界/约束/验收标准/技术选型/风险五类小标题。
+- [x] 连续达到 `stale_rounds_before_hint` 轮时评论附带"可换 `agent/rework-prd` 落地"软提示。
+- [x] 单个 deliberate Issue 处理失败被隔离:打 `labels.failed` + 评论,不影响 Phase 1/Phase 2。
+- [x] `build_prompt` 在 worktree 含 PRD 时,输出包含 PRD 文件正文(上限内);PRD 缺失时输出回退指针文案。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 新增 deliberate 异步讨论章节(标签流转、轮次、收敛换标签、实现 prompt 内联)。
-- [ ] 若新增导航项则 `mkdocs.yml` 同步。
+- [x] `docs/guides/agent-runner.md` 新增 deliberate 异步讨论章节(标签流转、轮次、收敛换标签、实现 prompt 内联)。
+- [x] 若新增导航项则 `mkdocs.yml` 同步(新增章节落在既有 `guides/agent-runner.md`,无需新增 nav 项;`uv run mkdocs build --strict` 通过)。
 
 ### Validation Acceptance
 
-- [ ] `uv run pytest tests/test_agent_runner_cli.py -k "deliberation" -q` 通过(真实 `iar run --once` 入口触发 Phase 0)。
-- [ ] `uv run pytest tests/test_agent_runner_deliberation_issues.py -q` 通过(状态机三路径)。
-- [ ] `uv run pytest tests/test_run_agent.py -k "prompt_inlines_prd" -q` 通过(实现 prompt 内联)。
-- [ ] `uv run pytest tests/test_run_agent_deliberation.py -q` 通过(synthesis 默认模式回归)。
-- [ ] `just test` 全绿;`uv run mkdocs build --strict` 成功。
+- [x] `uv run pytest tests/test_agent_runner_cli.py -k "deliberation" -q` 通过(真实 `iar run --once` 入口触发 Phase 0)。证据:`.iar/evidence/rv-1-phase0-cli-deliberation.log`。
+- [x] `uv run pytest tests/test_agent_runner_deliberation_issues.py -q` 通过(状态机三路径)。证据:`.iar/evidence/rv-2-state-machine-deliberation.log`。
+- [x] `uv run pytest tests/test_run_agent.py -k "prompt_inlines_prd" -q` 通过(实现 prompt 内联)。证据:`.iar/evidence/rv-3-prompt-inline-prd.log`。
+- [x] `uv run pytest tests/test_run_agent_deliberation.py -q` 通过(synthesis 默认模式回归)。证据:`.iar/evidence/rv-5-deliberation-default-mode.log`。
+- [x] `just test` 全绿(`uv run pytest tests/ -q` 1162 passed);`uv run mkdocs build --strict` 成功。证据:`rv-4-full-regression.log`、`rv-6-lint.log`、`rv-7-mkdocs-strict.log`。
 
 ## 8. Functional Requirements
 

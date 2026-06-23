@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
+    IAgentTranscriptRunner,
     IContentGenerator,
     IGitHubClient,
     IProcessRunner,
@@ -34,6 +35,8 @@ def run_agent_daemon(
     run_history_store: IRunHistoryStore | None = None,
     run_trigger: str = "cli_daemon",
     max_prd_issues: int = 1,
+    transcript_runner_factory: Callable[[Path], IAgentTranscriptRunner] | None = None,
+    max_deliberation_issues: int = 1,
 ) -> None:
     """Run the queue poller forever across all target repositories.
 
@@ -49,6 +52,12 @@ def run_agent_daemon(
         run_history_store: Optional side-channel run history store.
         run_trigger: Trigger source recorded with each run record.
         max_prd_issues: Maximum rework-prd issues to process per pass per repository.
+        transcript_runner_factory: Optional factory that returns an
+            :class:`IAgentTranscriptRunner` for a repo path. When omitted, the
+            Phase 0 deliberation queue is skipped entirely (zero regression for
+            callers that do not assemble a runner).
+        max_deliberation_issues: Maximum ``agent/deliberate`` Issues to process
+            per Phase 0 pass. Defaults to 1 to bound multi-agent cost.
     """
     while True:
         for context in contexts:
@@ -63,6 +72,28 @@ def run_agent_daemon(
                 if content_generator_factory is not None
                 else None
             )
+
+            # Phase 0: Asynchronous Issue-comment deliberation on Issues that
+            # explicitly opt in via the ``agent/deliberate`` label. Skipped
+            # when no transcript runner factory was injected so existing
+            # callers (tests, ad-hoc scripts) keep their previous behaviour.
+            if transcript_runner_factory is not None:
+                try:
+                    from backend.core.use_cases.agent_runner_deliberation_issues import (
+                        process_deliberation_issues,
+                    )
+
+                    process_deliberation_issues(
+                        repo_path=context.repo_path,
+                        config=context.config,
+                        github_client=github_client,
+                        transcript_runner_factory=transcript_runner_factory,
+                        max_issues=max_deliberation_issues,
+                        stale_rounds_before_hint=context.config.deliberation.stale_rounds_before_hint,
+                    )
+                except Exception as exc:  # noqa: BLE001 - daemon must survive Phase 0 faults.
+                    _logger.error("Deliberation phase failed: %s", exc)
+
             try:
                 # Phase 1: PRD rework before normal ready-issue execution.
                 process_prd_rework_issues(

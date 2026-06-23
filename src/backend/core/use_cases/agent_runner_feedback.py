@@ -21,6 +21,12 @@ from backend.core.use_cases.agent_runner_structured_evidence import (
 
 _MAX_RECOVERY_OUTPUT_LENGTH = 12000
 
+# Default ceiling for inlining the canonical PRD inside the implementation /
+# recovery / continuation prompts. PRDs longer than this are truncated with a
+# pointer to the full file. Exposed as a parameter so future PRDs (or repos)
+# can raise or lower the ceiling without forking this helper.
+_DEFAULT_PRD_INLINE_MAX_CHARS = 20000
+
 
 class VerificationFailedError(RuntimeError):
     """Raised when configured verification commands do not pass."""
@@ -86,27 +92,90 @@ _DEFAULT_EXECUTION_TEMPLATE = "\n".join(
 )
 
 
-def _build_prd_line(issue: IssueSummary) -> str:
-    """Build the PRD reference line for a prompt template."""
-    prd_path = extract_prd_path(issue.body)
-    if prd_path:
-        prd_path_obj = Path(prd_path)
-        move_instruction = ""
-        if (
-            len(prd_path_obj.parts) >= 2
-            and prd_path_obj.parts[0] == "tasks"
-            and prd_path_obj.parts[1] == "pending"
-        ):
-            move_instruction = (
-                " If all checklist items are complete, move the PRD from "
-                "`tasks/pending/` to `tasks/archive/`."
-            )
-        return (
-            f"Also read the canonical PRD at `{prd_path}`. "
-            "Before requesting a commit, update the PRD's Acceptance Checklist "
-            f"to reflect completed work.{move_instruction}"
+def _read_prd_text(prd_path: Path) -> str | None:
+    """Return the canonical PRD file contents, or ``None`` if unreadable.
+
+    Reads with ``encoding="utf-8"`` (project rule) and swallows
+    :class:`OSError` so a transient filesystem error during prompt build does
+    not crash the runner — the caller falls back to the pointer line in that
+    case, which still tells the agent where the PRD lives.
+    """
+    try:
+        return prd_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _build_prd_closeout_instruction(prd_relative_path: str) -> str:
+    """Return the canonical "update checklist, archive if complete" footer."""
+    prd_path_obj = Path(prd_relative_path)
+    archive_clause = ""
+    if (
+        len(prd_path_obj.parts) >= 2
+        and prd_path_obj.parts[0] == "tasks"
+        and prd_path_obj.parts[1] == "pending"
+    ):
+        archive_clause = (
+            " If all Acceptance Checklist items are complete, move the PRD "
+            "from `tasks/pending/` to `tasks/archive/`."
         )
-    return "If the Issue references a PRD, read it before editing."
+    return (
+        "Before requesting a commit, update the PRD's Acceptance Checklist "
+        f"to reflect completed work.{archive_clause}"
+    )
+
+
+def _build_prd_context_block(
+    issue: IssueSummary,
+    worktree_path: Path,
+    *,
+    max_chars: int = _DEFAULT_PRD_INLINE_MAX_CHARS,
+) -> str:
+    """Render the PRD reference block for implementation/recovery/continuation prompts.
+
+    When the Issue references a canonical PRD and the file exists inside
+    ``worktree_path``, the full PRD text is inlined (up to ``max_chars``)
+    so the agent runs with the complete specification in context instead of
+    needing a separate read pass. When the file is missing or exceeds the
+    ceiling, a pointer line is returned so the agent still knows where the
+    PRD lives.
+
+    Args:
+        issue: The Issue being processed.
+        worktree_path: Repository worktree the agent will operate in.
+        max_chars: Maximum number of characters of PRD body to inline before
+            falling back to a pointer line with the full path.
+    """
+    prd_relative_path = extract_prd_path(issue.body)
+    if not prd_relative_path:
+        return "If the Issue references a PRD, read it before editing."
+
+    closeout_instruction = _build_prd_closeout_instruction(prd_relative_path)
+    prd_path = worktree_path / prd_relative_path
+    prd_text = _read_prd_text(prd_path)
+    if prd_text is None:
+        return (
+            f"Also read the canonical PRD at `{prd_relative_path}`. "
+            f"{closeout_instruction}"
+        )
+
+    if len(prd_text) <= max_chars:
+        inline_section = prd_text.rstrip()
+    else:
+        truncation_note = (
+            f"[PRD body truncated to {max_chars} chars; "
+            f"read the full canonical PRD at `{prd_relative_path}` for the "
+            "remaining context.]"
+        )
+        inline_section = prd_text[:max_chars].rstrip() + "\n\n" + truncation_note
+
+    return (
+        f"The canonical PRD is inlined below from `{prd_relative_path}`. "
+        f"{closeout_instruction}\n\n"
+        "--- BEGIN PRD ---\n"
+        f"{inline_section}\n"
+        "--- END PRD ---"
+    )
 
 
 def build_prompt(
@@ -128,7 +197,7 @@ def build_prompt(
             Issue 传空字符串。仅当模板含 ``{validation_line}`` 占位符时生效。
     """
     template = prompt_config.phases.get(phase, _DEFAULT_EXECUTION_TEMPLATE)
-    prd_line = _build_prd_line(issue)
+    prd_line = _build_prd_context_block(issue, worktree_path)
     return template.format(
         issue_number=issue.number,
         issue_title=issue.title,
@@ -402,9 +471,11 @@ def build_recovery_prompt(
     """Build a prompt that asks the agent to repair a failed attempt."""
     prd_path = extract_prd_path(issue.body)
     if prd_path:
+        prd_closeout = _build_prd_closeout_instruction(prd_path)
+        prd_context_block = _build_prd_context_block(issue, worktree_path)
         prd_line = (
-            f"Also re-check the canonical PRD at `{prd_path}` if it affects the fix. "
-            "Ensure the Acceptance Checklist is updated and the PRD is archived if complete."
+            "Re-check the canonical PRD below; update the Acceptance Checklist "
+            f"to reflect the recovery work. {prd_closeout}\n\n{prd_context_block}"
         )
     else:
         prd_line = "If the Issue references a PRD, re-check it if it affects the fix."
@@ -456,11 +527,12 @@ def build_progress_continuation_prompt(
     """
     prd_path = extract_prd_path(issue.body)
     if prd_path:
+        prd_closeout = _build_prd_closeout_instruction(prd_path)
+        prd_context_block = _build_prd_context_block(issue, worktree_path)
         prd_line = (
-            f"Read the canonical PRD at `{prd_path}` and its Acceptance Checklist "
-            "to see which items are already done and which remain. Update the "
-            "checklist as you complete items, and move the PRD from "
-            "`tasks/pending/` to `tasks/archive/` once every item is checked."
+            "The canonical PRD is inlined below. Use it and its Acceptance "
+            f"Checklist to see which items are already done. {prd_closeout}\n\n"
+            f"{prd_context_block}"
         )
     else:
         prd_line = "If the Issue references a PRD, read it to see the remaining work."
