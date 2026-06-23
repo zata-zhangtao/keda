@@ -118,6 +118,46 @@ def test_mark_issue_failed_falls_back_to_minimal_comment_on_rejection() -> None:
         "gh issue edit 84 --add-label agent/ready --remove-label agent/failed" in body
     )
     # The Issue is still transitioned to the failed state.
+
+
+def test_mark_issue_failed_transition_failure_recovery_guidance() -> None:
+    """A failed workflow transition to supervising should retry that transition."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue(
+        104, "Issue #104", "PRD path: `tasks/example.md`", ("agent/running",)
+    )
+    exc = subprocess.CalledProcessError(
+        returncode=1,
+        cmd=[
+            "gh",
+            "issue",
+            "edit",
+            "104",
+            "--add-label",
+            "agent/supervising",
+            "--remove-label",
+            "agent/running",
+        ],
+    )
+
+    _mark_issue_failed(
+        issue=issue,
+        config=AppConfig(),
+        github_client=fake_client,
+        exc=exc,
+    )
+
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    body = comment_calls[0]["body"]
+    assert "## Agent Runner Failed" in body
+    assert "### How To Recover" in body
+    assert (
+        "gh issue edit 104 --add-label agent/supervising --remove-label agent/failed"
+        in body
+    )
+    assert "finished its work" in body
+    assert "agent/ready" not in body
     label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
     assert any("agent/failed" in c["add"] for c in label_calls)
 

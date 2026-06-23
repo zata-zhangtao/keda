@@ -181,6 +181,53 @@ _USAGE_LIMIT_HINT_PATTERN = re.compile(
 )
 _USAGE_LIMIT_RESET_AT_PATTERN = re.compile(r"resets at (\S+)")
 
+#: Workflow labels that represent a completed implementation phase. When a
+#: failure occurs while transitioning to one of these labels, the agent's local
+#: work is already done; recovery should retry the transition rather than
+#: re-run the agent from ``agent/ready``.
+_COMPLETION_WORKFLOW_LABELS = frozenset({"agent/supervising", "agent/review"})
+
+#: Matches ``gh issue edit <number> ... --add-label <label>`` and captures the
+#: target label, regardless of option order or extra flags.
+_GH_ISSUE_EDIT_ADD_LABEL_PATTERN = re.compile(
+    r"gh issue edit\s+\d+\s+.*--add-label\s+(\S+)",
+    re.IGNORECASE,
+)
+
+
+def _detect_transition_target_label(exc: BaseException) -> str | None:
+    """Return the target workflow label if ``exc`` is a failed transition.
+
+    The GitHub CLI labels the transition command as
+    ``gh issue edit <n> --add-label <target> --remove-label <current>``.
+    When this command fails after the agent has already finished its work,
+    the operator should retry the transition instead of re-running the agent.
+
+    Args:
+        exc: The exception that caused the failure.
+
+    Returns:
+        The target label string if one can be parsed, otherwise ``None``.
+    """
+    if not isinstance(exc, subprocess.CalledProcessError):
+        return None
+    cmd = getattr(exc, "cmd", None)
+    if cmd is None:
+        return None
+    if isinstance(cmd, (list, tuple)):
+        cmd_str = " ".join(str(part) for part in cmd)
+    else:
+        cmd_str = str(cmd)
+    match = _GH_ISSUE_EDIT_ADD_LABEL_PATTERN.search(cmd_str)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def _is_completion_workflow_label(label: str) -> bool:
+    """Return whether ``label`` represents a post-implementation workflow state."""
+    return label in _COMPLETION_WORKFLOW_LABELS
+
 
 def detect_usage_limit_root_cause(failure_text: str) -> str | None:
     """Return a human-readable root-cause line for API usage limit failures.
@@ -265,7 +312,10 @@ def format_failure_comment(
         exc: The exception that caused the failure.
         attempt_results: Optional attempt history rendered as a table.
         issue_number: When provided, a recovery guidance section with a
-            copy-pastable relabel command is appended to the comment.
+            copy-pastable relabel command is appended to the comment. If the
+            exception is a failed workflow-label transition to a completion
+            state (e.g. ``agent/supervising``), the guidance retries that
+            transition instead of falling back to ``agent/ready``.
     """
     cause = exc.__cause__
     if isinstance(cause, subprocess.CalledProcessError):
@@ -294,25 +344,50 @@ def format_failure_comment(
     elif cause is not None:
         lines.extend(["```text", str(cause), "```", ""])
     if issue_number is not None:
-        lines.extend(
-            [
-                "### How To Recover",
-                "",
-                "After fixing the root cause, relabel the Issue so the "
-                "runner picks it up on its next poll:",
-                "",
-                "```bash",
-                f"gh issue edit {issue_number} "
-                "--add-label agent/ready --remove-label agent/failed",
-                "```",
-                "",
-                "If the worktree is dirty, remove it first "
-                f"(`git worktree remove <repo>-worktrees/tasks/issue-{issue_number}`). "
-                "See the 失败重跑 section in `docs/guides/agent-runner.md` "
-                "for the full procedure.",
-                "",
-            ]
-        )
+        transition_label = _detect_transition_target_label(exc)
+        if transition_label is not None and _is_completion_workflow_label(
+            transition_label
+        ):
+            lines.extend(
+                [
+                    "### How To Recover",
+                    "",
+                    "The agent finished its work, but the final workflow "
+                    "label transition failed. You can retry the transition "
+                    "without re-running the agent:",
+                    "",
+                    "```bash",
+                    f"gh issue edit {issue_number} "
+                    f"--add-label {transition_label} --remove-label agent/failed",
+                    "```",
+                    "",
+                    "If the worktree is dirty, remove it first "
+                    f"(`git worktree remove <repo>-worktrees/tasks/issue-{issue_number}`). "
+                    "See the 失败重跑 section in `docs/guides/agent-runner.md` "
+                    "for the full procedure.",
+                    "",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "### How To Recover",
+                    "",
+                    "After fixing the root cause, relabel the Issue so the "
+                    "runner picks it up on its next poll:",
+                    "",
+                    "```bash",
+                    f"gh issue edit {issue_number} "
+                    "--add-label agent/ready --remove-label agent/failed",
+                    "```",
+                    "",
+                    "If the worktree is dirty, remove it first "
+                    f"(`git worktree remove <repo>-worktrees/tasks/issue-{issue_number}`). "
+                    "See the 失败重跑 section in `docs/guides/agent-runner.md` "
+                    "for the full procedure.",
+                    "",
+                ]
+            )
     return "\n".join(lines)
 
 
@@ -329,7 +404,9 @@ def format_minimal_failure_comment(
     Args:
         exc: The exception that caused the failure.
         issue_number: When provided, a copy-pastable relabel command is
-            appended so the operator can re-queue the Issue.
+            appended so the operator can re-queue the Issue. If the exception
+            is a failed workflow-label transition to a completion state, the
+            guidance retries that transition instead of ``agent/ready``.
     """
     exc_message = str(exc).strip()
     failure_summary = exc_message.splitlines()[0] if exc_message else type(exc).__name__
@@ -342,20 +419,40 @@ def format_minimal_failure_comment(
         f"- Failure: `{failure_summary}`",
     ]
     if issue_number is not None:
-        lines.extend(
-            [
-                "",
-                "### How To Recover",
-                "",
-                "After fixing the root cause, relabel the Issue so the "
-                "runner picks it up on its next poll:",
-                "",
-                "```bash",
-                f"gh issue edit {issue_number} "
-                "--add-label agent/ready --remove-label agent/failed",
-                "```",
-            ]
-        )
+        transition_label = _detect_transition_target_label(exc)
+        if transition_label is not None and _is_completion_workflow_label(
+            transition_label
+        ):
+            lines.extend(
+                [
+                    "",
+                    "### How To Recover",
+                    "",
+                    "The agent finished its work, but the final workflow "
+                    "label transition failed. You can retry the transition "
+                    "without re-running the agent:",
+                    "",
+                    "```bash",
+                    f"gh issue edit {issue_number} "
+                    f"--add-label {transition_label} --remove-label agent/failed",
+                    "```",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "",
+                    "### How To Recover",
+                    "",
+                    "After fixing the root cause, relabel the Issue so the "
+                    "runner picks it up on its next poll:",
+                    "",
+                    "```bash",
+                    f"gh issue edit {issue_number} "
+                    "--add-label agent/ready --remove-label agent/failed",
+                    "```",
+                ]
+            )
     return "\n".join(lines)
 
 

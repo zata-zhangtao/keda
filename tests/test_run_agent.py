@@ -42,6 +42,7 @@ from backend.core.use_cases.run_agent_once import (
     format_attempt_history,
     format_command,
     format_failure_comment,
+    format_minimal_failure_comment,
     get_head_sha,
     publish_changes,
     resolve_prd_archive_path,
@@ -3899,6 +3900,102 @@ def test_format_failure_comment_without_issue_number_unchanged() -> None:
     body = format_failure_comment(MaxRetriesExceededError(attempt_history))
     assert "gh issue edit" not in body
     assert "How To Recover" not in body
+
+
+def test_format_failure_comment_transition_to_supervising_recovery() -> None:
+    """A failed transition to supervising should suggest retrying that transition."""
+    exc = subprocess.CalledProcessError(
+        returncode=1,
+        cmd=[
+            "gh",
+            "issue",
+            "edit",
+            "104",
+            "--add-label",
+            "agent/supervising",
+            "--remove-label",
+            "agent/running",
+        ],
+    )
+    body = format_failure_comment(exc, issue_number=104)
+    assert "### How To Recover" in body
+    assert (
+        "gh issue edit 104 --add-label agent/supervising --remove-label agent/failed"
+        in body
+    )
+    assert "finished its work" in body
+    assert "without re-running the agent" in body
+    assert "agent/ready" not in body
+
+
+def test_format_failure_comment_transition_to_review_recovery() -> None:
+    """A failed transition to review should suggest retrying that transition."""
+    exc = subprocess.CalledProcessError(
+        returncode=1,
+        cmd=[
+            "gh",
+            "issue",
+            "edit",
+            "99",
+            "--add-label",
+            "agent/review",
+            "--remove-label",
+            "agent/supervising",
+        ],
+    )
+    body = format_failure_comment(exc, issue_number=99)
+    assert (
+        "gh issue edit 99 --add-label agent/review --remove-label agent/failed" in body
+    )
+    assert "finished its work" in body
+    assert "agent/ready" not in body
+
+
+def test_format_failure_comment_non_completion_transition_recovery() -> None:
+    """A failed transition to a non-completion label still falls back to ready."""
+    exc = subprocess.CalledProcessError(
+        returncode=1,
+        cmd=[
+            "gh",
+            "issue",
+            "edit",
+            "77",
+            "--add-label",
+            "agent/running",
+            "--remove-label",
+            "agent/ready",
+        ],
+    )
+    body = format_failure_comment(exc, issue_number=77)
+    assert (
+        "gh issue edit 77 --add-label agent/ready --remove-label agent/failed" in body
+    )
+    assert "finished its work" not in body
+
+
+def test_format_minimal_failure_comment_transition_to_supervising_recovery() -> None:
+    """The fallback comment also suggests retrying a completed transition."""
+    exc = subprocess.CalledProcessError(
+        returncode=1,
+        cmd=[
+            "gh",
+            "issue",
+            "edit",
+            "104",
+            "--add-label",
+            "agent/supervising",
+            "--remove-label",
+            "agent/running",
+        ],
+    )
+    body = format_minimal_failure_comment(exc, issue_number=104)
+    assert "### How To Recover" in body
+    assert (
+        "gh issue edit 104 --add-label agent/supervising --remove-label agent/failed"
+        in body
+    )
+    assert "finished its work" in body
+    assert "agent/ready" not in body
 
 
 def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
