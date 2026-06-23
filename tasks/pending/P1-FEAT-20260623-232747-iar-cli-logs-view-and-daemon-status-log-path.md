@@ -1,0 +1,401 @@
+# PRD: 为 iar 新增 CLI 日志查看能力（`iar logs` + `daemon status` 显示 log_path）
+
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/115
+
+
+## 1. Introduction & Goals
+
+### 问题陈述
+
+用户通过 `iar registry start`（或后台托管启动）拉起 daemon / review-daemon 后，**CLI 侧没有任何内置命令能看到 daemon 正在做什么**。日志其实一直在落盘——托管进程的 stdout/stderr 被重定向写入 `logs/agent-runner/processes/<repo_id>/<kind>-<process_id>.log`（见 `process_supervisor.py` 的 `spawn`），全局结构化日志也写入 `logs/app-YYYY-MM-DD.log`（见 `logger.py`）——但要看进展只能手动 `tail` 文件路径（路径里含 process_id 哈希，难以拼出）或打开 Web 管理终端。按进程续读日志的能力（`IRunnerProcessSupervisor.read_log` + 用例 `tail_runner_log`）早已实现，但**只接到了 Web 管理终端的 HTTP 路由**（`routes/agent_runner_console.py`），CLI 完全没暴露。结果就是纯 CLI 工作流下，启动 daemon 后“看不见工作如何了”。
+
+### Proposed Solution Summary
+
+**推荐机制**：在 API 层新增一个 `iar logs` CLI 命令，**复用已有的核心用例 `tail_runner_log()` 与端口 `IRunnerProcessSupervisor.read_log()`**，把 Web 管理终端已经在用的“按 offset 续读进程日志”能力接到命令行；同时给 `iar daemon status` 的表格补一列 `log_path`，让用户在没有 `iar logs` 时也能直接拿到文件路径自行 `tail`。
+
+- **谁提供输入**：用户运行 `iar logs`，仓库目标由命令推断——未显式传 `--repo-id` 时复用 daemon 已有的“当前工作目录推断唯一 enabled 注册仓”逻辑（`_resolve_default_daemon_target`）；`--kind daemon|review_daemon`（默认 `daemon`）选择进程类型；`--lines N` 控制初始回看行数；`-f/--follow` 开启实时流式。
+- **插入的现有边界**：真入口 `cli_typer.py`（typer）→ `_run_typer_command` 构造 `argparse.Namespace` → `cli.py` 的 `_run_parsed_command` 分发 → 新 handler（置于 `cli_registry.py`，与 `_run_daemon_status_command` 并列，复用其 supervisor/registry helper）。argparse 镜像 `cli_parser.py` 同步加 `logs` 子命令。
+- **系统状态/可见行为变化**：新增一条只读命令，向 stdout 打印目标 daemon 的进程日志；`iar daemon status` 表格多一列 `log_path`。不写任何持久化状态，不触碰 workflow 状态机（GitHub labels/PR 仍是唯一事实来源）。
+- **刻意规避的复杂度**：不新增存储、不新增 core 抽象（不加 line-oriented 的新读取方法）、不新增 HTTP 路由或后台服务、不引入新依赖；`--lines N` 通过“文件尾部字节窗口 + 行切分”从现有字节级 `read_log` 派生。
+
+### 测量目标
+
+1. `iar logs` 能对“当前仓库正在运行的托管 daemon”打印最近 N 行日志并以 `-f` 实时跟随，无需用户手敲文件路径。
+2. `iar logs --kind review_daemon` 可切换到 review-daemon 的日志。
+3. 无运行中托管进程时，命令给出可操作的回退指引（最近一个进程日志文件，或指向 `logs/app-YYYY-MM-DD.log`），而不是空输出或栈回溯。
+4. `iar daemon status` 表格新增 `log_path` 列，managed 进程显示真实路径，unmanaged 进程（`log_path` 为空）显示 `-`。
+5. 不破坏四层依赖方向（api → core → infra），不新增 core/infra 代码即可交付（纯 API + 测试 + 文档）。
+
+### Realistic Validation
+
+除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
+
+- [ ] **`iar logs` 回看真实验证**：在临时 registry/进程记录 fixture 下，通过真实 `uv run iar logs --repo-id <id> --lines 20` 进程调用，验证 stdout 输出该进程日志文件的最后 20 行且退出码为 0。
+- [ ] **`iar logs --follow` 实时跟随真实验证**：启动 `uv run iar logs -f` 子进程后向目标日志文件追加内容，验证新内容被打印；发送中断信号后进程以 0 退出。
+- [ ] **无运行进程回退真实验证**：在没有 running 托管进程的仓库执行 `uv run iar logs`，验证打印回退指引（最近进程日志路径或 `logs/app-*.log` 提示）而非异常。
+- [ ] **`iar daemon status` log_path 列真实验证**：通过 `uv run iar daemon status` 真实命令验证输出表头包含 `log_path` 列。
+
+**为什么单元测试不够**：handler 的取值与渲染可被单测覆盖，但“typer 入口 → argparse Namespace → `_run_parsed_command` 分发 → 仓库推断 → supervisor 选择进程 → 续读循环 → 信号处理”这条真实链路只有通过实际 `iar` 进程调用才能证明参数透传、退出码与中断处理正确。
+
+**验证留证（交付物）**：上述四项真实验证均须留证，且**文本与图片两种形态都要**——真实命令 stdout 捕获为 `.txt`（必要时 `.json`）写入 `logs/agent-runner/console-validation-<YYYYMMDD>/`（沿用仓库既有留证约定，参见 `logs/agent-runner/console-validation-20260611/A4-logs.txt` 先例，可 diff、可回归），并把同一真实输出渲染为 PNG 供人工查看；其中 `iar logs -f` 因需体现“实时新增”，留证为追加前 / 追加后两段对照（`*-before.*` / `*-after.*`）。PNG 必须由真实捕获输出渲染而非摆拍。
+
+### Delivery Dependencies
+
+- Group: iar-daemon-cli-ux
+- Depends on groups:
+  - none
+- Depends on tasks/issues:
+  - none
+- Gate type: soft
+- Notes: 与 pending `P2-FEAT-20260623-110000-iar-daemon-default-current-repo-only`（daemon 当前仓库推断）共享 `_resolve_default_daemon_target` 仓库推断逻辑；建议复用而非重复实现，但本 PRD 不被其阻塞（该逻辑已在 `cli.py` 存在并可直接复用）。与 archive 的 operations-console / registry-start-stop 工作是下游延续，无硬门禁。
+
+---
+
+## 2. Requirement Shape
+
+- **Actor**：使用 iar CLI 的开发者（纯命令行工作流，不一定开 Web 管理终端）。
+- **Trigger**：执行 `iar logs [--repo-id X] [--kind daemon|review_daemon] [--lines N] [-f/--follow]`；以及执行 `iar daemon status`。
+- **Expected Behavior**：
+  - `iar logs` 解析目标仓库与进程类型，定位对应托管进程的日志文件，打印最近 `N` 行（默认值见 FR-3）；带 `-f` 时在初始回看后持续轮询 `read_log` 的 `next_offset` 输出新增内容，直到用户 Ctrl-C。
+  - 目标进程不在运行时按回退链给出指引（FR-6）。
+  - `iar daemon status` 表格新增 `log_path` 列。
+- **Explicit Scope Boundary**：
+  - 只读已落盘的进程日志，不改变日志写入机制、不新增日志格式、不做日志聚合/检索/过滤（除“最后 N 行”外不做 grep 级过滤）。
+  - 只针对托管进程（pidfile registry 中由 `iar registry start` / Web 管理终端启动的进程）。unmanaged 前台 `iar daemon` 进程无 `log_path`，只给指引、不尝试 tail。
+  - 不引入 TUI、不引入 Web 变更。
+
+---
+
+## 3. Repository Context And Architecture Fit
+
+### 当前相关模块/文件
+
+| 关注点 | 位置 | 说明 |
+|---|---|---|
+| 真 CLI 入口（typer） | `src/backend/api/cli_typer.py` | `app`/`daemon_app`/`registry_app` 等；命令经 `_run_typer_command` / `_run_typer_repository_command` 构造 `argparse.Namespace` 后委托 `_run_parsed_command`。`cli.py:main` 即委托至此。 |
+| 命令分发 | `src/backend/api/cli.py` | `_run_parsed_command(parsed)` 按 `parsed.command` 分发；`daemon status` 分支调用 `_run_daemon_status_command`；daemon/review-daemon 的“当前仓库推断”块复用 `_resolve_default_daemon_target`。 |
+| argparse 镜像 | `src/backend/api/cli_parser.py` | 与 typer 入口保持同步的参数结构（docstring 明确要求同步）。 |
+| daemon status / registry handler | `src/backend/api/cli_registry.py` | `_run_daemon_status_command`（渲染 Daemon status 表）、`create_process_supervisor`/`create_registry_editor`、`_DAEMON_KIND`/`_REVIEW_DAEMON_KIND`、`resolve_repository_targets`。**新 handler 的落点。** |
+| 续读用例（core） | `src/backend/core/use_cases/console_processes.py` | `tail_runner_log(process_id, offset, supervisor, max_bytes)` → `ProcessLogChunk`。**直接复用。** |
+| 端口与模型（core） | `src/backend/core/shared/interfaces/runner_console.py` | `IRunnerProcessSupervisor.read_log/list_processes/list_unmanaged_processes`、`RunnerProcessRecord(log_path,...)`、`ProcessLogChunk(content,next_offset,eof)`。 |
+| 续读实现（infra） | `src/backend/infrastructure/console/process_supervisor.py` | `read_log` 按字节 offset seek/读；`spawn` 把子进程 stdout/stderr 写入 `logs/agent-runner/processes/<repo>/<kind>-<process_id>.log`；unmanaged 进程 `log_path=""`。 |
+| 既有消费方（参照） | `src/backend/api/routes/agent_runner_console.py` | Web 管理终端已 import 并使用 `tail_runner_log`，证明该核心能力稳定可复用。 |
+| 全局日志器 | `src/backend/infrastructure/logging/logger.py` | 同时挂 `StreamHandler(stdout)` 与 `FileHandler(app-YYYY-MM-DD.log)`，保留 14 天——回退指引指向此处。 |
+| CLI 文档 | `docs/guides/agent-runner.md` | daemon/registry 命令说明所在页。 |
+
+### 既有架构模式（需遵循）
+
+- 四层依赖：`api → core → engines/infra`；api 可用工厂（`create_process_supervisor` 等）拿到实现并调用 core 用例，**禁止直接 import infrastructure 模块**。
+- 命令实现模式：typer 命令 → `_run_typer_command` 造 Namespace → `_run_parsed_command` 分发 → `cli_registry.py` handler，handler 内用 supervisor + core 用例。新命令必须沿用此链路，**不要绕过 `_run_parsed_command` 直接在 typer 里写业务逻辑**。
+- 进程筛选模式：`_run_daemon_status_command` 已示范“`supervisor.list_processes()` 按 `repo_id`+`kind`+`status` 过滤、并合并 `list_unmanaged_processes`”——新 handler 复用同一筛选骨架。
+- 单文件非空行 ≤ 1000；`cli_registry.py` 现 ~508 行，新增 handler 后仍远低于上限。
+
+### 所有权与依赖边界
+
+- 日志文件路径来源唯一：`RunnerProcessRecord.log_path`（由 supervisor 生成），**严禁在 CLI 侧硬编码 `logs/agent-runner/processes/...` 路径模板**。
+- 续读唯一入口：core 用例 `tail_runner_log` → 端口 `read_log`。CLI 不直接 open 日志文件做流式（保持 infra 边界）；仅在“计算初始回看起点字节偏移”时用 stdlib `pathlib.Path(record.log_path).stat().st_size` 读取文件大小（stat 系统调用，不 import infrastructure 模块，符合边界）。
+
+### 运行时/测试/工作流约束
+
+- Python ≥ 3.11，`uv` + `just`；测试命令 `just test`（定义于 `justfile.shared`，内部 `uv run pytest`）。
+- 文本 I/O 必须显式 `encoding="utf-8"`（本任务读路径走 `read_log`，其已 `decode("utf-8", errors="replace")`）。
+- 公共 API 用 Google Style Docstrings；变量命名需带来源/类型/状态语义。
+- 变更代码同步更新 `docs/` 与 `mkdocs.yml`。
+
+### Existing PRD Relationship（必填）
+
+检索 `tasks/pending/` 与 `tasks/archive/` 结果：
+
+- **未发现重复 PRD**：没有任何 pending/archive PRD 以“CLI 日志查看 / `iar logs` / `daemon status` 显示 log_path”为目标。
+- **相关（软依赖，复用）**：
+  - pending `P2-FEAT-20260623-110000-iar-daemon-default-current-repo-only.md` —— 定义了 daemon 命令的当前仓库推断行为；`iar logs` 复用同一 `_resolve_default_daemon_target` 逻辑。软依赖，不阻塞。
+  - archive `P1-FEAT-20260623-012835-iar-registry-start-stop-daemon.md`、`P1-FEAT-20260623-002646-iar-daemon-cwd-infer-single-repo.md`、`P2-FEAT-20260623-133728`(daemon status 子命令) —— 本 PRD 是这条 daemon CLI UX 线的自然延续。
+  - archive `prd-agent-runner-operations-console.md` / `agent-runner-unified-ops-console.md` —— 这两份建成了 supervisor + `read_log`/`tail_runner_log` + Web 管理终端，本 PRD 直接复用其核心能力到 CLI，**不重建任何能力**。
+- **结论**：独立可执行，与上述为复用/延续关系，不构成硬门禁。
+
+### Potential Redundancy Risks
+
+- 风险：在 CLI 侧重新实现“按行 tail / 文件轮询”而绕过 `tail_runner_log`。规避：强制走 core 用例。
+- 风险：重复实现仓库推断。规避：复用 `_resolve_default_daemon_target`。
+- 风险：handler 里重写进程筛选。规避：抽出与 `_run_daemon_status_command` 共享的筛选小函数或直接沿用同一骨架。
+
+---
+
+## 4. Recommendation
+
+### Recommended Approach（最小改动路径）
+
+**纯 API 层新增**，零 core/infra 新代码：
+
+1. **`cli_typer.py`**：新增顶层 `@app.command("logs")`，参数 `--repo-id / --repo / --kind / --lines / --follow`，经 `_run_typer_repository_command("logs", ...)`（或 `_run_typer_command`）下发。
+2. **`cli_parser.py`**：同步新增 `logs` 子命令（保持 argparse 镜像一致）。
+3. **`cli.py` `_run_parsed_command`**：
+   - 把 `logs` 加入“未指定仓库 → `_resolve_default_daemon_target` 推断当前仓”的判定块（与 `daemon`/`review-daemon` 同款）。
+   - 新增 `if parsed.command == "logs": return _run_logs_command(...)` 分支。
+4. **`cli_registry.py`**：
+   - 新增 `_run_logs_command(...)`：按 `repo_id`+`kind` 从 `supervisor.list_processes()` 选目标进程（优先 running，回退最近记录），用 `Path(record.log_path).stat().st_size` 算初始字节窗口起点，调用 `tail_runner_log` 取初始内容并按行截断到 `--lines`；`--follow` 时循环 `tail_runner_log(offset=next_offset)` 输出新增内容，`KeyboardInterrupt` 干净退出；无可用进程时打印回退指引。
+   - 修改 `_run_daemon_status_command`：表格新增 `log_path` 列（`overflow="fold"`），值取 `record.log_path or "-"`。
+5. **docs**：`docs/guides/agent-runner.md` 增补 `iar logs` 用法与 `daemon status` 新列说明；`mkdocs.yml` 该页已在导航中，无需改导航。
+
+### 为什么最适合当前架构
+
+- 复用的 `tail_runner_log`/`read_log` 已被 Web 管理终端验证为稳定生产路径，CLI 只是第二个消费者——零重复逻辑、零新抽象。
+- 完整复用 daemon 既有的命令链路、仓库推断、进程筛选骨架，与最近几个 daemon CLI 命令风格一致，执行者认知负担最小。
+- 不碰持久层与 workflow 状态机，符合“SQLite/日志只是旁路、GitHub 为唯一事实来源”的既定约束。
+
+### Alternatives Considered
+
+- **A：把 `iar logs` 收敛为 `iar daemon logs` 子命令**。否决：日志目标未来可能扩展到非 daemon 进程（run_once/review_once），顶层 `iar logs` 更通用且与用户已认可的提案一致。保留 `--kind` 即可覆盖 daemon/review_daemon。
+- **B：CLI 直接 `tail -f` 全局 `logs/app-YYYY-MM-DD.log` 并按 repo 过滤**。否决：app 日志多仓混写、需自造过滤，而 per-process 日志本就是单进程纯净流且是管理终端的既定数据源；只在“无任何 per-process 记录”时作为回退指引指向它。
+- **C：在 core 新增 line-oriented 的 `read_log_tail(lines=N)` 方法**。否决：字节级 `read_log` 已足够，CLI 端用“尾部字节窗口 + 行切分”即可派生最后 N 行，避免为单一消费者扩端口。
+
+---
+
+## 5. Implementation Guide
+
+> 本节是基于当前仓库分析的“活”实现指南。如实现过程中发现新增受影响文件、隐藏依赖、边界情况或更优路径，请先更新本 PRD 再继续。
+
+### Core Logic（数据与控制流）
+
+```
+iar logs --kind daemon --lines 50 -f
+  └─ cli_typer.py: logs_command()  ──_run_typer_repository_command("logs", kind=..., lines=..., follow=...)
+       └─ cli.py: _run_parsed_command(parsed)
+            ├─ 若未给 repo_id/repo/--all 且 command==logs → _resolve_default_daemon_target() 推断 repo_id
+            └─ command=="logs" → cli_registry._run_logs_command(parsed, runner_settings, repo_id, repo_override)
+                 ├─ resolve_repository_targets(...) 校验/解析目标仓
+                 ├─ supervisor = create_process_supervisor()
+                 ├─ 选进程: list_processes() 过滤 repo_id+kind
+                 │     ├─ 有 running → 选最新 running
+                 │     ├─ 无 running 但有历史记录(log_path 非空) → 选最新记录(静态/可 follow)
+                 │     └─ 都没有 → 检查 list_unmanaged_processes(); 打印回退指引(指最近进程日志 or logs/app-*.log) 并 return 0
+                 ├─ 初始回看: size = Path(record.log_path).stat().st_size
+                 │            start = max(0, size - TAIL_WINDOW_BYTES)   # TAIL_WINDOW_BYTES 复用 _DEFAULT_LOG_CHUNK_BYTES(64KiB)
+                 │            chunk = tail_runner_log(process_id, offset=start, supervisor, max_bytes=...)
+                 │            行切分→保留最后 N 行→打印; 若 start>0 且首行被截断, 打印一行“(更早内容已省略, 见 <log_path>)”
+                 ├─ offset = chunk.next_offset
+                 └─ follow 循环(仅 --follow): while True: sleep(POLL_INTERVAL_SECONDS=1.0)
+                                              chunk = tail_runner_log(process_id, offset, supervisor)
+                                              if chunk.content: print(chunk.content, end=""); offset = chunk.next_offset
+                                              若进程已退出(record.status != running)且 chunk.eof → 打印“(进程已退出, code=...)” 并 break
+                       └─ KeyboardInterrupt → 干净 return 0
+```
+
+注意：所有 `print` 走 stdout，错误/提示走 `console`/`error_console`（沿用 `cli_console.py`）。续读内容已是 utf-8 解码字符串，直接 `print(..., end="")` 保持原始换行。
+
+### Change Impact Tree
+
+```text
+.
+├── src/backend/api/
+│   ├── cli_typer.py
+│   │   [修改]
+│   │   【总结】注册顶层 `iar logs` 命令并把 --repo-id/--repo/--kind/--lines/--follow 透传给分发层
+│   │   ├── 新增 @app.command("logs") 函数, 用 Annotated typer.Option 定义 kind/lines/follow
+│   │   └── 经 _run_typer_repository_command("logs", kind=..., lines=..., follow=...) 下发
+│   │
+│   ├── cli_parser.py
+│   │   [修改]
+│   │   【总结】argparse 镜像同步新增 logs 子命令, 与 typer 入口参数结构一致
+│   │   ├── subparsers.add_parser("logs"), 加 --kind/--lines/--follow
+│   │   └── add_common_options + add_all_repositories_option(若沿用 repo 选择器)
+│   │
+│   ├── cli.py
+│   │   [修改]
+│   │   【总结】把 logs 纳入当前仓库推断, 并在分发处路由到新 handler
+│   │   ├── _resolve_default_daemon_target 适用判定块加入 "logs"
+│   │   └── _run_parsed_command 新增 `if parsed.command == "logs": return _run_logs_command(...)`
+│   │
+│   └── cli_registry.py
+│       [修改]
+│       【总结】新增只读日志 handler, 并给 daemon status 表补 log_path 列
+│       ├── 新增 _run_logs_command(): 选进程→初始回看→follow 轮询→回退指引, 复用 tail_runner_log/list_processes
+│       ├── (可选)抽出 _select_process_for_repo_kind() 供 logs 与 daemon status 共享筛选
+│       └── _run_daemon_status_command: 表格新增 "log_path" 列(overflow="fold"), 值 record.log_path or "-"
+│
+├── tests/
+│   ├── test_cli_registry.py
+│   │   [修改] 【总结】覆盖 _run_logs_command 选进程/回看/回退分支 + daemon status 新列断言
+│   ├── test_agent_runner_cli.py
+│   │   [修改] 【总结】真实入口 smoke: 子进程跑 `iar logs`/`iar logs -f` 验证 stdout/退出码/中断
+│   └── (按需新增 fixture) 临时 registry + 临时 log 文件 + Fake/真 supervisor
+│
+└── docs/
+    └── guides/agent-runner.md
+        [修改] 【总结】新增 `iar logs` 用法说明与 `daemon status` 的 log_path 列说明
+```
+
+> 上述文件清单是实现起点，不保证穷尽。typer 与 argparse 双入口必须同步；若发现 completion/帮助文本或其它消费 `RunnerProcessRecord` 的渲染点，一并更新。
+
+### Executor Drift Guard
+
+实现前/后用以下 `rg` 命令定位锚点与校验最终状态（在仓库根执行）：
+
+```bash
+# 1. 定位真入口与分发, 确认在何处挂 logs 命令
+rg -n "_run_parsed_command|_run_typer_command|_run_typer_repository_command|add_typer\(" src/backend/api/cli_typer.py src/backend/api/cli.py
+
+# 2. 定位当前仓库推断块(把 logs 加入)
+rg -n "_resolve_default_daemon_target|in \(\"daemon\", \"review-daemon\"\)" src/backend/api/cli.py
+
+# 3. 定位 daemon status 表与可复用的进程筛选骨架
+rg -n "_run_daemon_status_command|list_processes\(\)|list_unmanaged_processes|add_column" src/backend/api/cli_registry.py
+
+# 4. 确认续读用例签名(直接复用, 勿改)
+rg -n "def tail_runner_log|def read_log|class ProcessLogChunk|log_path" src/backend/core/use_cases/console_processes.py src/backend/core/shared/interfaces/runner_console.py
+
+# 5. 防止硬编码日志路径: 实现后此命令在 cli_*.py 中应无新增匹配
+rg -n "agent-runner/processes|logs/app-" src/backend/api/
+
+# 6. 完成后确认 logs 命令双入口都已注册
+rg -n "\"logs\"|'logs'|add_parser\(\"logs\"|command\(\"logs\"" src/backend/api/cli_typer.py src/backend/api/cli_parser.py src/backend/api/cli.py
+```
+
+校验失败三角排查：若 `iar logs` 报 “unknown command” → 多半 typer 注册了但 `_run_parsed_command` 未加分支，或反之；若实时跟随不出新内容 → 检查 `next_offset` 是否被正确回传复用、以及 `max_bytes` 是否足够；若回看为空但文件有内容 → 检查初始 `start` 偏移与 `record.log_path` 是否取到 running 进程。
+
+### Flow / Architecture Diagram
+
+```mermaid
+flowchart TD
+    U["用户: iar logs --kind daemon -f"] --> T["cli_typer.py: logs command"]
+    T --> N["_run_typer_repository_command 构造 argparse.Namespace"]
+    N --> D["cli.py: _run_parsed_command"]
+    D -->|"未指定仓库"| INF["_resolve_default_daemon_target 推断当前仓"]
+    INF --> H["cli_registry.py: _run_logs_command"]
+    D -->|"command == logs"| H
+    H --> SUP["create_process_supervisor()"]
+    SUP --> SEL{"该 repo+kind 有 running 托管进程?"}
+    SEL -->|"有"| REC["选最新 running RunnerProcessRecord"]
+    SEL -->|"无, 但有历史记录"| REC2["选最新历史记录(log_path 非空)"]
+    SEL -->|"都没有"| FB["打印回退指引: 最近进程日志 / logs/app-*.log"]
+    REC --> TAIL["tail_runner_log(process_id, offset) [core 用例]"]
+    REC2 --> TAIL
+    TAIL --> RL["IRunnerProcessSupervisor.read_log [infra, 按字节 offset]"]
+    RL --> OUT["stdout 打印; --follow 则轮询 next_offset"]
+    FB --> END["return 0"]
+    OUT --> END
+
+    subgraph REUSE["既有能力(Web 管理终端已在用, 本次零新增)"]
+        TAIL
+        RL
+    end
+```
+
+### Realistic Validation Plan
+
+| Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Evidence 留证（文本 + PNG） | Required For Acceptance |
+|---|---|---|---|---|---|---|---|
+| `iar logs --lines N` 打印最后 N 行 | CLI `iar logs` | integration（真实进程调用） | supervisor 用真实实现指向临时 registry/pidfile + 临时 log 文件；不连 GitHub | 临时 `IAR_HOME`/registry 指向 fixture 仓库 + 预置 `RunnerProcessRecord` + 预置日志文件 | `uv run iar logs --repo-id <id> --lines 20`（断言 stdout 末 20 行 + 退出码 0） | `logs-tail.txt` + `logs-tail.png` | Yes |
+| `iar logs -f` 跟随新增内容 | CLI `iar logs -f` | integration | 同上 | 同上 + 测试中向日志文件 append | 启动 `uv run iar logs -f` 子进程→append→断言新内容出现→发送 SIGINT→断言退出码 0 | `logs-follow-before.{txt,png}` + `logs-follow-after.{txt,png}`（追加前/后对照） | Yes |
+| 无 running 进程回退指引 | CLI `iar logs` | integration | 同上但无 running 记录 | fixture 中无 running 进程 | `uv run iar logs --repo-id <id>`（断言输出含回退指引、无 traceback、退出码 0） | `logs-fallback.txt` + `logs-fallback.png` | Yes |
+| `daemon status` 含 log_path 列 | CLI `iar daemon status` | integration/unit | supervisor 返回带 log_path 的记录 | fixture 进程记录 | `uv run iar daemon status`（断言表头含 `log_path`） | `daemon-status.txt` + `daemon-status.png` | Yes |
+| handler 选进程/截断/offset 逻辑 | `_run_logs_command` | unit | Fake `IRunnerProcessSupervisor` | 内存 fake 记录 + tmp_path 日志 | `uv run pytest tests/test_cli_registry.py -k logs` | N/A（单测层，不留图） | No（补充层） |
+| 回归（全量） | — | suite | — | — | `just test` | N/A | Yes |
+
+**留证产出约定**：上表 `Evidence` 列文件统一落在 `logs/agent-runner/console-validation-<YYYYMMDD>/`（`<YYYYMMDD>` 为实现当日），`.txt` 为真实命令 stdout 原样捕获，`.png` 由同一真实输出渲染（保留 Rich 表格/颜色，便于人工查看），二者成对。实现完成后这组 `.png` 直接交付给评审者查看。**禁止用手敲/摆拍内容冒充真实输出。**
+
+失败排查：若真实 `iar logs` 子进程测试取不到进程 → 检查测试是否正确隔离了 pidfile registry 路径（避免读到真机 `~/.iar/processes.json`）与 `cwd`；`-f` 测试卡住 → 确认轮询间隔与中断信号处理，给子进程设超时。
+
+### Low-Fidelity Prototype
+
+不需要（纯 CLI 文本输出，无多步交互或布局歧义）。
+
+### ER Diagram
+
+No data model changes in this PRD.
+
+### Interactive Prototype Change Log
+
+No interactive prototype file changes in this PRD.
+
+### External Validation
+
+No external validation required; repository evidence was sufficient.
+
+---
+
+## 6. Definition Of Done
+
+- 实现验证：`iar logs`（含 `--kind/--lines/--follow` 与默认当前仓推断）与 `iar daemon status`（新增 log_path 列）按 FR 全部生效。
+- 真实入口验证：Realistic Validation Plan 中所有 `Required For Acceptance = Yes` 行通过。
+- 文档更新：`docs/guides/agent-runner.md` 增补 `iar logs` 与 status 新列；如有 CLI 帮助文本/示例同步。
+- 无回归：`just test` 全绿。
+- 架构契合：未新增 core/infra 代码即交付；`rg` 校验 CLI 层无硬编码日志路径；未破坏 api→core→infra 方向。
+
+---
+
+## 7. Acceptance Checklist
+
+### Architecture Acceptance
+- [ ] `iar logs` 业务逻辑位于 `cli_registry.py` 的 `_run_logs_command`，经 `cli.py:_run_parsed_command` 分发，未在 `cli_typer.py` 内写业务逻辑。
+- [ ] 未新增 core/infra 代码：续读复用 `tail_runner_log`/`read_log`；`rg -n "def tail_runner_log|def read_log" src/backend/core src/backend/infrastructure` 结果与改动前一致（无新增方法）。
+- [ ] `rg -n "agent-runner/processes|logs/app-" src/backend/api/` 在 `cli_*.py` 中无新增硬编码路径模板（日志路径来自 `RunnerProcessRecord.log_path`）。
+
+### Dependency Acceptance
+- [ ] 仓库推断复用 `_resolve_default_daemon_target`，`rg -n "_resolve_default_daemon_target" src/backend/api/cli.py` 显示 `logs` 与 `daemon` 共用同一推断。
+- [ ] typer 与 argparse 双入口均注册 `logs`：`rg -n "\"logs\"|add_parser\(\"logs\"|command\(\"logs\"" src/backend/api/cli_typer.py src/backend/api/cli_parser.py` 均命中。
+
+### Behavior Acceptance
+- [ ] `iar logs` 默认 `--kind daemon`，`--kind review_daemon` 可切换。
+- [ ] `iar logs --lines N` 打印目标进程日志最后 N 行；窗口截断更早内容时打印一行省略提示并附 `log_path`。
+- [ ] `iar logs -f` 在初始回看后持续输出新增内容，Ctrl-C 干净退出（退出码 0），目标进程退出后打印退出提示并结束。
+- [ ] 无 running 托管进程时打印回退指引（最近进程日志路径，或指向 `logs/app-YYYY-MM-DD.log`），无 traceback。
+- [ ] `iar daemon status` 表头含 `log_path` 列，unmanaged 进程显示 `-`。
+
+### Documentation Acceptance
+- [ ] `docs/guides/agent-runner.md` 含 `iar logs` 用法与 `daemon status` 新列说明；`rg -n "iar logs" docs/guides/agent-runner.md` 命中。
+
+### Validation Acceptance
+- [ ] 真实入口：`uv run iar logs --repo-id <fixture-id> --lines 20` 在 fixture 下输出末 20 行且退出码 0（最高保真入口，非仅单测）。
+- [ ] 真实入口：`uv run iar logs -f` 子进程能输出 append 内容并在 SIGINT 后退出码 0。
+- [ ] 真实入口：`uv run iar logs`（无 running 进程）打印回退指引、无 traceback、退出码 0。
+- [ ] 真实入口：`uv run iar daemon status` 输出表头含 `log_path`。
+- [ ] 留证（文本）：`logs/agent-runner/console-validation-<YYYYMMDD>/` 下存在 `logs-tail.txt`、`logs-follow-before.txt`、`logs-follow-after.txt`、`logs-fallback.txt`、`daemon-status.txt`，内容为真实命令 stdout 捕获。
+- [ ] 留证（图片）：上述每个文本均有对应 `.png`（由同一真实输出渲染），`iar logs -f` 以 before/after 两张体现实时新增；这组 PNG 已交付评审者查看。
+- [ ] `just test` 全绿。
+
+---
+
+## 8. Functional Requirements
+
+- **FR-1**：新增 `iar logs` 命令，支持 `--repo-id`（与 `--repo` 互斥，沿用既有校验）、`--kind {daemon,review_daemon}`（默认 `daemon`）、`--lines N`、`-f/--follow`。
+- **FR-2**：未指定 `--repo-id/--repo/--all` 时，复用 `_resolve_default_daemon_target` 从当前工作目录推断唯一 enabled 注册仓；推断失败时复用其既有错误文案。
+- **FR-3**：`--lines N` 默认值（建议 `200`）；初始回看通过“尾部字节窗口（复用 `_DEFAULT_LOG_CHUNK_BYTES` = 64KiB）+ 行切分 + 取末 N 行”从字节级 `read_log` 派生；窗口起点 `>0` 且首行被截断时打印一行省略提示并附完整 `log_path`。
+- **FR-4**：进程选择——优先该 `repo_id`+`kind` 的最新 running 托管进程；无 running 时回退到该 repo+kind 最新一条 `log_path` 非空的记录（静态展示，仍可 `-f`）。
+- **FR-5**：`-f/--follow` 在初始回看后以固定间隔（建议 `1.0s`）轮询 `tail_runner_log(offset=next_offset)` 输出新增内容；`KeyboardInterrupt` 干净退出（码 0）；检测到目标进程已退出且读到 EOF 后打印退出提示并结束。
+- **FR-6**：当该 repo+kind 既无 running 也无历史 `log_path` 记录（例如仅有 unmanaged 前台 daemon，其 `log_path` 为空）时，打印回退指引——给出 `logs/agent-runner/processes/<repo_id>/` 目录与 `logs/app-YYYY-MM-DD.log` 提示，退出码 0，不抛异常。
+- **FR-7**：`iar daemon status` 表格新增 `log_path` 列（`overflow="fold"`），managed 进程显示真实路径，`log_path` 为空时显示 `-`。
+- **FR-8**：所有日志读取经 core 用例 `tail_runner_log`/端口 `read_log`，CLI 不直接打开日志文件做流式读取；仅允许用 stdlib `Path(log_path).stat()` 取文件大小以计算初始偏移。
+
+---
+
+## 9. Non-Goals
+
+- 不做日志聚合、全文检索、按级别/关键字过滤（除“最后 N 行”外）。
+- 不为 unmanaged 前台 `iar daemon` 进程提供 tail（其无 `log_path`），仅给指引。
+- 不改变日志写入机制、不新增日志文件、不调整日志保留策略。
+- 不新增 TUI、不改动 Web 管理终端、不新增 HTTP 路由。
+- 不为 `run_once`/`review_once`/`blocked_continue` 等非常驻进程提供 `iar logs`（本期仅 daemon/review_daemon；如需后续扩展 `--kind`）。
+
+---
+
+## 10. Risks And Follow-Ups
+
+- **风险（低）**：`--lines N` 的尾部字节窗口在极长单行/大 N 时可能截断更早行——已用省略提示 + `log_path` 兜底；如确有需求，后续可扩展窗口自适应（非本期）。
+- **风险（低）**：`-f` 跟随期间目标进程被 stop/重启，process_id 变更——本期策略为“跟随当前文件至进程退出后结束并提示”，不自动切换到新进程（避免复杂的进程接续逻辑）；如需自动接续可作为后续。
+- **Follow-up（非阻塞）**：可考虑给 `iar registry list` 也展示 log_path，使观测入口统一；本期不纳入以控制范围。
+
+---
+
+## 11. Decision Log
+
+| ID | 决策问题 | Chosen | Rejected | Rationale |
+|---|---|---|---|---|
+| D-01 | 命令落点 | 顶层 `iar logs` | `iar daemon logs` 子命令 | 与用户已认可提案一致，且日志目标未来可超出 daemon；`--kind` 已能区分 daemon/review_daemon。 |
+| D-02 | 续读能力来源 | 复用 core `tail_runner_log`/`read_log` | 在 CLI 直接 open 文件做 tail | 该能力已被 Web 管理终端验证为稳定生产路径，复用即零重复且守住 api→infra 边界。 |
+| D-03 | handler 落点 | `cli_registry.py`（与 `_run_daemon_status_command` 并列） | 新建 `cli_logs.py` 模块 | 该文件已 import supervisor/registry/筛选 helper，复用最省接线且仍 < 1000 行上限。 |
+| D-04 | 仓库推断 | 复用 `_resolve_default_daemon_target` | 在 logs 内重写推断 | 与 daemon 行为一致、避免重复逻辑，并对齐 pending daemon-default-repo PRD。 |
+| D-05 | 无 running 进程的回退 | 回退到最近 per-process 记录, 再无则指引 `logs/app-*.log` | 直接 tail/过滤全局 app 日志 | per-process 日志单进程纯净且为管理终端既定数据源；app 日志多仓混写仅作最终指引。 |
+| D-06 | `--lines N` 实现 | 尾部字节窗口 + 行切分（复用 64KiB 常量） | 在 core 新增 line-oriented `read_log_tail` | 字节级 `read_log` 已够用，避免为单一 CLI 消费者扩 core 端口。 |
+| D-07 | 命令性质 | 只读、不写持久状态、不碰 workflow 状态机 | 顺带记录“查看”审计/状态 | 观测命令应零副作用；GitHub labels/PR 仍为唯一事实来源。 |
+| D-08 | 验证留证形式 | 真实 stdout 文本(`.txt` 入 `console-validation-<date>/`) + 渲染 PNG 双留证, `-f` 取 before/after | 只留文本 / 只截 PNG / 仅“测试通过”结论 | 用户要求可视查看且需可 diff 回归；文本对齐仓库既有留证约定, PNG 满足人工审阅, `-f` 的实时性单图无法体现。 |
