@@ -145,7 +145,9 @@ def _recover_from_active_rebase(
 
         agent_name = choose_agent(issue, config, "auto")
         try:
-            run_agent_with_prompt(agent_name, prompt, worktree_path, process_runner)
+            run_agent_with_prompt(
+                agent_name, prompt, worktree_path, process_runner, issue=issue
+            )
         except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
             _logger.warning(
                 "Agent conflict resolution attempt %d/%d failed for Issue #%d: %s",

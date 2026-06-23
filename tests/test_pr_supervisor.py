@@ -1732,6 +1732,7 @@ def test_execute_rebase_allows_detached_head_when_active_rebase_target_matches(
         *,
         capture_output=False,
         timeout_seconds=None,
+        issue=None,
     ):
         return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
 
@@ -1867,6 +1868,7 @@ def test_execute_rebase_rejects_mismatched_active_rebase_target(
         *,
         capture_output=False,
         timeout_seconds=None,
+        issue=None,
     ):
         return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
 
@@ -2014,6 +2016,7 @@ def test_execute_rebase_rejects_unknown_active_rebase_target(
         *,
         capture_output=False,
         timeout_seconds=None,
+        issue=None,
     ):
         return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
 
@@ -2130,6 +2133,7 @@ def test_execute_rebase_conflict_path_does_not_run_git_commit(
         *,
         capture_output=False,
         timeout_seconds=None,
+        issue=None,
     ):
         return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
 
@@ -2308,6 +2312,7 @@ def test_execute_rebase_real_git_conflict_allows_detached_head(
         *,
         capture_output=False,
         timeout_seconds=None,
+        issue=None,
     ):
         return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
 

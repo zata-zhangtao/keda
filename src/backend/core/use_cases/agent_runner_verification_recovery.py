@@ -74,7 +74,11 @@ def run_recovery_after_verification_failure(
         failure_summary=failure_summary,
     )
     run_agent_with_prompt(
-        supervisor_agent, recovery_prompt, worktree_path, process_runner
+        supervisor_agent,
+        recovery_prompt,
+        worktree_path,
+        process_runner,
+        issue=issue,
     )
 
     request_path = worktree_path / ".agent-runner" / "commit-request.json"

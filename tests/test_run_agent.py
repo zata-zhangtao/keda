@@ -4345,6 +4345,7 @@ def test_run_once_rebase_conflict_detached_head(
         *,
         capture_output=False,
         timeout_seconds=None,
+        issue=None,
     ):
         return CommandResult(command=("noop",), return_code=0, stdout="", stderr="")
 

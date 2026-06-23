@@ -612,7 +612,11 @@ def run_agent_until_committed(
             if attempt_index == 0:
                 if prompt_override is not None:
                     run_agent_with_prompt(
-                        selected_agent, prompt_override, worktree_path, process_runner
+                        selected_agent,
+                        prompt_override,
+                        worktree_path,
+                        process_runner,
+                        issue=issue,
                     )
                 else:
                     run_agent(
@@ -627,7 +631,11 @@ def run_agent_until_committed(
                     failure_summary=recovery_failure_summary,
                 )
                 run_agent_with_prompt(
-                    selected_agent, recovery_prompt, worktree_path, process_runner
+                    selected_agent,
+                    recovery_prompt,
+                    worktree_path,
+                    process_runner,
+                    issue=issue,
                 )
         except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
             failure_type = classify_failure(

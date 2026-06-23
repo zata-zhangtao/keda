@@ -697,7 +697,7 @@ def execute_rebase(
                     failure_summary=failure_summary,
                 )
             run_agent_with_prompt(
-                supervisor_agent, prompt, worktree_path, process_runner
+                supervisor_agent, prompt, worktree_path, process_runner, issue=issue
             )
 
             # Agent 通过 commit-request.json 显式表达提交意图
@@ -859,7 +859,7 @@ def execute_repair(
     verification_results: list[CommandResult] = []
     for attempt in range(1, max_attempts + 1):
         run_agent_with_prompt(
-            supervisor_agent, repair_prompt, worktree_path, process_runner
+            supervisor_agent, repair_prompt, worktree_path, process_runner, issue=issue
         )
 
         request_path = worktree_path / ".agent-runner" / "commit-request.json"
@@ -1002,6 +1002,7 @@ def run_post_pr_supervisor_cycle(
                 worktree_path,
                 process_runner,
                 capture_output=True,
+                issue=issue,
             )
         except subprocess.CalledProcessError as exc:
             result = CommandResult(

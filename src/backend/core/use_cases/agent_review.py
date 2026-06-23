@@ -664,6 +664,7 @@ def run_pre_pr_review(
                 process_runner,
                 capture_output=True,
                 timeout_seconds=timeout_seconds,
+                issue=issue,
             )
             reviewer_text = extract_agent_response_text(review_result)
             stdout_decision = parse_reviewer_decision(reviewer_text)
