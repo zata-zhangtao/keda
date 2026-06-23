@@ -31,6 +31,7 @@ from backend.core.shared.models.agent_runner import (
     IssueSummary,
     LabelConfig,
     PullRequestContext,
+    PullRequestSummary,
 )
 from backend.core.shared.models.agent_deliberation import (
     DeliberationEvent,
@@ -446,16 +447,34 @@ class IGitHubClient(ABC):
 
     @abstractmethod
     def list_issues_by_label(
-        self, label: str, limit: int, state: str = "all"
+        self, label: str | None, limit: int, state: str = "all"
     ) -> list[IssueSummary]:
         """按标签列出 Issue，可跨 open/closed 状态。
 
         Args:
-            label: 要筛选的标签名。
+            label: 要筛选的标签名；为 ``None`` 表示不过滤标签。
             limit: 返回结果的最大数量上限。
             state: Issue 状态筛选，``"open"``、``"closed"`` 或 ``"all"``。
 
         Returns:
             list[IssueSummary]: 满足条件的 Issue 摘要列表。
+        """
+        ...
+
+    @abstractmethod
+    def list_pull_requests_for_issue(
+        self, repo: str, issue_number: int
+    ) -> list[PullRequestSummary]:
+        """List Pull Requests that reference or close the given Issue.
+
+        Args:
+            repo: Repository identifier in ``owner/name`` form.
+            issue_number: Issue number whose linked PRs should be
+                returned.
+
+        Returns:
+            list[PullRequestSummary]: PRs linked to the Issue, sorted by
+            state then PR number. An Issue with no linked PRs returns an
+            empty list.
         """
         ...

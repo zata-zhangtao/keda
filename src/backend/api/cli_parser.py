@@ -136,6 +136,52 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_options(issue_create_parser)
 
+    issue_list_parser = issue_subparsers.add_parser(
+        "list", help="List Issues with linked Pull Request status."
+    )
+    issue_list_parser.set_defaults(command="issue list")
+    issue_list_parser.add_argument(
+        "--all-registered",
+        action="store_true",
+        help="Force multi-repository scan even when cwd is an iAR project repo.",
+    )
+    issue_list_parser.add_argument(
+        "--state",
+        choices=("open", "closed", "all"),
+        default="all",
+        help="Issue state filter (default: all).",
+    )
+    issue_list_parser.add_argument(
+        "--label",
+        default=None,
+        help="Only show Issues carrying this label.",
+    )
+    issue_list_parser.add_argument(
+        "--with-pr",
+        action="store_true",
+        default=False,
+        help="Only show Issues with at least one linked PR.",
+    )
+    issue_list_parser.add_argument(
+        "--without-pr",
+        action="store_true",
+        default=False,
+        help="Only show Issues with no linked PRs.",
+    )
+    issue_list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum Issues to fetch per repository (default: 100).",
+    )
+    issue_list_parser.add_argument(
+        "--output",
+        choices=("table", "json"),
+        default="table",
+        help="Render format (default: table).",
+    )
+    add_common_options(issue_list_parser)
+
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument(

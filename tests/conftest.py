@@ -15,6 +15,7 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     IssueSummary,
     LabelConfig,
+    PullRequestSummary,
 )
 
 
@@ -47,6 +48,8 @@ class FakeGitHubClient(IGitHubClient):
         self._issue_title: str | None = None
         self._issue_labels: dict[int, tuple[str, ...]] = {}
         self._rework_prd_issues: list[IssueSummary] = []
+        self._prs_by_repo_issue: dict[tuple[str, int], list[PullRequestSummary]] = {}
+        self._list_issues_by_label_result: list[IssueSummary] = []
 
     def sync_labels(self, labels: LabelConfig) -> None:
         self.calls.append({"method": "sync_labels", "labels": labels})
@@ -213,7 +216,27 @@ class FakeGitHubClient(IGitHubClient):
                 "state": state,
             }
         )
-        return []
+        return list(self._list_issues_by_label_result[:limit])
+
+    def set_list_issues_by_label_result(self, issues: list[IssueSummary]) -> None:
+        self._list_issues_by_label_result = list(issues)
+
+    def set_prs_for_repo_issue(
+        self, repo: str, issue_number: int, pulls: list[PullRequestSummary]
+    ) -> None:
+        self._prs_by_repo_issue[(repo, issue_number)] = list(pulls)
+
+    def list_pull_requests_for_issue(
+        self, repo: str, issue_number: int
+    ) -> list[PullRequestSummary]:
+        self.calls.append(
+            {
+                "method": "list_pull_requests_for_issue",
+                "repo": repo,
+                "issue_number": issue_number,
+            }
+        )
+        return list(self._prs_by_repo_issue.get((repo, issue_number), []))
 
 
 class FakeContentGenerator(IContentGenerator):
