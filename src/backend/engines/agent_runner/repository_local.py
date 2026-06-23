@@ -666,9 +666,17 @@ def initialize_repository_local_config(
     )
     config_path = repo_root_path / IAR_REPOSITORY_CONFIG_FILENAME
     if config_path.exists() and not options.force and not options.dry_run:
-        raise ValueError(
-            f"IAR local config already exists at {config_path}. "
-            "Use --force to overwrite it."
+        existing_text = config_path.read_text(encoding="utf-8")
+        if existing_text != config_text:
+            raise ValueError(
+                f"IAR local config already exists at {config_path}. "
+                "Use --force to overwrite it."
+            )
+        return RepositoryInitResult(
+            repo_root_path=repo_root_path,
+            config_path=config_path,
+            config_text=config_text,
+            wrote_file=False,
         )
     if options.dry_run:
         return RepositoryInitResult(

@@ -11,8 +11,6 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import os
-import shlex
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +18,10 @@ from backend.api.cli_console import console, error_console
 from backend.api.cli_init import (
     _print_workflow_config_plan,
     _run_init_command,
+)
+from backend.api.cli_prd_utils import (
+    _expand_prd_paths,
+    _prompt_and_publish_prd_if_needed,
 )
 from backend.api.cli_registry import (
     _run_registry_list_command,
@@ -29,14 +31,10 @@ from backend.api.cli_registry import (
     _run_registry_stop_command,
 )
 from backend.api.cli_takeover import _run_takeover_command
+from backend.api.cli_utils import _format_cli_exception
 from backend.core.use_cases.create_issue_from_prd import (
-    ISSUE_LINK_LINE_RE,
     IssueFromPrdRequest,
-    PrdPublishContext,
     create_issue_from_prd,
-    current_git_branch,
-    parse_issue_number,
-    publish_prd_file,
     resolve_prd_paths,
 )
 from backend.core.use_cases.run_agent_daemon import run_agent_daemon
@@ -60,7 +58,6 @@ from backend.core.use_cases.worktree_cleanup import (
 )
 from backend.core.use_cases.worktree_env import copy_missing_env_files
 from backend.core.shared.models.agent_deliberation import DeliberationSession
-from backend.core.shared.models.agent_runner import LabelConfig
 from backend.engines.agent_runner.factory import (
     create_console_store,
     create_content_generator,
@@ -96,155 +93,14 @@ from backend.engines.agent_runner.workflow_install import (
     install_workflow,
 )
 
-_MAX_CLI_ERROR_STREAM_CHARS = 12000
-
-
 if TYPE_CHECKING:
     from backend.core.shared.interfaces.agent_runner import (
         IGitHubClient,
         IProcessRunner,
     )
     from backend.core.shared.models.agent_runner import (
-        LabelConfig,
         RepositoryRunContext,
     )
-
-
-def _format_command_for_cli(command: object) -> str:
-    """Format a failed command for CLI diagnostics."""
-    if isinstance(command, str):
-        return command
-    if isinstance(command, (list, tuple)):
-        return shlex.join(str(command_part) for command_part in command)
-    return str(command)
-
-
-def _decode_cli_error_stream(stream_value: object) -> str:
-    """Decode captured subprocess output for CLI diagnostics."""
-    if stream_value is None:
-        return ""
-    if isinstance(stream_value, bytes):
-        return stream_value.decode("utf-8", errors="replace")
-    return str(stream_value)
-
-
-def _truncate_cli_error_stream(stream_text: str) -> str:
-    """Limit very large captured command output in CLI diagnostics."""
-    if len(stream_text) <= _MAX_CLI_ERROR_STREAM_CHARS:
-        return stream_text
-    omitted_char_count = len(stream_text) - _MAX_CLI_ERROR_STREAM_CHARS
-    return (
-        stream_text[:_MAX_CLI_ERROR_STREAM_CHARS]
-        + f"\n... truncated {omitted_char_count} chars ..."
-    )
-
-
-def _format_cli_exception(exc: BaseException) -> str:
-    """Format an exception with subprocess stdout/stderr when available."""
-    if not isinstance(exc, subprocess.CalledProcessError):
-        return str(exc)
-
-    lines = [
-        "Command failed.",
-        f"Command: {_format_command_for_cli(exc.cmd)}",
-        f"Exit code: {exc.returncode}",
-    ]
-    stdout_text = _truncate_cli_error_stream(_decode_cli_error_stream(exc.output))
-    stderr_text = _truncate_cli_error_stream(_decode_cli_error_stream(exc.stderr))
-    if stdout_text:
-        lines.extend(["", "stdout:", stdout_text.rstrip()])
-    if stderr_text:
-        lines.extend(["", "stderr:", stderr_text.rstrip()])
-    if not stdout_text and not stderr_text:
-        lines.append("No stdout or stderr was captured.")
-    return "\n".join(lines)
-
-
-@dataclasses.dataclass(frozen=True)
-class _DefaultDaemonTarget:
-    """Result of inferring a daemon target from cwd."""
-
-    repo_id: str | None
-    error: str
-
-
-def _resolve_default_daemon_target() -> _DefaultDaemonTarget:
-    """Infer the daemon target repository from the current working directory.
-
-    Returns:
-        _DefaultDaemonTarget: when ``repo_id`` is set, use that repository;
-        when ``error`` is set, fail early with the error message. If both are
-        None/empty, fall back to --all.
-    """
-    try:
-        cwd_git_root = detect_git_repository_root(Path.cwd())
-    except ValueError:
-        # Not inside a git repository: keep the legacy --all fallback so that
-        # commands like nohup iar daemon still work outside a repository.
-        return _DefaultDaemonTarget(repo_id=None, error="")
-    settings = load_fresh_agent_runner_settings()
-    match = find_repository_match_for_path(settings, cwd_git_root)
-    if match.is_unique_enabled:
-        assert match.matched_repo_id is not None  # noqa: S101
-        return _DefaultDaemonTarget(repo_id=match.matched_repo_id, error="")
-    if match.is_disabled:
-        assert match.disabled_repo_id is not None  # noqa: S101
-        return _DefaultDaemonTarget(
-            repo_id=None,
-            error=(
-                f"Repository '{match.disabled_repo_id}' is disabled. "
-                "Use --repo-id to target it explicitly or enable it in config.toml."
-            ),
-        )
-    if match.is_ambiguous:
-        candidates = ", ".join(repo_id for repo_id, _ in match.enabled_candidates)
-        return _DefaultDaemonTarget(
-            repo_id=None,
-            error=(
-                f"Current directory matches multiple enabled repositories: {candidates}. "
-                "Use --repo-id to target one, or --all to target all."
-            ),
-        )
-    return _DefaultDaemonTarget(repo_id=None, error="")
-
-
-def _prompt_and_publish_prd_if_needed(
-    *,
-    repo_path: Path,
-    relative_prd_path: Path,
-    issue_url: str,
-    queue_ready: bool,
-    git_remote: str,
-    labels_config: "LabelConfig",
-    github_client: "IGitHubClient",
-    process_runner: "IProcessRunner",
-) -> bool:
-    """Prompt user to commit and push PRD changes if working tree is dirty."""
-
-    status_result = process_runner.run(["git", "status", "--porcelain"], cwd=repo_path)
-    if not status_result.stdout.strip():
-        return False
-
-    prd_path_text = relative_prd_path.as_posix()
-    print(f"\n检测到 PRD 文件有未提交的变更：{prd_path_text}")
-    response = input("是否立即 commit 并 push 该变更？(y/N): ")
-    if response.lower() not in ("y", "yes"):
-        return False
-
-    current_branch = current_git_branch(repo_path, process_runner)
-    publish_context = PrdPublishContext(
-        repo_path=repo_path,
-        relative_prd_path=relative_prd_path,
-        git_remote=git_remote,
-        current_branch=current_branch,
-    )
-    publish_prd_file(publish_context, process_runner)
-    if queue_ready:
-        github_client.edit_issue_labels(
-            parse_issue_number(issue_url),
-            add=[labels_config.ready],
-        )
-    return True
 
 
 def _ensure_gh_auth_or_prompt(
@@ -320,6 +176,54 @@ def _resolve_cli_repository_targets(
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class _DefaultDaemonTarget:
+    """Result of inferring a daemon target from cwd."""
+
+    repo_id: str | None
+    error: str
+
+
+def _resolve_default_daemon_target() -> _DefaultDaemonTarget:
+    """Infer the daemon target repository from the current working directory.
+
+    Returns:
+        _DefaultDaemonTarget: when ``repo_id`` is set, use that repository;
+        when ``error`` is set, fail early with the error message. If both are
+        None/empty, fall back to --all.
+    """
+    try:
+        cwd_git_root = detect_git_repository_root(Path.cwd())
+    except ValueError:
+        # Not inside a git repository: keep the legacy --all fallback so that
+        # commands like nohup iar daemon still work outside a repository.
+        return _DefaultDaemonTarget(repo_id=None, error="")
+    settings = load_fresh_agent_runner_settings()
+    match = find_repository_match_for_path(settings, cwd_git_root)
+    if match.is_unique_enabled:
+        assert match.matched_repo_id is not None  # noqa: S101
+        return _DefaultDaemonTarget(repo_id=match.matched_repo_id, error="")
+    if match.is_disabled:
+        assert match.disabled_repo_id is not None  # noqa: S101
+        return _DefaultDaemonTarget(
+            repo_id=None,
+            error=(
+                f"Repository '{match.disabled_repo_id}' is disabled. "
+                "Use --repo-id to target it explicitly or enable it in config.toml."
+            ),
+        )
+    if match.is_ambiguous:
+        candidates = ", ".join(repo_id for repo_id, _ in match.enabled_candidates)
+        return _DefaultDaemonTarget(
+            repo_id=None,
+            error=(
+                f"Current directory matches multiple enabled repositories: {candidates}. "
+                "Use --repo-id to target one, or --all to target all."
+            ),
+        )
+    return _DefaultDaemonTarget(repo_id=None, error="")
+
+
 def _resolve_run_trigger(command_kind: str) -> str:
     """解析运行记录的 trigger 来源。
 
@@ -349,93 +253,6 @@ def _handle_not_initialized_error(exc: IARRepositoryNotInitializedError) -> int:
     error_console.print("Run the following command from the repository root:")
     error_console.print("  iar init")
     return 1
-
-
-def _expand_prd_paths(
-    repo_path: Path, prd_paths: list[str]
-) -> tuple[list[str], list[str]]:
-    """Expand directories in ``prd_paths`` to their ``*.md`` files.
-
-    Files are returned as repo-relative paths. Directories are expanded to
-    their immediate ``*.md`` children, sorted by filename. PRDs that already
-    contain a ``- GitHub Issue:`` URL are skipped when discovered via a
-    directory, because the user's intent is to create Issues only for pending
-    PRDs. Explicitly passed files are not skipped so that errors remain
-    visible. Non-existent paths are passed through unchanged so that downstream
-    validation can report them with its usual diagnostics.
-
-    Args:
-        repo_path: Repository root used to resolve relative paths.
-        prd_paths: Raw CLI arguments, each may be a file or a directory.
-
-    Returns:
-        ``(expanded_paths, skipped_paths)`` tuple. ``expanded_paths`` are
-        repo-relative PRD Markdown files to process. ``skipped_paths`` are
-        repo-relative PRD files that already have an Issue link and were
-        discovered through a directory argument.
-
-    Raises:
-        ValueError: When a directory is empty of ``*.md`` files or the
-            final expanded list is empty.
-    """
-
-    expanded_paths: list[str] = []
-    skipped_paths: list[str] = []
-    seen_paths: set[str] = set()
-
-    def _has_issue_link(absolute_prd_path: Path) -> bool:
-        try:
-            prd_text = absolute_prd_path.read_text(encoding="utf-8")
-        except OSError:
-            return False
-        return any(ISSUE_LINK_LINE_RE.match(line) for line in prd_text.splitlines())
-
-    for prd_path_text in prd_paths:
-        candidate_path = (repo_path / prd_path_text).resolve()
-
-        if not candidate_path.exists():
-            expanded_paths.append(prd_path_text)
-            continue
-
-        is_directory = candidate_path.is_dir()
-        if candidate_path.is_file():
-            if candidate_path.suffix.lower() != ".md":
-                raise ValueError(f"PRD file must be a Markdown file: {prd_path_text}")
-            file_entries = [candidate_path]
-        elif is_directory:
-            file_entries = sorted(
-                [
-                    entry
-                    for entry in candidate_path.iterdir()
-                    if entry.is_file() and entry.suffix.lower() == ".md"
-                ],
-                key=lambda entry: entry.name,
-            )
-            if not file_entries:
-                raise ValueError(
-                    f"Directory contains no PRD Markdown files: {prd_path_text}"
-                )
-        else:
-            raise ValueError(
-                f"PRD path is neither a file nor a directory: {prd_path_text}"
-            )
-
-        for file_entry in file_entries:
-            relative_path = file_entry.relative_to(repo_path.resolve()).as_posix()
-            if relative_path in seen_paths:
-                continue
-            seen_paths.add(relative_path)
-
-            if is_directory and _has_issue_link(file_entry):
-                skipped_paths.append(relative_path)
-                continue
-
-            expanded_paths.append(relative_path)
-
-    if not expanded_paths and not skipped_paths:
-        raise ValueError("No PRD Markdown files found.")
-
-    return expanded_paths, skipped_paths
 
 
 def _run_parsed_command(parsed: argparse.Namespace) -> int:
