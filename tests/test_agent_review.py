@@ -1283,7 +1283,11 @@ def test_run_pre_pr_review_soft_fails_with_findings_on_last_cycle(
                 capture_output=capture_output,
             )
 
-    config = AppConfig(pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1))
+    config = AppConfig(
+        pre_pr_review=PrePrReviewConfig(
+            enabled=True, max_attempts=1, commit_request_reminder_attempts=0
+        )
+    )
 
     with pytest.raises(RuntimeError, match="did not approve"):
         run_pre_pr_review(
@@ -1304,6 +1308,206 @@ def test_run_pre_pr_review_soft_fails_with_findings_on_last_cycle(
     assert "Verdict: changes requested" in body
     assert "missing tests" in body
     assert "reviewer reported findings but produced no commit request" in body
+
+
+def test_run_pre_pr_review_reminds_reviewer_then_commits(
+    tmp_path: Path,
+) -> None:
+    """Findings without commit request trigger a reminder; a follow-up patch commits."""
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    worktree_path = tmp_path / "fake-worktree"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    class _ReminderThenPatchRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__(
+                responses={
+                    ("git", "branch", "--show-current"): CommandResult(
+                        command=("git", "branch", "--show-current"),
+                        return_code=0,
+                        stdout="issue-1\n",
+                        stderr="",
+                    ),
+                    ("git", "status", "--porcelain"): CommandResult(
+                        command=("git", "status", "--porcelain"),
+                        return_code=0,
+                        stdout=" M file.py\n",
+                        stderr="",
+                    ),
+                    ("git", "rev-parse", "HEAD"): CommandResult(
+                        command=("git", "rev-parse", "HEAD"),
+                        return_code=0,
+                        stdout="after-sha\n",
+                        stderr="",
+                    ),
+                }
+            )
+            self._review_calls = 0
+            self.last_prompt = ""
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                self._review_calls += 1
+                self.last_prompt = " ".join(command)
+                if self._review_calls == 1:
+                    return CommandResult(
+                        command=command_tuple,
+                        return_code=0,
+                        stdout=(
+                            "```json\n"
+                            "{\n"
+                            '  "verdict": "changes_requested",\n'
+                            '  "summary": "needs work",\n'
+                            '  "findings": [\n'
+                            '    {"severity": "high", "category": "code", '
+                            '"title": "missing tests"}\n'
+                            "  ]\n"
+                            "}\n"
+                            "```"
+                        ),
+                        stderr="",
+                    )
+                # Second call: write commit request and return approved.
+                request_path = cwd / ".agent-runner" / "commit-request.json"
+                request_path.parent.mkdir(parents=True, exist_ok=True)
+                request_path.write_text(
+                    json.dumps({"commit_message": "reviewer fix"}),
+                    encoding="utf-8",
+                )
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout='{"verdict": "approved", "summary": "fixed"}',
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _ReminderThenPatchRunner()
+    from backend.core.shared.models.agent_runner import RunnerConfig
+
+    config = AppConfig(
+        pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1),
+        runner=RunnerConfig(verification_commands=("just test",)),
+    )
+
+    final_sha, _verification = run_pre_pr_review(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=fake_runner,
+        selected_agent="codex",
+        head_sha_before="before-sha",
+        expected_branch="issue-1",
+        verification_results=[],
+    )
+    assert final_sha == "after-sha"
+    assert fake_runner._review_calls == 2
+    assert "REMINDER #1" in fake_runner.last_prompt
+    assert "missing tests" in fake_runner.last_prompt
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "Verdict: approved" in comment_calls[0]["body"]
+    assert (
+        "reviewer approved and runner committed follow-up patch"
+        in comment_calls[0]["body"]
+    )
+
+
+def test_run_pre_pr_review_zero_reminder_attempts_fails_fast(
+    tmp_path: Path,
+) -> None:
+    """commit_request_reminder_attempts=0 disables the inner re-prompt."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+
+    class _FindingsOnlyNoRetryRunner(FakeProcessRunner):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout=(
+                        "```json\n"
+                        "{\n"
+                        '  "verdict": "changes_requested",\n'
+                        '  "summary": "needs work",\n'
+                        '  "findings": [\n'
+                        '    {"severity": "high", "category": "code", '
+                        '"title": "missing tests"}\n'
+                        "  ]\n"
+                        "}\n"
+                        "```"
+                    ),
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _FindingsOnlyNoRetryRunner()
+    config = AppConfig(
+        pre_pr_review=PrePrReviewConfig(
+            enabled=True, max_attempts=1, commit_request_reminder_attempts=0
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="did not approve"):
+        run_pre_pr_review(
+            issue=issue,
+            worktree_path=tmp_path,
+            config=config,
+            github_client=fake_client,
+            process_runner=fake_runner,
+            selected_agent="codex",
+            head_sha_before="before-sha",
+            expected_branch="issue-1",
+            verification_results=[],
+        )
+
+    codex_calls = [c for c in fake_runner.calls if c and c[0] == "codex"]
+    assert len(codex_calls) == 1
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert (
+        "reviewer reported findings but produced no commit request"
+        in comment_calls[0]["body"]
+    )
 
 
 def test_run_pre_pr_review_last_cycle_final_patch_is_accepted(

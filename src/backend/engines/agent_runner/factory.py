@@ -228,6 +228,7 @@ def build_app_config_from_settings(
             allow_same_agent=pre_pr.allow_same_agent,
             max_attempts=pre_pr.max_attempts,
             timeout_seconds=pre_pr.timeout_seconds,
+            commit_request_reminder_attempts=pre_pr.commit_request_reminder_attempts,
             review_prompt_template=tuple(pre_pr.review_prompt_template),
         ),
         post_pr_supervisor=PostPrSupervisorConfig(

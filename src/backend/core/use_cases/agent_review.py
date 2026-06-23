@@ -526,6 +526,40 @@ def _escape_cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ").strip() or "-"
 
 
+def _build_commit_request_reminder_prompt(
+    review_prompt: str,
+    findings: tuple[ReviewFinding, ...],
+    reminder_index: int,
+) -> str:
+    """Append a strict reminder when a reviewer listed findings but no patch.
+
+    The reminder is injected back into the same review cycle so the reviewer
+    gets another chance to produce ``.agent-runner/commit-request.json``
+    instead of leaving the runner with findings it cannot apply automatically.
+    """
+    finding_lines: list[str] = []
+    for finding in findings:
+        location = (
+            f"{finding.file}:{finding.line}" if finding.file else "unknown location"
+        )
+        finding_lines.append(
+            f"- [{location}] {finding.severity}: {finding.title}\n"
+            f"  {finding.description}\n"
+            f"  Recommendation: {finding.recommendation}"
+        )
+    findings_block = "\n".join(finding_lines) or "(no structured findings)"
+    reminder = (
+        f"\n\nREMINDER #{reminder_index}: The review above reported findings "
+        "but did not create `.agent-runner/commit-request.json`. "
+        "You MUST now apply concrete fixes in the worktree and write "
+        "`.agent-runner/commit-request.json` with a descriptive `commit_message`. "
+        "Do not just list findings; produce a patch that addresses every item."
+        "\n\nFindings that must be addressed:\n"
+        f"{findings_block}"
+    )
+    return review_prompt + reminder
+
+
 def run_pre_pr_review(
     *,
     issue: IssueSummary,
@@ -611,21 +645,78 @@ def run_pre_pr_review(
             verification_results=current_verification,
             head_sha=current_head,
         )
-        _logger.info(
-            "Pre-PR review cycle %d/%d for Issue #%d: running reviewer '%s'.",
-            cycle,
-            max_attempts,
-            issue.number,
-            reviewer_agent,
-        )
-        review_result = run_agent_with_prompt(
-            reviewer_agent,
-            review_prompt,
-            worktree_path,
-            process_runner,
-            capture_output=True,
-            timeout_seconds=timeout_seconds,
-        )
+        max_inner_attempts = max(0, review_config.commit_request_reminder_attempts)
+        for inner_attempt in range(max_inner_attempts + 1):
+            _logger.info(
+                "Pre-PR review cycle %d/%d for Issue #%d: running reviewer '%s' "
+                "(inner attempt %d/%d).",
+                cycle,
+                max_attempts,
+                issue.number,
+                reviewer_agent,
+                inner_attempt + 1,
+                max_inner_attempts + 1,
+            )
+            review_result = run_agent_with_prompt(
+                reviewer_agent,
+                review_prompt,
+                worktree_path,
+                process_runner,
+                capture_output=True,
+                timeout_seconds=timeout_seconds,
+            )
+            reviewer_text = extract_agent_response_text(review_result)
+            stdout_decision = parse_reviewer_decision(reviewer_text)
+
+            # Check if reviewer requested changes via commit request
+            request_path = worktree_path / _COMMIT_REQUEST_RELATIVE_PATH
+            commit_request_decision = (
+                _read_commit_request_decision(request_path)
+                if request_path.is_file()
+                else None
+            )
+            reviewer_decision = _merge_reviewer_decisions(
+                stdout_decision,
+                commit_request_decision,
+            )
+            _logger.info(
+                "Pre-PR review cycle %d/%d for Issue #%d: parsed verdict=%s "
+                "(inner attempt %d/%d, stdout_parseable=%s, "
+                "commit_request_verdict=%s, findings=%d).",
+                cycle,
+                max_attempts,
+                issue.number,
+                reviewer_decision.verdict,
+                inner_attempt + 1,
+                max_inner_attempts + 1,
+                stdout_decision.parseable,
+                commit_request_decision.verdict if commit_request_decision else "none",
+                len(reviewer_decision.findings),
+            )
+
+            request_path_was_present = request_path.is_file()
+            missing_commit_request = (
+                reviewer_decision.has_findings
+                and reviewer_decision.verdict == "changes_requested"
+                and not request_path_was_present
+            )
+            if missing_commit_request and inner_attempt < max_inner_attempts:
+                _logger.info(
+                    "Pre-PR review cycle %d/%d for Issue #%d: reviewer reported "
+                    "%d finding(s) without a commit request; re-prompting.",
+                    cycle,
+                    max_attempts,
+                    issue.number,
+                    len(reviewer_decision.findings),
+                )
+                review_prompt = _build_commit_request_reminder_prompt(
+                    review_prompt,
+                    reviewer_decision.findings,
+                    reminder_index=inner_attempt + 1,
+                )
+                continue
+            break
+
         elapsed_seconds = time.monotonic() - attempt_started_at
         _logger.info(
             "Pre-PR review cycle %d/%d for Issue #%d: reviewer exited "
@@ -635,31 +726,6 @@ def run_pre_pr_review(
             issue.number,
             review_result.return_code,
             elapsed_seconds,
-        )
-        reviewer_text = extract_agent_response_text(review_result)
-        stdout_decision = parse_reviewer_decision(reviewer_text)
-
-        # Check if reviewer requested changes via commit request
-        request_path = worktree_path / _COMMIT_REQUEST_RELATIVE_PATH
-        commit_request_decision = (
-            _read_commit_request_decision(request_path)
-            if request_path.is_file()
-            else None
-        )
-        reviewer_decision = _merge_reviewer_decisions(
-            stdout_decision,
-            commit_request_decision,
-        )
-        _logger.info(
-            "Pre-PR review cycle %d/%d for Issue #%d: parsed verdict=%s "
-            "(stdout_parseable=%s, commit_request_verdict=%s, findings=%d).",
-            cycle,
-            max_attempts,
-            issue.number,
-            reviewer_decision.verdict,
-            stdout_decision.parseable,
-            commit_request_decision.verdict if commit_request_decision else "none",
-            len(reviewer_decision.findings),
         )
         cycle_verdict = reviewer_decision.verdict
         request_path_was_present = request_path.is_file()

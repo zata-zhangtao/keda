@@ -479,6 +479,10 @@ class AgentRunnerPrePrReviewSettings(BaseModel):
     allow_same_agent: bool = True
     max_attempts: int = 2
     timeout_seconds: int = 900
+    # When the reviewer reports findings but fails to write a commit request,
+    # the runner appends a reminder and re-invokes the reviewer up to this
+    # many times within the same review cycle.
+    commit_request_reminder_attempts: int = 1
     # Review rules template; supports either a single string or a list of
     # lines. When the field is omitted from TOML the embedded default in
     # ``agent_review.py`` is used so out-of-the-box behavior still calls the

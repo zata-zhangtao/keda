@@ -104,6 +104,10 @@ def test_settings_review_and_supervisor_match_core() -> None:
     assert pre_push.allow_same_agent == core_pre.allow_same_agent
     assert pre_push.max_attempts == core_pre.max_attempts
     assert pre_push.timeout_seconds == core_pre.timeout_seconds
+    assert (
+        pre_push.commit_request_reminder_attempts
+        == core_pre.commit_request_reminder_attempts
+    )
     assert list(pre_push.review_prompt_template) == list(
         core_pre.review_prompt_template
     )

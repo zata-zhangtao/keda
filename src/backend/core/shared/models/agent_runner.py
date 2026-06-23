@@ -207,6 +207,12 @@ class PrePrReviewConfig:
     allow_same_agent: bool = True
     max_attempts: int = 2
     timeout_seconds: int = 900
+    # When the reviewer reports findings but fails to write a commit request,
+    # the runner appends a reminder and re-invokes the reviewer up to this
+    # many times within the same review cycle. This prevents the runner from
+    # giving up just because the reviewer listed problems without producing a
+    # patch.
+    commit_request_reminder_attempts: int = 1
     # Overrides for the review rules appended after the review packet.
     # Empty tuple means "use the embedded default template" which instructs
     # the reviewer to call the ``code-reviewer`` skill and emit a findings
