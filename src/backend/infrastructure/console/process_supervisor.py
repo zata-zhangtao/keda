@@ -25,9 +25,14 @@ import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 _logger = logging.getLogger(__name__)
+
+try:
+    import psutil
+except Exception:  # noqa: BLE001 - psutil 是可选依赖；不可用时降级为空扫描。
+    psutil = None  # type: ignore[assignment]
 
 
 # 以下数据类与 core/shared/interfaces/runner_console.py 中的同名类型
@@ -95,6 +100,95 @@ def _probe_pid(pid: int) -> tuple[bool, int | None]:
     except PermissionError:
         # 进程存在但属于其他用户 —— 对本面板而言仍视为存活。
         return True, None
+
+
+#: 需要识别的 runner 子命令到 supervisor 内部 kind 字符串的映射。
+#: 顺序重要：review-daemon 必须在 daemon 之前检查，避免 "daemon" 子串误匹配。
+_UNMANAGED_KIND_PATTERNS = (
+    ("review-daemon", "review_daemon"),
+    ("daemon", "daemon"),
+)
+
+
+def _find_iar_command_index(cmdline: tuple[str, ...]) -> int | None:
+    """在命令行中定位 ``iar`` 可执行文件的位置。
+
+    兼容 ``iar``、``uv run iar``、``/path/to/iar`` 等形态。
+    """
+    for index, arg in enumerate(cmdline):
+        basename = os.path.basename(arg)
+        if basename == "iar":
+            return index
+    return None
+
+
+def _parse_unmanaged_kind(cmdline: tuple[str, ...]) -> str | None:
+    """从命令行解析 runner 子命令对应的 kind。
+
+    Returns:
+        ``"daemon"`` / ``"review_daemon"`` 或 ``None``。
+    """
+    iar_index = _find_iar_command_index(cmdline)
+    if iar_index is None:
+        return None
+    candidate_args = cmdline[iar_index + 1 :]
+    # 跳过选项参数（如 --repo /path/to/repo），定位子命令。
+    for arg in candidate_args:
+        if arg.startswith("-"):
+            continue
+        for pattern, kind in _UNMANAGED_KIND_PATTERNS:
+            if arg == pattern:
+                return kind
+        # 第一个非选项非 runner 子命令的参数说明不是目标进程。
+        return None
+    return None
+
+
+def _parse_repo_id_from_argv(cmdline: tuple[str, ...]) -> str | None:
+    """解析命令行中的 ``--repo-id`` 值。"""
+    for index, arg in enumerate(cmdline):
+        if arg == "--repo-id" and index + 1 < len(cmdline):
+            return cmdline[index + 1]
+    return None
+
+
+def _resolve_repo_id_from_cwd(
+    cwd: str | None,
+    registry_entries: Sequence[Any],
+) -> str | None:
+    """用进程 cwd 匹配 registry 中的仓库路径，返回 repo_id。
+
+    Args:
+        cwd: 进程当前工作目录。
+        registry_entries: 与 ``RegistryRepositoryEntry`` 同构的对象序列，
+            要求每个条目有 ``repo_id`` 和 ``path`` 属性。
+    """
+    if not cwd:
+        return None
+    try:
+        cwd_path = Path(cwd).resolve()
+    except (OSError, ValueError):
+        return None
+    for entry in registry_entries:
+        try:
+            entry_path = Path(str(getattr(entry, "path", ""))).expanduser().resolve()
+        except (OSError, ValueError):
+            continue
+        if cwd_path == entry_path:
+            return getattr(entry, "repo_id", None)
+    return None
+
+
+def _format_create_time(create_time: float | None) -> str:
+    """把 psutil 的 create_time 转成 ISO 字符串；不可用则返回空字符串。"""
+    if create_time is None:
+        return ""
+    try:
+        return datetime.fromtimestamp(create_time, tz=timezone.utc).isoformat(
+            timespec="seconds"
+        )
+    except (OSError, ValueError, OverflowError):
+        return ""
 
 
 class PidfileProcessSupervisor:
@@ -261,6 +355,90 @@ class PidfileProcessSupervisor:
             )
         refreshed_records.sort(key=lambda record: record.started_at, reverse=True)
         return refreshed_records
+
+    def list_unmanaged_processes(
+        self, registry_entries: Sequence[Any]
+    ) -> list[RunnerProcessRecord]:
+        """扫描系统进程，返回未在 pidfile 中登记的 iar daemon / review-daemon。
+
+        仅返回当前用户拥有的进程；命令行无法解析或不属于 registry 的进程
+        被忽略。结果仅用于观测，不参与 ``stop`` / ``read_log`` 等托管操作。
+
+        Args:
+            registry_entries: 与 ``RegistryRepositoryEntry`` 同构的对象序列，
+                每个条目至少包含 ``repo_id`` 与 ``path`` 属性，用于按 cwd
+                匹配未显式指定 ``--repo-id`` 的手动进程。
+        """
+        if psutil is None:
+            _logger.warning(
+                "psutil is not available; cannot scan for unmanaged runner processes."
+            )
+            return []
+
+        # 收集已托管进程的 pid，避免重复报告。
+        registry = self._load_registry()
+        managed_pids: set[int] = set()
+        for entry in registry.values():
+            try:
+                managed_pids.add(int(entry["pid"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        try:
+            current_username = psutil.Process().username()
+        except Exception:  # noqa: BLE001 - 用户名读取失败时不阻断扫描。
+            current_username = None
+
+        unmanaged_records: list[RunnerProcessRecord] = []
+        for proc in psutil.process_iter(
+            ["pid", "name", "cmdline", "username", "create_time"]
+        ):
+            try:
+                proc_info = proc.info
+                if not isinstance(proc_info, dict):
+                    continue
+                pid = proc_info.get("pid")
+                username = proc_info.get("username")
+                cmdline = proc_info.get("cmdline")
+                if not isinstance(pid, int) or pid <= 0:
+                    continue
+                if current_username is not None and username != current_username:
+                    continue
+                if not isinstance(cmdline, (list, tuple)) or not cmdline:
+                    continue
+                cmdline_tuple = tuple(str(arg) for arg in cmdline)
+                kind = _parse_unmanaged_kind(cmdline_tuple)
+                if kind is None:
+                    continue
+                if pid in managed_pids:
+                    continue
+                repo_id = _parse_repo_id_from_argv(cmdline_tuple)
+                if repo_id is None:
+                    try:
+                        cwd = proc.cwd()
+                    except Exception:  # noqa: BLE001 - cwd 读取失败时跳过按路径匹配。
+                        cwd = None
+                    repo_id = _resolve_repo_id_from_cwd(cwd, registry_entries)
+                if repo_id is None:
+                    continue
+                unmanaged_records.append(
+                    RunnerProcessRecord(
+                        process_id=f"unmanaged-{pid}",
+                        repo_id=repo_id,
+                        kind=kind,
+                        pid=pid,
+                        status="running",
+                        exit_code=None,
+                        log_path="",
+                        command=cmdline_tuple,
+                        started_at=_format_create_time(proc_info.get("create_time")),
+                        stopped_at=None,
+                    )
+                )
+            except Exception:  # noqa: BLE001 - 单个进程扫描失败不应中断整体。
+                continue
+
+        return unmanaged_records
 
     def get_process(self, process_id: str) -> RunnerProcessRecord | None:
         """按 ID 查询单个进程的最新状态。"""

@@ -13,8 +13,9 @@
 
 - SQLite 历史只是旁路记录，不参与 workflow 状态机决策；GitHub
   labels/comments/PR 仍是唯一事实来源。
-- 进程监管只认由面板启动并登记在 pidfile registry 中的进程，
-  不接管用户手工启动的 CLI 进程。
+- 进程监管以 pidfile registry 中由面板启动的托管进程为操作对象；
+  同时提供 ``list_unmanaged_processes`` 用于观测用户手工启动的 CLI
+      进程，但不对其执行停止、重启等生命周期操作。
 """
 
 from __future__ import annotations
@@ -136,6 +137,22 @@ class IRunnerProcessSupervisor(ABC):
     @abstractmethod
     def list_processes(self) -> list[RunnerProcessRecord]:
         """列出全部登记的进程并刷新其存活状态。"""
+        ...
+
+    @abstractmethod
+    def list_unmanaged_processes(
+        self, registry_entries: list[RegistryRepositoryEntry]
+    ) -> list[RunnerProcessRecord]:
+        """扫描系统进程，返回属于 registry 但未在 pidfile 中登记的 runner 进程。
+
+        结果仅用于观测，不纳入 ``stop`` / ``read_log`` 等托管生命周期操作。
+        实现应过滤当前用户拥有的进程，并排除已在 ``list_processes`` 中
+        出现的 pid。
+
+        Args:
+            registry_entries: 当前 registry 中的仓库条目，用于按 cwd 匹配
+                未显式指定 ``--repo-id`` 的手动进程。
+        """
         ...
 
     @abstractmethod

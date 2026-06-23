@@ -73,6 +73,7 @@ def test_registry_list_skips_non_running_records() -> None:
             status="stopped",
         ),
     ]
+    supervisor.list_unmanaged_processes.return_value = []
 
     captured_table = None
 
@@ -196,6 +197,7 @@ def test_registry_list_includes_running_records() -> None:
             status="running",
         ),
     ]
+    supervisor.list_unmanaged_processes.return_value = []
 
     captured_table = None
 
@@ -214,6 +216,98 @@ def test_registry_list_includes_running_records() -> None:
     assert captured_table is not None
     output = _render_table(captured_table)
     assert "running (abc123)" in output
+
+
+def test_registry_list_shows_unmanaged_running() -> None:
+    """Unmanaged running processes must be shown as running (unmanaged)."""
+    editor = MagicMock()
+    editor.list_repositories.return_value = [
+        MagicMock(
+            repo_id="keda-main",
+            display_name="Keda Main",
+            path="/Users/zata/code/keda",
+        )
+    ]
+
+    supervisor = MagicMock()
+    supervisor.list_processes.return_value = []
+    supervisor.list_unmanaged_processes.return_value = [
+        _make_record(
+            process_id="unmanaged-12345",
+            repo_id="keda-main",
+            kind=RunnerProcessKind.DAEMON.value,
+            status="running",
+        ),
+    ]
+
+    captured_table = None
+
+    def _capture_print(value) -> None:
+        nonlocal captured_table
+        captured_table = value
+
+    with patch(
+        "backend.api.cli_registry.create_registry_editor", return_value=editor
+    ), patch(
+        "backend.api.cli_registry.create_process_supervisor", return_value=supervisor
+    ), patch("backend.api.cli_registry.console.print", side_effect=_capture_print):
+        exit_code = _run_registry_list_command(MagicMock())
+
+    assert exit_code == 0
+    assert captured_table is not None
+    output = _render_table(captured_table)
+    assert "running" in output
+    assert "unmanaged" in output
+    assert "unmanaged-12345" not in output
+
+
+def test_registry_list_prefers_managed_over_unmanaged() -> None:
+    """When both managed and unmanaged processes exist, show managed status."""
+    editor = MagicMock()
+    editor.list_repositories.return_value = [
+        MagicMock(
+            repo_id="keda-main",
+            display_name="Keda Main",
+            path="/Users/zata/code/keda",
+        )
+    ]
+
+    supervisor = MagicMock()
+    supervisor.list_processes.return_value = [
+        _make_record(
+            process_id="managed-abc",
+            repo_id="keda-main",
+            kind=RunnerProcessKind.DAEMON.value,
+            status="running",
+        ),
+    ]
+    supervisor.list_unmanaged_processes.return_value = [
+        _make_record(
+            process_id="unmanaged-12345",
+            repo_id="keda-main",
+            kind=RunnerProcessKind.DAEMON.value,
+            status="running",
+        ),
+    ]
+
+    captured_table = None
+
+    def _capture_print(value) -> None:
+        nonlocal captured_table
+        captured_table = value
+
+    with patch(
+        "backend.api.cli_registry.create_registry_editor", return_value=editor
+    ), patch(
+        "backend.api.cli_registry.create_process_supervisor", return_value=supervisor
+    ), patch("backend.api.cli_registry.console.print", side_effect=_capture_print):
+        exit_code = _run_registry_list_command(MagicMock())
+
+    assert exit_code == 0
+    assert captured_table is not None
+    output = _render_table(captured_table)
+    assert "managed-abc" in output
+    assert "unmanaged" not in output
 
 
 def test_takeover_start_daemons_uses_config_directory_as_spawn_cwd(

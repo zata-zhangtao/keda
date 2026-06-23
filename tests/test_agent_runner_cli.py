@@ -2739,6 +2739,7 @@ def test_main_registry_list_shows_repositories_and_daemon_status(
 
     mock_supervisor = MagicMock()
     mock_supervisor.list_processes.return_value = records
+    mock_supervisor.list_unmanaged_processes.return_value = []
 
     with patch(
         "backend.api.cli_registry.create_process_supervisor",
@@ -2775,6 +2776,7 @@ def test_main_registry_list_empty_registry(
 
     mock_supervisor = MagicMock()
     mock_supervisor.list_processes.return_value = []
+    mock_supervisor.list_unmanaged_processes.return_value = []
 
     with patch(
         "backend.api.cli_registry.create_process_supervisor",

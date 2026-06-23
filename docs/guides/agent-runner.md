@@ -717,6 +717,13 @@ iar registry list
 
 这可以帮助你确认哪些仓库当前正在后台跑 agent，以及是否重复启动了 daemon。
 
+> **Managed vs Unmanaged**：
+> - 通过 `iar registry start` / console / `iar takeover` 启动的 daemon 是**托管进程**，会写入 `~/.iar/processes.json`，状态显示为 `running (<process_id>)`，可用 `iar registry stop` 停止。
+> - 直接在命令行执行 `iar daemon` / `iar review-daemon` 启动的进程是**未托管进程**。`iar registry list` 会通过扫描系统进程把它们识别出来，状态显示为 `running (unmanaged)`，但**不会**被 `iar registry stop` 停止，也没有独立的日志文件被 `registry` 命令管理。
+> - 同时存在托管与未托管进程时，列表优先显示托管状态。
+
+> **不要混用**：同一时间、同一仓库，建议要么只使用 `iar registry start` 管理 daemon，要么只手动运行 `iar daemon`。混用可能导致两个进程同时 claim 同一仓库的 Issues，且 `registry stop` 不会清理手动启动的进程。
+
 #### 启动与停止托管 daemon（`iar registry start` / `iar registry stop`）
 
 对于已经在 registry 中注册且已 init 的本地仓库（例如你手动 `iar init` 过的 `keda-main`），可以直接用 `start` / `stop` 管理 daemon 生命周期，无需 `reinit --start-daemons`（后者会重置 `.iar.toml`）：

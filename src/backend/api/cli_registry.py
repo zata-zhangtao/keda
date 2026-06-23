@@ -159,7 +159,10 @@ def _run_registry_list_command(process_runner: IProcessRunner) -> int:
     editor = create_registry_editor()
     supervisor = create_process_supervisor()
 
-    running: dict[str, dict[str, list[str]]] = {}
+    registry_entries = editor.list_repositories()
+
+    # managed_running[repo_id][kind] = list[(process_id, is_managed)]
+    running: dict[str, dict[str, list[tuple[str, bool]]]] = {}
     for record in supervisor.list_processes():
         if record.status != "running":
             continue
@@ -167,7 +170,17 @@ def _run_registry_list_command(process_runner: IProcessRunner) -> int:
         if not isinstance(kind_name, str):
             kind_name = kind_name.value
         running.setdefault(record.repo_id, {}).setdefault(kind_name, []).append(
-            record.process_id
+            (record.process_id, True)
+        )
+
+    for record in supervisor.list_unmanaged_processes(registry_entries):
+        if record.status != "running":
+            continue
+        kind_name = record.kind
+        if not isinstance(kind_name, str):
+            kind_name = kind_name.value
+        running.setdefault(record.repo_id, {}).setdefault(kind_name, []).append(
+            (record.process_id, False)
         )
 
     table = Table(title="Registered repositories")
@@ -177,7 +190,7 @@ def _run_registry_list_command(process_runner: IProcessRunner) -> int:
     table.add_column("daemon", style="green")
     table.add_column("review-daemon", style="green")
 
-    for entry in editor.list_repositories():
+    for entry in registry_entries:
         repo_running = running.get(entry.repo_id, {})
         daemon = _format_process_status(repo_running, _DAEMON_KIND)
         review_daemon = _format_process_status(repo_running, _REVIEW_DAEMON_KIND)
@@ -323,12 +336,27 @@ def _run_registry_stop_command(
     return exit_code
 
 
-def _format_process_status(running: dict[str, list[str]], kind: str) -> str:
-    """Return a human-readable status string for a daemon kind."""
-    process_ids = running.get(kind, [])
-    if not process_ids:
+def _format_process_status(
+    running: dict[str, list[tuple[str, bool]]], kind: str
+) -> str:
+    """Return a human-readable status string for a daemon kind.
+
+    Managed running processes are shown with their process IDs. Unmanaged
+    running processes are shown as ``running (unmanaged)`` so users can tell
+    which daemons were started outside of ``iar registry start`` / console.
+    """
+    entries = running.get(kind, [])
+    if not entries:
         return "[dim]stopped[/]"
-    return f"[green]running[/] ({', '.join(process_ids)})"
+
+    managed_ids = [process_id for process_id, is_managed in entries if is_managed]
+    if managed_ids:
+        return f"[green]running[/] ({', '.join(managed_ids)})"
+
+    unmanaged_count = sum(1 for _, is_managed in entries if not is_managed)
+    if unmanaged_count == 1:
+        return "[yellow]running[/] (unmanaged)"
+    return f"[yellow]running[/] (unmanaged x{unmanaged_count})"
 
 
 def _restart_daemons(repo_id: str, repo_path: Path, process_runner) -> int:
