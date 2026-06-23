@@ -486,8 +486,9 @@ behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concre
 | `iar --repo /path/to/repo run` | 等价的顶层 selector 写法，适合把目标仓库放在命令前 |
 | `iar run --repo-id keda` | 从 legacy registry 找到路径，再合并目标仓库 `.iar.toml` |
 | `iar run --all` | 显式处理 `config.toml` 中所有 enabled registry entries |
-| `iar daemon` / `iar review-daemon` | 在当前 `.iar.toml` 仓库目录下默认只处理该仓库；不在任何注册仓时处理所有 enabled registry entries |
+| `iar daemon` / `iar review-daemon` | 当前已初始化注册仓库；未命中、未初始化或匹配多个时报错 |
 | `iar daemon --repo-id keda` | 仅处理指定仓库 |
+| `iar daemon --all` | 显式处理 `config.toml` 中所有 enabled registry entries |
 
 历史命令 `iar run-once`、`iar review-once`、`iar issue-from-prd` 和 `iar recover-publish` 已被删除；请改用 `iar run` / `iar review` / `iar issue create` / `iar recover`。
 
@@ -617,7 +618,7 @@ enabled = true
 - 每个仓库必须有 `path`（本地绝对路径）。
 - `enabled = false` 可临时禁用某个仓库。
 - registry 通常只保留 `path` 和 `enabled`；仓库级 overrides 仍兼容，但建议迁移到目标仓库的 `.iar.toml`。
-- 未指定 `--repo`、`--repo-id` 或 `--all` 时，单仓库命令（如 `iar run`、`iar review`）只处理当前 Git 仓库；`iar daemon` 和 `iar review-daemon` 例外，默认监控所有 enabled registry entries。
+- 未指定 `--repo`、`--repo-id` 或 `--all` 时，单仓库命令（如 `iar run`、`iar review`）只处理当前 Git 仓库；`iar daemon` 和 `iar review-daemon` 同样只处理当前已初始化注册仓库，未命中、未初始化或匹配多个时报错。如需监控所有 enabled registry entries，请显式使用 `--all`。
 
 迁移示例：
 
@@ -770,7 +771,7 @@ iar takeover
    - `gh repo clone <owner>/<repo> ~/.iar/repos/<owner>/<repo>`
    - 在新 clone 的仓库执行 `iar init`
    - 写入 `~/.iar/config.toml` 的 `[agent_runner.repositories.<repo_id>]`
-6. 默认启动 `iar daemon` 和 `iar review-daemon` 两个托管子进程（若仓库路径已在 registry 中启用，默认只监控该仓库；否则监控所有 enabled registry entries）。
+6. 默认启动 `iar daemon` 和 `iar review-daemon` 两个托管子进程（在目标仓库路径下启动，因此只监控该仓库）。
 
 ### 非交互式与批量接管
 
@@ -2281,7 +2282,7 @@ Overview 还会按 severity 汇总 `anomaly_count` 和 `anomaly_summary`（`warn
 
 管理终端按 `(repo_id, kind)` 托管 runner 子进程。**每个仓库一个
 daemon 进程**即获得多项目并发——不同仓库的 Issue 同时执行，互不阻塞
-（CLI 的 `iar daemon` 在 cwd 命中已启用注册仓时默认只监控该仓，否则监控所有 enabled registry entries，但在单个进程内串行轮询）。
+（CLI 的 `iar daemon` 在 cwd 命中唯一已初始化注册仓时只监控该仓，未命中、未初始化或匹配多个时报错；显式 `--all` 时才监控所有 enabled registry entries，但在单个进程内串行轮询）。
 
 - 子进程以 `start_new_session` 脱离后端进程组：后端重启不影响执行中
   的 runner；重启后从 pidfile registry（`~/.iar/processes.json`）复活

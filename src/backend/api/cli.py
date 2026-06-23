@@ -191,19 +191,34 @@ def _resolve_default_daemon_target() -> _DefaultDaemonTarget:
 
     Returns:
         _DefaultDaemonTarget: when ``repo_id`` is set, use that repository;
-        when ``error`` is set, fail early with the error message. If both are
-        None/empty, fall back to --all.
+        when ``error`` is set, fail early with the error message. This function
+        no longer falls back to ``--all``; callers must explicitly request all
+        enabled registry entries.
     """
     try:
         cwd_git_root = detect_git_repository_root(Path.cwd())
     except ValueError:
-        # Not inside a git repository: keep the legacy --all fallback so that
-        # commands like nohup iar daemon still work outside a repository.
-        return _DefaultDaemonTarget(repo_id=None, error="")
+        return _DefaultDaemonTarget(
+            repo_id=None,
+            error=(
+                "Current directory is not a Git repository. "
+                "Run from an initialized iAR repository, or use --all to target all enabled registry entries."
+            ),
+        )
     settings = load_fresh_agent_runner_settings()
     match = find_repository_match_for_path(settings, cwd_git_root)
     if match.is_unique_enabled:
         assert match.matched_repo_id is not None  # noqa: S101
+        try:
+            require_iar_repository_initialized(cwd_git_root)
+        except IARRepositoryNotInitializedError:
+            return _DefaultDaemonTarget(
+                repo_id=None,
+                error=(
+                    f"Repository '{match.matched_repo_id}' is not initialized. "
+                    "Run 'iar init' in the repository root, or use --all to target all enabled registry entries."
+                ),
+            )
         return _DefaultDaemonTarget(repo_id=match.matched_repo_id, error="")
     if match.is_disabled:
         assert match.disabled_repo_id is not None  # noqa: S101
@@ -211,7 +226,7 @@ def _resolve_default_daemon_target() -> _DefaultDaemonTarget:
             repo_id=None,
             error=(
                 f"Repository '{match.disabled_repo_id}' is disabled. "
-                "Use --repo-id to target it explicitly or enable it in config.toml."
+                "Use --repo-id to target it explicitly, or enable it in config.toml."
             ),
         )
     if match.is_ambiguous:
@@ -223,7 +238,13 @@ def _resolve_default_daemon_target() -> _DefaultDaemonTarget:
                 "Use --repo-id to target one, or --all to target all."
             ),
         )
-    return _DefaultDaemonTarget(repo_id=None, error="")
+    return _DefaultDaemonTarget(
+        repo_id=None,
+        error=(
+            "Current directory is not an enabled iAR registry target. "
+            "Use --repo-id to target a registered repository, or --all to target all enabled registry entries."
+        ),
+    )
 
 
 def _resolve_run_trigger(command_kind: str) -> str:
@@ -275,17 +296,18 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
     # 1. cwd 命中唯一 enabled 注册仓 → 仅处理该仓（与 --repo-id 等价）
     # 2. cwd 命中 disabled 注册仓 → 报错
     # 3. cwd 命中多个 enabled 注册仓 → 报错，要求显式选择
-    # 4. cwd 未命中任何注册仓 → 回退到 --all
+    # 4. cwd 未命中任何注册仓或未初始化 → 报错，不再回退到 --all
     if parsed.command in ("daemon", "review-daemon"):
-        if repo_id is None and repo_override is None:
+        if (
+            repo_id is None
+            and repo_override is None
+            and not getattr(parsed, "all_repositories", False)
+        ):
             default_target = _resolve_default_daemon_target()
             if default_target.error:
                 logger.error(default_target.error)
                 return 1
-            if default_target.repo_id is not None:
-                repo_id = default_target.repo_id
-            else:
-                parsed.all_repositories = True
+            repo_id = default_target.repo_id
 
     process_runner = create_process_runner()
 

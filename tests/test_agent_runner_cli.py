@@ -12,6 +12,9 @@ import pytest
 from backend.api.cli import _expand_prd_paths, main
 from backend.api.cli_parser import build_parser
 from backend.core.shared.interfaces.runner_console import RunnerProcessKind
+from backend.engines.agent_runner.repository_local import (
+    IARRepositoryNotInitializedError,
+)
 from backend.infrastructure.logging.logger import Logger
 
 
@@ -756,8 +759,113 @@ def test_main_daemon_cwd_ambiguous_repo_rejected(monkeypatch) -> None:
     assert exit_code == 1
 
 
-def test_main_daemon_cwd_no_match_falls_back_to_all(monkeypatch) -> None:
-    """daemon should fall back to --all when cwd matches no registry entry."""
+def test_main_daemon_cwd_no_match_rejected(monkeypatch) -> None:
+    """daemon should reject cwd when it matches no registry entry."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    settings = MagicMock()
+    settings.repositories = {
+        "other-repo": MagicMock(path="/tmp/other", enabled=True),
+    }
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ), patch(
+        "backend.api.cli.detect_git_repository_root",
+        return_value=Path("/tmp/repo"),
+    ), patch(
+        "backend.api.cli.load_fresh_agent_runner_settings",
+        return_value=settings,
+    ):
+        exit_code = main(["daemon"])
+
+    assert exit_code == 1
+    mock_resolve.assert_not_called()
+
+
+def test_main_review_daemon_cwd_no_match_rejected(monkeypatch) -> None:
+    """review-daemon should reject cwd when it matches no registry entry."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    settings = MagicMock()
+    settings.repositories = {
+        "other-repo": MagicMock(path="/tmp/other", enabled=True),
+    }
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+    ) as mock_resolve, patch("backend.api.cli.run_review_daemon"), patch(
+        "backend.api.cli.require_iar_repository_initialized"
+    ), patch(
+        "backend.api.cli.detect_git_repository_root",
+        return_value=Path("/tmp/repo"),
+    ), patch(
+        "backend.api.cli.load_fresh_agent_runner_settings",
+        return_value=settings,
+    ):
+        exit_code = main(["review-daemon"])
+
+    assert exit_code == 1
+    mock_resolve.assert_not_called()
+
+
+def test_main_daemon_cwd_not_git_rejected(monkeypatch) -> None:
+    """daemon should reject cwd when it is not inside a git repository."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
+        "backend.api.cli.detect_git_repository_root",
+        side_effect=ValueError("not a git repository"),
+    ):
+        exit_code = main(["daemon"])
+
+    assert exit_code == 1
+    mock_resolve.assert_not_called()
+
+
+def test_main_daemon_cwd_uninitialized_repo_rejected(monkeypatch) -> None:
+    """daemon should reject cwd when the unique matched repo is not initialized."""
+    from backend.api.cli import main
+
+    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
+
+    settings = MagicMock()
+    settings.repositories = {
+        "keda-main": MagicMock(path="/tmp/repo", enabled=True),
+    }
+
+    with patch(
+        "backend.api.cli.resolve_repository_targets",
+    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
+        "backend.api.cli.require_iar_repository_initialized",
+        side_effect=IARRepositoryNotInitializedError(
+            Path("/tmp/repo"), Path("/tmp/repo/.iar.toml")
+        ),
+    ), patch(
+        "backend.api.cli.detect_git_repository_root",
+        return_value=Path("/tmp/repo"),
+    ), patch(
+        "backend.api.cli.load_fresh_agent_runner_settings",
+        return_value=settings,
+    ):
+        exit_code = main(["daemon"])
+
+    assert exit_code == 1
+    mock_resolve.assert_not_called()
+
+
+def test_main_daemon_explicit_all_targets_all_repositories(monkeypatch) -> None:
+    """daemon --all should still target all enabled registry entries."""
     from backend.api.cli import main
 
     monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
@@ -784,41 +892,7 @@ def test_main_daemon_cwd_no_match_falls_back_to_all(monkeypatch) -> None:
         "backend.api.cli.load_fresh_agent_runner_settings",
         return_value=settings,
     ):
-        exit_code = main(["daemon"])
-
-    assert exit_code == 0
-    assert mock_resolve.call_args.kwargs["all_repositories"] is True
-
-
-def test_main_review_daemon_cwd_no_match_falls_back_to_all(monkeypatch) -> None:
-    """review-daemon should fall back to --all when cwd matches no registry entry."""
-    from backend.api.cli import main
-
-    monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
-
-    mock_context = MagicMock()
-    mock_context.repo_path = Path("/tmp/repo")
-    mock_context.repo_id = "repo"
-    mock_context.display_name = "Repo"
-
-    settings = MagicMock()
-    settings.repositories = {
-        "other-repo": MagicMock(path="/tmp/other", enabled=True),
-    }
-
-    with patch(
-        "backend.api.cli.resolve_repository_targets",
-        return_value=[mock_context],
-    ) as mock_resolve, patch("backend.api.cli.run_review_daemon"), patch(
-        "backend.api.cli.require_iar_repository_initialized"
-    ), patch(
-        "backend.api.cli.detect_git_repository_root",
-        return_value=Path("/tmp/repo"),
-    ), patch(
-        "backend.api.cli.load_fresh_agent_runner_settings",
-        return_value=settings,
-    ):
-        exit_code = main(["review-daemon"])
+        exit_code = main(["daemon", "--all"])
 
     assert exit_code == 0
     assert mock_resolve.call_args.kwargs["all_repositories"] is True
