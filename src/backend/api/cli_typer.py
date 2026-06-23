@@ -726,7 +726,11 @@ def daemon_run_command(
     config: ConfigOption = None,
     all_repositories: AllRepositoriesOption = False,
 ) -> int:
-    """Run the agent runner continuously."""
+    """Run the agent runner continuously.
+
+    Defaults to the current initialized repository; pass --all to target
+    every enabled registry entry instead.
+    """
     return _run_daemon_command(
         ctx,
         command="daemon",
@@ -796,7 +800,11 @@ def review_daemon_command(
     config: ConfigOption = None,
     all_repositories: AllRepositoriesOption = False,
 ) -> int:
-    """Run supervisor review continuously."""
+    """Run supervisor review continuously.
+
+    Defaults to the current initialized repository; pass --all to target
+    every enabled registry entry instead.
+    """
     return _run_daemon_command(
         ctx,
         command="review-daemon",
