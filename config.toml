@@ -536,16 +536,21 @@ enabled = false
 path = "/Users/zata/code/keda"
 enabled = true
 display_name = "Keda Main"
+# GitHub owner/name used by `gh pr list --repo` for PR column population.
+# 缺省时 PR 列为空，并在 stderr 一次性打印 WARN。
+github_repo = "zata-zhangtao/keda"
 
 [agent_runner.repositories.zata-zhangtao-fsense]
 path = "/Users/zata/.iar/repos/zata-zhangtao/fsense"
 enabled = true
 display_name = "fsense"
+github_repo = "zata-zhangtao/fsense"
 
 [agent_runner.repositories.zata-zhangtao-freshai]
 path = "/Users/zata/.iar/repos/zata-zhangtao/freshai"
 enabled = true
 display_name = "freshai"
+github_repo = "zata-zhangtao/freshai"
 [agent_runner.console]
 # 运行历史与审计日志的 SQLite 文件路径（CLI 直跑与面板托管共用）。
 history_db_path = "~/.iar/console.db"

@@ -314,6 +314,9 @@ id = "target-repo"
 enabled = true
 # 管理终端 / 日志中显示的友好名称
 display_name = "target-repo"
+# 可选：GitHub owner/name（``gh pr list --repo`` 使用）。
+# 缺省时 ``iar issue list`` 的 PR 列为空 + stderr 一次性 WARN。
+github_repo = "owner/target-repo"
 
 # Git 发布配置：推送 remote、目标基础分支 base_branch
 [agent_runner.git]
@@ -746,14 +749,19 @@ max_issues = 1
 [agent_runner.repositories.keda]
 path = "/Users/zata/code/keda"
 enabled = true
+# Optional ``owner/name`` for ``gh pr list --repo`` (PR column on
+# ``iar issue list``). 缺省时 PR 列为空 + stderr 一次性 WARN。
+github_repo = "zata-zhangtao/keda"
 
 [agent_runner.repositories.backend_service]
 path = "/Users/zata/code/backend-service"
 enabled = true
+github_repo = "owner/backend-service"
 ```
 
 - 每个仓库必须有 `path`（本地绝对路径）。
 - `enabled = false` 可临时禁用某个仓库。
+- `github_repo` 是可选的 `owner/name` 字符串；缺省时 `iar issue list` 不会调用 `gh pr list --repo <repo_id>`，PR 列留空、stderr 一次性打印 WARN 指引用户去 `config.toml` 或 `.iar.toml` 补字段。**该字段不参与目录名推断**——iar 不做 `git remote` 解析，必须由用户显式声明。
 - registry 通常只保留 `path` 和 `enabled`；仓库级 overrides 仍兼容，但建议迁移到目标仓库的 `.iar.toml`。
 - 未指定 `--repo`、`--repo-id` 或 `--all` 时，单仓库命令（如 `iar run`、`iar review`）只处理当前 Git 仓库；`iar daemon` 和 `iar review-daemon` 同样只处理当前已初始化注册仓库，未命中、未初始化或匹配多个时报错。如需监控所有 enabled registry entries，请显式使用 `--all`。
 

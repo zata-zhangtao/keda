@@ -16,8 +16,10 @@ from typer.testing import CliRunner
 from backend.api.cli_parser import build_parser
 from backend.api.cli_typer import app
 from backend.core.shared.models.agent_runner import (
+    AppConfig,
     IssueSummary,
     PullRequestSummary,
+    RepositoryIdentity,
 )
 from backend.core.use_cases.issue_pr_status import (
     IssueListRequest,
@@ -37,12 +39,30 @@ class _FakeContext:
     config: object = field(default=None)
 
 
-def _make_context(repo_id: str, path: Path) -> _FakeContext:
+def _make_context(
+    repo_id: str,
+    path: Path,
+    *,
+    github_repo: str | None = None,
+) -> _FakeContext:
+    """Build a context with a merged ``AppConfig`` that has a github_repo.
+
+    When ``github_repo`` is ``None`` the identity is registered without
+    one — the PR column then stays empty (this exercises the missing-
+    config branch). When it is a string it is treated as the
+    ``owner/name`` label that ``gh pr list --repo`` expects.
+    """
+    identity = RepositoryIdentity(
+        id=repo_id,
+        path=str(path),
+        display_name=repo_id,
+        github_repo=github_repo,
+    )
     return _FakeContext(
         repo_id=repo_id,
         display_name=repo_id,
         repo_path=path,
-        config=None,
+        config=AppConfig(repositories={repo_id: identity}),
     )
 
 
@@ -197,17 +217,19 @@ def test_list_issues_with_prs_returns_rows(tmp_path: Path) -> None:
         ]
     )
     github_client.set_prs_for_repo_issue(
-        "test-repo",
+        "owner/repo",
         1,
         [_make_pr(42, "merged", merged=True)],
     )
-    github_client.set_prs_for_repo_issue("test-repo", 2, [])
+    github_client.set_prs_for_repo_issue("owner/repo", 2, [])
 
     result = list_issues_with_prs(
         IssueListRequest(),
         cwd=tmp_path,
         github_client_factory=lambda _: github_client,
-        resolve_targets=_fake_resolve_factory([_make_context("test-repo", repo_path)]),
+        resolve_targets=_fake_resolve_factory(
+            [_make_context("test-repo", repo_path, github_repo="owner/repo")]
+        ),
         has_local_iar_repo=lambda _: True,
     )
 
@@ -230,10 +252,10 @@ def test_list_issues_with_prs_with_pr_filter(tmp_path: Path) -> None:
         ]
     )
     github_client.set_prs_for_repo_issue(
-        "test-repo", 1, [_make_pr(42, "merged", merged=True)]
+        "owner/repo", 1, [_make_pr(42, "merged", merged=True)]
     )
     github_client.set_prs_for_repo_issue(
-        "test-repo", 2, [_make_pr(43, "draft", is_draft=True)]
+        "owner/repo", 2, [_make_pr(43, "draft", is_draft=True)]
     )
     # issue 3 has no PRs
 
@@ -241,7 +263,9 @@ def test_list_issues_with_prs_with_pr_filter(tmp_path: Path) -> None:
         IssueListRequest(with_pr=True),
         cwd=tmp_path,
         github_client_factory=lambda _: github_client,
-        resolve_targets=_fake_resolve_factory([_make_context("test-repo", repo_path)]),
+        resolve_targets=_fake_resolve_factory(
+            [_make_context("test-repo", repo_path, github_repo="owner/repo")]
+        ),
         has_local_iar_repo=lambda _: True,
     )
     assert {row.number for row in result.rows} == {1, 2}
@@ -259,14 +283,16 @@ def test_list_issues_with_prs_without_pr_filter(tmp_path: Path) -> None:
         ]
     )
     github_client.set_prs_for_repo_issue(
-        "test-repo", 1, [_make_pr(42, "merged", merged=True)]
+        "owner/repo", 1, [_make_pr(42, "merged", merged=True)]
     )
 
     result = list_issues_with_prs(
         IssueListRequest(with_pr=False),
         cwd=tmp_path,
         github_client_factory=lambda _: github_client,
-        resolve_targets=_fake_resolve_factory([_make_context("test-repo", repo_path)]),
+        resolve_targets=_fake_resolve_factory(
+            [_make_context("test-repo", repo_path, github_repo="owner/repo")]
+        ),
         has_local_iar_repo=lambda _: True,
     )
     assert [row.number for row in result.rows] == [2]
@@ -308,15 +334,15 @@ def test_list_issues_with_prs_partial_failure_isolates_errors(tmp_path: Path) ->
         github_client_factory=_factory,
         resolve_targets=_fake_resolve_factory(
             [
-                _make_context("repo-a", repo_a),
-                _make_context("repo-b", repo_b),
+                _make_context("repo-a", repo_a, github_repo="owner-a/repo-a"),
+                _make_context("repo-b", repo_b, github_repo="owner-b/repo-b"),
             ]
         ),
         has_local_iar_repo=lambda _: False,
     )
     assert [row.number for row in result.rows] == [1]
     assert len(result.errors) == 1
-    assert result.errors[0][0] == "repo-a"
+    assert result.errors[0][0] == "owner-a/repo-a"
     assert "gh unavailable" in result.errors[0][1]
 
 
@@ -333,6 +359,67 @@ def test_render_pr_column_formats_pulls() -> None:
     )
     assert render_pr_column(pulls) == "#42 [merged], #43 [draft]"
     assert render_pr_column(()) == "—"
+
+
+# ---------------------------------------------------------------------------
+# _repo_label_for: identity from AppConfig.repositories
+# ---------------------------------------------------------------------------
+
+
+def test_repo_label_for_returns_github_repo(tmp_path: Path) -> None:
+    """Configured github_repo becomes the label passed to gh."""
+    from backend.core.use_cases.issue_pr_status import _repo_label_for
+
+    context = _make_context("keda", tmp_path, github_repo="zata-zhangtao/keda")
+    assert _repo_label_for(context) == "zata-zhangtao/keda"
+
+
+def test_repo_label_for_returns_none_when_github_repo_missing(tmp_path: Path) -> None:
+    """Unconfigured github_repo yields None so the PR column stays empty."""
+    from backend.core.use_cases.issue_pr_status import _repo_label_for
+
+    context = _make_context("keda", tmp_path, github_repo=None)
+    assert _repo_label_for(context) is None
+
+
+def test_repo_label_for_handles_legacy_context_without_config(tmp_path: Path) -> None:
+    """Context without a config (defensive) returns None instead of crashing."""
+    from backend.core.use_cases.issue_pr_status import _repo_label_for
+
+    legacy = _FakeContext(
+        repo_id="keda", display_name="keda", repo_path=tmp_path, config=None
+    )
+    assert _repo_label_for(legacy) is None
+
+
+def test_list_issues_with_prs_emits_warn_when_github_repo_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A missing github_repo prints a stderr WARN once and skips PR column."""
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    github_client = FakeGitHubClient()
+    github_client.set_list_issues_by_label_result(
+        [_make_issue(1, "No PR"), _make_issue(2, "Still no PR")]
+    )
+
+    result = list_issues_with_prs(
+        IssueListRequest(),
+        cwd=tmp_path,
+        github_client_factory=lambda _: github_client,
+        resolve_targets=_fake_resolve_factory(
+            [_make_context("unconfigured", repo_path, github_repo=None)]
+        ),
+        has_local_iar_repo=lambda _: True,
+    )
+    assert [row.number for row in result.rows] == [1, 2]
+    for row in result.rows:
+        assert row.pulls == ()
+        assert row.repo is None
+    captured = capsys.readouterr()
+    assert "has no github_repo configured" in captured.err
+    # The warning is per-repo, not per-issue, even when multiple issues are listed.
+    assert captured.err.count("has no github_repo configured") == 1
 
 
 # ---------------------------------------------------------------------------
