@@ -269,6 +269,8 @@ uv run --project /path/to/keda iar init
 
 `iar init --dry-run` 只打印将要写入的内容，不创建文件。`.iar.toml` 已存在时，`iar init` 会拒绝覆盖；确认需要重建时显式传入 `--force`。
 
+`iar init` 成功写入本地配置后，还会自动把当前仓库注册（或更新路径）到全局 `config.toml` 的 `[agent_runner.repositories]` 中，使 `iar daemon` 默认即可在当前仓库启动。如果该 `repo_id` 已在 registry 中但指向不同路径，init 会自动更新 registry 路径到当前位置。
+
 ### `verification_commands` 自动探测
 
 `iar init` 不会写死验证命令，而是按目标仓库实际情况探测 `[agent_runner.runner].verification_commands`（实现见 `src/backend/engines/agent_runner/repository_local.py` 的 `detect_verification_commands`）：

@@ -2,12 +2,37 @@
 
 ## 1. Introduction & Goals
 
-[Brief problem statement and feature objective.]
+### Problem Statement
+
+[Briefly describe the current pain, who experiences it, and why the existing workflow or behavior is insufficient.]
+
+### Proposed Solution Summary
+
+[Summarize the recommended implementation approach in one short paragraph. Name the core mechanism, who supplies any required declaration/configuration/input, where it plugs into the existing system, what state/API/UI changes it makes, and what it intentionally avoids.]
 
 ### Measurable Objectives
 - [Objective 1]
 - [Objective 2]
 - [Objective 3]
+
+### Realistic Validation
+
+除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
+
+- [ ] **[行为名称] 真实验证**：通过 `[真实入口命令或流程]` 验证 `[关键可观察结果]`。
+- [ ] **[配置/状态/回退] 真实验证**：通过 `[真实入口命令或流程]` 验证 `[关键可观察结果]`。
+
+**为什么单元测试不够**：说明真实入口验证覆盖了哪些单元测试无法证明的行为。
+
+### Delivery Dependencies
+
+- Group: [logical-delivery-group-or-none]
+- Depends on groups:
+  - none
+- Depends on tasks/issues:
+  - none
+- Gate type: none
+- Notes: [Use tool-neutral dependency names. Do not put tool-specific hidden markers here.]
 
 ---
 
@@ -25,7 +50,9 @@
 - Existing path: [Closest current module or code path]
 - Reuse candidates: [Files/modules to extend directly]
 - Architecture pattern to preserve: [Relevant boundary or dependency direction]
+- Frontend impact: [which frontend app(s) the repo ships and which change + closest routes/components, or "No frontend impact" with reason]
 - Constraints: [Runtime, dependency, coding standard, workflow, or rollout constraints]
+- Existing PRD relationship: [Result of checking tasks/pending/ first and relevant tasks/archive/ second: duplicate / depends on / blocks / independent / none found]
 - Redundancy risks: [Likely duplication or parallel abstraction risks]
 
 ---
@@ -54,7 +81,7 @@ This section is a living implementation guide based on current repository analys
 
 ```text
 .
-├── [Layer]
+├── [Backend Layer]
 │   └── [path/to/file]
 │       [新增] / [修改] / [删除]
 │       【总结】[One-sentence summary of the file-level change]
@@ -62,6 +89,15 @@ This section is a living implementation guide based on current repository analys
 │       ├── [Concrete logical change 1; use symbol/config/route anchors, not line numbers]
 │       ├── [Concrete logical change 2; include rg anchor when useful]
 │       └── [Concrete logical change 3]
+│
+└── Frontend ([repo's frontend app])   # 用户可见改动时必填；纯后端任务写 "No frontend impact"
+    └── [frontend-app]/[path/to/component-or-route]
+        [新增] / [修改] / [删除]
+        【总结】[组件/路由/状态/API 客户端调用的一句话总结]
+
+        ├── [组件或页面改动]
+        ├── [调用后端 API 的客户端代码与类型同步]
+        └── [状态或交互改动]
 ```
 
 ### 5.3 Executor Drift Guard
@@ -180,6 +216,12 @@ This checklist must validate the final target state, not only an interim first p
 - [ ] [Concrete API, workflow, runtime, or business behavior outcome]
 - [ ] [Concrete compatibility or invariance that must remain true]
 
+### Frontend Acceptance (When A Frontend App Changes)
+
+- [ ] `[frontend-app]/[component or route]` renders/behaves as specified
+- [ ] Frontend calls the new/changed backend endpoint with the correct contract and synced types
+- [ ] If no frontend changes: `No frontend impact` recorded with a reason
+
 ### Documentation Acceptance
 
 - [ ] [Concrete doc page or reference updated to match the target design]
@@ -189,6 +231,7 @@ This checklist must validate the final target state, not only an interim first p
 
 - [ ] `[validation command]` passes
 - [ ] `[real entry command]` exercises the changed behavior through `[API/CLI/UI/job/startup/migration]` without bypassing `[critical boundary]`
+- [ ] For user-visible changes: the repo's e2e/UI test command or a manual app run confirms the flow end-to-end
 - [ ] `[rg search command]` confirms no legacy entry point, duplicate path, or compatibility shim remains
 - [ ] `[rg search command]` confirms expected target references exist in the owning files
 

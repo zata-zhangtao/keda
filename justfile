@@ -16,7 +16,7 @@ import "justfile.shared"
 # Usage:
 #   just reinstall-iar
 reinstall-iar:
-    uv tool install --reinstall --editable .
+    uv tool install --force --reinstall --editable .
 
 # Run the development entrypoint
 # Usage:

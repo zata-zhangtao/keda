@@ -64,6 +64,13 @@ def test_iar_init_dry_run_real_entry(tmp_path: Path) -> None:
     assert not (repo_path / ".iar.toml").exists()
 
 
+def _create_isolated_config(tmp_path: Path) -> Path:
+    """Create a minimal config.toml for tests that touch the global registry."""
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent_runner]\n", encoding="utf-8")
+    return config_path
+
+
 def test_iar_init_writes_idempotent_and_force_overwrites(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -71,6 +78,7 @@ def test_iar_init_writes_idempotent_and_force_overwrites(
     """iar init should write once, stay idempotent when unchanged, and honor --force."""
     repo_path = _init_git_repository(tmp_path, "target")
     monkeypatch.chdir(repo_path)
+    monkeypatch.setenv("IAR_CONFIG", str(_create_isolated_config(tmp_path)))
 
     first_exit_code = main(["init"])
     config_path = repo_path / ".iar.toml"
@@ -122,6 +130,7 @@ def test_iar_init_protects_diverged_config(
     """iar init should fail without --force when the existing config diverged."""
     repo_path = _init_git_repository(tmp_path, "target")
     monkeypatch.chdir(repo_path)
+    monkeypatch.setenv("IAR_CONFIG", str(_create_isolated_config(tmp_path)))
 
     assert main(["init"]) == 0
     config_path = repo_path / ".iar.toml"
@@ -460,3 +469,49 @@ def test_detect_default_remote_falls_back_when_upstream_missing(
     remote = _detect_default_remote(repo_path, None)
 
     assert remote == "origin"
+
+
+def test_iar_init_registers_repository_in_global_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """iar init should add the current repository to the global registry."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    monkeypatch.chdir(repo_path)
+    config_path = _create_isolated_config(tmp_path)
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    assert main(["init"]) == 0
+
+    config_text = config_path.read_text(encoding="utf-8")
+    assert "[agent_runner.repositories.target]" in config_text
+    assert f'path = "{repo_path}"' in config_text
+    assert "enabled = true" in config_text
+    assert 'display_name = "target"' in config_text
+
+    # A second init with an unchanged config must stay idempotent.
+    assert main(["init"]) == 0
+    second_text = config_path.read_text(encoding="utf-8")
+    assert second_text.count("[agent_runner.repositories.target]") == 1
+
+
+def test_iar_init_updates_registry_path_when_repository_moves(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """iar init should update the registry path if the same repo_id is reused."""
+    old_path = _init_git_repository(tmp_path, "old-target")
+    new_path = _init_git_repository(tmp_path, "target")
+    config_path = _create_isolated_config(tmp_path)
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    monkeypatch.chdir(old_path)
+    assert main(["init"]) == 0
+    assert f'path = "{old_path}"' in config_path.read_text(encoding="utf-8")
+
+    monkeypatch.chdir(new_path)
+    assert main(["init"]) == 0
+    config_text = config_path.read_text(encoding="utf-8")
+    assert f'path = "{new_path}"' in config_text
+    assert f'path = "{old_path}"' not in config_text
+    assert config_text.count("[agent_runner.repositories.target]") == 1

@@ -9,7 +9,11 @@ from typing import TYPE_CHECKING
 from backend.api.cli_console import console, error_console
 from backend.core.shared.models.agent_runner import LabelConfig
 from backend.core.use_cases.sync_labels import sync_labels
-from backend.engines.agent_runner.factory import create_github_client, logger
+from backend.engines.agent_runner.factory import (
+    create_github_client,
+    create_registry_editor,
+    logger,
+)
 from backend.engines.agent_runner.init_flow import (
     BundledSkillCopyOptions,
     DEFAULT_BUNDLED_SKILL_NAMES,
@@ -21,6 +25,7 @@ from backend.engines.agent_runner.repository_local import (
     RepositoryInitOptions,
     initialize_repository_local_config,
 )
+from backend.engines.agent_runner.takeover import upsert_repository
 
 if TYPE_CHECKING:
     from backend.core.shared.interfaces.agent_runner import IProcessRunner
@@ -59,6 +64,26 @@ def _run_init_command(
         console.print(
             f"[dim]IAR local config already up to date:[/] {init_result.config_path}"
         )
+    if init_result.repo_id:
+        try:
+            registry_result = upsert_repository(
+                repo_id=init_result.repo_id,
+                repo_path=init_result.repo_root_path,
+                display_name=init_result.display_name or init_result.repo_id,
+                editor=create_registry_editor(),
+            )
+            if registry_result.action == "added":
+                console.print(
+                    f"[green]Registered repository:[/] {registry_result.repo_id}"
+                )
+            elif registry_result.action == "updated":
+                console.print(
+                    f"[yellow]Updated registry path for {registry_result.repo_id}:[/] "
+                    f"{registry_result.previous_path} -> {registry_result.path}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to register repository in global registry: %s", exc)
+            return 1
     copy_skills_flag = (
         False
         if getattr(parsed, "skip_skills", False)

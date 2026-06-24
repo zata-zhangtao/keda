@@ -21,6 +21,7 @@ The default recommendation must be the smallest change that cleanly solves the p
 7. **Output Contract:** Treat the required PRD structure as mandatory. Do not omit, rename, or bury required sections unless the user explicitly requests a different format.
 8. **Realistic Validation:** Every PRD must identify the highest-fidelity validation needed to prove the behavior works through real project entry points, not only isolated unit or integration tests.
 9. **Executor-Resilient Detail:** Write implementation detail for a less capable executor: be concrete, but prefer semantic anchors and repository searches over brittle coordinates such as line numbers.
+10. **Full-Stack Surface:** Treat the user-visible frontend as a first-class part of the plan. For any feature with a user-facing surface, the PRD must identify the repository's actual frontend app(s) and explicitly decide which change, planning them with the same rigor as the backend. Discover the frontend surface from the repo and its architecture docs — do not assume a fixed framework or directory name. Being outside the backend's internal layering means a different architecture, not out of scope. If the feature is genuinely backend-only, the PRD must say so explicitly with a one-line reason — never omit the frontend silently.
 
 ---
 
@@ -43,14 +44,43 @@ Before asking questions or proposing changes, inspect the repository for:
 - existing extension points and reusable code paths
 - current data model and state ownership
 - existing docs, tests, and workflows relevant to the request
+- user-facing surface: which frontend app(s) the repository ships (discover from top-level app directories, `package.json`, and framework configs) and whether the request touches them, including the closest routes/components/state
+- existing PRDs under `tasks/pending/` and related archived PRDs under `tasks/archive/`
+
+You must inspect existing PRDs before creating a new one:
+- search `tasks/pending/` first for duplicate, overlapping, prerequisite, or downstream work
+- search `tasks/archive/` when a completed PRD may define context, prior decisions, or reusable acceptance criteria
+- reuse or update an existing pending PRD when it clearly represents the same work instead of creating a duplicate
+- populate `Delivery Dependencies` from explicit pending PRD relationships when a task must wait for another task or group
+- use `none` only after checking pending PRDs and finding no sequencing dependency
+- do not infer hard dependencies from vague topic similarity; record uncertain relationships as `soft` or ask the user when dependency choice changes scope or execution order
 
 You must explicitly identify:
 - **Existing Path:** the current code path that is closest to the requested change
 - **Reuse Candidates:** files/modules that can be extended directly
 - **Architecture Constraints:** boundaries that should not be broken
+- **Frontend Impact:** which of the repository's frontend app(s) change, or none with a reason
+- **Existing PRD Relationship:** whether the request duplicates, depends on, blocks, or is independent from current pending PRDs
 - **Potential Redundancy Risks:** likely sources of duplicated logic or parallel abstractions
 
 Do not ask questions that can be answered by reading the repository.
+
+### Phase 1.5: Frontend Impact Gate
+
+Decide the user-facing surface before designing the backend. First discover what frontend(s) the repository actually ships — do not assume a fixed framework or directory name. Inspect:
+- top-level application directories and the repository's architecture docs
+- each candidate's `package.json` (framework, and the dev/build/test/e2e scripts) and framework config files
+- how each frontend is run and tested in this repo (its dev command, app-run command, and e2e/UI test command)
+
+Record each frontend app's path, stack, run command, and e2e/UI test command from what you find, and reuse those concrete values in the Change Impact Tree and validation.
+
+Then classify the request as exactly one of:
+
+- **Full-stack:** backend behavior plus a user-visible change. Plan the affected frontend app(s) as first-class: components, routes/pages, state, the API client call that hits the new/changed backend endpoint, and type/contract sync. These must appear in the Change Impact Tree and in validation.
+- **Frontend-only:** UI/UX change with no backend contract change. Plan the frontend with full concreteness; note that no backend layer changes.
+- **Backend-only:** no user-visible surface (internal CLI, worker job, migration, infra). The PRD must state `No frontend impact` with a one-line reason, so omission is a documented decision rather than a silent default.
+
+**Hard rule:** if the request changes anything a user sees or interacts with, the PRD MUST plan the frontend with the same concreteness as the backend. A lone "update UI" line is not acceptable — name the app, the components/routes, and the API wiring. If more than one frontend could plausibly host the surface, ask the user which one in Phase 2 instead of guessing.
 
 ### Phase 2: Clarify Only What The Code Cannot Answer
 
@@ -105,7 +135,7 @@ For each behavior that changes user-visible output, API behavior, persistence, b
 - the exact automated command or manual/sandbox validation procedure
 - why lower-level unit or integration tests alone are sufficient or insufficient
 
-**Hard rule:** If the PRD introduces or changes executable behavior (CLI commands, API endpoints, background jobs, file output, or external integrations), the Realistic Validation Plan MUST contain at least one validation row that exercises the behavior through the real entry point. "Unit tests are sufficient" is NOT an acceptable substitute unless the change is purely internal refactoring with no user-visible or executable surface. Use dry-run, local file output, or sandbox mode to avoid requiring live external services when credentials are unavailable.
+**Hard rule:** If the PRD introduces or changes executable behavior (CLI commands, API endpoints, background jobs, file output, external integrations, or user-visible frontend changes), the Realistic Validation Plan MUST contain at least one validation row that exercises the behavior through the real entry point. If the change is user-visible, at least one row MUST exercise it through a real frontend entry point — the repository's e2e/UI test command or a manual app run — not only a component unit test. "Unit tests are sufficient" is NOT an acceptable substitute unless the change is purely internal refactoring with no user-visible or executable surface. Use dry-run, local file output, or sandbox mode to avoid requiring live external services when credentials are unavailable.
 
 Do not require live external services by default. If live or sandbox validation is necessary, make it opt-in, explicitly gated by environment variables, and document the fallback validation when credentials are unavailable.
 
@@ -160,7 +190,7 @@ Create or modify interactive prototype files under `docs/prototypes/` only when:
 - the user explicitly asks for a prototype, wireframe, or interactive demo, or
 - static diagrams cannot adequately express the behavior under review
 
-Do not create prototype files merely because the feature touches UI.
+Do not create prototype files merely because the feature touches UI. Skipping a prototype file does not waive the Frontend Impact Gate — the frontend must still be planned in the Change Impact Tree and validation when the user-visible surface changes.
 
 ### Phase 5.5: Executor Resilience Gate
 
@@ -198,11 +228,16 @@ Timestamp must use local current time in `YYYYMMDD-HHMMSS` format.
 
 Before handing off the PRD, verify the whole document has:
 - all required top-level sections in the required order
+- Section 1 includes a concise `### Proposed Solution Summary` that names the recommended mechanism before the measurable objectives
 - Section 1 includes a `### Realistic Validation` checklist immediately after the goals/objectives
+- Section 1 includes a tool-neutral `### Delivery Dependencies` block before Section 2, using `none` values when the task has no sequencing dependency
+- Section 3 includes an explicit note about matching or related pending PRDs, even when the result is "none found"
 - Section 5 starts with the required living implementation guide statement
 - a Change Impact Tree
 - at least one Mermaid flow or architecture diagram
 - a Realistic Validation Plan that contains at least one row with a real entry point (not only pytest/helper functions), unless the PRD explicitly documents why the change is pure internal refactoring with no executable surface
+- an explicit frontend-impact statement: the affected frontend app(s) and their changes (components, routes, API wiring) for user-visible features, or `No frontend impact` with a one-line reason
+- for user-visible changes, at least one Realistic Validation row using a real frontend entry point (the repo's e2e/UI test command or a manual app run)
 - an Acceptance Checklist with grouped headings and concrete checkbox items
 - Functional Requirements using `FR-1`, `FR-2`, ... identifiers
 - Non-Goals
@@ -226,7 +261,16 @@ This structure is the output contract for generated and updated PRDs.
 
 ### 1. Introduction & Goals
 
-Brief problem statement plus measurable objectives.
+Brief problem statement, proposed solution summary, and measurable objectives.
+
+Must include a concise `### Proposed Solution Summary` before the measurable objectives.
+This summary should give reviewers the implementation direction before they reach Section 4 or Section 5:
+
+- name the core mechanism or architecture path being recommended
+- state who supplies any required declaration, configuration, or input, and whether the system infers it or only consumes explicit data
+- identify the existing entry point, module boundary, API, workflow, or UI surface it plugs into
+- state the main system state, output, or user-visible behavior change
+- state what important complexity is intentionally avoided, such as new storage, a parallel abstraction, or a changed state machine
 
 Must include a `### Realistic Validation` checklist before Section 2.
 This first-section checklist is a concise, reviewer-facing summary of the highest-fidelity validation expected for the task. It must use Markdown checkbox items and mirror the style of:
@@ -238,14 +282,43 @@ This first-section checklist is a concise, reviewer-facing summary of the highes
 
 - [ ] **[行为名称] 真实验证**：通过 `[真实入口命令或流程]` 验证 `[关键可观察结果]`。
 - [ ] **[配置/状态/回退] 真实验证**：通过 `[真实入口命令或流程]` 验证 `[关键可观察结果]`。
-- [ ] **为什么单元测试不够**：说明真实入口验证覆盖了哪些单元测试无法证明的行为。
+
+**为什么单元测试不够**：说明真实入口验证覆盖了哪些单元测试无法证明的行为。
 ```
 
 Rules:
 - Keep this checklist short enough to scan, usually 2-5 items.
 - Use concrete real entry points such as CLI commands, HTTP endpoints, app startup, Playwright flows, worker jobs, migrations, or publish/deploy procedures.
 - Include dry-run, local file output, sandbox mode, or mocked external boundary details when live services are not required.
+- The checkbox items are actionable real-entry verifications. Capture "为什么单元测试不够" (why unit tests are insufficient) as a one-line rationale beneath the checklist, not as a checkbox, since it states reasoning rather than a task to complete.
 - This checklist does not replace the detailed `Realistic Validation Plan` table in Section 5.
+
+Must include a `### Delivery Dependencies` block after the first-section `### Realistic Validation` checklist and before Section 2.
+This block is tool-neutral sequencing metadata, not a tool-specific queue syntax.
+Use `none` explicitly when the task has no dependency.
+
+Use this shape:
+
+```markdown
+### Delivery Dependencies
+
+- Group: [logical-delivery-group-or-none]
+- Depends on groups:
+  - none
+- Depends on tasks/issues:
+  - none
+- Gate type: none
+- Notes: [Use tool-neutral dependency names. Do not put tool-specific hidden markers here.]
+```
+
+Rules:
+- `Group` names the logical delivery group for this PRD, or `none`.
+- `Depends on groups` lists logical upstream groups, not tool-specific labels.
+- `Depends on tasks/issues` lists upstream task names, PRD slugs, issue numbers, or `none`.
+- `Gate type` must be `none`, `soft`, or `hard`.
+- `hard` means an execution tool may treat the dependency as a blocking gate when that repository has a deterministic adapter.
+- `soft` documents sequencing context but must not be treated as a blocking gate unless a repository-specific PRD explicitly defines that behavior.
+- Do not place tool-specific hidden markers, labels, or queue syntax in this block. Repository-specific publish tooling may translate the block into its own markers or labels.
 
 ### 2. Requirement Shape
 
@@ -260,7 +333,19 @@ Must include:
 - current relevant modules/files
 - existing architecture pattern to follow
 - ownership and dependency boundaries
+- frontend impact: the affected frontend app(s) and the closest existing routes/components, or `No frontend impact` with a reason
 - constraints from runtime, docs, tests, or workflows
+- matching or related PRDs found in `tasks/pending/` and relevant prior PRDs from `tasks/archive/`
+
+If no related PRDs are found, state that explicitly.
+If related PRDs are found, identify whether this PRD:
+
+- duplicates existing pending work and should update that PRD instead
+- depends on another pending PRD
+- blocks another pending PRD
+- can run independently
+
+Reflect dependency decisions in the first-section `Delivery Dependencies` block.
 
 ### 4. Recommendation
 
@@ -301,7 +386,7 @@ Include:
 
 Include:
 - a dedicated section named `Acceptance Checklist`
-- grouped checklist headings such as `Architecture Acceptance`, `Dependency Acceptance`, `Behavior Acceptance`, `Documentation Acceptance`, and `Validation Acceptance` when relevant
+- grouped checklist headings such as `Architecture Acceptance`, `Dependency Acceptance`, `Behavior Acceptance`, `Frontend Acceptance` (when a frontend app changes), `Documentation Acceptance`, and `Validation Acceptance` when relevant
 - concrete, repository-verifiable checkbox items
 - exact paths, API contracts, commands, or search assertions where applicable
 - at least one `Validation Acceptance` item that exercises the changed behavior through the highest feasible real entry point; if no real entry-point validation is included, the PRD must explicitly document that the change is pure internal refactoring with no executable surface, and this justification must be reviewed in the Decision Log
@@ -361,12 +446,14 @@ Database
 Infrastructure
 Domain
 API
-Frontend
+Frontend (per the repo's frontend app(s))
 Tests
 Docs
 ```
 
-内容重点覆盖：SQL 变化、字段变化、数据流变化、API 变化、ORM 变化、Domain Logic 变化、UI 展示变化、类型同步、测试同步。
+内容重点覆盖：SQL 变化、字段变化、数据流变化、API 变化、ORM 变化、Domain Logic 变化、前端组件/路由/状态变化、前端调用后端 API 的客户端代码、UI 展示变化、类型同步、测试同步。
+
+当需求触达用户可见界面时，Change Impact Tree 必须包含仓库实际前端 app 的具体改动：组件、路由/页面、状态、调用后端 API 的客户端代码、类型同步。禁止用一行"更新 UI"代替前端规划。
 
 不要包含：import 调整、格式化、lint 修复、无意义 rename、与任务无关的小改动。
 
@@ -458,6 +545,7 @@ For architecture-heavy or refactor work, prefer:
 - `Architecture Acceptance`
 - `Dependency Acceptance`
 - `Behavior Acceptance`
+- `Frontend Acceptance` (when a frontend app changes)
 - `Documentation Acceptance`
 - `Validation Acceptance`
 
@@ -476,12 +564,19 @@ The checklist must validate the final target state, not merely the completion of
 
 * [ ] Rewrote the request into a concrete behavior change
 * [ ] Inspected the repository before asking questions
+* [ ] Searched existing `tasks/pending/` PRDs for duplicate, prerequisite, blocking, or downstream work before creating/updating this PRD
+* [ ] Checked relevant `tasks/archive/` PRDs when prior decisions or completed related work could affect the plan
 * [ ] Identified the closest existing code path
+* [ ] Documented the Existing PRD Relationship in Section 3 and reflected sequencing decisions in Delivery Dependencies
 * [ ] Handled critical unresolved questions correctly: asked the user only when repository evidence was insufficient and the answer would materially affect the PRD
 * [ ] Compared a minimal-change option against a heavier option
 * [ ] Justified every new abstraction, dependency, or file path
 * [ ] Rejected redundant layers where reuse was sufficient
+* [ ] Section 1 includes a concise proposed solution summary before measurable objectives, including who supplies required declarations/configuration/input, so the PRD does not jump from problem statement directly to validation or implementation detail
+* [ ] Section 1 includes a tool-neutral Delivery Dependencies block, using explicit `none` values when no sequencing dependency exists
 * [ ] Included a Change Impact Tree with architecture-fit reasoning
+* [ ] **BLOCKER:** Stated frontend impact explicitly — for user-visible features named the affected frontend app(s) and their changes (components, routes, API wiring) in the Change Impact Tree; for backend-only work recorded `No frontend impact` with a reason; never omitted the frontend silently
+* [ ] For user-visible changes, the Realistic Validation Plan includes a real frontend entry point (the repo's e2e/UI test command or a manual app run), not only component unit tests
 * [ ] **BLOCKER:** Did not include line-number-dependent edit instructions; all fragile edits use semantic anchors and/or `rg` search commands
 * [ ] Included at least one flow or architecture diagram
 * [ ] Implementation Guide includes the required living implementation guide statement

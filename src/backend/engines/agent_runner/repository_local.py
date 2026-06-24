@@ -103,6 +103,8 @@ class RepositoryInitResult:
     config_path: Path
     config_text: str
     wrote_file: bool
+    repo_id: str | None = None
+    display_name: str | None = None
 
 
 def detect_git_repository_root(
@@ -665,6 +667,25 @@ def initialize_repository_local_config(
         options, process_runner
     )
     config_path = repo_root_path / IAR_REPOSITORY_CONFIG_FILENAME
+    selected_remote = options.remote_override or _detect_default_remote(
+        repo_root_path, process_runner
+    )
+    detected_repo_id = _detect_repository_id(
+        repo_root_path, selected_remote, process_runner
+    )
+    selected_repo_id = options.repo_id_override or detected_repo_id
+    selected_display_name = options.display_name_override or repo_root_path.name
+
+    def _make_result(wrote_file: bool) -> RepositoryInitResult:
+        return RepositoryInitResult(
+            repo_root_path=repo_root_path,
+            config_path=config_path,
+            config_text=config_text,
+            wrote_file=wrote_file,
+            repo_id=selected_repo_id,
+            display_name=selected_display_name,
+        )
+
     if config_path.exists() and not options.force and not options.dry_run:
         existing_text = config_path.read_text(encoding="utf-8")
         if existing_text != config_text:
@@ -672,27 +693,12 @@ def initialize_repository_local_config(
                 f"IAR local config already exists at {config_path}. "
                 "Use --force to overwrite it."
             )
-        return RepositoryInitResult(
-            repo_root_path=repo_root_path,
-            config_path=config_path,
-            config_text=config_text,
-            wrote_file=False,
-        )
+        return _make_result(wrote_file=False)
     if options.dry_run:
-        return RepositoryInitResult(
-            repo_root_path=repo_root_path,
-            config_path=config_path,
-            config_text=config_text,
-            wrote_file=False,
-        )
+        return _make_result(wrote_file=False)
 
     config_path.write_text(config_text, encoding="utf-8")
-    return RepositoryInitResult(
-        repo_root_path=repo_root_path,
-        config_path=config_path,
-        config_text=config_text,
-        wrote_file=True,
-    )
+    return _make_result(wrote_file=True)
 
 
 def _run_git(
