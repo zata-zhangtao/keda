@@ -44,8 +44,10 @@ from backend.core.use_cases.agent_runner_commit import (
 )
 from backend.core.use_cases.agent_runner_failure import (
     AgentRunnerAttemptError,
+    AgentUnavailableError,
     ForbiddenBlockedError,
     MaxRetriesExceededError,
+    ProviderCapacityError,
     PublishFailureError,
     UnrecoverableError,
     classify_failure,
@@ -57,6 +59,7 @@ from backend.core.use_cases.agent_runner_failure import (
     format_publish_failure_comment,
     format_recovery_failure_summary,
     is_recoverable_commit_request_error,
+    is_transient_failure,
 )
 from backend.core.use_cases.agent_runner_feedback import (
     PrdDeliveryError,
@@ -111,8 +114,10 @@ _logger = logging.getLogger(__name__)
 
 __all__ = [
     "AgentRunnerAttemptError",
+    "AgentUnavailableError",
     "MaxRetriesExceededError",
     "PrdDeliveryError",
+    "ProviderCapacityError",
     "PublishFailureError",
     "EmptyCommitRequestError",
     "UnrecoverableError",
@@ -152,10 +157,12 @@ __all__ = [
     "list_changed_paths",
     "list_git_remotes",
     "publish_changes",
+    "resolve_agent_fallback_order",
     "resolve_prd_archive_path",
     "run_agent",
     "run_agent_until_committed",
     "run_agent_with_prompt",
+    "run_agent_with_prompt_resilient",
     "run_once",
     "run_preflight_checks",
     "run_verification",
@@ -210,6 +217,36 @@ def choose_agent(issue: IssueSummary, config: AppConfig, override_agent: str) ->
         if config.runner.default_agent != "auto"
         else "claude"
     )
+
+
+def resolve_agent_fallback_order(
+    issue: IssueSummary,
+    config: AppConfig,
+    override_agent: str,
+) -> list[str]:
+    """Return the ordered list of agents to try for an Issue.
+
+    The first entry is the primary agent resolved by :func:`choose_agent`.
+    Subsequent entries come from ``config.runner.agent_fallback_order`` with the
+    primary agent and duplicates removed, preserving configured order. When no
+    fallback order is configured the list contains only the primary agent, so
+    the escalation ladder behaves exactly like single-agent runs.
+
+    Args:
+        issue: Issue being processed.
+        config: Agent Runner configuration.
+        override_agent: The ``--agent`` override (``"auto"`` routes by label).
+
+    Returns:
+        Ordered, de-duplicated agent names to attempt.
+    """
+    primary_agent = choose_agent(issue, config, override_agent)
+    fallback_order = [primary_agent]
+    for candidate_agent in config.runner.agent_fallback_order:
+        normalized_agent = candidate_agent.strip()
+        if normalized_agent and normalized_agent not in fallback_order:
+            fallback_order.append(normalized_agent)
+    return fallback_order
 
 
 def create_or_reuse_worktree(
@@ -403,8 +440,14 @@ def run_agent(
         phase="execution",
         validation_line=build_validation_prompt_line(issue, config),
     )
-    return run_agent_with_prompt(
-        agent_name, prompt, worktree_path, process_runner, issue=issue
+    return run_agent_with_prompt_resilient(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        issue=issue,
+        transient_retry_attempts=config.runner.transient_retry_attempts,
+        transient_retry_delay_seconds=config.runner.transient_retry_delay_seconds,
     )
 
 
@@ -446,6 +489,82 @@ def run_agent_with_prompt(
             result.return_code,
         )
     return result
+
+
+def run_agent_with_prompt_resilient(
+    agent_name: str,
+    prompt: str,
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+    *,
+    capture_output: bool = False,
+    timeout_seconds: int | None = None,
+    issue: IssueSummary | None = None,
+    transient_retry_attempts: int = 2,
+    transient_retry_delay_seconds: int = 10,
+) -> CommandResult:
+    """Run an agent, retrying transient network/transport failures in place.
+
+    Level 1 of the escalation ladder. Only :func:`is_transient_failure` errors
+    (dropped sockets, connection resets, gateway timeouts, 5xx) are retried with
+    the same agent, because re-issuing the request usually succeeds. A missing
+    agent CLI is surfaced as :class:`AgentUnavailableError` so the orchestration
+    layer can skip to the next agent; every other error propagates unchanged so
+    the recovery loop or the cross-agent fallback can handle it.
+
+    Args:
+        agent_name: Agent to invoke (claude / codex / kimi).
+        prompt: Prepared prompt text.
+        worktree_path: Worktree the agent runs in.
+        process_runner: Command executor.
+        capture_output: Whether to capture stdout/stderr.
+        timeout_seconds: Optional per-invocation timeout.
+        issue: Optional Issue for logging context.
+        transient_retry_attempts: Extra retries granted to transient failures.
+        transient_retry_delay_seconds: Backoff between transient retries.
+
+    Returns:
+        The successful :class:`CommandResult`.
+
+    Raises:
+        AgentUnavailableError: The agent CLI could not be launched.
+        Exception: The original error when it is not transient or retries are
+            exhausted.
+    """
+    max_retries = max(0, transient_retry_attempts)
+    issue_number = issue.number if issue is not None else 0
+    for retry_index in range(max_retries + 1):
+        try:
+            return run_agent_with_prompt(
+                agent_name,
+                prompt,
+                worktree_path,
+                process_runner,
+                capture_output=capture_output,
+                timeout_seconds=timeout_seconds,
+                issue=issue,
+            )
+        except FileNotFoundError as exc:
+            raise AgentUnavailableError(agent_name) from exc
+        except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            if retry_index >= max_retries or not is_transient_failure(exc):
+                raise
+            _logger.warning(
+                "Transient error from agent '%s' for Issue #%d; "
+                "retrying (%d/%d): %s",
+                agent_name,
+                issue_number,
+                retry_index + 1,
+                max_retries,
+                exc,
+            )
+            wait_before_recovery_attempt(
+                issue_number,
+                recovery_attempt=retry_index + 1,
+                max_recovery_attempts=max_retries,
+                delay_seconds=transient_retry_delay_seconds,
+            )
+    raise RuntimeError("unreachable: resilient agent retry loop exited")
 
 
 def extract_agent_response_text(result: CommandResult) -> str:
@@ -611,12 +730,18 @@ def run_agent_until_committed(
         try:
             if attempt_index == 0:
                 if prompt_override is not None:
-                    run_agent_with_prompt(
+                    run_agent_with_prompt_resilient(
                         selected_agent,
                         prompt_override,
                         worktree_path,
                         process_runner,
                         issue=issue,
+                        transient_retry_attempts=(
+                            config.runner.transient_retry_attempts
+                        ),
+                        transient_retry_delay_seconds=(
+                            config.runner.transient_retry_delay_seconds
+                        ),
                     )
                 else:
                     run_agent(
@@ -630,13 +755,21 @@ def run_agent_until_committed(
                     max_recovery_attempts=max_recovery_attempts,
                     failure_summary=recovery_failure_summary,
                 )
-                run_agent_with_prompt(
+                run_agent_with_prompt_resilient(
                     selected_agent,
                     recovery_prompt,
                     worktree_path,
                     process_runner,
                     issue=issue,
+                    transient_retry_attempts=config.runner.transient_retry_attempts,
+                    transient_retry_delay_seconds=(
+                        config.runner.transient_retry_delay_seconds
+                    ),
                 )
+        except AgentUnavailableError:
+            # The agent CLI could not be launched; let the cross-agent fallback
+            # skip to the next candidate instead of burning recovery attempts.
+            raise
         except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
             failure_type = classify_failure(
                 before_sha=before_sha,
@@ -645,6 +778,7 @@ def run_agent_until_committed(
                 agent_result=CommandResult(("",), 0, "", ""),
                 verification_results=[],
                 exc=exc,
+                detect_provider_errors=True,
             )
             attempt_results.append(
                 AttemptResult(
@@ -658,6 +792,10 @@ def run_agent_until_committed(
                 raise UnrecoverableError(str(exc), attempt_results) from exc
             if failure_type == FailureType.FORBIDDEN_BLOCKED:
                 raise ForbiddenBlockedError(str(exc), attempt_results) from exc
+            if failure_type == FailureType.PROVIDER_CAPACITY:
+                # The same provider will keep failing until its window resets;
+                # escalate so the fallback chain can switch to another agent.
+                raise ProviderCapacityError(str(exc), attempt_results) from exc
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_agent_execution_failure(exc)

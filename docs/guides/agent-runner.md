@@ -327,6 +327,14 @@ default_agent = "auto"
 max_recovery_attempts = 5
 # 每次重试前等待的秒数
 recovery_retry_delay_seconds = 30
+# 跨 agent fallback 链：为空时仅用主 agent（与旧行为一致）。
+# 填本机可用的 agent，按顺序尝试；某 agent 反复修不好或供应商受限时切到下一个。
+agent_fallback_order = []
+# 最多切换 agent 的次数（order=[a,b,c] 且 max_agent_switches=2 时最多尝试 3 个 agent）
+max_agent_switches = 2
+# 瞬时网络错误（socket 断开 / 5xx / 超时）的就地重试次数与退避秒数
+transient_retry_attempts = 2
+transient_retry_delay_seconds = 10
 # 提交前自动运行的验证命令；任一命令失败会进入 recovery
 verification_commands = [
     "git diff --check",
@@ -1351,6 +1359,19 @@ After fixing the root cause, manually re-add `agent/rework-prd` to retry.
 Issue 执行失败后会被标记为 `agent/failed`，runner 不会再自动处理。以下是将失败 Issue 重新置为可执行状态的完整流程。
 
 > 非 publish 阶段失败的 `Agent Runner Failed` 评论末尾自带 `How To Recover` 段，包含可直接复制的 relabel 命令和本章节指向；publish 阶段失败的评论则提示 `iar recover`。两类评论的指引与本章节命令保持一致。
+
+### 错误分级与 fallback 链（escalation ladder）
+
+在把 Issue 标成 `agent/failed` 之前，runner 会按错误性质走一条分级阶梯，尽量自动恢复，而不是一遇错就失败：
+
+1. **瞬时网络错误就地重试（Level 1）**：socket 断开（如 `The socket connection was closed unexpectedly`）、连接重置、网关超时、5xx 等传输层抖动，会用**同一个 agent**就地重试 `transient_retry_attempts` 次（间隔 `transient_retry_delay_seconds` 秒）。实现阶段与 Pre-PR Review 阶段共用这套重试，因此一次 review 抖动不再直接判负。
+2. **同 agent recovery**：验证失败、未产出 commit、可修复的请求级错误（含 400 / 上下文超窗）走既有的 recovery 循环——带着失败摘要重新调用同一个 agent 修复，最多 `max_recovery_attempts` 轮。
+3. **跨 agent fallback（Level 2）**：当某 agent **耗尽 recovery 预算仍失败**，或命中**供应商容量限制**（429 usage limit、529 overloaded——这类同一供应商重试也只会继续失败），runner 会切换到 `agent_fallback_order` 里的下一个 agent，在已落盘的进度上接力。切换次数受 `max_agent_switches` 封顶。配置中列出但本机未安装的 agent（命令不存在）会被自动跳过。
+4. **不切换的情况**：安全违规（禁改路径、分支异常）等不可恢复错误换谁都失败，runner 直接停止、不浪费配额。
+
+`agent_fallback_order` 默认**为空**，此时只用主 agent，行为与启用本特性前完全一致——跨 agent fallback 是显式 opt-in。所有尝试（含跨 agent）都会汇总进失败评论的 **Attempt History** 表，其中新增的 **Agent** 列标明每次尝试由哪个 agent 执行。
+
+配置示例见上文 `[agent_runner.runner]`：`agent_fallback_order` / `max_agent_switches` / `transient_retry_attempts` / `transient_retry_delay_seconds`。
 
 ### 进度落盘与跨 claim 续作（checkpoint）
 

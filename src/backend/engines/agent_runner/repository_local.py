@@ -204,6 +204,17 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "runner.default_agent": "默认使用的 AI agent：auto / claude / codex / kimi",
     "runner.max_recovery_attempts": "Agent 失败后的最大重试次数",
     "runner.recovery_retry_delay_seconds": "每次重试前等待的秒数",
+    "runner.agent_fallback_order": (
+        "跨 agent fallback 链：为空时仅用主 agent；填本机可用 agent（如 "
+        '["claude", "codex"]），某 agent 反复修不好或供应商受限时切到下一个'
+    ),
+    "runner.max_agent_switches": (
+        "最多切换 agent 次数（order=[a,b,c] 且此值=2 时最多尝试 3 个 agent）"
+    ),
+    "runner.transient_retry_attempts": (
+        "瞬时网络错误（socket 断开 / 5xx / 超时）的就地重试次数"
+    ),
+    "runner.transient_retry_delay_seconds": "瞬时错误每次重试前等待的秒数",
     "runner.verification_commands": "提交前自动运行的验证命令；任一命令失败会进入 recovery",
     "safety.auto_merge": "是否允许自动合并 PR（强烈建议保持 false）",
     "safety.forbidden_path_patterns": "提交前禁止变更的路径通配模式",

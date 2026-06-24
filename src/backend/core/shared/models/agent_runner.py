@@ -39,18 +39,32 @@ class FailureType(Enum):
     NO_COMMITS = "no_commits"
     VERIFICATION_FAILED = "verification_failed"
     AGENT_ERROR = "agent_error"
+    TRANSIENT = "transient"
+    PROVIDER_CAPACITY = "provider_capacity"
     UNRECOVERABLE = "unrecoverable"
     FORBIDDEN_BLOCKED = "forbidden_blocked"
 
 
 @dataclass(frozen=True)
 class AttemptResult:
-    """Record of a single agent execution attempt."""
+    """Record of a single agent execution attempt.
+
+    Attributes:
+        attempt_number: 1-based attempt index within a single agent's run.
+        failure_type: Classified outcome of the attempt.
+        recovered: Whether this attempt recovered from a prior failure.
+        detail: Human-readable detail rendered into the failure comment.
+        agent: Name of the agent that produced this attempt. Empty when
+            recorded before an agent label is attached; the orchestration
+            layer stamps it when merging attempts across a cross-agent
+            fallback chain.
+    """
 
     attempt_number: int
     failure_type: FailureType
     recovered: bool
     detail: str
+    agent: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,12 +183,28 @@ class WorktreeConfig:
 
 @dataclass(frozen=True)
 class RunnerConfig:
-    """Local runner behavior."""
+    """Local runner behavior.
+
+    Attributes:
+        agent_fallback_order: Ordered agents to try for one Issue. Empty
+            disables cross-agent fallback (single-agent behavior). The primary
+            agent is prepended and de-duplicated by
+            ``resolve_agent_fallback_order``.
+        max_agent_switches: Maximum number of agent switches before the Issue
+            is marked failed.
+        transient_retry_attempts: In-place retries granted to transient
+            network/transport errors (Level 1 of the escalation ladder).
+        transient_retry_delay_seconds: Backoff between transient retries.
+    """
 
     max_issues: int = 1
     default_agent: str = "auto"
     max_recovery_attempts: int = 5
     recovery_retry_delay_seconds: int = 30
+    agent_fallback_order: tuple[str, ...] = ()
+    max_agent_switches: int = 2
+    transient_retry_attempts: int = 2
+    transient_retry_delay_seconds: int = 10
     verification_commands: tuple[str, ...] = (
         "git diff --check",
         "uv run mkdocs build",

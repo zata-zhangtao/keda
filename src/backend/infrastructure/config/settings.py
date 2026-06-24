@@ -400,6 +400,16 @@ class AgentRunnerRunnerSettings(BaseModel):
     default_agent: str = "auto"
     max_recovery_attempts: int = 5
     recovery_retry_delay_seconds: int = 30
+    # Cross-agent fallback chain. Empty disables switching: the runner uses only
+    # the primary agent, matching pre-escalation-ladder behavior. List the
+    # locally available agents to try in order, e.g. ["claude", "codex"].
+    agent_fallback_order: list[str] = Field(default_factory=list)
+    # Maximum number of agent switches before the Issue is marked failed.
+    # With order [a, b, c] and max_agent_switches=2, up to 3 agents are tried.
+    max_agent_switches: int = 2
+    # In-place retries for transient network/transport errors (Level 1).
+    transient_retry_attempts: int = 2
+    transient_retry_delay_seconds: int = 10
     verification_commands: list[str] = Field(
         default_factory=lambda: [
             "git diff --check",

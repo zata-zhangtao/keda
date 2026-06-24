@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,13 +21,18 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_runner_events import (
     format_event_marker,
 )
+from backend.core.use_cases.agent_runner_failure import (
+    ProviderCapacityError,
+    format_agent_execution_failure,
+    is_provider_capacity_failure,
+)
 from backend.core.use_cases.run_agent_once import (
     EmptyCommitRequestError,
     commit_requested_changes,
     extract_agent_response_text,
     extract_prd_path,
     get_head_sha,
-    run_agent_with_prompt,
+    run_agent_with_prompt_resilient,
 )
 
 _logger = logging.getLogger(__name__)
@@ -657,15 +663,30 @@ def run_pre_pr_review(
                 inner_attempt + 1,
                 max_inner_attempts + 1,
             )
-            review_result = run_agent_with_prompt(
-                reviewer_agent,
-                review_prompt,
-                worktree_path,
-                process_runner,
-                capture_output=True,
-                timeout_seconds=timeout_seconds,
-                issue=issue,
-            )
+            try:
+                review_result = run_agent_with_prompt_resilient(
+                    reviewer_agent,
+                    review_prompt,
+                    worktree_path,
+                    process_runner,
+                    capture_output=True,
+                    timeout_seconds=timeout_seconds,
+                    issue=issue,
+                    transient_retry_attempts=(config.runner.transient_retry_attempts),
+                    transient_retry_delay_seconds=(
+                        config.runner.transient_retry_delay_seconds
+                    ),
+                )
+            except (subprocess.CalledProcessError, OSError) as exc:
+                # Transient blips are already retried inside the resilient
+                # wrapper. A provider-capacity failure here will keep failing on
+                # the same reviewer agent, so escalate to let the cross-agent
+                # fallback switch agents instead of failing the Issue.
+                if is_provider_capacity_failure(exc):
+                    raise ProviderCapacityError(
+                        format_agent_execution_failure(exc), []
+                    ) from exc
+                raise
             reviewer_text = extract_agent_response_text(review_result)
             stdout_decision = parse_reviewer_decision(reviewer_text)
 

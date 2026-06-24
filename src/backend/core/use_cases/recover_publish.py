@@ -22,6 +22,9 @@ from backend.core.shared.models.agent_runner import (
     PublishRecoveryRequest,
     PublishRecoveryResult,
 )
+from backend.core.use_cases.agent_runner_failure import (
+    build_publish_failure_comment_body,
+)
 from backend.core.use_cases.agent_runner_validation import (
     build_validation_checklist_block,
     extract_realistic_validation_items,
@@ -227,37 +230,15 @@ def _build_recovery_failure_comment(
     exc: BaseException,
 ) -> str:
     """构建发布恢复失败后写入 Issue 的评论正文。"""
-    lines = [
-        "## Agent Runner Publish Recovery Failed",
-        "",
-        "The publish recovery command failed.",
-        "",
-        f"- Failure category: `{failure_category}`",
-    ]
-    if worktree_path is not None:
-        lines.append(f"- Worktree: `{worktree_path}`")
-    lines.extend(
-        [
-            "",
-            "```text",
-            str(exc),
-            "",
-        ]
+    return build_publish_failure_comment_body(
+        header="## Agent Runner Publish Recovery Failed",
+        intro="The publish recovery command failed.",
+        action_intro="To retry publishing without re-running the agent:",
+        issue_number=issue_number,
+        failure_category=failure_category,
+        worktree_path=worktree_path,
+        exc=exc,
     )
-    if exc.__cause__ is not None:
-        lines.append(str(exc.__cause__))
-    lines.extend(
-        [
-            "```",
-            "",
-            "To retry publishing without re-running the agent:",
-            "",
-            "```bash",
-            f"uv run iar recover --issue {issue_number}",
-            "```",
-        ]
-    )
-    return "\n".join(lines)
 
 
 def recover_publish_issue(

@@ -20,10 +20,13 @@ from backend.core.use_cases.agent_runner_feedback import (
 
 __all__ = [
     "AgentRunnerAttemptError",
+    "AgentUnavailableError",
     "ForbiddenBlockedError",
     "MaxRetriesExceededError",
+    "ProviderCapacityError",
     "PublishFailureError",
     "UnrecoverableError",
+    "build_publish_failure_comment_body",
     "classify_failure",
     "detect_usage_limit_root_cause",
     "format_agent_execution_failure",
@@ -33,7 +36,9 @@ __all__ = [
     "format_minimal_failure_comment",
     "format_publish_failure_comment",
     "format_recovery_failure_summary",
+    "is_provider_capacity_failure",
     "is_recoverable_commit_request_error",
+    "is_transient_failure",
 ]
 
 
@@ -81,6 +86,35 @@ class ForbiddenBlockedError(AgentRunnerAttemptError):
         super().__init__(message, attempt_results)
 
 
+class ProviderCapacityError(AgentRunnerAttemptError):
+    """Raised when the agent's model provider is at capacity or rate limited.
+
+    Capacity failures (429 usage limit, 529 overloaded) keep failing on the
+    same agent until the provider's usage window resets, so the escalation
+    ladder switches to a different agent instead of retrying in place.
+    """
+
+
+class AgentUnavailableError(AgentRunnerAttemptError):
+    """Raised when an agent CLI cannot be launched (command not found).
+
+    Treated as agent-specific rather than a business failure: the escalation
+    ladder skips the unavailable agent and tries the next one in the
+    configured fallback order.
+    """
+
+    def __init__(
+        self,
+        agent: str,
+        attempt_results: list[AttemptResult] | None = None,
+    ) -> None:
+        super().__init__(
+            f"Agent '{agent}' is unavailable (command not found).",
+            attempt_results or [],
+        )
+        self.agent = agent
+
+
 class PublishFailureError(RuntimeError):
     """Raised when the publish phase fails after a local commit exists."""
 
@@ -124,16 +158,18 @@ def classify_failure(
     agent_result: CommandResult,
     verification_results: list[CommandResult],
     exc: BaseException | None = None,
+    detect_provider_errors: bool = False,
 ) -> FailureType:
     """Classify the failure type of an agent execution attempt.
 
     Priority:
     1. UNRECOVERABLE (security/branch violations)
     2. UNCOMMITTED_CHANGES
-    3. NO_COMMITS
-    4. VERIFICATION_FAILED
-    5. AGENT_ERROR
-    6. SUCCESS
+    3. PROVIDER_CAPACITY / TRANSIENT (only when ``detect_provider_errors``)
+    4. NO_COMMITS
+    5. VERIFICATION_FAILED
+    6. AGENT_ERROR
+    7. SUCCESS
 
     Args:
         before_sha: SHA before the agent run.
@@ -142,6 +178,11 @@ def classify_failure(
         agent_result: Result of the agent CLI invocation.
         verification_results: Results of verification commands.
         exc: Optional exception raised during the attempt.
+        detect_provider_errors: When ``True``, inspect ``exc`` for provider
+            capacity / transient network signatures. Only the agent-invocation
+            call site sets this; commit and verification failures must not be
+            reclassified as transient just because their output mentions a
+            network word.
 
     Returns:
         The classified failure type.
@@ -155,6 +196,11 @@ def classify_failure(
                 return FailureType.UNRECOVERABLE
             if is_recoverable_commit_request_error(exc):
                 return FailureType.UNCOMMITTED_CHANGES
+        if detect_provider_errors:
+            if is_provider_capacity_failure(exc):
+                return FailureType.PROVIDER_CAPACITY
+            if is_transient_failure(exc):
+                return FailureType.TRANSIENT
         return FailureType.AGENT_ERROR
 
     if has_uncommitted:
@@ -180,6 +226,93 @@ _USAGE_LIMIT_HINT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _USAGE_LIMIT_RESET_AT_PATTERN = re.compile(r"resets at (\S+)")
+
+#: Provider capacity / rate-limit signatures. A superset of the usage-limit
+#: hint above: these mean the same agent will keep failing until the provider
+#: window resets, so the runner should switch agents rather than retry.
+_PROVIDER_CAPACITY_HINT_PATTERN = re.compile(
+    r"usage limit (?:exceeded|reached)"
+    r"|request rejected \(429\)"
+    r"|\b429\b"
+    r"|too many requests"
+    r"|rate.?limit"
+    r"|overloaded"
+    r"|\b529\b",
+    re.IGNORECASE,
+)
+
+#: Transient network / transport signatures. These are worth retrying with the
+#: same agent because re-issuing the request frequently succeeds.
+_TRANSIENT_HINT_PATTERN = re.compile(
+    r"socket connection (?:was )?closed"
+    r"|connection reset"
+    r"|connection closed"
+    r"|connection refused"
+    r"|connection error"
+    r"|econnreset"
+    r"|broken pipe"
+    r"|bad gateway"
+    r"|service unavailable"
+    r"|gateway time-?out"
+    r"|temporarily unavailable"
+    r"|\b50[234]\b"
+    r"|timed out"
+    r"|read timeout"
+    r"|network error",
+    re.IGNORECASE,
+)
+
+
+def _failure_text(exc: BaseException) -> str:
+    """Return searchable text for an exception, including subprocess output.
+
+    ``CommandFailedError`` (and other ``CalledProcessError`` subclasses) carry
+    the agent's captured stdout/stderr on ``output`` / ``stderr``; the failure
+    signature usually lives there rather than in ``str(exc)``.
+    """
+    parts = [str(exc)]
+    for attribute_name in ("output", "stderr"):
+        attribute_value = getattr(exc, attribute_name, None)
+        if attribute_value:
+            parts.append(str(attribute_value))
+    return "\n".join(parts)
+
+
+def is_provider_capacity_failure(exc: BaseException) -> bool:
+    """Return whether ``exc`` indicates the provider is at capacity.
+
+    Capacity failures (429 usage limit, 529 overloaded, rate limiting) keep
+    failing on the same agent until the provider window resets. The escalation
+    ladder treats this as a signal to switch agents.
+
+    Args:
+        exc: The exception raised by an agent invocation.
+
+    Returns:
+        ``True`` when the exception text matches a provider-capacity signature.
+    """
+    return _PROVIDER_CAPACITY_HINT_PATTERN.search(_failure_text(exc)) is not None
+
+
+def is_transient_failure(exc: BaseException) -> bool:
+    """Return whether ``exc`` looks like a transient network/transport error.
+
+    Transient failures (dropped sockets, connection resets, gateway timeouts,
+    5xx) often succeed on a simple retry with the same agent. Provider-capacity
+    failures are intentionally excluded so capacity errors escalate instead of
+    being retried in place.
+
+    Args:
+        exc: The exception raised by an agent invocation.
+
+    Returns:
+        ``True`` when the exception text matches a transient signature and is
+        not a provider-capacity failure.
+    """
+    if is_provider_capacity_failure(exc):
+        return False
+    return _TRANSIENT_HINT_PATTERN.search(_failure_text(exc)) is not None
+
 
 #: Workflow labels that represent a completed implementation phase. When a
 #: failure occurs while transitioning to one of these labels, the agent's local
@@ -283,14 +416,16 @@ def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
     lines = [
         "### Attempt History",
         "",
-        "| Attempt | Failure Type | Recovered | Detail |",
-        "|---------|-------------|-----------|--------|",
+        "| Attempt | Agent | Failure Type | Recovered | Detail |",
+        "|---------|-------|-------------|-----------|--------|",
     ]
     for result in attempt_results:
         detail = _summarize_attempt_detail(result.detail)
         recovered = "Yes" if result.recovered else "No"
+        agent = result.agent or "-"
         lines.append(
-            f"| {result.attempt_number} | {result.failure_type.value} | {recovered} | {detail} |"
+            f"| {result.attempt_number} | {agent} | "
+            f"{result.failure_type.value} | {recovered} | {detail} |"
         )
     return "\n".join(lines)
 
@@ -474,12 +609,52 @@ def format_publish_failure_comment(
     Returns:
         Markdown comment body.
     """
+    return build_publish_failure_comment_body(
+        header="## Agent Runner Publish Failed",
+        intro="The agent produced a local commit but publishing failed.",
+        action_intro="To resume publishing without re-running the agent:",
+        issue_number=issue_number,
+        failure_category=failure_category.value,
+        worktree_path=worktree_path,
+        exc=exc,
+    )
+
+
+def build_publish_failure_comment_body(
+    *,
+    header: str,
+    intro: str,
+    action_intro: str,
+    issue_number: int,
+    failure_category: str,
+    worktree_path: Path | None,
+    exc: BaseException,
+) -> str:
+    """Build the shared body for publish / publish-recovery failure comments.
+
+    Both the publish phase and the ``iar recover`` flow render the same
+    structure (failure category, optional worktree, error text + cause, and the
+    ``iar recover`` retry hint), differing only in the heading, intro line, and
+    action sentence.
+
+    Args:
+        header: Markdown heading line (e.g. ``"## Agent Runner Publish Failed"``).
+        intro: One-line description shown under the heading.
+        action_intro: Sentence introducing the ``iar recover`` command block.
+        issue_number: GitHub Issue number used in the recover command.
+        failure_category: Human-readable publish failure category.
+        worktree_path: Worktree path to surface, if available.
+        exc: The exception that caused the failure.
+
+    Returns:
+        Markdown comment body.
+    """
     lines = [
-        "## Agent Runner Publish Failed",
+        header,
         "",
-        "The agent produced a local commit but publishing failed.",
+        intro,
         "",
-        f"- Failure category: `{failure_category.value}`",
+        f"- Failure category: `{failure_category}`",
     ]
 
     if worktree_path is not None:
@@ -501,7 +676,7 @@ def format_publish_failure_comment(
         [
             "```",
             "",
-            "To resume publishing without re-running the agent:",
+            action_intro,
             "",
             "```bash",
             f"uv run iar recover --issue {issue_number}",

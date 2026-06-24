@@ -26,6 +26,7 @@ from backend.core.shared.models.agent_runner import (
     WorktreeConfig,
 )
 from backend.core.use_cases.run_agent_once import (
+    AgentUnavailableError,
     MaxRetriesExceededError,
     PrdDeliveryError,
     build_recovery_prompt,
@@ -45,11 +46,18 @@ from backend.core.use_cases.run_agent_once import (
     format_minimal_failure_comment,
     get_head_sha,
     publish_changes,
+    resolve_agent_fallback_order,
     resolve_prd_archive_path,
     run_agent_with_prompt,
+    run_agent_with_prompt_resilient,
     validate_safe_changes,
     _reconcile_worktree_with_remote_branch,
 )
+from backend.core.use_cases.agent_runner_failure import (
+    is_provider_capacity_failure,
+    is_transient_failure,
+)
+from backend.infrastructure.process_runner import CommandFailedError
 from backend.core.use_cases.agent_runner_feedback import (
     build_progress_continuation_prompt,
 )
@@ -3775,9 +3783,32 @@ def test_format_attempt_history_table() -> None:
         ),
     ]
     table = format_attempt_history(results)
-    assert "| Attempt | Failure Type | Recovered | Detail |" in table
-    assert "| 1 | no_commits | No | No commits produced. |" in table
-    assert "| 2 | success | Yes | Agent fixed the issue. |" in table
+    assert "| Attempt | Agent | Failure Type | Recovered | Detail |" in table
+    assert "| 1 | - | no_commits | No | No commits produced. |" in table
+    assert "| 2 | - | success | Yes | Agent fixed the issue. |" in table
+
+
+def test_format_attempt_history_includes_agent_column() -> None:
+    """Attempts stamped with an agent should render it in the Agent column."""
+    results = [
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.PROVIDER_CAPACITY,
+            recovered=False,
+            detail="Claude at capacity.",
+            agent="claude",
+        ),
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.SUCCESS,
+            recovered=True,
+            detail="Codex finished.",
+            agent="codex",
+        ),
+    ]
+    table = format_attempt_history(results)
+    assert "| 1 | claude | provider_capacity | No | Claude at capacity. |" in table
+    assert "| 1 | codex | success | Yes | Codex finished. |" in table
 
 
 _USAGE_LIMIT_STDOUT = (
@@ -6723,3 +6754,270 @@ def test_build_prd_context_block_handles_unicode_prd(tmp_path: Path) -> None:
     block = _build_prd_context_block(issue, tmp_path)
     assert "中文 PRD" in block
     assert "详细描述。" in block
+
+
+# ---------------------------------------------------------------------------
+# 错误分级与 fallback 链：错误分类层 + Level 1 瞬时重试 + agent 顺序解析
+# ---------------------------------------------------------------------------
+
+
+class _SequencedAgentRunner(FakeProcessRunner):
+    """Runner that yields a scripted sequence of outcomes per ``run`` call.
+
+    Each outcome is either a :class:`CommandResult` to return or an exception to
+    raise. The last outcome repeats once the sequence is exhausted.
+    """
+
+    def __init__(self, outcomes: list[object]) -> None:
+        super().__init__()
+        self._outcomes = list(outcomes)
+        self._index = 0
+
+    def run(
+        self,
+        command,
+        *,
+        cwd,
+        check=True,
+        timeout=None,
+        capture_output=True,
+        input_text=None,
+        label=None,
+    ):
+        self.calls.append(list(command))
+        outcome = self._outcomes[min(self._index, len(self._outcomes) - 1)]
+        self._index += 1
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+def _transient_command_error() -> CommandFailedError:
+    return CommandFailedError(
+        1,
+        ["claude", "--dangerously-skip-permissions", "-p", "PROMPT"],
+        output=(
+            "[agent error] API Error: The socket connection was closed " "unexpectedly."
+        ),
+        stderr="",
+    )
+
+
+def test_run_agent_with_prompt_resilient_retries_transient_then_succeeds(
+    tmp_path: Path,
+) -> None:
+    """A transient agent error should be retried in place and then succeed."""
+    success = CommandResult(("claude",), 0, "ok", "")
+    runner = _SequencedAgentRunner([_transient_command_error(), success])
+
+    result = run_agent_with_prompt_resilient(
+        "claude",
+        "prompt",
+        tmp_path,
+        runner,
+        transient_retry_attempts=2,
+        transient_retry_delay_seconds=0,
+    )
+
+    assert result.return_code == 0
+    assert len(runner.calls) == 2
+
+
+def test_run_agent_with_prompt_resilient_raises_agent_unavailable(
+    tmp_path: Path,
+) -> None:
+    """A missing agent CLI should surface as AgentUnavailableError without retry."""
+    runner = _SequencedAgentRunner([FileNotFoundError("claude: command not found")])
+
+    with pytest.raises(AgentUnavailableError):
+        run_agent_with_prompt_resilient(
+            "claude",
+            "prompt",
+            tmp_path,
+            runner,
+            transient_retry_attempts=2,
+            transient_retry_delay_seconds=0,
+        )
+
+    assert len(runner.calls) == 1
+
+
+def test_run_agent_with_prompt_resilient_propagates_non_transient(
+    tmp_path: Path,
+) -> None:
+    """Non-transient errors must propagate immediately without retry."""
+    error = CommandFailedError(1, ["claude"], output="some ordinary failure", stderr="")
+    runner = _SequencedAgentRunner([error, CommandResult(("claude",), 0, "", "")])
+
+    with pytest.raises(CommandFailedError):
+        run_agent_with_prompt_resilient(
+            "claude",
+            "prompt",
+            tmp_path,
+            runner,
+            transient_retry_attempts=2,
+            transient_retry_delay_seconds=0,
+        )
+
+    assert len(runner.calls) == 1
+
+
+def test_run_agent_with_prompt_resilient_does_not_retry_provider_capacity(
+    tmp_path: Path,
+) -> None:
+    """Provider-capacity errors must not be retried in place (they escalate)."""
+    error = CommandFailedError(
+        1, ["claude"], output="Request rejected (429) usage limit reached", stderr=""
+    )
+    runner = _SequencedAgentRunner([error, CommandResult(("claude",), 0, "", "")])
+
+    with pytest.raises(CommandFailedError):
+        run_agent_with_prompt_resilient(
+            "claude",
+            "prompt",
+            tmp_path,
+            runner,
+            transient_retry_attempts=2,
+            transient_retry_delay_seconds=0,
+        )
+
+    assert len(runner.calls) == 1
+
+
+def test_run_agent_with_prompt_resilient_reraises_after_exhausting_retries(
+    tmp_path: Path,
+) -> None:
+    """A persistent transient error re-raises after exhausting retries."""
+    runner = _SequencedAgentRunner([_transient_command_error()] * 5)
+
+    with pytest.raises(CommandFailedError):
+        run_agent_with_prompt_resilient(
+            "claude",
+            "prompt",
+            tmp_path,
+            runner,
+            transient_retry_attempts=2,
+            transient_retry_delay_seconds=0,
+        )
+
+    # 1 initial attempt + 2 retries.
+    assert len(runner.calls) == 3
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "The socket connection was closed unexpectedly",
+        "connection reset by peer",
+        "upstream connect error 503 service unavailable",
+        "Read timed out",
+        "502 bad gateway",
+    ],
+)
+def test_is_transient_failure_matches_network_errors(message: str) -> None:
+    """Network/transport signatures are classified as transient."""
+    assert is_transient_failure(RuntimeError(message))
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "5-hour usage limit reached",
+        "Request rejected (429)",
+        "Error 529 overloaded",
+        "too many requests",
+        "rate limit exceeded",
+    ],
+)
+def test_is_provider_capacity_failure_matches_capacity_errors(message: str) -> None:
+    """Capacity / rate-limit signatures are classified as provider capacity."""
+    assert is_provider_capacity_failure(RuntimeError(message))
+
+
+def test_provider_capacity_takes_precedence_over_transient() -> None:
+    """A 429 must classify as capacity, never as a retryable transient error."""
+    exc = RuntimeError("429 too many requests")
+    assert is_provider_capacity_failure(exc)
+    assert not is_transient_failure(exc)
+
+
+def test_transient_predicate_reads_subprocess_output() -> None:
+    """Signatures captured in subprocess output must be detected."""
+    assert is_transient_failure(_transient_command_error())
+
+
+def test_transient_predicate_ignores_unrelated_errors() -> None:
+    """A plain verification failure is not a transient error."""
+    assert not is_transient_failure(RuntimeError("verification failed: 3 tests"))
+
+
+def test_classify_failure_detects_provider_capacity_when_enabled() -> None:
+    """classify_failure flags provider capacity only when asked to."""
+    exc = CommandFailedError(1, ["claude"], output="usage limit reached", stderr="")
+    failure_type = classify_failure(
+        before_sha="a",
+        after_sha="a",
+        has_uncommitted=False,
+        agent_result=CommandResult(("",), 0, "", ""),
+        verification_results=[],
+        exc=exc,
+        detect_provider_errors=True,
+    )
+    assert failure_type == FailureType.PROVIDER_CAPACITY
+
+
+def test_classify_failure_detects_transient_when_enabled() -> None:
+    """classify_failure flags transient errors when detection is enabled."""
+    failure_type = classify_failure(
+        before_sha="a",
+        after_sha="a",
+        has_uncommitted=False,
+        agent_result=CommandResult(("",), 0, "", ""),
+        verification_results=[],
+        exc=_transient_command_error(),
+        detect_provider_errors=True,
+    )
+    assert failure_type == FailureType.TRANSIENT
+
+
+def test_classify_failure_ignores_provider_errors_by_default() -> None:
+    """Without detection, an agent error mentioning capacity stays AGENT_ERROR.
+
+    Guards against commit/verification failures being reclassified as transient
+    just because their output mentions a network word.
+    """
+    exc = CommandFailedError(1, ["claude"], output="usage limit reached", stderr="")
+    failure_type = classify_failure(
+        before_sha="a",
+        after_sha="a",
+        has_uncommitted=False,
+        agent_result=CommandResult(("",), 0, "", ""),
+        verification_results=[],
+        exc=exc,
+    )
+    assert failure_type == FailureType.AGENT_ERROR
+
+
+def test_resolve_agent_fallback_order_empty_returns_primary_only() -> None:
+    """With no fallback configured, only the primary agent is returned."""
+    issue = _make_ready_issue()
+    order = resolve_agent_fallback_order(issue, AppConfig(), "auto")
+    assert order == ["codex"]
+
+
+def test_resolve_agent_fallback_order_dedupes_and_preserves_order() -> None:
+    """The primary agent is de-duplicated and configured order is preserved."""
+    issue = _make_ready_issue()
+    config = AppConfig(
+        runner=RunnerConfig(agent_fallback_order=("codex", "claude", "kimi"))
+    )
+    order = resolve_agent_fallback_order(issue, config, "auto")
+    assert order == ["codex", "claude", "kimi"]
+
+
+def test_resolve_agent_fallback_order_honors_override_primary() -> None:
+    """An explicit --agent override becomes the primary agent."""
+    issue = _make_ready_issue()
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
+    order = resolve_agent_fallback_order(issue, config, "claude")
+    assert order == ["claude", "codex"]

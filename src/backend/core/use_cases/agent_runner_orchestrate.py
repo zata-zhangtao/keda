@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import logging
 import socket
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
@@ -30,6 +33,7 @@ from backend.core.shared.interfaces.agent_runner import (
 from backend.core.shared.interfaces.runner_console import IRunHistoryStore
 from backend.core.shared.models.agent_runner import (
     AppConfig,
+    AttemptResult,
     IssueSummary,
     ReviewEventMarker,
 )
@@ -88,6 +92,14 @@ from backend.core.use_cases.run_agent_once import (
     choose_agent,
     create_or_reuse_worktree,
     get_head_sha,
+    resolve_agent_fallback_order,
+)
+from backend.core.use_cases.agent_runner_failure import (
+    AgentUnavailableError,
+    ForbiddenBlockedError,
+    MaxRetriesExceededError,
+    ProviderCapacityError,
+    UnrecoverableError,
 )
 from backend.core.use_cases.agent_runner_failure_marking import (
     _mark_issue_blocked,
@@ -407,6 +419,7 @@ def _process_ready_issue(
     from backend.core.use_cases.run_agent_once import (
         MaxRetriesExceededError,
         PrdDeliveryError,
+        ProviderCapacityError,
         VerificationFailedError,
         build_progress_continuation_prompt,
         checkpoint_uncommitted_progress,
@@ -483,7 +496,9 @@ def _process_ready_issue(
             expected_branch=expected_branch,
             prompt_override=continuation_prompt,
         )
-    except MaxRetriesExceededError:
+    except (MaxRetriesExceededError, ProviderCapacityError):
+        # 切换 agent 前先把在途进度 checkpoint，让 fallback 链上的下一个
+        # agent 能在已提交进度上续作（provider 容量错误同样适用）。
         # best-effort：checkpoint 自身失败（如触碰禁改路径）不得掩盖原始失败。
         try:
             checkpoint_sha = checkpoint_uncommitted_progress(
@@ -753,6 +768,119 @@ def _process_running_publish_recovery(
         _release_blocked_claim_lock(lock_path)
 
 
+def _stamp_attempts_with_agent(
+    attempts: list[AttemptResult],
+    agent: str,
+) -> list[AttemptResult]:
+    """Return attempts labeled with the agent that produced them.
+
+    Attempts recorded inside a single agent's run carry an empty ``agent``
+    field; the fallback layer stamps the agent so the merged failure history
+    shows which agent produced each attempt. Attempts that already carry an
+    agent label are left untouched.
+
+    Args:
+        attempts: Attempt history from one agent's run.
+        agent: Agent name to stamp onto unlabeled attempts.
+
+    Returns:
+        A new list of attempts with the agent stamped.
+    """
+    return [
+        attempt if attempt.agent else replace(attempt, agent=agent)
+        for attempt in attempts
+    ]
+
+
+def run_issue_with_agent_fallback(
+    *,
+    issue: IssueSummary,
+    config: AppConfig,
+    agent: str,
+    process_for_agent: Callable[..., None],
+) -> str:
+    """Process an Issue across the configured agent fallback chain.
+
+    Level 2 of the escalation ladder. ``process_for_agent`` is invoked with a
+    keyword ``agent`` argument for each candidate agent resolved by
+    :func:`resolve_agent_fallback_order`, capped at ``max_agent_switches``
+    switches. The chain advances to the next agent when an agent exhausts its
+    recovery budget (:class:`MaxRetriesExceededError`) or hits a provider
+    capacity limit (:class:`ProviderCapacityError`), and skips an agent whose
+    CLI is unavailable (:class:`AgentUnavailableError`). Unrecoverable and
+    forbidden-path failures are re-raised immediately because every agent would
+    hit the same wall.
+
+    When the chain is exhausted, the merged (agent-stamped) attempt history is
+    raised as a :class:`MaxRetriesExceededError` so the failure comment shows
+    every agent that was tried. With no fallback configured the chain contains
+    only the primary agent, so behavior matches single-agent runs.
+
+    Args:
+        issue: Issue being processed.
+        config: Agent Runner configuration.
+        agent: The ``--agent`` override (``"auto"`` routes by label).
+        process_for_agent: Callable accepting ``agent=<name>`` that runs the
+            full implement → review → publish pipeline for one agent.
+
+    Returns:
+        The agent name that completed the Issue.
+
+    Raises:
+        UnrecoverableError: A security/branch violation that no agent can fix.
+        ForbiddenBlockedError: Forbidden paths require human intervention.
+        MaxRetriesExceededError: Every candidate agent failed.
+        AgentUnavailableError: Every candidate agent's CLI was unavailable.
+    """
+    fallback_order = resolve_agent_fallback_order(issue, config, agent)
+    max_switches = max(0, config.runner.max_agent_switches)
+    candidate_agents = fallback_order[: max_switches + 1]
+    combined_attempts: list[AttemptResult] = []
+    last_switch_exc: Exception | None = None
+    for candidate_index, candidate_agent in enumerate(candidate_agents):
+        is_last_candidate = candidate_index == len(candidate_agents) - 1
+        try:
+            process_for_agent(agent=candidate_agent)
+            return candidate_agent
+        except (UnrecoverableError, ForbiddenBlockedError):
+            # Every agent would hit the same wall; do not switch.
+            raise
+        except AgentUnavailableError as exc:
+            last_switch_exc = exc
+            _logger.warning(
+                "Issue #%d: agent '%s' is unavailable; trying next candidate.",
+                issue.number,
+                candidate_agent,
+            )
+            continue
+        except (ProviderCapacityError, MaxRetriesExceededError) as exc:
+            combined_attempts.extend(
+                _stamp_attempts_with_agent(
+                    getattr(exc, "attempt_results", None) or [],
+                    candidate_agent,
+                )
+            )
+            last_switch_exc = exc
+            if is_last_candidate:
+                break
+            _logger.warning(
+                "Issue #%d: agent '%s' failed with %s; switching to next agent.",
+                issue.number,
+                candidate_agent,
+                type(exc).__name__,
+            )
+            continue
+
+    if last_switch_exc is None:
+        raise RuntimeError(f"No agent candidates available for Issue #{issue.number}.")
+    if combined_attempts:
+        # Carry the merged, agent-stamped attempt history while preserving the
+        # last agent's root cause (e.g. the verification error) so the failure
+        # comment still surfaces it instead of a duplicated wrapper message.
+        raise MaxRetriesExceededError(combined_attempts) from last_switch_exc.__cause__
+    raise last_switch_exc
+
+
 def run_once(
     *,
     repo_path: Path,
@@ -940,32 +1068,41 @@ def run_once(
                     )
                     continue
             continue
-        from backend.core.use_cases.agent_runner_failure import ForbiddenBlockedError
-
         run_started_at = datetime.now(timezone.utc)
+        used_agent = selected_agent
         try:
             if issue_kind == "ready":
-                _process_ready_issue(
+                used_agent = run_issue_with_agent_fallback(
                     issue=issue,
-                    repo_path=repo_path,
                     config=config,
                     agent=agent,
-                    github_client=github_client,
-                    process_runner=process_runner,
-                    content_generator=content_generator,
+                    process_for_agent=partial(
+                        _process_ready_issue,
+                        issue=issue,
+                        repo_path=repo_path,
+                        config=config,
+                        github_client=github_client,
+                        process_runner=process_runner,
+                        content_generator=content_generator,
+                    ),
                 )
             elif issue_kind == "running_rework":
                 _, marker = _guard_running_issue_is_rework(issue, config, github_client)
                 if marker is None:
                     continue
-                _process_running_rework(
+                used_agent = run_issue_with_agent_fallback(
                     issue=issue,
-                    repo_path=repo_path,
                     config=config,
                     agent=agent,
-                    github_client=github_client,
-                    process_runner=process_runner,
-                    marker=marker,
+                    process_for_agent=partial(
+                        _process_running_rework,
+                        issue=issue,
+                        repo_path=repo_path,
+                        config=config,
+                        github_client=github_client,
+                        process_runner=process_runner,
+                        marker=marker,
+                    ),
                 )
             elif issue_kind == "blocked_resolution":
                 marker = _guard_blocked_issue_has_resolution(issue, github_client)
@@ -978,25 +1115,35 @@ def run_once(
                         issue.number,
                     )
                     continue
-                _process_blocked_resolution(
+                used_agent = run_issue_with_agent_fallback(
                     issue=issue,
-                    repo_path=repo_path,
                     config=config,
                     agent=agent,
-                    github_client=github_client,
-                    process_runner=process_runner,
-                    content_generator=content_generator,
-                    marker=marker,
+                    process_for_agent=partial(
+                        _process_blocked_resolution,
+                        issue=issue,
+                        repo_path=repo_path,
+                        config=config,
+                        github_client=github_client,
+                        process_runner=process_runner,
+                        content_generator=content_generator,
+                        marker=marker,
+                    ),
                 )
             else:
-                _process_running_publish_recovery(
+                used_agent = run_issue_with_agent_fallback(
                     issue=issue,
-                    repo_path=repo_path,
                     config=config,
                     agent=agent,
-                    github_client=github_client,
-                    process_runner=process_runner,
-                    content_generator=content_generator,
+                    process_for_agent=partial(
+                        _process_running_publish_recovery,
+                        issue=issue,
+                        repo_path=repo_path,
+                        config=config,
+                        github_client=github_client,
+                        process_runner=process_runner,
+                        content_generator=content_generator,
+                    ),
                 )
             _logger.info("Completed Issue #%d: %s", issue.number, issue.title)
             append_run_record(
@@ -1005,7 +1152,7 @@ def run_once(
                 repo_path=repo_path,
                 issue=issue,
                 trigger=run_trigger,
-                agent=selected_agent,
+                agent=used_agent,
                 outcome="completed",
                 error_summary=None,
                 started_at=run_started_at,

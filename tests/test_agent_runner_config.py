@@ -123,6 +123,28 @@ def test_merge_repository_config_inherits_unset_fields() -> None:
     assert merged.runner.default_agent == "claude"
 
 
+def test_runner_settings_escalation_ladder_defaults() -> None:
+    """Escalation-ladder settings default to fallback-off, safe values."""
+    settings = AgentRunnerRunnerSettings()
+    assert settings.agent_fallback_order == []
+    assert settings.max_agent_switches == 2
+    assert settings.transient_retry_attempts == 2
+    assert settings.transient_retry_delay_seconds == 10
+
+
+def test_merge_repository_config_overrides_agent_fallback_order() -> None:
+    """Repository-level fallback order overrides global runner config."""
+    global_config = AppConfig(runner=RunnerConfig())
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        runner=AgentRunnerRunnerSettings(agent_fallback_order=["claude", "codex"]),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert list(merged.runner.agent_fallback_order) == ["claude", "codex"]
+    # Unset escalation fields inherit defaults.
+    assert merged.runner.max_agent_switches == 2
+
+
 def test_merge_repository_config_overrides_labels() -> None:
     """Repository-level label overrides should map correctly to LabelConfig."""
     from backend.core.shared.models.agent_runner import LabelConfig

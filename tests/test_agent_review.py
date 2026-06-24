@@ -11,6 +11,7 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     IssueSummary,
     PrePrReviewConfig,
+    RunnerConfig,
 )
 from backend.core.use_cases.agent_review import (
     build_pre_pr_review_result_comment,
@@ -23,6 +24,8 @@ from backend.core.use_cases.agent_runner_events import (
     parse_latest_event_marker,
     parse_latest_pending_rework_marker,
 )
+from backend.core.use_cases.agent_runner_failure import ProviderCapacityError
+from backend.infrastructure.process_runner import CommandFailedError
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
 
@@ -1602,3 +1605,153 @@ def test_run_pre_pr_review_last_cycle_final_patch_is_accepted(
         "reviewer patched and runner committed follow-up changes"
         in (comment_calls[0]["body"])
     )
+
+
+# ---------------------------------------------------------------------------
+# Pre-PR review 错误韧性：瞬时重试（Level 1）与供应商容量升级（Level 2 触发）
+# ---------------------------------------------------------------------------
+
+
+def _socket_command_error(command: list[str]) -> CommandFailedError:
+    return CommandFailedError(
+        1,
+        command,
+        output=(
+            "[agent error] API Error: The socket connection was closed " "unexpectedly."
+        ),
+        stderr="",
+    )
+
+
+def test_run_pre_pr_review_retries_transient_reviewer_error(tmp_path: Path) -> None:
+    """A transient reviewer error is retried in place and then approves.
+
+    Regression guard for the Issue #15 failure mode: a single socket drop during
+    review must no longer fail the Issue.
+    """
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+
+    class _TransientThenApproveRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._reviewer_calls = 0
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                self._reviewer_calls += 1
+                if self._reviewer_calls == 1:
+                    raise _socket_command_error(list(command))
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout='{"verdict": "approved", "summary": "LGTM"}',
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _TransientThenApproveRunner()
+    config = AppConfig(
+        pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1),
+        runner=RunnerConfig(
+            transient_retry_attempts=2, transient_retry_delay_seconds=0
+        ),
+    )
+    worktree_path = tmp_path / "issue-1"
+    worktree_path.mkdir()
+
+    final_sha, _verification = run_pre_pr_review(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=fake_client,
+        process_runner=fake_runner,
+        selected_agent="codex",
+        head_sha_before="abc123",
+        expected_branch="issue-1",
+        verification_results=[],
+    )
+
+    assert final_sha == "abc123"
+    reviewer_calls = [c for c in fake_runner.calls if c[:1] == ["codex"]]
+    assert len(reviewer_calls) == 2  # one transient failure + one success
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert "Verdict: approved" in comment_calls[0]["body"]
+
+
+def test_run_pre_pr_review_escalates_provider_capacity(tmp_path: Path) -> None:
+    """A reviewer provider-capacity error escalates so the chain can switch."""
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+
+    class _CapacityRunner(FakeProcessRunner):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            capture_output=True,
+            label=None,
+        ):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                raise CommandFailedError(
+                    1,
+                    list(command),
+                    output="API Error: Request rejected (429) usage limit reached",
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _CapacityRunner()
+    config = AppConfig(
+        pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1),
+        runner=RunnerConfig(
+            transient_retry_attempts=2, transient_retry_delay_seconds=0
+        ),
+    )
+    worktree_path = tmp_path / "issue-1"
+    worktree_path.mkdir()
+
+    with pytest.raises(ProviderCapacityError):
+        run_pre_pr_review(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            github_client=fake_client,
+            process_runner=fake_runner,
+            selected_agent="codex",
+            head_sha_before="abc123",
+            expected_branch="issue-1",
+            verification_results=[],
+        )
+
+    # Capacity is not retried in place: exactly one reviewer invocation.
+    reviewer_calls = [c for c in fake_runner.calls if c[:1] == ["codex"]]
+    assert len(reviewer_calls) == 1
