@@ -1,6 +1,7 @@
 # PRD: iar 仓库标识到 GitHub owner/repo 的解析
 
-- GitHub Issue: TBD
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/116
+
 
 ## 1. Introduction & Goals
 
