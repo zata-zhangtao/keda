@@ -627,6 +627,105 @@ def test_process_watchdog_includes_context_label_in_logs() -> None:
     )
 
 
+def test_process_watchdog_kills_on_inactivity_timeout() -> None:
+    """Watchdog should kill a process that produces no output."""
+    from backend.infrastructure import process_runner
+
+    class _NeverStoppedEvent:
+        def wait(self, timeout: float) -> bool:  # noqa: ARG002
+            return False
+
+    mock_process = MagicMock()
+    mock_process.poll.return_value = None
+    watchdog = process_runner._ProcessWatchdog(
+        mock_process,
+        ["slow", "command"],
+        timeout=None,
+        inactivity_timeout_seconds=2,
+        heartbeat_seconds=10,
+        base_label="Command",
+    )
+    watchdog._started_at = 0
+    watchdog._last_output_at = 0
+    watchdog._stop_event = _NeverStoppedEvent()
+
+    with patch.object(process_runner.time, "monotonic", side_effect=[3.0, 3.0]):
+        watchdog._run()
+
+    mock_process.kill.assert_called_once_with()
+
+
+def test_process_watchdog_does_not_kill_on_inactivity_when_output_is_active() -> None:
+    """Watchdog should not kill a process that keeps producing output."""
+    from backend.infrastructure import process_runner
+
+    mock_process = MagicMock()
+    mock_process.poll.return_value = None
+    watchdog = process_runner._ProcessWatchdog(
+        mock_process,
+        ["slow", "command"],
+        timeout=None,
+        inactivity_timeout_seconds=2,
+        heartbeat_seconds=10,
+        base_label="Command",
+    )
+    watchdog._started_at = 0
+    watchdog._last_output_at = 0
+    stop_event = MagicMock()
+    stop_event.wait.side_effect = [False, True]
+    watchdog._stop_event = stop_event
+
+    with patch.object(process_runner.time, "monotonic", side_effect=[1.5, 1.5, 1.5]):
+        watchdog.note_output()
+        watchdog._run()
+
+    mock_process.kill.assert_not_called()
+
+
+def test_subprocess_runner_kills_silent_process_on_inactivity_timeout(
+    tmp_path: Path,
+) -> None:
+    """A silent process should be killed by inactivity timeout."""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    runner = SubprocessRunner()
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.run(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            cwd=tmp_path,
+            capture_output=True,
+            timeout=3600,
+            inactivity_timeout=1,
+        )
+
+
+def test_subprocess_runner_keeps_active_process_alive(
+    tmp_path: Path,
+) -> None:
+    """A process that keeps printing should not be killed by inactivity timeout."""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    runner = SubprocessRunner()
+    script = (
+        "import time\n"
+        "for _ in range(5):\n"
+        "    print('tick')\n"
+        "    time.sleep(0.1)\n"
+    )
+
+    result = runner.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=10,
+        inactivity_timeout=1,
+    )
+
+    assert result.return_code == 0
+    assert result.stdout.count("tick") == 5
+
+
 def test_subprocess_runner_replaces_invalid_utf8_in_captured_output(
     tmp_path: Path,
 ) -> None:

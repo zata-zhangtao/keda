@@ -34,6 +34,20 @@ def test_agent_runner_reads_root_config_toml() -> None:
     assert settings_module._find_config_toml() == repository_root / "config.toml"
     assert app_config.runner.default_agent == "claude"
     assert app_config.runner.recovery_retry_delay_seconds == 30
+    assert app_config.runner.timeout_seconds == 14400
+    assert app_config.runner.inactivity_timeout_seconds == 1200
+
+
+def test_runner_timeout_settings_match_core() -> None:
+    """AgentRunnerRunnerSettings timeout defaults must match RunnerConfig."""
+    from backend.core.shared.models.agent_runner import RunnerConfig
+    from backend.infrastructure.config.settings import AgentRunnerRunnerSettings
+
+    settings = AgentRunnerRunnerSettings()
+    core = RunnerConfig()
+
+    assert settings.timeout_seconds == core.timeout_seconds
+    assert settings.inactivity_timeout_seconds == core.inactivity_timeout_seconds
 
 
 def test_settings_and_core_agent_labels_are_identical() -> None:

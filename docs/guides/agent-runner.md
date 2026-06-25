@@ -335,10 +335,33 @@ max_agent_switches = 2
 # 瞬时网络错误（socket 断开 / 5xx / 超时）的就地重试次数与退避秒数
 transient_retry_attempts = 2
 transient_retry_delay_seconds = 10
+# 单次 agent 执行的 wall-clock 超时（秒）；超时会 kill 子进程并进入 recovery
+timeout_seconds = 14400
+# 无输出超时（秒）：agent 子进程在指定时间内没有 stdout/stderr 输出时被 kill
+inactivity_timeout_seconds = 1200
 # 提交前自动运行的验证命令；任一命令失败会进入 recovery
 verification_commands = [
     "git diff --check",
 ]
+
+### Agent 执行超时
+
+`[agent_runner.runner]` 提供两类超时，防止 agent 子进程永久挂起：
+
+| 配置项 | 默认值 | 作用 |
+|---|---|---|
+| `timeout_seconds` | `14400`（4 小时） | 单次 agent 执行的 wall-clock 上限。超过后 runner 会 kill 子进程，并将本次尝试记录为可恢复的 `AGENT_ERROR`，随后进入 recovery 流程。 |
+| `inactivity_timeout_seconds` | `1200`（20 分钟） | 无输出上限。只要 agent 子进程持续产生 stdout/stderr 数据，时钟就会重置；如果超过 20 分钟没有任何输出，runner 认为进程已卡死并 kill。 |
+
+两类超时独立生效，满足任意一个都会终止子进程。它们同时作用于首次实现和每次 recovery attempt。如果某个任务确实需要更长时间，可以在目标仓库的 `.iar.toml` 或全局 `config.toml` 中调大对应值；如果某类任务经常静默运行（例如大型编译），可适当提高 `inactivity_timeout_seconds`。
+
+超时后的日志示例：
+
+```text
+Claude stream (Issue #19: ...) timed out after 14400s; terminating: claude ...
+Claude stream (Issue #19: ...) inactive for 1200s; terminating: claude ...
+Agent command failed for Issue #19; asking agent to recover (1/5).
+```
 
 # 发布前安全边界：自动合并开关、禁止提交的路径模式
 [agent_runner.safety]

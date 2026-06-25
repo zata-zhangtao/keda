@@ -107,6 +107,7 @@ class IProcessRunner(ABC):
         cwd: Path,
         check: bool = True,
         timeout: int | None = None,
+        inactivity_timeout: int | None = None,
         capture_output: bool = True,
         input_text: str | None = None,
         label: str | None = None,
@@ -126,8 +127,12 @@ class IProcessRunner(ABC):
                 非零退出会触发错误向上抛出；为 ``False`` 时则把非零
                 退出码原样放入返回的 ``CommandResult``，交由调用方
                 自行判断。
-            timeout: 可选的超时时间（秒）。超过该时间后子进程会被
-                终止并视为失败；为 ``None`` 表示不设超时、一直等待。
+            timeout: 可选的 wall-clock 超时时间（秒）。超过该时间后
+                子进程会被终止并视为失败；为 ``None`` 表示不设超时、
+                一直等待。
+            inactivity_timeout: 可选的无输出超时时间（秒）。当子进程
+                在指定时间内没有 stdout/stderr 输出时被终止；为
+                ``None`` 表示不检测无输出超时。
             capture_output: 是否捕获 stdout/stderr。为 ``True`` 时输出
                 被收集到返回值中；为 ``False`` 时输出直接透传到当前
                 终端（用于需要实时可见的交互场景），此时返回的
@@ -144,7 +149,8 @@ class IProcessRunner(ABC):
 
         Raises:
             Exception: 当 ``check`` 为 ``True`` 且命令以非零码退出，
-                或在 ``timeout`` 内未完成时，向上抛出相应异常。
+                或在 ``timeout`` / ``inactivity_timeout`` 内未完成时，
+                向上抛出相应异常。
         """
         ...
 

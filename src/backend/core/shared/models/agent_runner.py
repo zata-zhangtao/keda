@@ -195,6 +195,9 @@ class RunnerConfig:
         transient_retry_attempts: In-place retries granted to transient
             network/transport errors (Level 1 of the escalation ladder).
         transient_retry_delay_seconds: Backoff between transient retries.
+        timeout_seconds: Wall-clock timeout for a single agent execution.
+        inactivity_timeout_seconds: Kill the agent if it produces no stdout or
+            stderr for this many seconds.
     """
 
     max_issues: int = 1
@@ -205,6 +208,8 @@ class RunnerConfig:
     max_agent_switches: int = 2
     transient_retry_attempts: int = 2
     transient_retry_delay_seconds: int = 10
+    timeout_seconds: int = 14400
+    inactivity_timeout_seconds: int = 1200
     verification_commands: tuple[str, ...] = (
         "git diff --check",
         "uv run mkdocs build",

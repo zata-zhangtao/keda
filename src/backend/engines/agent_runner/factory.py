@@ -236,6 +236,8 @@ def build_app_config_from_settings(
             max_agent_switches=runner_settings.max_agent_switches,
             transient_retry_attempts=runner_settings.transient_retry_attempts,
             transient_retry_delay_seconds=runner_settings.transient_retry_delay_seconds,
+            timeout_seconds=runner_settings.timeout_seconds,
+            inactivity_timeout_seconds=runner_settings.inactivity_timeout_seconds,
             verification_commands=tuple(runner_settings.verification_commands),
         ),
         safety=SafetyConfig(

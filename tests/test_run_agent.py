@@ -48,6 +48,7 @@ from backend.core.use_cases.run_agent_once import (
     publish_changes,
     resolve_agent_fallback_order,
     resolve_prd_archive_path,
+    run_agent_until_committed,
     run_agent_with_prompt,
     run_agent_with_prompt_resilient,
     validate_safe_changes,
@@ -157,33 +158,7 @@ def test_run_agent_with_prompt_can_capture_output(tmp_path: Path) -> None:
 
 def test_run_agent_with_prompt_passes_timeout(tmp_path: Path) -> None:
     """Prepared agent runs should pass timeout through to the process runner."""
-
-    class _RecordingTimeoutRunner(FakeProcessRunner):
-        def __init__(self) -> None:
-            super().__init__()
-            self.timeouts: list[int | None] = []
-
-        def run(
-            self,
-            command,
-            *,
-            cwd,
-            check=True,
-            timeout=None,
-            capture_output=True,
-            label=None,
-        ):
-            self.timeouts.append(timeout)
-            return super().run(
-                command,
-                cwd=cwd,
-                check=check,
-                timeout=timeout,
-                capture_output=capture_output,
-                label=label,
-            )
-
-    fake_runner = _RecordingTimeoutRunner()
+    fake_runner = FakeProcessRunner()
 
     run_agent_with_prompt(
         "codex",
@@ -192,9 +167,11 @@ def test_run_agent_with_prompt_passes_timeout(tmp_path: Path) -> None:
         fake_runner,
         capture_output=True,
         timeout_seconds=123,
+        inactivity_timeout_seconds=45,
     )
 
     assert fake_runner.timeouts == [123]
+    assert fake_runner.inactivity_timeouts == [45]
 
 
 def test_run_agent_with_prompt_logs_issue_context(
@@ -227,6 +204,62 @@ def test_run_agent_with_prompt_logs_issue_context(
         "Agent finished for Issue #23: https://github.com/zata-zhangtao/fsense/issues/23 (exit_code=0)"
         in caplog.text
     )
+
+
+def test_run_agent_until_committed_enters_recovery_after_timeout(
+    tmp_path: Path,
+) -> None:
+    """TimeoutExpired during agent execution should be caught and retried."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="https://github.com/example/repo/issues/1",
+        body="Body",
+        labels=(),
+    )
+
+    class _TimeoutRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            inactivity_timeout=None,
+            capture_output=True,
+            input_text=None,
+            label=None,
+        ):
+            self.attempts += 1
+            raise subprocess.TimeoutExpired(cmd=list(command), timeout=timeout)
+
+    fake_runner = _TimeoutRunner()
+    config = AppConfig(
+        runner=RunnerConfig(
+            max_recovery_attempts=1,
+            timeout_seconds=5,
+            inactivity_timeout_seconds=1,
+            recovery_retry_delay_seconds=0,
+        )
+    )
+
+    with pytest.raises(MaxRetriesExceededError):
+        run_agent_until_committed(
+            selected_agent="claude",
+            issue=issue,
+            worktree_path=tmp_path,
+            config=config,
+            process_runner=fake_runner,
+            before_sha="abc123",
+            expected_branch="issue-1",
+        )
+
+    assert fake_runner.attempts == 2
 
 
 def test_extract_agent_response_text_from_claude_stream_json() -> None:
@@ -1259,6 +1292,7 @@ def test_run_once_uncommitted_changes_runner_commits(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -1396,6 +1430,7 @@ def test_run_once_recovers_after_staged_verification_failure(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -1508,6 +1543,7 @@ def test_run_once_recovers_after_agent_command_failure(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -1947,6 +1983,7 @@ class _PrecommitCommitRunner(FakeProcessRunner):
         cwd,
         check=True,
         timeout=None,
+        inactivity_timeout=None,
         capture_output=True,
         input_text=None,
         label=None,
@@ -2145,6 +2182,7 @@ def test_run_once_success(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -2266,6 +2304,7 @@ def test_run_once_failure_removes_supervising_label(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -2494,6 +2533,7 @@ def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -2610,6 +2650,7 @@ def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3127,6 +3168,7 @@ def test_recovery_loop_success_on_second_attempt(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3212,6 +3254,7 @@ def test_recovery_loop_exhausted_raises_max_retries(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3282,6 +3325,7 @@ def test_run_once_reuses_existing_clean_local_commit(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3623,6 +3667,7 @@ def test_run_once_recovers_running_issue_with_existing_local_commit(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3696,6 +3741,7 @@ def test_attempt_history_in_issue_comment(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -4069,6 +4115,7 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -4204,6 +4251,7 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -4375,6 +4423,7 @@ def test_run_once_rebase_conflict_detached_head(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -5794,6 +5843,7 @@ def test_worktree_reconcile_run_once(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             input_text=None,
             label=None,
@@ -6436,6 +6486,7 @@ def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> 
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             input_text=None,
             label=None,

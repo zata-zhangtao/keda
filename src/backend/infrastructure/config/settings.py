@@ -410,6 +410,8 @@ class AgentRunnerRunnerSettings(BaseModel):
     # In-place retries for transient network/transport errors (Level 1).
     transient_retry_attempts: int = 2
     transient_retry_delay_seconds: int = 10
+    timeout_seconds: int = 14400
+    inactivity_timeout_seconds: int = 1200
     verification_commands: list[str] = Field(
         default_factory=lambda: [
             "git diff --check",

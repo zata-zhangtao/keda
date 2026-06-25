@@ -431,6 +431,9 @@ def run_agent(
     worktree_path: Path,
     config: AppConfig,
     process_runner: IProcessRunner,
+    *,
+    timeout_seconds: int | None = None,
+    inactivity_timeout_seconds: int | None = None,
 ) -> CommandResult:
     """Run Codex or Claude Code in non-interactive mode."""
     prompt = build_prompt(
@@ -448,6 +451,8 @@ def run_agent(
         issue=issue,
         transient_retry_attempts=config.runner.transient_retry_attempts,
         transient_retry_delay_seconds=config.runner.transient_retry_delay_seconds,
+        timeout_seconds=timeout_seconds,
+        inactivity_timeout_seconds=inactivity_timeout_seconds,
     )
 
 
@@ -459,6 +464,7 @@ def run_agent_with_prompt(
     *,
     capture_output: bool = False,
     timeout_seconds: int | None = None,
+    inactivity_timeout_seconds: int | None = None,
     issue: IssueSummary | None = None,
 ) -> CommandResult:
     """Run Codex or Claude Code with a prepared prompt."""
@@ -474,13 +480,16 @@ def run_agent_with_prompt(
     else:
         command = _build_codex_command(prompt, worktree_path)
     label = f"Issue #{issue.number}: {issue.url}" if issue is not None else None
-    result = process_runner.run(
-        command,
-        cwd=worktree_path,
-        capture_output=capture_output,
-        timeout=timeout_seconds,
-        label=label,
-    )
+    run_kwargs: dict[str, object] = {
+        "command": command,
+        "cwd": worktree_path,
+        "capture_output": capture_output,
+        "timeout": timeout_seconds,
+        "label": label,
+    }
+    if inactivity_timeout_seconds is not None:
+        run_kwargs["inactivity_timeout"] = inactivity_timeout_seconds
+    result = process_runner.run(**run_kwargs)
     if issue is not None:
         _logger.info(
             "Agent finished for Issue #%d: %s (exit_code=%d)",
@@ -499,6 +508,7 @@ def run_agent_with_prompt_resilient(
     *,
     capture_output: bool = False,
     timeout_seconds: int | None = None,
+    inactivity_timeout_seconds: int | None = None,
     issue: IssueSummary | None = None,
     transient_retry_attempts: int = 2,
     transient_retry_delay_seconds: int = 10,
@@ -519,6 +529,7 @@ def run_agent_with_prompt_resilient(
         process_runner: Command executor.
         capture_output: Whether to capture stdout/stderr.
         timeout_seconds: Optional per-invocation timeout.
+        inactivity_timeout_seconds: Optional no-output timeout.
         issue: Optional Issue for logging context.
         transient_retry_attempts: Extra retries granted to transient failures.
         transient_retry_delay_seconds: Backoff between transient retries.
@@ -542,6 +553,7 @@ def run_agent_with_prompt_resilient(
                 process_runner,
                 capture_output=capture_output,
                 timeout_seconds=timeout_seconds,
+                inactivity_timeout_seconds=inactivity_timeout_seconds,
                 issue=issue,
             )
         except FileNotFoundError as exc:
@@ -742,10 +754,18 @@ def run_agent_until_committed(
                         transient_retry_delay_seconds=(
                             config.runner.transient_retry_delay_seconds
                         ),
+                        timeout_seconds=config.runner.timeout_seconds,
+                        inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                     )
                 else:
                     run_agent(
-                        selected_agent, issue, worktree_path, config, process_runner
+                        selected_agent,
+                        issue,
+                        worktree_path,
+                        config,
+                        process_runner,
+                        timeout_seconds=config.runner.timeout_seconds,
+                        inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                     )
             else:
                 recovery_prompt = build_recovery_prompt(
@@ -765,12 +785,19 @@ def run_agent_until_committed(
                     transient_retry_delay_seconds=(
                         config.runner.transient_retry_delay_seconds
                     ),
+                    timeout_seconds=config.runner.timeout_seconds,
+                    inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                 )
         except AgentUnavailableError:
             # The agent CLI could not be launched; let the cross-agent fallback
             # skip to the next candidate instead of burning recovery attempts.
             raise
-        except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+        except (
+            RuntimeError,
+            OSError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             failure_type = classify_failure(
                 before_sha=before_sha,
                 after_sha=before_sha,

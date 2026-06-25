@@ -275,6 +275,8 @@ class FakeProcessRunner(IProcessRunner):
         self.calls: list[list[str]] = []
         self.input_texts: list[str | None] = []
         self.labels: list[str | None] = []
+        self.timeouts: list[int | None] = []
+        self.inactivity_timeouts: list[int | None] = []
 
     def run(
         self,
@@ -283,6 +285,7 @@ class FakeProcessRunner(IProcessRunner):
         cwd: Path,
         check: bool = True,
         timeout: int | None = None,
+        inactivity_timeout: int | None = None,
         capture_output: bool = True,
         input_text: str | None = None,
         label: str | None = None,
@@ -290,6 +293,8 @@ class FakeProcessRunner(IProcessRunner):
         self.calls.append(list(command))
         self.input_texts.append(input_text)
         self.labels.append(label)
+        self.timeouts.append(timeout)
+        self.inactivity_timeouts.append(inactivity_timeout)
         key = tuple(command)
         if key in self.responses:
             result = self.responses[key]
