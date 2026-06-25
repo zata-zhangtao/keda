@@ -36,7 +36,38 @@
 
 ---
 
-## 2. Requirement Shape
+## 2. Usage And Impact After Implementation
+
+写 PRD 时即填写，描述实现后的目标态用户视角，作为构建目标和回头验证的脚本；不是事后日志。用户可见或有可执行行为（API/CLI/UI/job/启动/迁移）时必填；纯内部改动只写最后一行的兜底说明。保持各角色走查具体，但不要照抄 Goals / FR / Non-Goals。
+
+### [终端用户 / End User]
+- [Which page/route and entry point, which fields, and the resulting identifier or output format, e.g. `provider/model_id`]
+
+### [管理员 / Admin]
+- [What the admin manages and where; any operational attributes set here]
+
+### [开发者 / Developer]
+- [Which existing entry point developers keep using; which DTO/contract to follow when extending]
+
+### Entry Commands / API Examples
+
+```bash
+# [Create / verify / sync / ...] through the new or changed entry point
+curl -X POST /api/[resource] \
+  -H "Content-Type: application/json" \
+  -d '{ "field": "value" }'
+```
+
+### Impact On Existing Behavior
+- [What stays unchanged for existing users/data/config]
+- [Any new optional config/env and its default-off behavior; existing paths must keep working]
+
+If the change is purely internal:
+- `No user-facing usage change; internal-only change.`
+
+---
+
+## 3. Requirement Shape
 
 - Actor: [Who needs this behavior]
 - Trigger: [When the behavior happens]
@@ -45,7 +76,7 @@
 
 ---
 
-## 3. Repository Context And Architecture Fit
+## 4. Repository Context And Architecture Fit
 
 - Existing path: [Closest current module or code path]
 - Reuse candidates: [Files/modules to extend directly]
@@ -57,7 +88,7 @@
 
 ---
 
-## 4. Recommendation
+## 5. Recommendation
 
 ### Recommended Approach
 - Approach: [Extend the best existing path or justify the smallest necessary new piece]
@@ -70,14 +101,14 @@
 
 ---
 
-## 5. Implementation Guide
+## 6. Implementation Guide
 
 This section is a living implementation guide based on current repository analysis. If implementation discovers additional affected files, hidden dependencies, edge cases, or a better path, update this PRD before proceeding.
 
-### 5.1 Core Logic
+### 6.1 Core Logic
 - [How data and control move through the existing system]
 
-### 5.2 Change Impact Tree
+### 6.2 Change Impact Tree
 
 ```text
 .
@@ -100,7 +131,7 @@ This section is a living implementation guide based on current repository analys
         └── [状态或交互改动]
 ```
 
-### 5.3 Executor Drift Guard
+### 6.3 Executor Drift Guard
 
 The file list above is the expected implementation surface from current repository analysis. During implementation, treat it as a starting point and use these repository searches to catch hidden references or drift before marking the PRD complete.
 
@@ -110,7 +141,7 @@ The file list above is the expected implementation surface from current reposito
 | [Target reference search] | `rg -n "[new-symbol-or-path]" [scope]` | [Expected target references exist in the owning files] | [Composition root, entry command, generated config, or docs index] |
 | [Hidden entry point search] | `rg -n "[command|env|artifact|route-pattern]" [scope]` | [No unreviewed entry points bypass the new target state] | [CI, scripts, Docker, deployment, README, IDE config] |
 
-### 5.4 Flow Or Architecture Diagram
+### 6.4 Flow Or Architecture Diagram
 
 ```mermaid
 flowchart TD
@@ -120,7 +151,7 @@ flowchart TD
     VALIDATE --> OUTPUT[Deliver]
 ```
 
-### 5.5 Low-Fidelity Prototype (Only When Required)
+### 6.5 Low-Fidelity Prototype (Only When Required)
 
 ```text
 +--------------------------------------------------+
@@ -135,7 +166,7 @@ flowchart TD
 If not required:
 - No low-fidelity prototype required for this PRD.
 
-### 5.6 ER Diagram (Only When Data Model Changes)
+### 6.6 ER Diagram (Only When Data Model Changes)
 
 ```mermaid
 erDiagram
@@ -153,7 +184,7 @@ erDiagram
 If not required:
 - No data model changes in this PRD.
 
-### 5.7 Realistic Validation Plan
+### 6.7 Realistic Validation Plan
 
 | Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
 |---|---|---|---|---|---|---|
@@ -166,7 +197,7 @@ Failure triage:
 If the change has no executable behavior:
 - No executable behavior changes; realistic validation is limited to documentation/build checks.
 
-### 5.8 Interactive Prototype Change Log (Only When Files Actually Changed)
+### 6.8 Interactive Prototype Change Log (Only When Files Actually Changed)
 
 | File Path | Change Type | Before | After | Why |
 |---|---|---|---|---|
@@ -175,7 +206,7 @@ If the change has no executable behavior:
 If no prototype changes:
 - No interactive prototype file changes in this PRD.
 
-### 5.9 External Validation (Only When Web Research Was Used)
+### 6.9 External Validation (Only When Web Research Was Used)
 
 | Topic | Source | Checked On | Relevant Finding | Impact On Recommendation |
 |---|---|---|---|---|
@@ -183,16 +214,6 @@ If no prototype changes:
 
 If no external validation was needed:
 - No external validation required; repository evidence was sufficient.
-
----
-
-## 6. Definition Of Done
-
-- [ ] Recommended approach is fully implemented without introducing unapproved parallel abstractions
-- [ ] All Acceptance Checklist items are satisfied
-- [ ] Relevant tests and validation commands pass
-- [ ] Documentation and operational notes are updated where needed
-- [ ] No open regression or rollout blocker remains
 
 ---
 
@@ -234,6 +255,11 @@ This checklist must validate the final target state, not only an interim first p
 - [ ] For user-visible changes: the repo's e2e/UI test command or a manual app run confirms the flow end-to-end
 - [ ] `[rg search command]` confirms no legacy entry point, duplicate path, or compatibility shim remains
 - [ ] `[rg search command]` confirms expected target references exist in the owning files
+
+### Delivery Readiness
+
+- [ ] Recommended approach fully implemented; no unapproved parallel abstraction introduced
+- [ ] No open regression or rollout blocker remains
 
 ---
 
