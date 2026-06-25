@@ -30,6 +30,10 @@ _STRUCTURED_EVIDENCE_MARKER_PATTERN = re.compile(
     r'language="(?P<language>[^"]+)"\s*-->'
 )
 _EVIDENCE_ITEM_FILE_PATTERN = re.compile(r"^rv-(?P<item>\d+)[-.]", re.IGNORECASE)
+_EVIDENCE_ITEM_SECTION_PATTERN = re.compile(
+    r"\[\s*Item\s+(?P<item>\d+)(?P<sub>[a-z]?)\s*\]",
+    re.IGNORECASE,
+)
 _PR_URL_PATTERN = re.compile(
     r"https?://[^/]+/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)"
 )
@@ -356,10 +360,68 @@ def _validate_evidence_file(
             f"in the manifest but does not exist in `{config.validation.evidence_dir}/`."
         )
 
-    return EvidenceFileInfo(
+    file_info = EvidenceFileInfo(
         file_name=file_name,
         sha256=_compute_file_sha256(file_path),
     )
+    _validate_evidence_file_content(
+        file_path=file_path,
+        expected_item_number=expected_item_number,
+        file_name=file_name,
+    )
+    return file_info
+
+
+def _validate_evidence_file_content(
+    file_path: Path,
+    expected_item_number: int,
+    file_name: str,
+) -> None:
+    """Detect cross-contamination between evidence files.
+
+    An evidence file must only contain section headers belonging to its own
+    checklist item. If a file named ``rv-1-*.txt`` also contains a section
+    header such as ``[Item 2]`` or ``[Item 2c]``, the agent most likely
+    leaked output from another item into this file (for example by using
+    shell-wide ``exec`` redirection).
+    """
+
+    try:
+        file_text = file_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+
+    found_items: set[int] = set()
+    for section_match in _EVIDENCE_ITEM_SECTION_PATTERN.finditer(file_text):
+        found_items.add(int(section_match.group("item")))
+
+    if expected_item_number not in found_items:
+        # The file does not even contain its own item marker. This can be
+        # legitimate for very short captures, so only flag when another
+        # item's marker is present.
+        if found_items:
+            other_items = sorted(found_items)
+            raise ValidationEvidenceError(
+                f"Item {expected_item_number}: evidence file `{file_name}` "
+                f"contains section header(s) for item(s) {other_items}, "
+                "but no header for its own item. Each evidence file must "
+                "contain only the output of its own Realistic Validation item."
+            )
+        return
+
+    foreign_items = sorted(
+        item_number
+        for item_number in found_items
+        if item_number != expected_item_number
+    )
+    if foreign_items:
+        raise ValidationEvidenceError(
+            f"Item {expected_item_number}: evidence file `{file_name}` "
+            f"contains section header(s) for foreign item(s) {foreign_items}. "
+            "Each evidence file must contain only the output of its own "
+            "Realistic Validation item. Avoid shell-wide stdout redirection "
+            "(e.g. `exec > >(tee ...)`) that leaks output across files."
+        )
 
 
 def validate_evidence_manifest(
@@ -588,6 +650,8 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
             "`explanation`（为什么该证据能证明检查点成立）、`risks`（潜在风险或不适用说明）。"
             'manifest 顶层必须声明 `version: 1` 和 `language: "{language}"`。'
             "所有证据文件必须命名为 `rv-<item_number>-<slug>.<ext>` 并放在 `{evidence_dir}/` 下。"
+            "重要：每个证据文件必须只包含对应 item 的输出，禁止混入其他 item 的内容；"
+            "不要用 `exec > >(tee -a ...)` 这类全局 stdout 重定向，它会让多个 item 的输出串到同一个文件里。"
         ).format(language=language, evidence_dir="{evidence_dir}")
     return (
         "Additionally, you must write a structured evidence manifest to "
@@ -597,5 +661,8 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
         "the checkpoint), and `risks` (potential risks or not-applicable notes). "
         'The manifest top level must declare `version: 1` and `language: "{language}"`. '
         "All evidence files must be named `rv-<item_number>-<slug>.<ext>` and placed "
-        "under `{evidence_dir}/`."
+        "under `{evidence_dir}/`. "
+        "Important: each evidence file must contain ONLY the output of its own item; "
+        "never mix output from multiple items into one file. Avoid shell-wide stdout "
+        "redirection such as `exec > >(tee -a ...)` which leaks output across files."
     ).format(language=language, evidence_dir="{evidence_dir}")

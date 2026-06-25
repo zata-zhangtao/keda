@@ -123,6 +123,19 @@ def test_build_structured_evidence_prompt_suffix_contains_schema() -> None:
     assert ".iar/evidence/evidence.json" in formatted
 
 
+def test_build_structured_evidence_prompt_suffix_warns_against_exec_redirection() -> (
+    None
+):
+    """The prompt explicitly discourages shell exec redirection that leaks output."""
+    zh_suffix = build_structured_evidence_prompt_suffix("zh-CN")
+    en_suffix = build_structured_evidence_prompt_suffix("en-US")
+
+    assert "exec >" in zh_suffix
+    assert "tee" in zh_suffix
+    assert "exec >" in en_suffix
+    assert "tee" in en_suffix
+
+
 def test_ensure_validation_evidence_ready_passes_with_complete_manifest(
     tmp_path: Path,
 ) -> None:
@@ -181,6 +194,48 @@ def test_ensure_validation_evidence_ready_rejects_file_number_mismatch(
     error_text = str(exc_info.value)
     assert "rv-2-serve.txt" in error_text
     assert "item 1" in error_text.lower()
+
+
+def test_ensure_validation_evidence_ready_rejects_foreign_item_headers(
+    tmp_path: Path,
+) -> None:
+    """An evidence file must not contain section headers from other items."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_evidence_files(evidence_dir)
+    _write_manifest(evidence_dir)
+    # rv-1-run.txt contains its own header plus a foreign [Item 2] header.
+    (evidence_dir / "rv-1-run.txt").write_text(
+        "[Item 1] run\nok\n[Item 2] leaked section\n",
+        encoding="utf-8",
+    )
+    body = _ISSUE_BODY + "\n" + format_structured_evidence_marker("zh-CN")
+
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_evidence_ready(_issue(body=body), tmp_path, AppConfig())
+    error_text = str(exc_info.value)
+    assert "rv-1-run.txt" in error_text
+    assert "foreign item(s) [2]" in error_text
+
+
+def test_ensure_validation_evidence_ready_rejects_file_with_only_foreign_headers(
+    tmp_path: Path,
+) -> None:
+    """An evidence file containing only foreign headers is cross-contaminated."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_evidence_files(evidence_dir)
+    _write_manifest(evidence_dir)
+    # rv-1-run.txt is supposed to hold item 1 but only has an [Item 2] header.
+    (evidence_dir / "rv-1-run.txt").write_text(
+        "[Item 2] this whole file came from item 2\n",
+        encoding="utf-8",
+    )
+    body = _ISSUE_BODY + "\n" + format_structured_evidence_marker("zh-CN")
+
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_evidence_ready(_issue(body=body), tmp_path, AppConfig())
+    error_text = str(exc_info.value)
+    assert "rv-1-run.txt" in error_text
+    assert "item(s) [2]" in error_text
 
 
 def test_load_evidence_manifest_requires_version_one(tmp_path: Path) -> None:
