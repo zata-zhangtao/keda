@@ -433,16 +433,17 @@ def test_relay_process_stdout_output_sink_preserves_line_boundaries() -> None:
     assert streamed_output_chunks == ["first\n", "second\n"]
 
 
-def test_subprocess_runner_non_claude_path_uses_pipe(tmp_path: Path) -> None:
-    """SubprocessRunner.run() should use PIPE for non-Claude path."""
+def test_subprocess_runner_non_claude_path_streams_via_pty(tmp_path: Path) -> None:
+    """Non-Claude streaming runs under a PTY: output is collected and logged.
+
+    The PTY makes the child line-buffer (a pipe would block-buffer and hide
+    progress), so a real subprocess is used here rather than mocking Popen.
+    """
+    import sys
+
     from backend.infrastructure.process_runner import SubprocessRunner
 
     runner = SubprocessRunner()
-
-    mock_process = MagicMock()
-    mock_process.stdout = iter(["output line 1\n", "output line 2\n"])
-    mock_process.stderr = iter([])
-    mock_process.wait.return_value = 0
 
     log_records: list[logging.LogRecord] = []
     handler = logging.Handler()
@@ -454,24 +455,40 @@ def test_subprocess_runner_non_claude_path_uses_pipe(tmp_path: Path) -> None:
     logger.setLevel(logging.INFO)
 
     try:
-        with patch("subprocess.Popen", return_value=mock_process):
-            result = runner.run(
-                ["codex", "exec", "test"],
-                cwd=tmp_path,
-                capture_output=False,
-                check=False,
-            )
+        result = runner.run(
+            [sys.executable, "-c", "print('output line 1'); print('output line 2')"],
+            cwd=tmp_path,
+            capture_output=False,
+            check=False,
+        )
 
-        # Check that output was captured via PIPE
+        # Output is collected from the PTY master.
         assert "output line 1" in result.stdout
         assert "output line 2" in result.stdout
 
-        # Check that output was logged
+        # And mirrored to the logger (line-buffered) when there is no sink.
         logged_messages = [r.getMessage() for r in log_records]
         assert any("output line 1" in msg for msg in logged_messages)
     finally:
         logger.removeHandler(handler)
         logger.setLevel(original_level)
+
+
+def test_subprocess_runner_pty_routes_output_to_sink(tmp_path: Path) -> None:
+    """When a sink is provided, PTY chunks go to the sink (for per-Issue panels)."""
+    import sys
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    chunks: list[str] = []
+    SubprocessRunner().run(
+        [sys.executable, "-c", "print('via-sink')"],
+        cwd=tmp_path,
+        capture_output=False,
+        check=False,
+        output_sink=chunks.append,
+    )
+    assert any("via-sink" in chunk for chunk in chunks)
 
 
 def test_subprocess_runner_claude_capture_uses_filtered_stream(

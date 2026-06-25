@@ -366,6 +366,14 @@ Claude stream (Issue #19: ...) inactive for 1200s; terminating: claude ...
 Agent command failed for Issue #19; asking agent to recover (1/5).
 ```
 
+### 非 claude agent 的实时输出（PTY）
+
+`claude` 用 `--output-format stream-json` 显式吐增量事件，所以一直能实时看到进度。`kimi` / `codex` 没有这种流式协议，而且很多 CLI 在发现 stdout 是管道（非终端）时会把输出从行缓冲切成**块缓冲**——结果就是运行中只看到几个点、最后才一次性打印，期间只有 watchdog 的 `still running after Ns` 心跳。
+
+为此 runner 在跑**非 claude** agent 时改用**伪终端（PTY）**：让子进程以为 stdout 是终端，从而恢复行缓冲、实时吐出进度。stdout/stderr 合并到同一 PTY（顺序自然、无双管道死锁），随后接入与 claude 相同的输出通道——并行时进入每个 Issue 各自的面板与日志文件（见下文「并行处理 Issue」）。`still running after Ns` 仍是正常的存活心跳，不是报错。
+
+> PTY 只能让**会输出但被缓冲**的 agent 实时可见；如果某 agent 本就几乎不打印进度，PTY 也变不出内容。
+
 # 发布前安全边界：自动合并开关、禁止提交的路径模式
 [agent_runner.safety]
 # 是否允许自动合并 PR（强烈建议保持 false）

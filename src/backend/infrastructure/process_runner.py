@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import codecs
 import json
+import os
+import select
 import subprocess
 import sys
 import threading
@@ -13,6 +16,15 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from backend.infrastructure.logging.logger import logger
+
+try:
+    import pty
+except ImportError:  # pragma: no cover - pty is POSIX-only (absent on Windows).
+    pty = None  # type: ignore[assignment]
+
+# Streaming agents (kimi / codex) block-buffer stdout when it is a pipe, hiding
+# their progress until exit. A pseudo-terminal makes them line-buffer again.
+_PTY_AVAILABLE = pty is not None and hasattr(pty, "openpty")
 
 _MAX_BUFFER_SIZE = 4096
 _MAX_ERROR_DETAIL_LEN = 4096
@@ -174,6 +186,19 @@ class SubprocessRunner:
                 encoding="utf-8",
                 errors="replace",
                 timeout=timeout,
+            )
+            stdout = completed.stdout
+            stderr = completed.stderr
+        elif _PTY_AVAILABLE:
+            # Stream a non-Claude command (kimi / codex) under a PTY so it
+            # line-buffers and shows live progress instead of going silent.
+            completed = _run_pty_stream(
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                inactivity_timeout=inactivity_timeout,
+                label=label,
+                output_sink=output_sink,
             )
             stdout = completed.stdout
             stderr = completed.stderr
@@ -664,6 +689,134 @@ def run_filtered_claude_stream(
         args=list(command),
         returncode=return_code,
         stdout="".join(stdout_lines),
+        stderr="",
+    )
+
+
+def _run_pty_stream(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    timeout: int | None,
+    inactivity_timeout: int | None,
+    label: str | None,
+    output_sink: Callable[[str], None] | None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a streaming command under a pseudo-terminal so it line-buffers.
+
+    Agents such as ``kimi`` / ``codex`` switch stdout to block buffering when it
+    is a pipe, so their progress stays invisible until they exit. Allocating a
+    PTY makes them believe stdout is a terminal, restoring live incremental
+    output. stdout and stderr are merged onto the PTY (natural ordering, no
+    second-pipe deadlock). Rendered chunks go to ``output_sink`` when provided,
+    otherwise to this process's stdout with line-buffered logging — mirroring
+    :func:`run_filtered_claude_stream`.
+
+    Args:
+        command: Command and arguments to execute.
+        cwd: Working directory for the subprocess.
+        timeout: Optional wall-clock timeout in seconds.
+        inactivity_timeout: Optional no-output timeout in seconds.
+        label: Optional label for heartbeat/timeout logs.
+        output_sink: Optional callback for rendered text chunks.
+
+    Returns:
+        CompletedProcess with the collected stdout (stderr merged into it).
+    """
+    master_fd, slave_fd = pty.openpty()
+    try:
+        process = subprocess.Popen(
+            list(command),
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+        )
+    finally:
+        os.close(slave_fd)
+    watchdog = _ProcessWatchdog(
+        process,
+        command,
+        timeout=timeout,
+        inactivity_timeout_seconds=inactivity_timeout,
+        heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
+        base_label="Command",
+        context_label=label,
+    )
+    watchdog.start()
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    stream_formatter = _TimestampedStreamFormatter()
+    collected: list[str] = []
+    line_buffer: list[str] = []
+
+    def _flush_log_lines(*, final: bool = False) -> None:
+        joined = "".join(line_buffer)
+        line_buffer.clear()
+        if not joined:
+            return
+        segments = joined.split("\n")
+        remainder = segments.pop()
+        for segment in segments:
+            stripped = segment.rstrip("\r").strip()
+            if stripped:
+                logger.info("Agent output: %s", stripped)
+        if final:
+            stripped_remainder = remainder.rstrip("\r").strip()
+            if stripped_remainder:
+                logger.info("Agent output: %s", stripped_remainder)
+        elif remainder:
+            line_buffer.append(remainder)
+
+    def _emit(text: str) -> None:
+        if not text:
+            return
+        collected.append(text)
+        if output_sink is not None:
+            output_sink(text)
+            return
+        print(stream_formatter.format_chunk(text), end="", flush=True)
+        line_buffer.append(text)
+        if "\n" in text:
+            _flush_log_lines()
+
+    try:
+        while True:
+            try:
+                ready, _, _ = select.select([master_fd], [], [], 1.0)
+            except (OSError, ValueError):
+                break
+            if not ready:
+                if process.poll() is not None:
+                    break
+                continue
+            try:
+                data = os.read(master_fd, 4096)
+            except OSError:
+                break  # EIO once the child closes the slave end == EOF.
+            if not data:
+                break
+            watchdog.note_output()
+            _emit(decoder.decode(data))
+        _emit(decoder.decode(b"", final=True))
+        if output_sink is None:
+            _flush_log_lines(final=True)
+        return_code = process.wait(timeout=timeout)
+        watchdog.raise_if_timed_out()
+    except Exception:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        watchdog.stop()
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+    return subprocess.CompletedProcess(
+        args=list(command),
+        returncode=return_code,
+        stdout="".join(collected),
         stderr="",
     )
 
