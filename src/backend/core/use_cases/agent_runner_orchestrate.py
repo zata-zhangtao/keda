@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import logging
 import socket
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
 from functools import partial
@@ -31,6 +33,10 @@ from backend.core.shared.interfaces.agent_runner import (
     IProcessRunner,
 )
 from backend.core.shared.interfaces.runner_console import IRunHistoryStore
+from backend.core.shared.interfaces.runner_live_view import (
+    IRunnerLiveView,
+    NoOpRunnerLiveView,
+)
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     AttemptResult,
@@ -67,6 +73,10 @@ from backend.core.use_cases.agent_runner_publication import (
     _reuse_existing_local_commit,
 )
 from backend.core.use_cases.agent_runner_rework import build_missing_worktree_comment
+from backend.core.use_cases.agent_runner_output_routing import (
+    _OutputRoutedProcessRunner,
+    issue_output_routing,
+)
 from backend.core.use_cases.agent_runner_run_history import append_run_record
 from backend.core.use_cases.agent_runner_supervisor import (
     _run_supervisor_with_repair_loop,
@@ -881,6 +891,192 @@ def run_issue_with_agent_fallback(
     raise last_switch_exc
 
 
+_RUN_HISTORY_LOCK = threading.Lock()
+
+
+def _append_run_record_locked(**kwargs: object) -> None:
+    """Thread-safe ``append_run_record`` for the parallel processing path.
+
+    Run-history storage (e.g. SQLite) is not safe for concurrent writers, so
+    serialize appends. Uncontended in the default sequential path.
+    """
+    with _RUN_HISTORY_LOCK:
+        append_run_record(**kwargs)
+
+
+def _process_single_issue(
+    issue: IssueSummary,
+    issue_kind: str,
+    *,
+    repo_path: Path,
+    config: AppConfig,
+    agent: str,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    content_generator: IContentGenerator | None,
+    run_history_store: IRunHistoryStore | None,
+    run_trigger: str,
+    effective_repo_id: str,
+    output_view: IRunnerLiveView,
+) -> int:
+    """Process one discovered Issue end-to-end.
+
+    Extracted from :func:`run_once` so it can run either sequentially or inside
+    a thread pool. All failures are caught and recorded here; the function never
+    raises, so the caller treats the return value as this Issue's exit-code
+    contribution.
+
+    Returns:
+        ``0`` on success or skip, ``1`` on a recorded failure/block.
+    """
+    selected_agent = choose_agent(issue, config, agent)
+    output_view.register_issue(issue.number, selected_agent)
+    run_started_at = datetime.now(timezone.utc)
+    used_agent = selected_agent
+    try:
+        if issue_kind == "ready":
+            used_agent = run_issue_with_agent_fallback(
+                issue=issue,
+                config=config,
+                agent=agent,
+                process_for_agent=partial(
+                    _process_ready_issue,
+                    issue=issue,
+                    repo_path=repo_path,
+                    config=config,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                    content_generator=content_generator,
+                ),
+            )
+        elif issue_kind == "running_rework":
+            _, marker = _guard_running_issue_is_rework(issue, config, github_client)
+            if marker is None:
+                output_view.update_status(issue.number, "skipped")
+                return 0
+            used_agent = run_issue_with_agent_fallback(
+                issue=issue,
+                config=config,
+                agent=agent,
+                process_for_agent=partial(
+                    _process_running_rework,
+                    issue=issue,
+                    repo_path=repo_path,
+                    config=config,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                    marker=marker,
+                ),
+            )
+        elif issue_kind == "blocked_resolution":
+            marker = _guard_blocked_issue_has_resolution(issue, github_client)
+            if marker is None:
+                output_view.update_status(issue.number, "skipped")
+                return 0
+            claimed = claim_blocked_issue(github_client, issue.number, config)
+            if not claimed:
+                _logger.info(
+                    "Issue #%d already claimed by another runner, skipping.",
+                    issue.number,
+                )
+                output_view.update_status(issue.number, "skipped")
+                return 0
+            used_agent = run_issue_with_agent_fallback(
+                issue=issue,
+                config=config,
+                agent=agent,
+                process_for_agent=partial(
+                    _process_blocked_resolution,
+                    issue=issue,
+                    repo_path=repo_path,
+                    config=config,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                    content_generator=content_generator,
+                    marker=marker,
+                ),
+            )
+        else:
+            used_agent = run_issue_with_agent_fallback(
+                issue=issue,
+                config=config,
+                agent=agent,
+                process_for_agent=partial(
+                    _process_running_publish_recovery,
+                    issue=issue,
+                    repo_path=repo_path,
+                    config=config,
+                    github_client=github_client,
+                    process_runner=process_runner,
+                    content_generator=content_generator,
+                ),
+            )
+        _logger.info("Completed Issue #%d: %s", issue.number, issue.title)
+        output_view.update_status(issue.number, "completed")
+        _append_run_record_locked(
+            run_history_store=run_history_store,
+            repo_id=effective_repo_id,
+            repo_path=repo_path,
+            issue=issue,
+            trigger=run_trigger,
+            agent=used_agent,
+            outcome="completed",
+            error_summary=None,
+            started_at=run_started_at,
+        )
+        return 0
+    except ForbiddenBlockedError as exc:
+        _mark_issue_blocked(
+            issue=issue,
+            config=config,
+            github_client=github_client,
+            exc=exc,
+        )
+        _logger.error("Blocked Issue #%d: %s", issue.number, exc)
+        output_view.update_status(issue.number, "blocked")
+        _append_run_record_locked(
+            run_history_store=run_history_store,
+            repo_id=effective_repo_id,
+            repo_path=repo_path,
+            issue=issue,
+            trigger=run_trigger,
+            agent=selected_agent,
+            outcome="blocked",
+            error_summary=str(exc),
+            started_at=run_started_at,
+        )
+        return 1
+    except BlockedWorktreeClaimedError as exc:
+        _logger.info(
+            "Issue #%d worktree already claimed by another runner, skipping: %s",
+            issue.number,
+            exc,
+        )
+        output_view.update_status(issue.number, "skipped")
+        return 0
+    except Exception as exc:  # noqa: BLE001 - report queue failures and continue.
+        _mark_issue_failed(
+            issue=issue,
+            config=config,
+            github_client=github_client,
+            exc=exc,
+        )
+        _logger.error("Failed Issue #%d: %s", issue.number, exc)
+        output_view.update_status(issue.number, "failed")
+        _append_run_record_locked(
+            run_history_store=run_history_store,
+            repo_id=effective_repo_id,
+            repo_path=repo_path,
+            issue=issue,
+            trigger=run_trigger,
+            agent=selected_agent,
+            outcome="failed",
+            error_summary=str(exc),
+            started_at=run_started_at,
+        )
+        return 1
+
+
 def run_once(
     *,
     repo_path: Path,
@@ -894,6 +1090,8 @@ def run_once(
     run_history_store: IRunHistoryStore | None = None,
     run_trigger: str = "cli_run",
     repo_id: str | None = None,
+    concurrency: int = 1,
+    output_view: IRunnerLiveView | None = None,
 ) -> int:
     """执行一次轮询处理。
 
@@ -901,11 +1099,16 @@ def run_once(
     发现并处理 ready 和 running 状态的 Issue。
 
     Issue 发现逻辑：
-    1. 扫描 ready 标签的 Issue，跳过依赖未满足的条目后最多处理 max_issues 个
+    1. 扫描 ready 标签的 Issue，跳过依赖未满足的条目后最多处理
+       ``max(max_issues, concurrency)`` 个
     2. 对 remaining 配额，从 running 标签 Issue 中筛选候选：
        - 有 rework 标记 → running_rework
        - 有已就绪的本地 commit → running_publish_recovery
        - 否则跳过
+
+    并发处理：``concurrency <= 1`` 时逐个串行处理（与历史行为逐字节一致）；
+    ``concurrency > 1`` 时用线程池同一轮并行处理多个 Issue，每个 Issue 的
+    agent 输出经 ``output_view`` 与每 Issue 日志文件分流，互不交错。
 
     Args:
         repo_path: 目标仓库路径
@@ -919,6 +1122,10 @@ def run_once(
         run_history_store: 可选的运行历史旁路存储；为 ``None`` 时零行为变化
         run_trigger: 写入运行记录的触发来源（如 cli_run / console_daemon）
         repo_id: 写入运行记录的仓库 ID；缺省取 ``repo_path.name``
+        concurrency: 单轮并行处理的 Issue 数量；``1`` 为串行（默认，零回归）。
+            实际领取上限取 ``max(max_issues, concurrency)``。
+        output_view: 并行时每 Issue 的实时输出视图；为 ``None`` 时不展示看板
+            （仍写每 Issue 日志文件）。串行路径忽略该参数。
 
     Returns:
         退出码（0 成功，1 有 Issue 处理失败）
@@ -949,8 +1156,10 @@ def run_once(
         except Exception as gate_exc:  # noqa: BLE001 - gate must not break polling.
             _logger.error("Validation gate pass failed: %s", gate_exc)
 
-    # 发现 ready Issue
-    ready_discovery_limit = max(max_issues, _READY_DISCOVERY_LIMIT)
+    # 发现 ready Issue。并行时单轮领取上限抬到 max(max_issues, concurrency)，
+    # 使单独一个 --concurrency N 即可领到并跑 N 个，无需另调 --max-issues。
+    effective_max_issues = max(max_issues, concurrency)
+    ready_discovery_limit = max(effective_max_issues, _READY_DISCOVERY_LIMIT)
     ready_issues = github_client.list_ready_issues(
         config.labels.ready, ready_discovery_limit
     )
@@ -958,7 +1167,7 @@ def run_once(
     issues_to_process: list[tuple[IssueSummary, str]] = []
 
     for issue in ready_issues:
-        if processed_count >= max_issues:
+        if processed_count >= effective_max_issues:
             break
         declaration = parse_dependency_marker(issue.body)
         if declaration is not None:
@@ -991,7 +1200,7 @@ def run_once(
         processed_count += 1
 
     # 发现 running Issue（使用剩余配额）
-    remaining = max_issues - processed_count
+    remaining = effective_max_issues - processed_count
     if remaining > 0:
         running_candidates = github_client.list_review_candidate_issues(
             [config.labels.running], remaining
@@ -1024,7 +1233,7 @@ def run_once(
                 )
 
     # 发现 blocked Issue（使用剩余配额）
-    remaining = max_issues - len(issues_to_process)
+    remaining = effective_max_issues - len(issues_to_process)
     if remaining > 0:
         blocked_candidates = github_client.list_review_candidate_issues(
             [config.labels.blocked], remaining
@@ -1047,11 +1256,10 @@ def run_once(
         )
         return 0
 
-    # 处理 Issue
-    exit_code = 0
-    for issue, issue_kind in issues_to_process:
-        selected_agent = choose_agent(issue, config, agent)
-        if dry_run:
+    # DRY RUN：仅列出将处理的 Issue，不实际处理（串行、零副作用）。
+    if dry_run:
+        for issue, issue_kind in issues_to_process:
+            selected_agent = choose_agent(issue, config, agent)
             _logger.info(
                 "DRY RUN: would process Issue #%d (%s) with %s: %s",
                 issue.number,
@@ -1066,141 +1274,65 @@ def run_once(
                         "DRY RUN: Issue #%d blocked_resolution marker not found, skipping.",
                         issue.number,
                     )
-                    continue
-            continue
-        run_started_at = datetime.now(timezone.utc)
-        used_agent = selected_agent
+        return 0
+
+    process_kwargs = {
+        "repo_path": repo_path,
+        "config": config,
+        "agent": agent,
+        "github_client": github_client,
+        "content_generator": content_generator,
+        "run_history_store": run_history_store,
+        "run_trigger": run_trigger,
+        "effective_repo_id": effective_repo_id,
+    }
+
+    # 串行路径：concurrency<=1 时逐个处理，与历史行为逐字节一致——无线程池、
+    # 无每 Issue 日志文件、无实时看板（NoOp 视图把展示调用变为空操作）。
+    if concurrency <= 1:
+        noop_view = NoOpRunnerLiveView()
+        exit_code = 0
+        for issue, issue_kind in issues_to_process:
+            exit_code |= _process_single_issue(
+                issue,
+                issue_kind,
+                process_runner=process_runner,
+                output_view=noop_view,
+                **process_kwargs,
+            )
+        return exit_code
+
+    # 并行路径：线程池同一轮并行处理多个 Issue。每个 Issue 的 agent 输出经
+    # output_sink 路由到独立日志文件与（可选）独立看板列，互不交错。
+    active_view = output_view or NoOpRunnerLiveView()
+    log_base = repo_path / "logs"
+
+    def _process_with_routing(item: tuple[IssueSummary, str]) -> int:
+        issue, issue_kind = item
         try:
-            if issue_kind == "ready":
-                used_agent = run_issue_with_agent_fallback(
-                    issue=issue,
-                    config=config,
-                    agent=agent,
-                    process_for_agent=partial(
-                        _process_ready_issue,
-                        issue=issue,
-                        repo_path=repo_path,
-                        config=config,
-                        github_client=github_client,
-                        process_runner=process_runner,
-                        content_generator=content_generator,
-                    ),
-                )
-            elif issue_kind == "running_rework":
-                _, marker = _guard_running_issue_is_rework(issue, config, github_client)
-                if marker is None:
-                    continue
-                used_agent = run_issue_with_agent_fallback(
-                    issue=issue,
-                    config=config,
-                    agent=agent,
-                    process_for_agent=partial(
-                        _process_running_rework,
-                        issue=issue,
-                        repo_path=repo_path,
-                        config=config,
-                        github_client=github_client,
-                        process_runner=process_runner,
-                        marker=marker,
-                    ),
-                )
-            elif issue_kind == "blocked_resolution":
-                marker = _guard_blocked_issue_has_resolution(issue, github_client)
-                if marker is None:
-                    continue
-                claimed = claim_blocked_issue(github_client, issue.number, config)
-                if not claimed:
-                    _logger.info(
-                        "Issue #%d already claimed by another runner, skipping.",
-                        issue.number,
-                    )
-                    continue
-                used_agent = run_issue_with_agent_fallback(
-                    issue=issue,
-                    config=config,
-                    agent=agent,
-                    process_for_agent=partial(
-                        _process_blocked_resolution,
-                        issue=issue,
-                        repo_path=repo_path,
-                        config=config,
-                        github_client=github_client,
-                        process_runner=process_runner,
-                        content_generator=content_generator,
-                        marker=marker,
-                    ),
-                )
-            else:
-                used_agent = run_issue_with_agent_fallback(
-                    issue=issue,
-                    config=config,
-                    agent=agent,
-                    process_for_agent=partial(
-                        _process_running_publish_recovery,
-                        issue=issue,
-                        repo_path=repo_path,
-                        config=config,
-                        github_client=github_client,
-                        process_runner=process_runner,
-                        content_generator=content_generator,
-                    ),
-                )
-            _logger.info("Completed Issue #%d: %s", issue.number, issue.title)
-            append_run_record(
-                run_history_store=run_history_store,
+            with issue_output_routing(
                 repo_id=effective_repo_id,
-                repo_path=repo_path,
-                issue=issue,
-                trigger=run_trigger,
-                agent=used_agent,
-                outcome="completed",
-                error_summary=None,
-                started_at=run_started_at,
+                issue_number=issue.number,
+                log_base=log_base,
+                output_view=active_view,
+            ) as sink:
+                scoped_runner = _OutputRoutedProcessRunner(process_runner, sink)
+                return _process_single_issue(
+                    issue,
+                    issue_kind,
+                    process_runner=scoped_runner,
+                    output_view=active_view,
+                    **process_kwargs,
+                )
+        except Exception as exc:  # noqa: BLE001 - one Issue's I/O must not kill the pass.
+            _logger.error(
+                "Parallel routing failed for Issue #%d: %s", issue.number, exc
             )
-        except ForbiddenBlockedError as exc:
-            exit_code = 1
-            _mark_issue_blocked(
-                issue=issue,
-                config=config,
-                github_client=github_client,
-                exc=exc,
-            )
-            _logger.error("Blocked Issue #%d: %s", issue.number, exc)
-            append_run_record(
-                run_history_store=run_history_store,
-                repo_id=effective_repo_id,
-                repo_path=repo_path,
-                issue=issue,
-                trigger=run_trigger,
-                agent=selected_agent,
-                outcome="blocked",
-                error_summary=str(exc),
-                started_at=run_started_at,
-            )
-        except BlockedWorktreeClaimedError as exc:
-            _logger.info(
-                "Issue #%d worktree already claimed by another runner, skipping: %s",
-                issue.number,
-                exc,
-            )
-        except Exception as exc:  # noqa: BLE001 - report queue failures and continue.
-            exit_code = 1
-            _mark_issue_failed(
-                issue=issue,
-                config=config,
-                github_client=github_client,
-                exc=exc,
-            )
-            _logger.error("Failed Issue #%d: %s", issue.number, exc)
-            append_run_record(
-                run_history_store=run_history_store,
-                repo_id=effective_repo_id,
-                repo_path=repo_path,
-                issue=issue,
-                trigger=run_trigger,
-                agent=selected_agent,
-                outcome="failed",
-                error_summary=str(exc),
-                started_at=run_started_at,
-            )
-    return exit_code
+            return 1
+
+    try:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            results = list(pool.map(_process_with_routing, issues_to_process))
+    finally:
+        active_view.close()
+    return 1 if any(results) else 0

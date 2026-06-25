@@ -195,12 +195,16 @@ class RunnerConfig:
         transient_retry_attempts: In-place retries granted to transient
             network/transport errors (Level 1 of the escalation ladder).
         transient_retry_delay_seconds: Backoff between transient retries.
+        max_concurrent_issues: Maximum Issues processed in parallel within a
+            single daemon pass. ``1`` keeps the sequential path (zero
+            regression); ``> 1`` enables the thread-pool parallel path.
         timeout_seconds: Wall-clock timeout for a single agent execution.
         inactivity_timeout_seconds: Kill the agent if it produces no stdout or
             stderr for this many seconds.
     """
 
     max_issues: int = 1
+    max_concurrent_issues: int = 1
     default_agent: str = "auto"
     max_recovery_attempts: int = 5
     recovery_retry_delay_seconds: int = 30

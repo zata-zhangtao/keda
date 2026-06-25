@@ -197,6 +197,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
     )
     daemon_run_options.add_argument("--max-issues", type=int)
+    daemon_run_options.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help=(
+            "Number of Issues to process in parallel per pass. Defaults to "
+            "[agent_runner.runner].max_concurrent_issues (1 = sequential). "
+            ">1 shows a per-Issue live view on a TTY and writes per-Issue logs."
+        ),
+    )
     add_common_options(daemon_run_options)
     add_all_repositories_option(daemon_run_options)
 

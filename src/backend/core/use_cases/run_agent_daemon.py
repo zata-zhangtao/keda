@@ -14,6 +14,7 @@ from backend.core.shared.interfaces.agent_runner import (
     IProcessRunner,
 )
 from backend.core.shared.interfaces.runner_console import IRunHistoryStore
+from backend.core.shared.interfaces.runner_live_view import IRunnerLiveView
 from backend.core.shared.models.agent_runner import RepositoryRunContext
 from backend.core.use_cases.agent_runner_orchestrate import (
     process_prd_rework_issues,
@@ -37,6 +38,8 @@ def run_agent_daemon(
     max_prd_issues: int = 1,
     transcript_runner_factory: Callable[[Path], IAgentTranscriptRunner] | None = None,
     max_deliberation_issues: int = 1,
+    concurrency: int = 1,
+    output_view: IRunnerLiveView | None = None,
 ) -> None:
     """Run the queue poller forever across all target repositories.
 
@@ -58,6 +61,11 @@ def run_agent_daemon(
             callers that do not assemble a runner).
         max_deliberation_issues: Maximum ``agent/deliberate`` Issues to process
             per Phase 0 pass. Defaults to 1 to bound multi-agent cost.
+        concurrency: Issues processed in parallel within each repository's
+            Phase 2 pass. ``1`` keeps the sequential path (zero regression).
+        output_view: Optional live view for parallel runs; each Issue's agent
+            output goes to its own panel. ``None`` shows no dashboard (per-Issue
+            log files are still written).
     """
     while True:
         for context in contexts:
@@ -121,6 +129,8 @@ def run_agent_daemon(
                     run_history_store=run_history_store,
                     run_trigger=run_trigger,
                     repo_id=context.repo_id,
+                    concurrency=concurrency,
+                    output_view=output_view,
                 )
             except Exception as exc:  # noqa: BLE001 - daemon should survive unexpected errors.
                 _logger.error(

@@ -229,6 +229,7 @@ def build_app_config_from_settings(
         ),
         runner=RunnerConfig(
             max_issues=runner_settings.max_issues,
+            max_concurrent_issues=runner_settings.max_concurrent_issues,
             default_agent=runner_settings.default_agent,
             max_recovery_attempts=runner_settings.max_recovery_attempts,
             recovery_retry_delay_seconds=runner_settings.recovery_retry_delay_seconds,

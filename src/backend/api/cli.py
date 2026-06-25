@@ -104,6 +104,7 @@ from backend.engines.agent_runner.factory import (
 )
 from backend.engines.agent_runner.failure_resolver import AgentFailureResolver
 from backend.engines.agent_runner.live_terminal import create_output_view
+from backend.engines.agent_runner.runner_live_view import create_runner_live_view
 from backend.engines.agent_runner.repository_local import (
     IARRepositoryNotInitializedError,
     detect_git_repository_root,
@@ -792,6 +793,17 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 if parsed.interval is not None
                 else runner_settings.daemon.run_interval_seconds
             )
+            # Parallel execution: --concurrency overrides the toml default
+            # ([agent_runner.runner].max_concurrent_issues; 1 = sequential).
+            # A per-Issue live view (Rich on a TTY, plain otherwise) is created
+            # only when running >1 in parallel; the sequential path is unchanged.
+            daemon_concurrency = (
+                getattr(parsed, "concurrency", None)
+                or runner_settings.runner.max_concurrent_issues
+            )
+            daemon_output_view = (
+                create_runner_live_view() if daemon_concurrency > 1 else None
+            )
 
             def content_generator_factory(repo_path: Path):
                 return create_content_generator(process_runner)
@@ -827,6 +839,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     max_prd_issues=1,
                     transcript_runner_factory=transcript_runner_factory,
                     max_deliberation_issues=runner_settings.daemon.max_deliberation_issues,
+                    concurrency=daemon_concurrency,
+                    output_view=daemon_output_view,
                 )
             finally:
                 release_daemon_locks(acquired_daemon_locks)

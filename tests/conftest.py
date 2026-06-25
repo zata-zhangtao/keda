@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from backend.core.shared.interfaces.agent_runner import (
     IContentGenerator,
@@ -277,6 +277,7 @@ class FakeProcessRunner(IProcessRunner):
         self.labels: list[str | None] = []
         self.timeouts: list[int | None] = []
         self.inactivity_timeouts: list[int | None] = []
+        self.output_sinks: list[Callable[[str], None] | None] = []
 
     def run(
         self,
@@ -289,12 +290,14 @@ class FakeProcessRunner(IProcessRunner):
         capture_output: bool = True,
         input_text: str | None = None,
         label: str | None = None,
+        output_sink: Callable[[str], None] | None = None,
     ) -> CommandResult:
         self.calls.append(list(command))
         self.input_texts.append(input_text)
         self.labels.append(label)
         self.timeouts.append(timeout)
         self.inactivity_timeouts.append(inactivity_timeout)
+        self.output_sinks.append(output_sink)
         key = tuple(command)
         if key in self.responses:
             result = self.responses[key]

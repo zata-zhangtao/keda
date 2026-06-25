@@ -111,6 +111,7 @@ class IProcessRunner(ABC):
         capture_output: bool = True,
         input_text: str | None = None,
         label: str | None = None,
+        output_sink: Callable[[str], None] | None = None,
     ) -> CommandResult:
         """运行一条命令并捕获其结果。
 
@@ -142,6 +143,11 @@ class IProcessRunner(ABC):
                 命令），并强制以捕获模式运行；为 ``None`` 时不写 stdin。
             label: 可选的运行上下文标签，用于在 watchdog 心跳或超时
                 日志中标识本次命令。例如 ``"Issue #23: https://..."``。
+            output_sink: 可选的流式输出回调。提供时，Claude ``stream-json``
+                的渲染文本块会逐块回传给该回调，而非直接 ``print`` 到当前
+                终端——用于并行处理时把每个 Issue 的 agent 输出分流到独立
+                面板/日志，避免多路输出在同一 stdout 交错。非 Claude 流式
+                命令忽略该参数。
 
         Returns:
             CommandResult: 包含退出码与（按需）捕获到的 stdout/stderr

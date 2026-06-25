@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -1118,3 +1119,132 @@ def test_run_once_marks_failed_with_merged_history_when_all_agents_fail(
     ]["body"]
     assert "| codex |" in failure_comment
     assert "| claude |" in failure_comment
+
+
+def test_run_once_parallel_runs_issues_concurrently(monkeypatch, tmp_path) -> None:
+    """concurrency>1 claims up to `concurrency` issues and runs them in parallel.
+
+    A barrier of width 3 only releases if all three workers reach it at once, so
+    passing proves both the raised claim limit (max(max_issues, concurrency)) and
+    real parallelism.
+    """
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issues = [_make_ready_issue(n, f"I{n}", "", ("agent/ready",)) for n in (1, 2, 3)]
+    fake_client.list_ready_issues = lambda ready_label, limit: list(issues)
+    barrier = threading.Barrier(3, timeout=5)
+    reached: list[int] = []
+
+    def _fake_process_ready_issue(*, agent: str, issue, **_kwargs: object) -> None:
+        try:
+            barrier.wait()
+            reached.append(issue.number)
+        except threading.BrokenBarrierError:  # pragma: no cover - failure path
+            pass
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+
+    exit_code = run_once(
+        repo_path=tmp_path,
+        config=AppConfig(),
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+        repo_id="testrepo",
+        concurrency=3,
+    )
+
+    assert exit_code == 0
+    assert sorted(reached) == [1, 2, 3]
+
+
+def test_run_once_parallel_aggregates_exit_code(monkeypatch, tmp_path) -> None:
+    """One failing issue makes the whole parallel pass return exit code 1."""
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issues = [_make_ready_issue(n, f"I{n}", "", ("agent/ready",)) for n in (1, 2)]
+    fake_client.list_ready_issues = lambda ready_label, limit: list(issues)
+
+    def _fake_process_ready_issue(*, agent: str, issue, **_kwargs: object) -> None:
+        if issue.number == 2:
+            raise MaxRetriesExceededError([_attempt("boom", FailureType.NO_COMMITS)])
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+
+    exit_code = run_once(
+        repo_path=tmp_path,
+        config=AppConfig(),
+        dry_run=False,
+        agent="auto",
+        max_issues=2,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+        repo_id="testrepo",
+        concurrency=2,
+    )
+
+    assert exit_code == 1
+
+
+def test_run_once_parallel_writes_per_issue_logs(monkeypatch, tmp_path) -> None:
+    """Parallel passes write one log file per Issue under logs/agent-runner/issues."""
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issues = [_make_ready_issue(n, f"I{n}", "", ("agent/ready",)) for n in (1, 2)]
+    fake_client.list_ready_issues = lambda ready_label, limit: list(issues)
+
+    def _fake_process_ready_issue(*, agent: str, issue, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+
+    run_once(
+        repo_path=tmp_path,
+        config=AppConfig(),
+        dry_run=False,
+        agent="auto",
+        max_issues=2,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+        repo_id="testrepo",
+        concurrency=2,
+    )
+
+    issue_log_dir = tmp_path / "logs" / "agent-runner" / "issues" / "testrepo"
+    assert list(issue_log_dir.glob("issue-1-*.log"))
+    assert list(issue_log_dir.glob("issue-2-*.log"))
+
+
+def test_run_once_sequential_default_writes_no_per_issue_logs(
+    monkeypatch, tmp_path
+) -> None:
+    """concurrency<=1 keeps the sequential path with no per-Issue routing/logs."""
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issues = [_make_ready_issue(n, f"I{n}", "", ("agent/ready",)) for n in (1, 2)]
+    fake_client.list_ready_issues = lambda ready_label, limit: list(issues)
+
+    def _fake_process_ready_issue(*, agent: str, issue, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+
+    run_once(
+        repo_path=tmp_path,
+        config=AppConfig(),
+        dry_run=False,
+        agent="auto",
+        max_issues=2,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+        repo_id="testrepo",
+        concurrency=1,
+    )
+
+    assert not (tmp_path / "logs" / "agent-runner" / "issues").exists()

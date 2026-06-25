@@ -397,6 +397,9 @@ class AgentRunnerRunnerSettings(BaseModel):
     """Local runner behavior."""
 
     max_issues: int = 1
+    # Maximum Issues processed in parallel within one daemon pass. 1 keeps the
+    # sequential path (zero regression); >1 enables thread-pool parallelism.
+    max_concurrent_issues: int = 1
     default_agent: str = "auto"
     max_recovery_attempts: int = 5
     recovery_retry_delay_seconds: int = 30

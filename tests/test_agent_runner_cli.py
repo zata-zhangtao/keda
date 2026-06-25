@@ -803,7 +803,13 @@ def test_main_daemon_cwd_matches_enabled_single_repo(monkeypatch) -> None:
     ), patch(
         "backend.api.cli_helpers.load_fresh_agent_runner_settings",
         return_value=settings,
-    ):
+    ), patch(
+        # Isolate from the real ~/.iar/daemon-locks so the test is deterministic
+        # regardless of any daemon actually running on the machine; this test
+        # checks cwd repo resolution, not single-instance locking.
+        "backend.api.cli.acquire_daemon_locks",
+        return_value=[],
+    ), patch("backend.api.cli.release_daemon_locks"):
         exit_code = main(["daemon"])
 
     assert exit_code == 0

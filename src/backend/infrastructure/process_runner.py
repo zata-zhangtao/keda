@@ -107,6 +107,7 @@ class SubprocessRunner:
         capture_output: bool = True,
         input_text: str | None = None,
         label: str | None = None,
+        output_sink: Callable[[str], None] | None = None,
     ) -> CommandResult:
         """Run a subprocess and capture output.
 
@@ -121,6 +122,11 @@ class SubprocessRunner:
             capture_output: Capture stdout/stderr instead of streaming.
             input_text: Optional text to feed via stdin.
             label: Optional label for heartbeat/timeout logs.
+            output_sink: Optional callback for streamed output chunks. When
+                provided for a streaming command (Claude ``stream-json`` or any
+                non-captured command), rendered text is routed to the sink
+                instead of the shared stdout, so parallel Issue runs can keep
+                each agent's output in its own panel/log without interleaving.
         """
         if input_text is not None:
             completed = subprocess.run(
@@ -144,6 +150,7 @@ class SubprocessRunner:
                 inactivity_timeout=inactivity_timeout,
                 collect_stdout=True,
                 label=label,
+                output_sink=output_sink,
             )
             stdout = completed.stdout
             stderr = completed.stderr
@@ -197,15 +204,21 @@ class SubprocessRunner:
                 if process.stdout is not None:
                     for line in process.stdout:
                         watchdog.note_output()
-                        timestamped = _format_timestamped_line(line)
-                        print(timestamped, end="", flush=True)
+                        if output_sink is not None:
+                            output_sink(line)
+                        else:
+                            timestamped = _format_timestamped_line(line)
+                            print(timestamped, end="", flush=True)
                         logger.info("%s", line.rstrip("\n"))
                         stdout_lines.append(line)
                 if process.stderr is not None:
                     for line in process.stderr:
                         watchdog.note_output()
-                        timestamped = _format_timestamped_line(line)
-                        print(timestamped, end="", file=sys.stderr, flush=True)
+                        if output_sink is not None:
+                            output_sink(line)
+                        else:
+                            timestamped = _format_timestamped_line(line)
+                            print(timestamped, end="", file=sys.stderr, flush=True)
                         logger.warning("%s", line.rstrip("\n"))
                         stderr_lines.append(line)
                 return_code = process.wait(timeout=timeout)

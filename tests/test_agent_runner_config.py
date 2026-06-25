@@ -132,6 +132,47 @@ def test_runner_settings_escalation_ladder_defaults() -> None:
     assert settings.transient_retry_delay_seconds == 10
 
 
+def test_max_concurrent_issues_default_and_factory_mapping() -> None:
+    """max_concurrent_issues defaults to 1 and maps into the domain RunnerConfig."""
+    assert AgentRunnerRunnerSettings().max_concurrent_issues == 1
+    assert RunnerConfig().max_concurrent_issues == 1
+
+    # Build the domain config from settings; mutate the nested field directly to
+    # avoid pydantic-settings sources (repo config.toml) shadowing an init kwarg.
+    settings = AgentRunnerSettings()
+    settings.runner.max_concurrent_issues = 4
+    app_config = build_app_config_from_settings(settings)
+    assert app_config.runner.max_concurrent_issues == 4
+
+
+def test_merge_repository_config_inherits_max_concurrent_issues() -> None:
+    """Repo override keeps global max_concurrent_issues when unset."""
+    global_config = AppConfig(runner=RunnerConfig(max_concurrent_issues=6))
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        runner=AgentRunnerRunnerSettings(max_issues=2),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.runner.max_concurrent_issues == 6
+
+
+def test_iar_toml_renders_max_concurrent_issues_comment() -> None:
+    """`iar init` output documents max_concurrent_issues above the field."""
+    from backend.engines.agent_runner.repository_local import (
+        _IAR_FIELD_COMMENTS,
+        settings_to_toml_string,
+    )
+    from backend.infrastructure.config.settings import AgentRunnerLocalSettings
+
+    settings = AgentRunnerLocalSettings(runner=AgentRunnerRunnerSettings())
+    rendered = settings_to_toml_string(settings)
+
+    assert "runner.max_concurrent_issues" in _IAR_FIELD_COMMENTS
+    assert "max_concurrent_issues = 1" in rendered
+    comment = _IAR_FIELD_COMMENTS["runner.max_concurrent_issues"]
+    assert any(comment in line for line in rendered.splitlines())
+
+
 def test_merge_repository_config_overrides_agent_fallback_order() -> None:
     """Repository-level fallback order overrides global runner config."""
     global_config = AppConfig(runner=RunnerConfig())

@@ -19,6 +19,7 @@ import json
 import logging
 import shlex
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -249,6 +250,14 @@ def resolve_agent_fallback_order(
     return fallback_order
 
 
+# Serializes the shared-repository git mutation in worktree creation across
+# parallel Issue workers (``iar daemon --concurrency``). ``git worktree add``
+# writes the main repo's ``.git/worktrees`` and refs, which can race when
+# several issues are set up at once. Uncontended (no overhead) in the default
+# sequential path. The long agent run happens after this lock is released.
+_SHARED_GIT_LOCK = threading.Lock()
+
+
 def create_or_reuse_worktree(
     repo_path: Path,
     issue: IssueSummary,
@@ -279,30 +288,33 @@ def create_or_reuse_worktree(
     install). Reused worktrees are healed the same way; existing files and
     ``node_modules`` are not touched.
     """
-    create_result = process_runner.run(
-        format_command(
-            config.worktree.create_command,
-            issue_number=issue.number,
-            base_branch=config.worktree.base_branch,
-        ),
-        cwd=repo_path,
-        check=False,
-    )
-    if create_result.return_code != 0:
-        reuse_result = process_runner.run(
+    # Hold the shared-git lock only for the worktree-add writes; the agent run
+    # (the long pole) happens later in the caller, outside this lock.
+    with _SHARED_GIT_LOCK:
+        create_result = process_runner.run(
             format_command(
-                config.worktree.reuse_command,
+                config.worktree.create_command,
                 issue_number=issue.number,
+                base_branch=config.worktree.base_branch,
             ),
             cwd=repo_path,
             check=False,
         )
-    else:
-        reuse_result = None
-    path_result = process_runner.run(
-        format_command(config.worktree.path_command, issue_number=issue.number),
-        cwd=repo_path,
-    )
+        if create_result.return_code != 0:
+            reuse_result = process_runner.run(
+                format_command(
+                    config.worktree.reuse_command,
+                    issue_number=issue.number,
+                ),
+                cwd=repo_path,
+                check=False,
+            )
+        else:
+            reuse_result = None
+        path_result = process_runner.run(
+            format_command(config.worktree.path_command, issue_number=issue.number),
+            cwd=repo_path,
+        )
     # path_command runs with cwd=repo_path, so a relative output must be
     # anchored there too — bare resolve() would anchor it to the daemon
     # process cwd instead.

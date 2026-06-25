@@ -154,6 +154,16 @@ DaemonIntervalOption = Annotated[
     int | None,
     typer.Option("--interval", help="Polling interval."),
 ]
+ConcurrencyOption = Annotated[
+    int | None,
+    typer.Option(
+        "--concurrency",
+        help=(
+            "Issues to process in parallel per pass (default: "
+            "[agent_runner.runner].max_concurrent_issues; 1 = sequential)."
+        ),
+    ),
+]
 
 
 def _enum_value(value: str | Enum) -> str:
@@ -678,6 +688,7 @@ def _run_daemon_command(
     repo_id: str | None,
     config: str | None,
     all_repositories: bool,
+    concurrency: int | None = None,
 ) -> int:
     """Run daemon or review-daemon through the shared dispatch path."""
     return _run_typer_repository_command(
@@ -690,6 +701,7 @@ def _run_daemon_command(
         agent=_enum_value(agent),
         max_issues=max_issues,
         all_repositories=all_repositories,
+        concurrency=concurrency,
     )
 
 
@@ -699,6 +711,7 @@ def daemon_callback(
     interval: DaemonIntervalOption = None,
     agent: RunAgentOption = RunAgentChoice.auto,
     max_issues: MaxIssuesOption = None,
+    concurrency: ConcurrencyOption = None,
     repo: RepoOption = None,
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
@@ -717,6 +730,7 @@ def daemon_callback(
         repo_id=repo_id,
         config=config,
         all_repositories=all_repositories,
+        concurrency=concurrency,
     )
     raise typer.Exit(code=exit_code)
 
@@ -727,6 +741,7 @@ def daemon_run_command(
     interval: DaemonIntervalOption = None,
     agent: RunAgentOption = RunAgentChoice.auto,
     max_issues: MaxIssuesOption = None,
+    concurrency: ConcurrencyOption = None,
     repo: RepoOption = None,
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
@@ -747,6 +762,7 @@ def daemon_run_command(
         repo_id=repo_id,
         config=config,
         all_repositories=all_repositories,
+        concurrency=concurrency,
     )
 
 

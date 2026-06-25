@@ -201,6 +201,10 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "worktree.reuse_command": "复用已有 worktree 时定位路径的命令",
     "worktree.path_command": "获取 worktree 绝对路径的命令",
     "runner.max_issues": "每次轮询每个仓库最多处理多少个 Issue",
+    "runner.max_concurrent_issues": (
+        "单轮内并行处理的 Issue 数量：1 为串行（默认）；>1 时同一轮并行跑多个 "
+        "Issue，仅 iar daemon --concurrency 未指定时作为默认值"
+    ),
     "runner.default_agent": "默认使用的 AI agent：auto / claude / codex / kimi",
     "runner.max_recovery_attempts": "Agent 失败后的最大重试次数",
     "runner.recovery_retry_delay_seconds": "每次重试前等待的秒数",

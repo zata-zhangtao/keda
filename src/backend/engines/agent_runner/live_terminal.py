@@ -25,24 +25,16 @@ import sys
 import threading
 from typing import TYPE_CHECKING
 
-from rich.console import Console, Group
+from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.table import Table
 from rich.text import Text
 
 from backend.core.shared.interfaces.agent_output_view import IAgentOutputView
+from backend.engines.agent_runner.live_panels import PanelState, render_panel_grid
 
 if TYPE_CHECKING:
     from backend.core.shared.models.agent_deliberation import DeliberationAgentProfile
-
-# Lines kept in memory per agent panel. The workspace file remains the source
-# of truth for full history; the panel only needs enough to fill the screen.
-_PANEL_BUFFER_LINES = 200
-
-# Minimum readable text width per side-by-side column. Below this, columns are
-# too narrow to read, so the view falls back to full-width vertical stacking.
-_MIN_COLUMN_WIDTH = 40
 
 
 def _is_interactive_tty() -> bool:
@@ -72,31 +64,6 @@ def create_output_view(*, plain: bool = False) -> IAgentOutputView:
         return PlainOutputView()
 
 
-class _AgentPanelState:
-    """Track per-agent display state for a panel."""
-
-    __slots__ = ("profile_id", "provider", "status", "lines")
-
-    def __init__(self, profile_id: str, provider: str) -> None:
-        self.profile_id = profile_id
-        self.provider = provider
-        self.status = "pending"
-        self.lines: list[str] = []
-
-    def append(self, chunk: str) -> None:
-        """Append a text chunk, keeping only the most recent lines."""
-        if not chunk:
-            return
-        if not self.lines:
-            self.lines.append("")
-        normalized_chunk = chunk.replace("\r\n", "\n").replace("\r", "\n")
-        chunk_line_parts = normalized_chunk.split("\n")
-        self.lines[-1] += chunk_line_parts[0]
-        self.lines.extend(chunk_line_parts[1:])
-        if len(self.lines) > _PANEL_BUFFER_LINES:
-            self.lines = self.lines[-_PANEL_BUFFER_LINES:]
-
-
 class RichLiveOutputView(IAgentOutputView):
     """Interactive TTY display using a single persistent Rich Live.
 
@@ -116,7 +83,7 @@ class RichLiveOutputView(IAgentOutputView):
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._console = Console()
-        self._panels: dict[str, _AgentPanelState] = {}
+        self._panels: dict[str, PanelState] = {}
         self._current_round = 0
         self._live: Live | None = None
 
@@ -140,22 +107,22 @@ class RichLiveOutputView(IAgentOutputView):
                 self._console.print(self._build_renderable())
             self._current_round = round_number
             self._panels = {
-                profile.profile_id: _AgentPanelState(
-                    profile_id=profile.profile_id,
+                profile.profile_id: PanelState(
+                    panel_id=profile.profile_id,
                     provider=profile.agent,
                 )
                 for profile in profiles
             }
             self._live.update(self._build_renderable())
 
-    def _make_panel(self, state: "_AgentPanelState", body_lines: int) -> Panel:
+    def _make_panel(self, state: PanelState, body_lines: int) -> Panel:
         """Build one agent panel showing the most recent ``body_lines`` lines.
 
         Text wraps within the panel (never truncated horizontally); the
         workspace file holds the full, untruncated history.
         """
         title = (
-            f"round={self._current_round} agent={state.profile_id} "
+            f"round={self._current_round} agent={state.panel_id} "
             f"provider={state.provider} {state.status}"
         )
         visible = state.lines[-body_lines:]
@@ -163,39 +130,15 @@ class RichLiveOutputView(IAgentOutputView):
         return Panel(
             Text(content),
             title=title,
-            subtitle=f"workspaces/{state.profile_id}/",
+            subtitle=f"workspaces/{state.panel_id}/",
             border_style="cyan" if state.status == "running" else "green",
         )
 
     def _build_renderable(self) -> object:
-        """Build the Rich renderable, adapting to the terminal width.
-
-        Wide terminals show one column per agent; narrow terminals (where each
-        column would fall below ``_MIN_COLUMN_WIDTH``) stack full-width panels
-        vertically so text stays readable.
-        """
-        if not self._panels:
-            return Text("")
-        states = list(self._panels.values())
-        count = len(states)
-        size = self._console.size
-
-        if size.width // count >= _MIN_COLUMN_WIDTH:
-            # Force exactly one equal-width column per agent. Table.grid is used
-            # instead of rich.Columns because Columns auto-fits by each panel's
-            # minimum width and would collapse to fewer columns when titles are
-            # long.
-            body_lines = max(3, size.height - 6)
-            grid = Table.grid(expand=True)
-            for _ in states:
-                grid.add_column(ratio=1)
-            grid.add_row(*(self._make_panel(state, body_lines) for state in states))
-            return grid
-
-        # Full-width vertical stack; split the available height across panels.
-        body_lines = max(2, (size.height - 2) // count - 2)
-        panels = [self._make_panel(state, body_lines) for state in states]
-        return Group(*panels)
+        """Build the Rich renderable, adapting to the terminal width."""
+        return render_panel_grid(
+            self._console, list(self._panels.values()), self._make_panel
+        )
 
     def append_output(
         self,
