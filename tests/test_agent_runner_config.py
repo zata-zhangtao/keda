@@ -124,9 +124,9 @@ def test_merge_repository_config_inherits_unset_fields() -> None:
 
 
 def test_runner_settings_escalation_ladder_defaults() -> None:
-    """Escalation-ladder settings default to fallback-off, safe values."""
+    """Escalation-ladder settings default to a conservative fallback chain."""
     settings = AgentRunnerRunnerSettings()
-    assert settings.agent_fallback_order == []
+    assert settings.agent_fallback_order == ["claude", "kimi", "codex"]
     assert settings.max_agent_switches == 2
     assert settings.transient_retry_attempts == 2
     assert settings.transient_retry_delay_seconds == 10

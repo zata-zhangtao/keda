@@ -186,9 +186,9 @@ class RunnerConfig:
     """Local runner behavior.
 
     Attributes:
-        agent_fallback_order: Ordered agents to try for one Issue. Empty
-            disables cross-agent fallback (single-agent behavior). The primary
-            agent is prepended and de-duplicated by
+        agent_fallback_order: Ordered agents to try for one Issue after the
+            primary agent. Empty disables cross-agent fallback (single-agent
+            behavior). The primary agent is prepended and de-duplicated by
             ``resolve_agent_fallback_order``.
         max_agent_switches: Maximum number of agent switches before the Issue
             is marked failed.
@@ -208,7 +208,7 @@ class RunnerConfig:
     default_agent: str = "auto"
     max_recovery_attempts: int = 5
     recovery_retry_delay_seconds: int = 30
-    agent_fallback_order: tuple[str, ...] = ()
+    agent_fallback_order: tuple[str, ...] = ("claude", "kimi", "codex")
     max_agent_switches: int = 2
     transient_retry_attempts: int = 2
     transient_retry_delay_seconds: int = 10

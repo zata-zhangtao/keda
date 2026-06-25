@@ -1153,6 +1153,7 @@ def _config_for_worktree(
     *verification_commands: str,
     max_recovery_attempts: int = 2,
     recovery_retry_delay_seconds: int = 0,
+    agent_fallback_order: tuple[str, ...] = (),
 ) -> AppConfig:
     commands = verification_commands or ("just test",)
     return AppConfig(
@@ -1160,6 +1161,7 @@ def _config_for_worktree(
             max_recovery_attempts=max_recovery_attempts,
             recovery_retry_delay_seconds=recovery_retry_delay_seconds,
             verification_commands=commands,
+            agent_fallback_order=agent_fallback_order,
         ),
         worktree=WorktreeConfig(path_command=f"echo {worktree_path}"),
     )
@@ -1170,8 +1172,13 @@ def _config_with_review_disabled(
     *verification_commands: str,
     max_recovery_attempts: int = 2,
     recovery_retry_delay_seconds: int = 0,
+    agent_fallback_order: tuple[str, ...] = (),
 ) -> AppConfig:
-    """Return a config with pre-PR review and post-PR supervisor disabled."""
+    """Return a config with pre-PR review and post-PR supervisor disabled.
+
+    Cross-agent fallback is disabled by default so that tests of the single-agent
+    recovery loop are not affected by the global default fallback chain.
+    """
     commands = verification_commands or ("just test",)
     worktree_cfg = (
         WorktreeConfig(path_command=f"echo {worktree_path}")
@@ -1183,6 +1190,7 @@ def _config_with_review_disabled(
             max_recovery_attempts=max_recovery_attempts,
             recovery_retry_delay_seconds=recovery_retry_delay_seconds,
             verification_commands=commands,
+            agent_fallback_order=agent_fallback_order,
         ),
         worktree=worktree_cfg,
         pre_pr_review=PrePrReviewConfig(enabled=False),
@@ -7049,11 +7057,11 @@ def test_classify_failure_ignores_provider_errors_by_default() -> None:
     assert failure_type == FailureType.AGENT_ERROR
 
 
-def test_resolve_agent_fallback_order_empty_returns_primary_only() -> None:
-    """With no fallback configured, only the primary agent is returned."""
+def test_resolve_agent_fallback_order_default_includes_primary_then_chain() -> None:
+    """With the default fallback chain, primary agent comes first, then defaults."""
     issue = _make_ready_issue()
     order = resolve_agent_fallback_order(issue, AppConfig(), "auto")
-    assert order == ["codex"]
+    assert order == ["codex", "claude", "kimi"]
 
 
 def test_resolve_agent_fallback_order_dedupes_and_preserves_order() -> None:
@@ -7072,3 +7080,11 @@ def test_resolve_agent_fallback_order_honors_override_primary() -> None:
     config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
     order = resolve_agent_fallback_order(issue, config, "claude")
     assert order == ["claude", "codex"]
+
+
+def test_resolve_agent_fallback_order_empty_disables_fallback() -> None:
+    """Setting the fallback chain to empty disables cross-agent switching."""
+    issue = _make_ready_issue()
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=()))
+    order = resolve_agent_fallback_order(issue, config, "auto")
+    assert order == ["codex"]

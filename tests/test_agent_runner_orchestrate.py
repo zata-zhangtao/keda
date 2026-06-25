@@ -1013,7 +1013,7 @@ def test_fallback_merges_attempt_history_with_agent_labels() -> None:
 
 
 def test_fallback_single_agent_reraises_with_agent_stamp() -> None:
-    """With no fallback configured, the single agent's failure is stamped."""
+    """With fallback disabled, the single agent's failure is stamped."""
     process_for_agent, calls = _agent_outcomes(
         {
             "codex": MaxRetriesExceededError(
@@ -1025,7 +1025,7 @@ def test_fallback_single_agent_reraises_with_agent_stamp() -> None:
     with pytest.raises(MaxRetriesExceededError) as exc_info:
         run_issue_with_agent_fallback(
             issue=_fallback_issue("agent/codex"),
-            config=AppConfig(),
+            config=AppConfig(runner=RunnerConfig(agent_fallback_order=())),
             agent="auto",
             process_for_agent=process_for_agent,
         )

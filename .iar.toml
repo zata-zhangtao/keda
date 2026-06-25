@@ -38,6 +38,8 @@ default_agent = "auto"
 max_recovery_attempts = 5
 # 每次重试前等待的秒数
 recovery_retry_delay_seconds = 30
+# 跨 agent fallback 链：主 agent 失败后依次尝试本机可用 agent；命令不存在则自动跳过
+agent_fallback_order = ["claude", "kimi", "codex"]
 # 提交前自动运行的验证命令；任一命令失败会进入 recovery
 verification_commands = [
     "git diff --check",
