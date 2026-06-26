@@ -58,12 +58,18 @@ if [ "$mode" = "interactive" ]; then
             # the AI read/edit files without per-action prompts.
             claude --dangerously-skip-permissions "$prompt_text" || true
             ;;
-        kimi|*)
-            # kimi and unknown tools: pass the prompt as a positional
-            # argument through the user's interactive shell so aliases
-            # resolve. `|| true` keeps the wrapper from failing when
-            # the user types /exit or Ctrl+C.
-            "${SHELL:-bash}" -i -c "$(printf '%s %q' "$ai_tool" "$prompt_text")" || true
+        kimi)
+            # kimi requires the --prompt flag. Pass the prompt through an
+            # environment variable so multi-line text survives the
+            # bash -c quoting round-trip unchanged.
+            KIMI_PROMPT="$prompt_text" "${SHELL:-bash}" -i -c 'kimi --prompt "$KIMI_PROMPT"' || true
+            ;;
+        *)
+            # Unknown tools: pass the prompt as a positional argument
+            # through the user's interactive shell so aliases resolve.
+            # The tool name is expanded literally for alias expansion;
+            # the prompt travels in an env var to preserve newlines.
+            AI_PROMPT="$prompt_text" "${SHELL:-bash}" -i -c "$ai_tool"' "$AI_PROMPT"' || true
             ;;
     esac
 else
@@ -76,12 +82,12 @@ else
             # swallows non-zero exits so a truncated stream doesn't
             # surface as a recipe failure.
             claude --dangerously-skip-permissions --print --verbose --output-format stream-json --include-partial-messages < <(printf '%s' "$prompt_text") 2>&1 | \
-                jq -n --unbuffered -r '
+                jq --unbuffered -r '
                     # Stateful: track per-block type and input byte count across the stream.
                     # content_block_start ships an empty `input: {}`; the real parameters
                     # arrive via `input_json_delta` fragments, then content_block_stop closes
                     # the line — so we open on start, stream on deltas, close on stop.
-                    foreach inputs as $evt (
+                    foreach (inputs) as $evt (
                         {index_types: {}, index_chars: {}};
 
                         if $evt.type == "stream_event" and $evt.event.type == "content_block_start" then
@@ -95,18 +101,14 @@ else
 
                         if $evt.type == "stream_event" and $evt.event.type == "content_block_start" and $evt.event.content_block.type == "tool_use" then
                             "\n🔧 \($evt.event.content_block.name)("
-                        elif $evt.type == "stream_event" and $evt.event.type == "content_block_start" and $evt.event.content_block.type == "thinking" then
-                            "💭 "
                         elif $evt.type == "stream_event" and $evt.event.type == "content_block_delta" and $evt.event.delta.type == "thinking_delta" then
-                            $evt.event.delta.thinking
+                            "💭 \($evt.event.delta.thinking)\n"
                         elif $evt.type == "stream_event" and $evt.event.type == "content_block_delta" and $evt.event.delta.type == "input_json_delta" then
                             if (.index_chars[($evt.event.index | tostring)] // 0) <= 120 then
                                 $evt.event.delta.partial_json
                             else
                                 empty
                             end
-                        elif $evt.type == "stream_event" and $evt.event.type == "content_block_stop" and .index_types[($evt.event.index | tostring)] == "thinking" then
-                            "\n"
                         elif $evt.type == "stream_event" and $evt.event.type == "content_block_stop" and .index_types[($evt.event.index | tostring)] == "tool_use" then
                             if (.index_chars[($evt.event.index | tostring)] // 0) > 120 then
                                 "…)\n"
@@ -122,13 +124,14 @@ else
                 ' || true
             ;;
         kimi)
-            # kimi uses --prompt flag instead of positional argument
-            "${SHELL:-bash}" -i -c "$(printf '%s --prompt %q' "$ai_tool" "$prompt_text")" || true
+            # kimi uses --prompt flag instead of positional argument.
+            # Use an env var so multi-line prompts survive bash -c quoting.
+            KIMI_PROMPT="$prompt_text" "${SHELL:-bash}" -i -c 'kimi --prompt "$KIMI_PROMPT"' || true
             ;;
         *)
             # Passthrough: any other tool name gets the prompt as a
             # positional argument through the user's interactive shell.
-            "${SHELL:-bash}" -i -c "$(printf '%s %q' "$ai_tool" "$prompt_text")" || true
+            AI_PROMPT="$prompt_text" "${SHELL:-bash}" -i -c "$ai_tool"' "$AI_PROMPT"' || true
             ;;
     esac
 fi
