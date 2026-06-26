@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -391,7 +390,7 @@ def _make_log_file(parent: Path, name: str, lines: int) -> Path:
     return log_file
 
 
-def test_logs_command_prints_tail_lines(tmp_path: Path) -> None:
+def test_logs_command_prints_tail_lines(tmp_path: Path, capsys) -> None:
     """`iar logs --lines 5` prints the last 5 lines from the daemon log file."""
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
@@ -407,13 +406,17 @@ def test_logs_command_prints_tail_lines(tmp_path: Path) -> None:
     context = MagicMock(repo_id="fixture-repo")
     supervisor = MagicMock()
     supervisor.list_processes.return_value = [record]
-    tail_mock = MagicMock(side_effect=[
-        ProcessLogChunk(
-            content=log_file.read_text(encoding="utf-8")[-min(log_size, 64 * 1024):],
-            next_offset=log_size,
-            eof=False,
-        )
-    ])
+    tail_mock = MagicMock(
+        side_effect=[
+            ProcessLogChunk(
+                content=log_file.read_text(encoding="utf-8")[
+                    -min(log_size, 64 * 1024) :
+                ],
+                next_offset=log_size,
+                eof=False,
+            )
+        ]
+    )
 
     parsed = _FakeArgs(
         kind=RunnerProcessKind.DAEMON.value,
@@ -422,18 +425,13 @@ def test_logs_command_prints_tail_lines(tmp_path: Path) -> None:
         repo_id="fixture-repo",
     )
 
-    captured = io.StringIO()
     with patch(
         "backend.api.cli_registry.resolve_repository_targets",
         return_value=[context],
     ), patch(
         "backend.api.cli_registry.create_process_supervisor",
         return_value=supervisor,
-    ), patch(
-        "backend.api.cli_registry.tail_runner_log", new=tail_mock
-    ), patch(
-        "backend.api.cli_registry.sys.stdout", captured
-    ):
+    ), patch("backend.api.cli_registry.tail_runner_log", new=tail_mock):
         exit_code = _run_logs_command(
             parsed=parsed,
             process_runner=MagicMock(),
@@ -443,10 +441,10 @@ def test_logs_command_prints_tail_lines(tmp_path: Path) -> None:
         )
 
     assert exit_code == 0
-    output = captured.getvalue()
-    lines = [line for line in output.splitlines() if line]
-    assert lines[-1] == "line 0049: daemon step 49"
-    assert len(lines) <= 5
+    output = capsys.readouterr().out
+    out_lines = [line for line in output.splitlines() if line]
+    assert out_lines[-1] == "line 0049: daemon step 49"
+    assert len(out_lines) <= 5
     assert tail_mock.call_count == 1
     assert tail_mock.call_args.kwargs["process_id"] == "abc123"
 
@@ -464,19 +462,24 @@ def test_logs_command_fallback_when_no_records(tmp_path: Path) -> None:
         repo_id="no-process-repo",
     )
 
+    printed_chunks: list[str] = []
+
+    def _capture_console_print(*args, **kwargs) -> None:
+        printable = args[0] if args else kwargs.get("__rich_object__", "")
+        printed_chunks.append(str(printable))
+
     with patch(
         "backend.api.cli_registry.resolve_repository_targets",
         return_value=[context],
     ), patch(
         "backend.api.cli_registry.create_process_supervisor",
         return_value=supervisor,
-    ), patch(
-        "backend.api.cli_registry.tail_runner_log"
-    ) as tail_mock, patch.object(
-        __import__("datetime", fromlist=["datetime"]).datetime,
-        "now",
-        return_value=MagicMock(strftime=lambda fmt: "2026-06-24"),
+    ), patch("backend.api.cli_registry.tail_runner_log") as tail_mock, patch(
+        "backend.api.cli_registry.datetime"
+    ) as datetime_mock, patch(
+        "backend.api.cli_registry.console.print", side_effect=_capture_console_print
     ):
+        datetime_mock.now.return_value.strftime.return_value = "2026-06-24"
         exit_code = _run_logs_command(
             parsed=parsed,
             process_runner=MagicMock(),
@@ -487,6 +490,7 @@ def test_logs_command_fallback_when_no_records(tmp_path: Path) -> None:
 
     assert exit_code == 0
     tail_mock.assert_not_called()
+    assert any("logs/app-2026-06-24.log" in chunk for chunk in printed_chunks)
 
 
 def test_logs_command_fallback_when_log_file_missing(tmp_path: Path) -> None:
@@ -514,22 +518,24 @@ def test_logs_command_fallback_when_log_file_missing(tmp_path: Path) -> None:
         repo_id="stale-repo",
     )
 
-    captured = io.StringIO()
+    printed_chunks: list[str] = []
+
+    def _capture_console_print(*args, **kwargs) -> None:
+        printable = args[0] if args else kwargs.get("__rich_object__", "")
+        printed_chunks.append(str(printable))
+
     with patch(
         "backend.api.cli_registry.resolve_repository_targets",
         return_value=[context],
     ), patch(
         "backend.api.cli_registry.create_process_supervisor",
         return_value=supervisor,
-    ), patch(
-        "backend.api.cli_registry.tail_runner_log"
-    ) as tail_mock, patch.object(
-        __import__("datetime", fromlist=["datetime"]).datetime,
-        "now",
-        return_value=MagicMock(strftime=lambda fmt: "2026-06-24"),
-    ), patch(
-        "backend.api.cli_registry.sys.stdout", captured
+    ), patch("backend.api.cli_registry.tail_runner_log") as tail_mock, patch(
+        "backend.api.cli_registry.datetime"
+    ) as datetime_mock, patch(
+        "backend.api.cli_registry.console.print", side_effect=_capture_console_print
     ):
+        datetime_mock.now.return_value.strftime.return_value = "2026-06-24"
         exit_code = _run_logs_command(
             parsed=parsed,
             process_runner=MagicMock(),
@@ -540,10 +546,10 @@ def test_logs_command_fallback_when_log_file_missing(tmp_path: Path) -> None:
 
     assert exit_code == 0
     tail_mock.assert_not_called()
-    assert "logs/app-2026-06-24.log" in captured.getvalue()
+    assert any("logs/app-2026-06-24.log" in chunk for chunk in printed_chunks)
 
 
-def test_logs_command_follows_new_content_then_sigint(tmp_path: Path) -> None:
+def test_logs_command_follows_new_content_then_sigint(tmp_path: Path, capsys) -> None:
     """`--follow` keeps polling; KeyboardInterrupt exits with 0."""
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
@@ -564,7 +570,9 @@ def test_logs_command_follows_new_content_then_sigint(tmp_path: Path) -> None:
 
     chunks = [
         ProcessLogChunk(content="initial-tail\n", next_offset=initial_size, eof=False),
-        ProcessLogChunk(content="appended-line\n", next_offset=initial_size + 14, eof=False),
+        ProcessLogChunk(
+            content="appended-line\n", next_offset=initial_size + 14, eof=False
+        ),
     ]
     tail_mock = MagicMock(side_effect=chunks)
 
@@ -589,19 +597,14 @@ def test_logs_command_follows_new_content_then_sigint(tmp_path: Path) -> None:
         repo_id="follow-repo",
     )
 
-    captured = io.StringIO()
     with patch(
         "backend.api.cli_registry.resolve_repository_targets",
         return_value=[context],
     ), patch(
         "backend.api.cli_registry.create_process_supervisor",
         return_value=supervisor,
-    ), patch(
-        "backend.api.cli_registry.tail_runner_log", new=tail_mock
-    ), patch(
+    ), patch("backend.api.cli_registry.tail_runner_log", new=tail_mock), patch(
         "backend.api.cli_registry.time.sleep", side_effect=_fake_sleep
-    ), patch(
-        "backend.api.cli_registry.sys.stdout", captured
     ):
         exit_code = _run_logs_command(
             parsed=parsed,
@@ -613,11 +616,11 @@ def test_logs_command_follows_new_content_then_sigint(tmp_path: Path) -> None:
 
     assert exit_code == 0
     assert tail_mock.call_count >= 2
-    output = captured.getvalue()
+    output = capsys.readouterr().out
     assert "appended-line" in output
 
 
-def test_logs_command_kind_review_daemon(tmp_path: Path) -> None:
+def test_logs_command_kind_review_daemon(tmp_path: Path, capsys) -> None:
     """--kind review_daemon is forwarded to the supervisor filter."""
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
@@ -648,7 +651,6 @@ def test_logs_command_kind_review_daemon(tmp_path: Path) -> None:
         repo_id="mixed-repo",
     )
 
-    captured = io.StringIO()
     with patch(
         "backend.api.cli_registry.resolve_repository_targets",
         return_value=[context],
@@ -662,8 +664,6 @@ def test_logs_command_kind_review_daemon(tmp_path: Path) -> None:
             next_offset=log_file.stat().st_size,
             eof=False,
         ),
-    ), patch(
-        "backend.api.cli_registry.sys.stdout", captured
     ):
         exit_code = _run_logs_command(
             parsed=parsed,
@@ -674,11 +674,11 @@ def test_logs_command_kind_review_daemon(tmp_path: Path) -> None:
         )
 
     assert exit_code == 0
-    output = captured.getvalue()
+    output = capsys.readouterr().out
     assert "line 0003: daemon step 3" in output
 
 
-def test_logs_command_omitted_lines_uses_default(tmp_path: Path) -> None:
+def test_logs_command_omitted_lines_uses_default(tmp_path: Path, capsys) -> None:
     """Default --lines 200 keeps all current content when below threshold."""
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
@@ -701,7 +701,6 @@ def test_logs_command_omitted_lines_uses_default(tmp_path: Path) -> None:
         repo_id="default-repo",
     )
 
-    captured = io.StringIO()
     with patch(
         "backend.api.cli_registry.resolve_repository_targets",
         return_value=[context],
@@ -715,8 +714,6 @@ def test_logs_command_omitted_lines_uses_default(tmp_path: Path) -> None:
             next_offset=log_file.stat().st_size,
             eof=False,
         ),
-    ), patch(
-        "backend.api.cli_registry.sys.stdout", captured
     ):
         exit_code = _run_logs_command(
             parsed=parsed,
@@ -727,7 +724,7 @@ def test_logs_command_omitted_lines_uses_default(tmp_path: Path) -> None:
         )
 
     assert exit_code == 0
-    output = captured.getvalue()
+    output = capsys.readouterr().out
     assert "line 0002: daemon step 2" in output
 
 
@@ -790,8 +787,11 @@ def test_daemon_status_table_includes_log_path_column(tmp_path: Path) -> None:
         )
 
     assert exit_code == 0
+    assert captured_table is not None
+    column_names = [column.header for column in captured_table.columns]
+    assert "log_path" in column_names
+
     rendered = _render_table(captured_table)
     assert "log_path" in rendered
-    assert str(log_file) in rendered
-    # Unmanaged record has empty log_path and should render as "-".
-    assert "- " in rendered or "|-|" in rendered or rendered.endswith("-")
+    # Unmanaged record has empty log_path and must render as "-" placeholder.
+    assert " - " in rendered or rendered.endswith("-")

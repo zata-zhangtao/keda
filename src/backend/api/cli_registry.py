@@ -7,7 +7,6 @@ managed process logs.
 
 from __future__ import annotations
 
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +28,7 @@ from backend.engines.agent_runner.factory import (
     create_registry_editor,
     load_fresh_agent_runner_settings,
     resolve_config_toml_path,
+    resolve_project_root_path,
     resolve_repository_targets,
     resolve_repository_targets_with_diagnostics,
 )
@@ -436,180 +436,6 @@ def _resolve_executable_from_command(command: tuple[str, ...]) -> str:
     return first
 
 
-_POLL_INTERVAL_SECONDS = 1.0
-_DEFAULT_LINES = 200
-_TAIL_WINDOW_BYTES = _DEFAULT_LOG_CHUNK_BYTES
-
-
-def _select_process_for_logs(
-    supervisor,
-    repo_id: str,
-    kind: str,
-) -> RunnerProcessRecord | None:
-    """Select the best log target for a repo+kind combination.
-
-    Preference: latest running managed process > latest managed record
-    with a non-empty log_path > any unmanaged running process.
-    """
-    all_records = supervisor.list_processes()
-    kind_records = sorted(
-        [r for r in all_records if r.repo_id == repo_id and r.kind == kind],
-        key=lambda r: r.started_at or "",
-        reverse=True,
-    )
-    if not kind_records:
-        return None
-    running = next((r for r in kind_records if r.status == "running"), None)
-    if running:
-        return running
-    with_log = next((r for r in kind_records if r.log_path), None)
-    return with_log
-
-
-def _run_logs_command(
-    parsed: argparse.Namespace,
-    process_runner: Any,
-    runner_settings: Any,
-    repo_id: str | None,
-    repo_override: str | None,
-) -> int:
-    """Print per-process logs for a managed daemon or review-daemon."""
-    kind = getattr(parsed, "kind", "daemon")
-    lines = getattr(parsed, "lines", _DEFAULT_LINES) or _DEFAULT_LINES
-    follow = getattr(parsed, "follow", False)
-
-    contexts = resolve_repository_targets(
-        runner_settings,
-        repo_id=repo_id,
-        repo_path_override=repo_override,
-        all_repositories=getattr(parsed, "all_repositories", False),
-    )
-    if not contexts:
-        error_console.print("[yellow]No repositories selected.[/]")
-        return 1
-    if len(contexts) > 1:
-        error_console.print(
-            "[red]iar logs supports exactly one repository. "
-            "Use --repo-id to specify.[/]"
-        )
-        return 1
-
-    target_repo_id = contexts[0].repo_id
-    supervisor = create_process_supervisor()
-
-    record = _select_process_for_logs(supervisor, target_repo_id, kind)
-    if record is None:
-        return _print_logs_fallback(target_repo_id, kind)
-
-    log_path = Path(record.log_path)
-    if not log_path.is_file():
-        return _print_logs_fallback(target_repo_id, kind)
-
-    try:
-        file_size = log_path.stat().st_size
-    except OSError:
-        error_console.print(f"[red]Cannot read log file:[/] {log_path}")
-        return 1
-
-    start_offset = max(0, file_size - _TAIL_WINDOW_BYTES)
-    try:
-        chunk = tail_runner_log(
-            process_id=record.process_id,
-            offset=start_offset,
-            supervisor=supervisor,
-            max_bytes=_TAIL_WINDOW_BYTES,
-        )
-    except Exception as exc:
-        error_console.print(f"[red]Failed to read log:[/] {exc}")
-        return 1
-
-    raw_content = chunk.content
-    all_lines = raw_content.splitlines(keepends=True)
-    tail_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
-    offset = chunk.next_offset
-
-    if (
-        start_offset > 0
-        and tail_lines
-        and not raw_content.startswith(tail_lines[0].rstrip("\n\r"))
-    ):
-        console.print(f"[dim](earlier content omitted; see {record.log_path})[/]")
-
-    for line in tail_lines:
-        sys.stdout.write(line)
-    if tail_lines and not tail_lines[-1].endswith("\n"):
-        sys.stdout.write("\n")
-    sys.stdout.flush()
-
-    if not follow:
-        return 0
-
-    try:
-        while True:
-            time.sleep(_POLL_INTERVAL_SECONDS)
-            # Re-fetch the record to get updated status
-            current_record = supervisor.get_process(record.process_id)
-            try:
-                chunk = tail_runner_log(
-                    process_id=record.process_id,
-                    offset=offset,
-                    supervisor=supervisor,
-                    max_bytes=_TAIL_WINDOW_BYTES,
-                )
-            except Exception:
-                break
-
-            if chunk.content:
-                sys.stdout.write(chunk.content)
-                if not chunk.content.endswith("\n"):
-                    sys.stdout.write("\n")
-                sys.stdout.flush()
-                offset = chunk.next_offset
-
-            process_exited = (
-                current_record is not None and current_record.status != "running"
-            )
-            if process_exited and chunk.eof:
-                exit_label = (
-                    f"exit_code={current_record.exit_code}"
-                    if current_record is not None
-                    and current_record.exit_code is not None
-                    else "exited"
-                )
-                console.print(f"\n[dim](process {exit_label})[/]")
-                break
-    except KeyboardInterrupt:
-        return 0
-
-    return 0
-
-
-def _print_logs_fallback(repo_id: str, kind: str) -> int:
-    """Print fallback guidance when no per-process log is available."""
-
-    supervisor = create_process_supervisor()
-    all_records = supervisor.list_processes()
-    kind_records = sorted(
-        [r for r in all_records if r.repo_id == repo_id and r.kind == kind],
-        key=lambda r: r.started_at or "",
-        reverse=True,
-    )
-    recent_with_log = next((r for r in kind_records if r.log_path), None)
-    if recent_with_log:
-        console.print(
-            f"[yellow]No running {kind} process for '{repo_id}'.[/]\n"
-            f"Most recent process log: [cyan]{recent_with_log.log_path}[/]"
-        )
-    else:
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        console.print(
-            f"[yellow]No running {kind} process for '{repo_id}' "
-            "and no process log records found.[/]\n"
-            f"Global app log: [cyan]logs/app-{today_str}.log[/]"
-        )
-    return 0
-
-
 def _run_daemon_status_command(
     parsed: argparse.Namespace,
     process_runner: IProcessRunner,
@@ -695,6 +521,13 @@ _LOGS_DEFAULT_LINES = 200
 _LOGS_POLL_INTERVAL_SECONDS = 1.0
 
 
+def _normalize_process_kind(record_kind: RunnerProcessKind | str) -> str:
+    """Return the string value of a process kind, accepting enum or string."""
+    if isinstance(record_kind, str):
+        return record_kind
+    return record_kind.value
+
+
 def _select_logs_record(
     records: list[RunnerProcessRecord], repo_id: str, kind: str
 ) -> RunnerProcessRecord | None:
@@ -710,8 +543,7 @@ def _select_logs_record(
     matching = [
         record
         for record in records
-        if record.repo_id == repo_id
-        and (record.kind == kind or record.kind.value == kind)
+        if record.repo_id == repo_id and _normalize_process_kind(record.kind) == kind
     ]
     if not matching:
         return None
@@ -770,26 +602,54 @@ def _format_logs_initial_payload(
 
 def _print_logs_fallback(repo_id: str, kind: str) -> int:
     """Print a fallback hint when no running or historical log is available."""
-    console.print(
-        f"[yellow]No managed {kind} process for '{repo_id}' "
-        "with a readable log file.[/]"
+    supervisor = create_process_supervisor()
+    all_records = supervisor.list_processes()
+    kind_records = sorted(
+        [
+            r
+            for r in all_records
+            if r.repo_id == repo_id and _normalize_process_kind(r.kind) == kind
+        ],
+        key=lambda r: r.started_at or "",
+        reverse=True,
     )
-    console.print(
-        f"[dim]Tip: recent per-process logs live under "
-        f"logs/agent-runner/processes/{repo_id}/. "
-        f"You can also inspect the global log at "
-        f"logs/app-{today_str}.log.[/]"
+    recent_with_log = next(
+        (r for r in kind_records if r.log_path and Path(r.log_path).exists()),
+        None,
     )
+    if recent_with_log:
+        console.print(
+            f"[yellow]No running {kind} process for '{repo_id}'.[/]\n"
+            f"Most recent process log: [cyan]{recent_with_log.log_path}[/]"
+        )
+    else:
+        # Resolve the daily app-log path through the engines layer
+        # (resolve_project_root_path keeps api→core→engines→infra direction
+        # intact). The format mirrors infrastructure/logging/logger.py:
+        # ``<log_dir>/app-YYYY-MM-DD.log`` where ``log_dir`` defaults to
+        # ``<project_root>/logs``.
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        app_log_path = resolve_project_root_path() / "logs" / f"app-{today_str}.log"
+        console.print(
+            f"[yellow]No running {kind} process for '{repo_id}' "
+            "and no process log records found.[/]\n"
+            f"Global app log: [cyan]{app_log_path}[/]"
+        )
     return 0
 
 
 def _run_logs_command(
     parsed: argparse.Namespace,
+    process_runner: IProcessRunner,
     runner_settings: Any,
     repo_id: str,
     repo_override: str | None,
 ) -> int:
     """Print the recent log of a managed daemon / review-daemon process."""
+    del (
+        process_runner
+    )  # Unused; kept for dispatch signature parity with sibling handlers.
+
     supervisor = create_process_supervisor()
 
     contexts = resolve_repository_targets(
@@ -820,7 +680,11 @@ def _run_logs_command(
     records = supervisor.list_processes()
     selected = _select_logs_record(records, context.repo_id, kind)
 
-    if selected is None or not selected.log_path:
+    if (
+        selected is None
+        or not selected.log_path
+        or not Path(selected.log_path).exists()
+    ):
         return _print_logs_fallback(context.repo_id, kind)
 
     start_offset = _compute_tail_window_offset(selected.log_path, lines)
@@ -828,6 +692,7 @@ def _run_logs_command(
         process_id=selected.process_id,
         offset=start_offset,
         supervisor=supervisor,
+        max_bytes=_DEFAULT_LOG_CHUNK_BYTES,
     )
 
     print(
@@ -865,6 +730,7 @@ def _run_logs_command(
             process_id=selected.process_id,
             offset=next_offset,
             supervisor=supervisor,
+            max_bytes=_DEFAULT_LOG_CHUNK_BYTES,
         )
         if chunk.content:
             print(chunk.content, end="")

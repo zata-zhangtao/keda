@@ -600,6 +600,7 @@ def test_main_daemon_status_shows_dash_for_unmanaged_log_path(
     assert "log_path" in output
     assert "-" in output
 
+
 def test_main_daemon_status_empty(capsys, monkeypatch) -> None:
     """daemon status should report when no processes are running."""
     from backend.api.cli import main
@@ -3712,9 +3713,7 @@ def test_main_logs_prints_last_n_lines(capsys, monkeypatch) -> None:
             "backend.api.cli_registry.create_process_supervisor",
             return_value=mock_supervisor,
         ):
-            exit_code = main(
-                ["logs", "--repo-id", "repo", "--lines", "5"]
-            )
+            exit_code = main(["logs", "--repo-id", "repo", "--lines", "5"])
 
         captured = capsys.readouterr()
         output = _strip_ansi(captured.out)
