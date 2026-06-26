@@ -17,14 +17,16 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     IssueSummary,
 )
-from backend.core.use_cases.agent_runner_feedback import ensure_verification_passed
+from backend.core.use_cases.agent_runner_feedback import (
+    VerificationFailedError,
+    ensure_verification_passed,
+)
 from backend.core.use_cases.agent_runner_git import (
     get_current_branch,
     get_head_sha,
     has_changes,
     run_verification,
 )
-from backend.core.use_cases.agent_runner_publish import validate_safe_changes
 
 _COMMIT_REQUEST_RELATIVE_PATH = Path(".agent-runner/commit-request.json")
 _MAX_COMMIT_MESSAGE_LENGTH = 200
@@ -145,6 +147,9 @@ def _commit_with_autofix_recovery(
     if first_attempt.return_code == 0:
         return
     if _verification_left_tracked_worktree_changes(worktree_path, process_runner):
+        # Imported locally to avoid a circular dependency with agent_runner_publish.
+        from backend.core.use_cases.agent_runner_publish import validate_safe_changes
+
         validate_safe_changes(worktree_path, config, process_runner)
         process_runner.run(["git", "add", "-u"], cwd=worktree_path)
     # 用 check=True 重试：重新 stage 解决格式问题则提交成功；否则由底层抛出
@@ -194,12 +199,22 @@ def commit_requested_changes(
     remove_commit_request(worktree_path)
     if not has_changes(worktree_path, process_runner):
         raise EmptyCommitRequestError()
+    # Imported locally to avoid a circular dependency with agent_runner_publish.
+    from backend.core.use_cases.agent_runner_publish import validate_safe_changes
+
     validate_safe_changes(worktree_path, config, process_runner)
     process_runner.run(["git", "add", "-A"], cwd=worktree_path)
     # 在 git commit 前再次运行验证，确保 staged 内容仍通过门禁
     verification_results = run_verification(worktree_path, config, process_runner)
-    ensure_verification_passed(verification_results)
+    try:
+        ensure_verification_passed(verification_results)
+    except VerificationFailedError:
+        # Let the Fix Agent / Recovery Agent handle verification failures.
+        raise
     if _verification_left_tracked_worktree_changes(worktree_path, process_runner):
+        # Imported locally to avoid a circular dependency with agent_runner_publish.
+        from backend.core.use_cases.agent_runner_publish import validate_safe_changes
+
         validate_safe_changes(worktree_path, config, process_runner)
         process_runner.run(["git", "add", "-u"], cwd=worktree_path)
     _commit_with_autofix_recovery(worktree_path, commit_message, config, process_runner)
@@ -252,6 +267,9 @@ def checkpoint_uncommitted_progress(
     if not current_branch or current_branch != expected_branch:
         return None
     # 安全门：禁改路径校验必须先于 staging，避免把敏感文件 checkpoint 进历史。
+    # Imported locally to avoid a circular dependency with agent_runner_publish.
+    from backend.core.use_cases.agent_runner_publish import validate_safe_changes
+
     validate_safe_changes(worktree_path, config, process_runner)
     process_runner.run(["git", "add", "-A"], cwd=worktree_path)
     checkpoint_message = (
@@ -318,6 +336,9 @@ def commit_runner_authored_paths(
     )
     if staged_diff.return_code == 0:
         return None
+    # Imported locally to avoid a circular dependency with agent_runner_publish.
+    from backend.core.use_cases.agent_runner_publish import validate_safe_changes
+
     validate_safe_changes(worktree_path, config, process_runner)
     _commit_with_autofix_recovery(worktree_path, commit_message, config, process_runner)
     return get_head_sha(worktree_path, process_runner)

@@ -65,6 +65,7 @@ from backend.core.use_cases.agent_runner_failure import (
 from backend.core.use_cases.agent_runner_feedback import (
     PrdDeliveryError,
     VerificationFailedError,
+    build_fix_prompt,
     build_progress_continuation_prompt,
     build_prompt,
     build_recovery_prompt,
@@ -126,6 +127,7 @@ __all__ = [
     "_ensure_worktree_branch",
     "_reconcile_worktree_with_remote_branch",
     "build_blocked_continuation_prompt",
+    "build_fix_prompt",
     "build_progress_continuation_prompt",
     "build_prompt",
     "build_recovery_prompt",
@@ -164,6 +166,7 @@ __all__ = [
     "run_agent_until_committed",
     "run_agent_with_prompt",
     "run_agent_with_prompt_resilient",
+    "run_fix_agent",
     "run_once",
     "run_preflight_checks",
     "run_verification",
@@ -437,6 +440,16 @@ def build_blocked_continuation_prompt(
     return "\n".join(lines)
 
 
+def _build_verification_commands_summary(
+    config: AppConfig,
+) -> str:
+    """Return a human-readable list of configured verification commands."""
+    commands = config.runner.verification_commands
+    if not commands:
+        return "No verification commands configured."
+    return "\n".join(f"- `{command}`" for command in commands)
+
+
 def run_agent(
     agent_name: str,
     issue: IssueSummary,
@@ -454,6 +467,7 @@ def run_agent(
         config.prompts,
         phase="execution",
         validation_line=build_validation_prompt_line(issue, config),
+        verification_commands_summary=_build_verification_commands_summary(config),
     )
     return run_agent_with_prompt_resilient(
         agent_name,
@@ -465,6 +479,51 @@ def run_agent(
         transient_retry_delay_seconds=config.runner.transient_retry_delay_seconds,
         timeout_seconds=timeout_seconds,
         inactivity_timeout_seconds=inactivity_timeout_seconds,
+    )
+
+
+def run_fix_agent(
+    agent_name: str,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    verification_results: list[CommandResult],
+) -> CommandResult:
+    """Run a focused Fix Agent for simple local verification failures.
+
+    The Fix Agent prompt only contains the current verification failure and
+    constraints; it does not ask the agent to update PRD checklists, evidence,
+    or other global deliverables.
+
+    Args:
+        agent_name: Agent to invoke.
+        issue: Current Issue.
+        worktree_path: Agent worktree path.
+        config: Agent Runner configuration.
+        process_runner: Command executor.
+        verification_results: Failed verification results to repair.
+
+    Returns:
+        The Fix Agent command result.
+    """
+    prompt = build_fix_prompt(
+        issue,
+        worktree_path,
+        verification_results=verification_results,
+        verification_commands_summary=_build_verification_commands_summary(config),
+    )
+    fix_timeout = config.runner.fix_timeout_seconds or config.runner.timeout_seconds
+    return run_agent_with_prompt_resilient(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        issue=issue,
+        transient_retry_attempts=config.runner.transient_retry_attempts,
+        transient_retry_delay_seconds=config.runner.transient_retry_delay_seconds,
+        timeout_seconds=fix_timeout,
+        inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
     )
 
 
@@ -786,6 +845,11 @@ def run_agent_until_committed(
                     recovery_attempt=attempt_index,
                     max_recovery_attempts=max_recovery_attempts,
                     failure_summary=recovery_failure_summary,
+                    verification_results=final_verification_results,
+                )
+                recovery_timeout = (
+                    config.runner.recovery_timeout_seconds
+                    or config.runner.timeout_seconds
                 )
                 run_agent_with_prompt_resilient(
                     selected_agent,
@@ -797,7 +861,7 @@ def run_agent_until_committed(
                     transient_retry_delay_seconds=(
                         config.runner.transient_retry_delay_seconds
                     ),
-                    timeout_seconds=config.runner.timeout_seconds,
+                    timeout_seconds=recovery_timeout,
                     inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                 )
         except AgentUnavailableError:
@@ -970,42 +1034,85 @@ def run_agent_until_committed(
                     expected_branch=expected_branch,
                 )
             except VerificationFailedError as exc:
-                # staging 后验证失败：unstage 并进入 recovery，让 agent 修复
+                # staging 后验证失败：runner autofix 已在 commit_requested_changes
+                # 内部尝试过。先 unstage，再交给 Fix Agent 处理简单局部失败。
                 unstage_changes(worktree_path, process_runner)
-                after_sha = get_head_sha(worktree_path, process_runner)
-                failure_type = classify_failure(
-                    before_sha=before_sha,
-                    after_sha=after_sha,
-                    has_uncommitted=False,
-                    agent_result=CommandResult(("",), 0, "", ""),
-                    verification_results=exc.verification_results,
-                    exc=None,
-                )
-                attempt_results.append(
-                    AttemptResult(
-                        attempt_number=attempt_index + 1,
-                        failure_type=failure_type,
-                        recovered=False,
-                        detail=format_recovery_failure_summary(
-                            "Verification after runner staged changes with git add -A failed.",
-                            exc.verification_results,
-                        ),
+                fix_succeeded = False
+                try:
+                    fix_agent_result = run_fix_agent(
+                        selected_agent,
+                        issue,
+                        worktree_path,
+                        config,
+                        process_runner,
+                        verification_results=exc.verification_results,
                     )
-                )
-                if attempt_index >= max_recovery_attempts:
-                    raise MaxRetriesExceededError(attempt_results) from exc
-                recovery_failure_summary = format_recovery_failure_summary(
-                    "Verification after runner staged changes with git add -A failed.",
-                    exc.verification_results,
-                )
-                _logger.warning(
-                    "Staged verification failed for Issue #%d; "
-                    "asking agent to recover (%d/%d).",
-                    issue.number,
-                    attempt_index + 1,
-                    max_recovery_attempts,
-                )
-                continue
+                    if fix_agent_result.return_code != 0:
+                        raise RuntimeError(
+                            f"Fix Agent exited with code {fix_agent_result.return_code}"
+                        )
+                    post_fix_verification = run_verification(
+                        worktree_path, config, process_runner
+                    )
+                    if failed_verification_results(post_fix_verification):
+                        raise VerificationFailedError(post_fix_verification)
+                    final_verification_results = commit_requested_changes(
+                        issue,
+                        worktree_path,
+                        config,
+                        process_runner,
+                        expected_branch=expected_branch,
+                    )
+                    fix_succeeded = True
+                except (
+                    RuntimeError,
+                    subprocess.CalledProcessError,
+                    VerificationFailedError,
+                ) as fix_exc:
+                    _logger.warning(
+                        "Fix Agent failed for Issue #%d: %s",
+                        issue.number,
+                        fix_exc,
+                    )
+                if fix_succeeded:
+                    # Fix Agent repaired the failure and the runner committed it.
+                    # Fall through to Phase 5 to record success.
+                    pass
+                else:
+                    after_sha = get_head_sha(worktree_path, process_runner)
+                    failure_type = classify_failure(
+                        before_sha=before_sha,
+                        after_sha=after_sha,
+                        has_uncommitted=False,
+                        agent_result=CommandResult(("",), 0, "", ""),
+                        verification_results=exc.verification_results,
+                        exc=None,
+                    )
+                    attempt_results.append(
+                        AttemptResult(
+                            attempt_number=attempt_index + 1,
+                            failure_type=failure_type,
+                            recovered=False,
+                            detail=format_recovery_failure_summary(
+                                "Verification after runner staged changes with git add -A failed.",
+                                exc.verification_results,
+                            ),
+                        )
+                    )
+                    if attempt_index >= max_recovery_attempts:
+                        raise MaxRetriesExceededError(attempt_results) from exc
+                    recovery_failure_summary = format_recovery_failure_summary(
+                        "Verification after runner staged changes with git add -A failed.",
+                        exc.verification_results,
+                    )
+                    _logger.warning(
+                        "Staged verification failed for Issue #%d; "
+                        "asking agent to recover (%d/%d).",
+                        issue.number,
+                        attempt_index + 1,
+                        max_recovery_attempts,
+                    )
+                    continue
             except (RuntimeError, subprocess.CalledProcessError) as exc:
                 after_sha = get_head_sha(worktree_path, process_runner)
                 # 对于不可恢复的 commit 错误（如分支切换、无 commit request），

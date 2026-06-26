@@ -76,14 +76,20 @@ _DEFAULT_EXECUTION_TEMPLATE = "\n".join(
         "Issue body:",
         "{issue_body}",
         "",
+        "Verification commands the runner will run before committing:",
+        "{verification_commands_summary}",
+        "",
         "Execution rules:",
         "- Read AGENTS.md and follow repository instructions.",
+        "- Check project conventions (naming, dependency direction, file encoding, "
+        "max line length, etc.) before requesting a commit.",
         "- Only modify files inside the current worktree.",
         "- Do not merge main, delete branches, push, or create PRs; "
         "the runner handles publishing.",
         "- Do not run `git add` or `git commit`; the runner exposes "
         "a restricted commit proxy.",
-        "- After finishing your changes, request a commit by writing "
+        "- After finishing your changes, run the verification commands above "
+        "locally if possible, then request a commit by writing "
         "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
         "- Do not touch production systems or real business data.",
         "- Implement the requested task with focused tests and docs updates.",
@@ -185,6 +191,7 @@ def build_prompt(
     phase: str = "execution",
     *,
     validation_line: str = "",
+    verification_commands_summary: str = "",
 ) -> str:
     """Build the prompt sent to the local AI agent from a template.
 
@@ -195,6 +202,8 @@ def build_prompt(
         phase: 模板阶段名。
         validation_line: Realistic Validation 强制执行指令；不要求证据的
             Issue 传空字符串。仅当模板含 ``{validation_line}`` 占位符时生效。
+        verification_commands_summary: 当前 runner 会执行的 verification
+            命令列表说明；传给 agent 让它提前了解交付门禁。
     """
     template = prompt_config.phases.get(phase, _DEFAULT_EXECUTION_TEMPLATE)
     prd_line = _build_prd_context_block(issue, worktree_path)
@@ -206,6 +215,7 @@ def build_prompt(
         issue_body=issue.body,
         prd_line=prd_line,
         validation_line=validation_line,
+        verification_commands_summary=verification_commands_summary,
     )
 
 
@@ -460,6 +470,67 @@ def ensure_verification_passed(verification_results: list[CommandResult]) -> Non
         raise VerificationFailedError(verification_results)
 
 
+def build_fix_prompt(
+    issue: IssueSummary,
+    worktree_path: Path,
+    *,
+    verification_results: list[CommandResult],
+    verification_commands_summary: str = "",
+) -> str:
+    """Build a focused prompt for the Fix Agent layer.
+
+    The Fix Agent only repairs the current verification failure. It must not
+    modify evidence files, PRD checklists, or ``.agent-runner/commit-request.json``
+    unless those files are directly part of the failing verification output.
+
+    Args:
+        issue: The Issue being processed.
+        worktree_path: Agent worktree path.
+        verification_results: The failed verification results to repair.
+        verification_commands_summary: Full list of verification commands the
+            runner runs, so the Fix Agent knows the complete delivery gate.
+
+    Returns:
+        Prompt text for the Fix Agent.
+    """
+    failed_results = failed_verification_results(verification_results)
+    failure_text = (
+        "\n\n".join(format_result_for_recovery(result) for result in failed_results)
+        if failed_results
+        else "Verification failed without a captured failing command."
+    )
+    commands_section = ""
+    if verification_commands_summary:
+        commands_section = (
+            "The runner will re-run the following verification commands after your "
+            f"fix (in order; the first failure stops the chain):\n{verification_commands_summary}"
+        )
+    return "\n".join(
+        [
+            f"Fix the verification failure for GitHub Issue #{issue.number}: {issue.title}",
+            "",
+            f"Issue URL: {issue.url}",
+            f"Worktree: {worktree_path}",
+            "",
+            "The runner detected the following verification failure:",
+            failure_text,
+            "",
+            commands_section,
+            "Fix rules:",
+            "- Only modify files inside the current worktree.",
+            "- Only fix the code or tests that caused the verification failure above.",
+            "- Before requesting a commit, re-check project conventions "
+            "(naming, dependency direction, file encoding, max line length, etc.).",
+            "- Do not update evidence files, PRD Acceptance Checklists, or commit requests.",
+            "- Do not switch branches, merge main, push, or create PRs.",
+            "- Do not run `git add` or `git commit`; the runner handles commits.",
+            "- After fixing the failure, write or update "
+            "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
+            "- Finish with a concise summary of the fix.",
+        ]
+    )
+
+
 def build_recovery_prompt(
     issue: IssueSummary,
     worktree_path: Path,
@@ -467,6 +538,7 @@ def build_recovery_prompt(
     recovery_attempt: int,
     max_recovery_attempts: int,
     failure_summary: str,
+    verification_results: list[CommandResult] | None = None,
 ) -> str:
     """Build a prompt that asks the agent to repair a failed attempt."""
     prd_path = extract_prd_path(issue.body)
@@ -490,6 +562,19 @@ def build_recovery_prompt(
             "Fix the manifest and the referenced evidence files before requesting a commit."
         )
 
+    verification_section = ""
+    if verification_results:
+        failed_results = failed_verification_results(verification_results)
+        if failed_results:
+            formatted_failures = "\n\n".join(
+                format_result_for_recovery(result) for result in failed_results
+            )
+            verification_section = (
+                "The runner detected the following verification failures "
+                "(commands are run in order; the first failure stops the chain):\n\n"
+                f"{formatted_failures}"
+            )
+
     return "\n".join(
         [
             f"Repair GitHub Issue #{issue.number}: {issue.title}",
@@ -502,10 +587,13 @@ def build_recovery_prompt(
             "The runner could not finish the previous attempt:",
             failure_summary,
             "",
+            verification_section,
             structured_evidence_line,
             "Recovery rules:",
             "- Inspect the current worktree and fix the failure.",
             "- Only modify files inside the current worktree.",
+            "- Before requesting a commit, re-check project conventions "
+            "(naming, dependency direction, file encoding, max line length, etc.).",
             "- Do not switch branches, merge main, push, or create PRs.",
             "- Do not run `git add` or `git commit`; the runner handles commits.",
             "- After fixing the issue, write or update "
@@ -518,12 +606,16 @@ def build_recovery_prompt(
 def build_progress_continuation_prompt(
     issue: IssueSummary,
     worktree_path: Path,
+    *,
+    failure_summary: str = "",
+    verification_results: list[CommandResult] | None = None,
 ) -> str:
     """构造"在已提交进度上继续"的 prompt，用于跨 claim 续作。
 
     当上一次 claim 把部分进度提交成 checkpoint（或正常提交）后，下一次 claim
     不应从零开始。本 prompt 告知 agent 工作树已有既有提交，要先检视现状再补齐
-    剩余工作，避免重复劳动或回退已完成内容。
+    剩余工作，避免重复劳动或回退已完成内容。同时附带上一次失败的 verification
+    上下文，让续作 agent 直接针对未通过的检查继续修复。
     """
     prd_path = extract_prd_path(issue.body)
     if prd_path:
@@ -536,6 +628,24 @@ def build_progress_continuation_prompt(
         )
     else:
         prd_line = "If the Issue references a PRD, read it to see the remaining work."
+
+    failure_section = ""
+    if failure_summary:
+        failure_section = "The previous attempt failed with:\n" f"{failure_summary}\n"
+
+    verification_section = ""
+    if verification_results:
+        failed_results = failed_verification_results(verification_results)
+        if failed_results:
+            formatted_failures = "\n\n".join(
+                format_result_for_recovery(result) for result in failed_results
+            )
+            verification_section = (
+                "The previous attempt failed the following verification checks "
+                "(commands are run in order; the first failure stops the chain):\n\n"
+                f"{formatted_failures}\n"
+            )
+
     return "\n".join(
         [
             f"Continue GitHub Issue #{issue.number}: {issue.title}",
@@ -549,8 +659,12 @@ def build_progress_continuation_prompt(
             "and the PRD Acceptance Checklist), then implement only what remains.",
             prd_line,
             "",
+            failure_section,
+            verification_section,
             "Execution rules:",
             "- Only modify files inside the current worktree.",
+            "- Before requesting a commit, re-check project conventions "
+            "(naming, dependency direction, file encoding, max line length, etc.).",
             "- Do not merge main, switch branches, push, or create PRs; "
             "the runner handles publishing.",
             "- Do not run `git add` or `git commit`; after finishing your changes, "

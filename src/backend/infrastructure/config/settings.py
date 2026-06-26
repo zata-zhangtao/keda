@@ -417,11 +417,12 @@ class AgentRunnerRunnerSettings(BaseModel):
     transient_retry_attempts: int = 2
     transient_retry_delay_seconds: int = 10
     timeout_seconds: int = 14400
+    fix_timeout_seconds: int | None = None
+    recovery_timeout_seconds: int | None = None
     inactivity_timeout_seconds: int = 1200
     verification_commands: list[str] = Field(
         default_factory=lambda: [
             "git diff --check",
-            "uv run mkdocs build",
         ]
     )
 

@@ -88,6 +88,25 @@ cd frontend && npm run dev             # 前端（默认 5173 端口）
 
 `iar`（issue-agent-runner）是本项目的核心工具，用于将 GitHub Issues 转为本地 AI Agent 任务队列，自动创建 Git Worktree 并驱动 Agent 执行。
 
+### Recovery Flow
+
+当 Agent 提交遇到 pre-commit、测试或 verification 失败时，`iar` 不会直接失败退出，而是按下面两层 escalator 逐步修复，最大限度减少人工干预和 API 浪费：
+
+1. **Fix Agent**：对简单局部问题（如 lint 逻辑错误、单测失败、遗漏 import），启动一个只聚焦当前 verification 失败的轻量 agent，使用更短的 `fix_timeout_seconds`。
+2. **Recovery Agent**：对复杂或全局失败（evidence、PRD checklist、commit request 等），启动完整 recovery agent，使用独立的 `recovery_timeout_seconds`。
+
+为了降低重复犯错和重复摸索的概率，runner 会在各阶段 prompt 中透传 verification 上下文：
+
+- 首次实现 prompt 会列出 runner 将要执行的完整 `verification_commands`。
+- Fix Agent / Recovery Agent 的 prompt 会附带具体失败的命令、exit code、stdout/stderr。
+- 跨 claim 续作 prompt 会继承上一次失败的 verification 输出。
+
+如果某轮修复仍未通过，runner 会先创建一个 `[Agent][WIP] Issue #N checkpoint` commit 保存进度，使其能跨 claim 续作；这些 checkpoint 在最终合并时由 GitHub/GitLab squash 收敛为干净历史，不再由 runner 内部压平。
+
+<p align="center">
+  <img src="./assets/diagrams/agent-runner-recovery-flow.svg" alt="Agent Runner Recovery Flow: Fix Agent → Recovery Agent → WIP checkpoint" width="100%">
+</p>
+
 ### 安装 `iar` 全局命令
 
 本项目通过 `pyproject.toml` 的 `[project.scripts]` 注册了 `iar` CLI。开发本仓库时推荐以可编辑模式安装为全局命令，这样源码改动可直接反映到 `iar`，无需每次重新构建安装：

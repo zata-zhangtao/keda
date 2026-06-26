@@ -40,6 +40,7 @@ from backend.core.shared.interfaces.runner_live_view import (
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     AttemptResult,
+    CommandResult,
     IssueSummary,
     ReviewEventMarker,
 )
@@ -474,7 +475,16 @@ def _process_ready_issue(
             exc.__class__.__name__,
         )
         commit_result = None
-        continuation_prompt = build_progress_continuation_prompt(issue, worktree_path)
+        verification_results: list[CommandResult] | None = None
+        failure_summary = str(exc)
+        if isinstance(exc, VerificationFailedError):
+            verification_results = exc.verification_results
+        continuation_prompt = build_progress_continuation_prompt(
+            issue,
+            worktree_path,
+            failure_summary=failure_summary,
+            verification_results=verification_results,
+        )
 
     if commit_result is not None:
         # 有已存在的本地 commit 且已达交付标准 → 恢复路径

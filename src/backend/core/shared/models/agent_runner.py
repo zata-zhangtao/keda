@@ -201,6 +201,10 @@ class RunnerConfig:
         timeout_seconds: Wall-clock timeout for a single agent execution.
         inactivity_timeout_seconds: Kill the agent if it produces no stdout or
             stderr for this many seconds.
+        fix_timeout_seconds: Optional shorter timeout for the Fix Agent phase.
+            When ``None``, falls back to ``timeout_seconds``.
+        recovery_timeout_seconds: Optional timeout for the full Recovery Agent
+            phase. When ``None``, falls back to ``timeout_seconds``.
     """
 
     max_issues: int = 1
@@ -213,6 +217,8 @@ class RunnerConfig:
     transient_retry_attempts: int = 2
     transient_retry_delay_seconds: int = 10
     timeout_seconds: int = 14400
+    fix_timeout_seconds: int | None = None
+    recovery_timeout_seconds: int | None = None
     inactivity_timeout_seconds: int = 1200
     verification_commands: tuple[str, ...] = (
         "git diff --check",

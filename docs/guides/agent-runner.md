@@ -280,6 +280,10 @@ uv run --project /path/to/keda iar init
 - 存在 `just test` 配方（含经 `import 'justfile.shared'` 等导入的配方，以及 `@test` quiet 前缀）→ 追加 `just test`，并**优先选它**：`just test` 跑的就是 `git commit` 时 pre-commit 强制的同一组 lint/format/test 钩子，并刷新 `.last_tested_commit` 标记，因此 runner 验证通过后提交不会再被 pre-commit 挡下；
 - 否则走通用回退：声明了 `pre-commit` 依赖且有 `.pre-commit-config.yaml` → 追加 `uv run pre-commit run --all-files`；声明了 `pytest` 且有 `tests/` → 追加 `uv run pytest -q`。
 
+代码层面的默认值只有 `git diff --check`（避免在未 `iar init` 的仓库里因缺少 mkdocs/pytest 而直接失败）。`iar init` 会按上述规则生成更完整的项目专属命令列表。
+
+探测出的命令列表会被 runner 写入首次实现 prompt、Fix Agent prompt 和 Recovery Agent prompt，让 Agent 在编码和修复阶段都能看到完整的交付门禁。所有 prompt 都会提醒 Agent 在请求 commit 前检查项目规范（AGENTS.md、命名、依赖方向、文件编码、行长度限制等）。
+
 > **check-test-flag 护栏**：若仓库装了 `check-test-flag` 钩子却没有可探测的 `just test` 配方，`iar init` 会**跳过** `pre-commit run --all-files` 并打印告警——该钩子只认 `just test` 写入的 `.last_tested_commit` 标记，bare `pre-commit run` 会触发它并让 runner 代提交死锁。这类仓库应补一个 `just test` 配方，或移除 check-test-flag。
 >
 > 探测只在 `iar init` 时发生：已存在的 `.iar.toml` 不会自动更新，需重跑 `iar init --force` 或手改 `verification_commands` 才会采用新探测结果。
@@ -341,6 +345,10 @@ transient_retry_attempts = 2
 transient_retry_delay_seconds = 10
 # 单次 agent 执行的 wall-clock 超时（秒）；超时会 kill 子进程并进入 recovery
 timeout_seconds = 14400
+# Fix Agent 阶段的 wall-clock 超时（秒）；未设置时沿用 timeout_seconds
+fix_timeout_seconds = 1800
+# 完整 Recovery Agent 阶段的 wall-clock 超时（秒）；未设置时沿用 timeout_seconds
+recovery_timeout_seconds = 7200
 # 无输出超时（秒）：agent 子进程在指定时间内没有 stdout/stderr 输出时被 kill
 inactivity_timeout_seconds = 1200
 # 提交前自动运行的验证命令；任一命令失败会进入 recovery
@@ -350,14 +358,18 @@ verification_commands = [
 
 ### Agent 执行超时
 
-`[agent_runner.runner]` 提供两类超时，防止 agent 子进程永久挂起：
+`[agent_runner.runner]` 提供四类超时，防止 agent 子进程永久挂起：
 
 | 配置项 | 默认值 | 作用 |
 |---|---|---|
 | `timeout_seconds` | `14400`（4 小时） | 单次 agent 执行的 wall-clock 上限。超过后 runner 会 kill 子进程，并将本次尝试记录为可恢复的 `AGENT_ERROR`，随后进入 recovery 流程。 |
+| `fix_timeout_seconds` | `None`（沿用 `timeout_seconds`） | Fix Agent 阶段的 wall-clock 上限。用于修复提交前验证失败等局部问题，通常可以给一个比完整实现更短的预算。 |
+| `recovery_timeout_seconds` | `None`（沿用 `timeout_seconds`） | 完整 Recovery Agent 阶段的 wall-clock 上限。Recovery Agent 需要基于失败摘要做全局重规划，可单独配置。 |
 | `inactivity_timeout_seconds` | `1200`（20 分钟） | 无输出上限。只要 agent 子进程持续产生 stdout/stderr 数据，时钟就会重置；如果超过 20 分钟没有任何输出，runner 认为进程已卡死并 kill。 |
 
-两类超时独立生效，满足任意一个都会终止子进程。它们同时作用于首次实现和每次 recovery attempt。如果某个任务确实需要更长时间，可以在目标仓库的 `.iar.toml` 或全局 `config.toml` 中调大对应值；如果某类任务经常静默运行（例如大型编译），可适当提高 `inactivity_timeout_seconds`。
+四类超时独立生效，满足任意一个都会终止子进程。`timeout_seconds` 是首次实现与默认 fallback 的基准；`fix_timeout_seconds` 与 `recovery_timeout_seconds` 分别覆盖 Fix Agent 与完整 Recovery Agent，未设置时自动回退到 `timeout_seconds`。
+
+如果某个任务确实需要更长时间，可以在目标仓库的 `.iar.toml` 或全局 `config.toml` 中调大对应值；如果某类任务经常静默运行（例如大型编译），可适当提高 `inactivity_timeout_seconds`。
 
 超时后的日志示例：
 
@@ -366,6 +378,37 @@ Claude stream (Issue #19: ...) timed out after 14400s; terminating: claude ...
 Claude stream (Issue #19: ...) inactive for 1200s; terminating: claude ...
 Agent command failed for Issue #19; asking agent to recover (1/5).
 ```
+
+### Fix Agent 与 Recovery Agent
+
+在把 agent 修改提交进仓库前，runner 会先运行 `verification_commands`。为了让 agent 从一开始就清楚交付门禁，**首次实现 prompt、Fix Agent prompt、Recovery Agent prompt 都会包含 verification 上下文**：
+
+- 首次实现 prompt 会列出完整的 `verification_commands` 列表，让 agent 在写代码时就知道最终要通过哪些检查。
+- Fix Agent 和 Recovery Agent 会附带具体的失败命令、exit code、stdout/stderr，而不是只给一句抽象描述。
+
+当验证失败时，runner 不会立即进入完整的 Recovery Agent，而是先尝试一次更轻量的 **Fix Agent**：
+
+1. **Fix Agent 层**
+   - Fix Agent 的 prompt 包含当前 verification 失败信息以及完整的 `verification_commands` 列表，并明确要求：只修导致失败的代码/测试；不要改 evidence、PRD Acceptance Checklist、commit request；不要切换分支或 push。
+   - Fix Agent 使用 `fix_timeout_seconds` 作为超时预算，未配置时回退到 `timeout_seconds`。
+   - Fix Agent 成功后，runner 会再次验证并尝试通过 commit proxy 提交；失败则进入完整的 Recovery Agent。
+
+2. **完整 Recovery Agent**
+   - 只有 Fix Agent 失败后，runner 才会启动完整的 Recovery Agent，基于更完整的上下文重规划实现。
+   - Recovery Agent 的 prompt 包含格式化后的 failure summary，以及原始 verification 失败输出（命令、exit code、stdout/stderr），避免重复踩同样的坑。
+   - Recovery Agent 使用 `recovery_timeout_seconds` 作为超时预算，未配置时回退到 `timeout_seconds`。
+
+这一分层修复的目的是把大量常见的 lint/类型错误（如 agent 遗漏 import、简单单测失败）用更短的超时和更聚焦的 prompt 解决，避免动辄调用一次完整的 recovery agent。
+
+### WIP checkpoint 不合并
+
+在实现阶段或 recovery 阶段，runner 可能调用 `checkpoint_uncommitted_progress` 把当前未提交进度保存为 `[Agent][WIP] Issue #N checkpoint` 形式的临时 commit，作为崩溃恢复点和跨 claim 续作的基础。这些 WIP checkpoint 不会被单独推送到远程分支上——它们只在本地分支存在，最终随功能 commit 一起被 push。
+
+runner **不在 publish 前对 WIP checkpoint 做 squash**：
+
+- 正常成功流程中，最终功能 commit 已经位于 WIP checkpoint 之上，`git reset --soft` 式的压平无法触发或会引入历史重写风险。
+- WIP checkpoint 的历史噪音在最终合并 PR 时，由 GitHub/GitLab 的 squash merge 收敛为一条干净历史。
+- checkpoint 的跨 claim 续作价值被完整保留。
 
 ### 非 claude agent 的实时输出（PTY）
 
@@ -1443,6 +1486,7 @@ iar daemon --concurrency 3
 
 - 已有提交**已达交付标准**（验证通过、PRD 清单全勾、证据齐备）→ 直接发布，不再调用 Agent。
 - 已有提交**尚未达标**（典型：上一次的 WIP checkpoint）→ runner 不再硬失败，而是带着 “continue from committed progress” 的 prompt 重新调用 Agent，在已提交进度上补齐剩余工作。
+  - continuation prompt 会附带上一次失败的 failure summary 和原始 verification 输出（失败命令、exit code、stdout/stderr），让续作 agent 直接针对未通过的检查继续修复，而不是重新摸索。
 - 无本地提交 → 全新实现。
 
 因此对体量大的 Issue，反复 `agent/failed → agent/ready` 会让进度逐轮累积，而不是空转；合并时这些 WIP commit 可通过 squash 收敛为干净历史。
@@ -2398,7 +2442,7 @@ validation_passed = "validation/passed"
 - 不同仓库应在 `verification_commands` 中配置自己的验证命令，例如 `just test`、`npm test`、`pnpm lint` 或 `make test`
 - runner 会在提交前先运行一次 `verification_commands`；发现未提交变更并执行 `git add -A` 后，会再次运行同一组验证命令，覆盖依赖 staged 状态的 commit hook 或测试标记
 - 如果验证过程中的 formatter 或 lint 自动修复了已跟踪文件，runner 会在安全路径校验后用 `git add -u` 同步这些 tracked 修改，避免 `.last_tested_commit` 指向 working tree 而 commit hook 检查到过期 staged tree
-- Agent CLI 非零退出或任一验证失败时，runner 最多按 `max_recovery_attempts` 重新调用同一个 Agent；每次 recovery 前会等待 `recovery_retry_delay_seconds` 秒，并把失败摘要或失败命令的 exit code、stdout、stderr 放入 recovery prompt；Agent 修复后仍只能写 commit request，不能直接提交
+- Agent CLI 非零退出或任一验证失败时，runner 最多按 `max_recovery_attempts` 重新调用同一个 Agent；每次 recovery 前会等待 `recovery_retry_delay_seconds` 秒，并把失败摘要以及失败命令的 exit code、stdout、stderr 放入 Fix Agent / Recovery Agent prompt；首次实现 prompt 也会预先列出完整的 `verification_commands` 并提醒检查项目规范，让 Agent 在写代码阶段就了解交付门禁。Agent 修复后仍只能写 commit request，不能直接提交
 - Runner 通过 `classify_failure` 对每次尝试进行分层失败识别，覆盖 `UNCOMMITTED_CHANGES`、`NO_COMMITS`、`VERIFICATION_FAILED`、`AGENT_ERROR`、`UNRECOVERABLE` 等类型；不可恢复错误（如安全路径拦截）会立即终止 retry loop
 - 每轮尝试的结果都会记录在 `AttemptResult` 中，最终 Issue comment 包含「Attempt History」表格，展示 attempt_number、failure_type、recovered 状态，便于人工 review 时追踪 Agent 的修复轨迹；Detail 列取每次失败输出的最后一行有效内容（实际报错几乎总在末尾），而不是从头截断的样板文字
 - 失败评论会识别已知错误签名：命中 Claude API 用量限额（429 / usage limit）时，在评论顶部输出加粗的 Root cause 摘要并带上限额重置时间；`CalledProcessError` 的命令回显只保留命令名（如 `claude`），不会把完整 agent prompt 打进评论
@@ -2412,7 +2456,13 @@ validation_passed = "validation/passed"
 
 当 Issue body 中包含 `PRD path: \`tasks/pending/xxx.md\`` 时，runner 成功路径会强制完成 PRD closeout：
 
-1. **Prompt 引导**：`build_prompt()` 从 `config.toml` 的 `[agent_runner.prompts.phases]` 模板渲染 prompt，默认模板会明确要求 Agent 在请求 commit 前更新 PRD 的 `Acceptance Checklist`，并在所有验收项完成后将 PRD 从 `tasks/pending/` 移动到 `tasks/archive/`。`build_recovery_prompt()` 也在 recovery 阶段给出同样的 closeout 提醒。
+1. **Prompt 引导**：`build_prompt()` 从 `config.toml` 的 `[agent_runner.prompts.phases]` 模板渲染 prompt，默认模板会：
+   - 列出 runner 将要执行的 `verification_commands`，让 Agent 在写代码阶段就了解交付门禁。
+   - 提醒 Agent 在请求 commit 前检查项目规范（AGENTS.md、命名、依赖方向、文件编码、行长度限制等）。
+   - 明确要求 Agent 在请求 commit 前更新 PRD 的 `Acceptance Checklist`，并在所有验收项完成后将 PRD 从 `tasks/pending/` 移动到 `tasks/archive/`。
+   - `build_fix_prompt()` 在 Fix Agent 阶段给出当前 verification 失败输出以及完整 verification 命令列表，约束 Agent 只修导致失败的代码/测试，并提醒检查项目规范。
+   - `build_recovery_prompt()` 在 recovery 阶段给出 failure summary 和原始 verification 失败输出，并给出同样的 closeout 与规范检查提醒。
+   - `build_progress_continuation_prompt()` 在跨 claim 续作时附带上一次失败的 failure summary 和 verification 输出，并提醒检查项目规范。
 2. **提交前 Delivery Gate**：runner 在 `publish_changes()` 之前执行 PRD delivery gate：
    - 无 PRD path：跳过 gate，保持现有行为。
    - PRD 仍在 `tasks/pending/`：若 `Acceptance Checklist` 还有未勾选项，将失败原因交回 recovery prompt；若已全部勾选，runner 自动执行 `git mv tasks/pending/<name>.md tasks/archive/<name>.md`。
