@@ -1,9 +1,11 @@
 ---
 name: prd
-description: "[Updated 2026-05-22] Generate an architecture-aware technical PRD. Triggers on: create a prd, write prd for, plan this feature. Prioritizes reuse, minimal-change plans, required output compliance, realistic validation, and conditional web research."
+description: "[Updated 2026-06-24] Generate an architecture-aware technical PRD. Triggers on: create a prd, write prd for, plan this feature. Prioritizes reuse, minimal-change plans, required output compliance, realistic validation, and conditional web research."
 ---
 
 # PRD Generator (Architecture-First)
+
+> **Maintenance note:** The `[Updated YYYY-MM-DD]` tag in the frontmatter reflects the date of the last **substantive** change to this SKILL.md (core rules, workflow phases, output contract, or templates). When committing a change to this file or any template under `skills/prd/`, bump the date to match the commit day so it never lags behind git history.
 
 Create technical PRDs that fit the existing codebase instead of expanding it unnecessarily.
 The default recommendation must be the smallest change that cleanly solves the problem.
