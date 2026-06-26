@@ -62,8 +62,8 @@ from backend.infrastructure.config.settings import (
     IAR_REPOSITORY_CONFIG_FILENAME,
     config,
     load_agent_runner_local_settings,
-    resolve_config_toml_path,
     resolve_project_root_path,
+    resolve_registry_config_toml_path,
 )
 from backend.infrastructure.console.process_supervisor import (
     PidfileProcessSupervisor,
@@ -1139,8 +1139,13 @@ def create_process_supervisor() -> IRunnerProcessSupervisor:
 
 
 def create_registry_editor() -> IRepositoryRegistryEditor:
-    """创建仓库 registry（config.toml）的受限写回编辑器。"""
-    return TomlRegistryEditor(resolve_config_toml_path())
+    """创建仓库 registry 的受限写回编辑器。
+
+    Registry 是全局共享的，必须固定写入 ``~/.iar/config.toml``，而不是
+    当前工作目录下搜索到的某个项目级 config.toml。这避免了在目标
+    仓库内执行 ``iar init`` 时意外污染该仓库的应用配置。
+    """
+    return TomlRegistryEditor(resolve_registry_config_toml_path())
 
 
 def resolve_console_spawn_cwd() -> Path:

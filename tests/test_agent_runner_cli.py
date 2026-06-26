@@ -2619,15 +2619,16 @@ def test_main_registry_sync_dry_run(
 ) -> None:
     """`iar registry sync --dry-run` should not write config.toml."""
     monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent_runner]\n", encoding="utf-8")
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
     scan_root = tmp_path / "code"
     scan_root.mkdir()
     repo_path = scan_root / "bar"
     repo_path.mkdir()
     (repo_path / ".git").mkdir()
     _write_iar_toml(repo_path, "bar")
-
-    config_path = tmp_path / "config.toml"
-    config_path.write_text("[agent_runner]\n", encoding="utf-8")
 
     exit_code = main(["registry", "sync", "--dry-run", str(scan_root)])
     captured = capsys.readouterr()
@@ -2646,15 +2647,16 @@ def test_main_registry_sync_registers_new_repo(
 ) -> None:
     """`iar registry sync` should write discovered repos to config.toml."""
     monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent_runner]\n", encoding="utf-8")
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
     scan_root = tmp_path / "code"
     scan_root.mkdir()
     repo_path = scan_root / "baz"
     repo_path.mkdir()
     (repo_path / ".git").mkdir()
     _write_iar_toml(repo_path, "baz")
-
-    config_path = tmp_path / "config.toml"
-    config_path.write_text("[agent_runner]\n", encoding="utf-8")
 
     exit_code = main(["registry", "sync", str(scan_root)])
 
@@ -2671,13 +2673,15 @@ def test_main_registry_reinit_updates_remote(
     """`iar registry reinit` should rewrite .iar.toml with the given remote."""
     monkeypatch.chdir(tmp_path)
     repo_path = _init_bare_git_repository(tmp_path, "fsense")
-    _write_iar_toml(repo_path, "zata-zhangtao-fsense")
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         "[agent_runner]\n[agent_runner.repositories.zata-zhangtao-fsense]\n"
         f'path = "{repo_path}"\nenabled = true\ndisplay_name = "fsense"\n',
         encoding="utf-8",
     )
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    _write_iar_toml(repo_path, "zata-zhangtao-fsense")
 
     exit_code = main(["registry", "reinit", "--repo-id", "zata-zhangtao-fsense"])
     captured = capsys.readouterr()
@@ -2715,13 +2719,15 @@ def test_main_registry_reinit_start_daemons_uses_config_directory_cwd(
     """`iar registry reinit --start-daemons` should spawn daemons from the directory containing the effective config.toml so they read the same registry as the parent CLI."""
     monkeypatch.chdir(tmp_path)
     repo_path = _init_bare_git_repository(tmp_path, "fsense")
-    _write_iar_toml(repo_path, "zata-zhangtao-fsense")
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         "[agent_runner]\n[agent_runner.repositories.zata-zhangtao-fsense]\n"
         f'path = "{repo_path}"\nenabled = true\ndisplay_name = "fsense"\n',
         encoding="utf-8",
     )
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
+
+    _write_iar_toml(repo_path, "zata-zhangtao-fsense")
 
     fake_context = MagicMock()
     fake_context.repo_id = "zata-zhangtao-fsense"
@@ -2774,9 +2780,9 @@ def test_main_registry_reinit_start_daemons_uses_config_directory_cwd(
             side_effect=_fake_start,
         ) as mock_start,
         patch(
-            "backend.api.cli_registry.resolve_config_toml_path",
+            "backend.api.cli_registry.resolve_registry_config_toml_path",
             return_value=config_path,
-        ) as mock_resolve_config,
+        ) as mock_resolve_registry_config,
     ):
         mock_supervisor = MagicMock()
         mock_supervisor.list_processes.return_value = []
@@ -2801,8 +2807,8 @@ def test_main_registry_reinit_start_daemons_uses_config_directory_cwd(
     # The local config initializer was invoked as part of reinit.
     mock_init.assert_called_once()
 
-    # spawn_cwd must come from the effective config.toml directory, not the repository path.
-    mock_resolve_config.assert_called_once()
+    # spawn_cwd must come from the registry config.toml directory, not the repository path.
+    mock_resolve_registry_config.assert_called_once()
     assert mock_start.call_count == 2
     for call in mock_start.call_args_list:
         assert call.kwargs["spawn_cwd"] == config_path.parent
@@ -2824,6 +2830,7 @@ def test_main_registry_remove_deletes_entry(
         f'path = "{repo_path}"\nenabled = true\ndisplay_name = "fsense"\n',
         encoding="utf-8",
     )
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
 
     exit_code = main(["registry", "remove", "--repo-id", "zata-zhangtao-fsense"])
     captured = capsys.readouterr()
@@ -2849,6 +2856,7 @@ def test_main_registry_remove_delete_removes_directory(
         f'path = "{repo_path}"\nenabled = true\ndisplay_name = "fsense"\n',
         encoding="utf-8",
     )
+    monkeypatch.setenv("IAR_CONFIG", str(config_path))
 
     exit_code = main(
         ["registry", "remove", "--repo-id", "zata-zhangtao-fsense", "--delete"]

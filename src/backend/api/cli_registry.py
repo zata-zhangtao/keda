@@ -22,7 +22,7 @@ from backend.engines.agent_runner.factory import (
     create_process_supervisor,
     create_registry_editor,
     load_fresh_agent_runner_settings,
-    resolve_config_toml_path,
+    resolve_registry_config_toml_path,
     resolve_repository_targets,
     resolve_repository_targets_with_diagnostics,
 )
@@ -255,7 +255,7 @@ def _run_registry_start_command(
         kinds.append(RunnerProcessKind.REVIEW_DAEMON)
 
     exit_code = 0
-    spawn_cwd = resolve_config_toml_path().parent
+    spawn_cwd = resolve_registry_config_toml_path().parent
     for repo_id in repo_ids:
         repo_entry = settings.repositories[repo_id]
         repo_path = Path(repo_entry.path).expanduser()
@@ -389,7 +389,7 @@ def _restart_daemons(repo_id: str, repo_path: Path, process_runner) -> int:
                     f"[yellow]Failed to stop old {record.kind} {record.process_id}:[/] {exc}"
                 )
 
-    spawn_cwd = resolve_config_toml_path().parent
+    spawn_cwd = resolve_registry_config_toml_path().parent
     for kind in (RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON):
         try:
             record = start_runner_process(

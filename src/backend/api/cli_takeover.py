@@ -15,7 +15,7 @@ from backend.engines.agent_runner.factory import (
     create_registry_editor,
     load_fresh_agent_runner_settings,
     logger,
-    resolve_config_toml_path,
+    resolve_registry_config_toml_path,
     resolve_repository_targets_with_diagnostics,
 )
 from backend.engines.agent_runner.takeover import (
@@ -36,14 +36,14 @@ if TYPE_CHECKING:
 def _start_daemons_for_repo(repo_id: str, _repo_path: Path) -> None:
     """Start managed daemon and review-daemon for a freshly registered repo.
 
-    The daemon is spawned from the directory containing the effective
-    ``config.toml`` so the subprocess resolves the same registry that was just
-    updated by ``takeover``.
+    The daemon is spawned from the directory containing the registry
+    ``config.toml`` so the subprocess resolves the same global registry that was
+    just updated by ``takeover``.
     """
     settings = load_fresh_agent_runner_settings()
     contexts, _failures = resolve_repository_targets_with_diagnostics(settings)
     supervisor = create_process_supervisor()
-    spawn_cwd = resolve_config_toml_path().parent
+    spawn_cwd = resolve_registry_config_toml_path().parent
     runner_command = settings.console.runner_command
     for kind in (RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON):
         try:

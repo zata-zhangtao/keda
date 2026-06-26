@@ -515,3 +515,42 @@ def test_iar_init_updates_registry_path_when_repository_moves(
     assert f'path = "{new_path}"' in config_text
     assert f'path = "{old_path}"' not in config_text
     assert config_text.count("[agent_runner.repositories.target]") == 1
+
+
+def test_iar_init_does_not_pollute_target_repo_config_toml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without IAR_CONFIG, iar init must write registry to ~/.iar/config.toml only.
+
+    Regression guard: previously ``create_registry_editor()`` resolved the
+    registry path via ``resolve_config_toml_path()``, which walks upward from
+    the current working directory and finds the target repository's own
+    ``config.toml``. That polluted the target repo with
+    ``[agent_runner.repositories.<repo_id>]`` entries.
+    """
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+
+    repo_path = _init_git_repository(tmp_path, "target")
+    repo_config_path = repo_path / "config.toml"
+    repo_config_path.write_text(
+        '[app]\nname = "target-app"\n',
+        encoding="utf-8",
+    )
+    original_repo_config = repo_config_path.read_text(encoding="utf-8")
+
+    monkeypatch.chdir(repo_path)
+    assert main(["init"]) == 0
+
+    # The target repository's application config.toml must remain untouched.
+    assert repo_config_path.read_text(encoding="utf-8") == original_repo_config
+
+    # Registry must land in the global IAR config instead.
+    global_config_path = fake_home / ".iar" / "config.toml"
+    assert global_config_path.is_file()
+    global_config_text = global_config_path.read_text(encoding="utf-8")
+    assert "[agent_runner.repositories.target]" in global_config_text
+    assert f'path = "{repo_path}"' in global_config_text

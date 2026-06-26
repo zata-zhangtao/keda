@@ -80,6 +80,13 @@ def isolate_agent_runner_toml(monkeypatch: pytest.MonkeyPatch) -> None:
         "_load_toml_section_data",
         load_toml_section_without_agent_repositories,
     )
+    # Registry repositories are loaded from a separate config path; keep those
+    # isolated from the developer's ~/.iar/config.toml as well.
+    monkeypatch.setattr(
+        settings_module,
+        "_load_registry_toml_section_data",
+        lambda _section_name: {},
+    )
 
 
 def test_build_app_config_from_settings_structure() -> None:
