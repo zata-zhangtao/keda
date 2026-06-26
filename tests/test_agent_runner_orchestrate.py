@@ -812,7 +812,7 @@ def _agent_outcomes(
     """
     calls: list[str] = []
 
-    def process_for_agent(*, agent: str) -> None:
+    def process_for_agent(*, agent: str, **kwargs: object) -> None:
         calls.append(agent)
         outcome = outcomes[agent]
         if isinstance(outcome, BaseException):
@@ -1043,6 +1043,101 @@ def test_stamp_attempts_with_agent_preserves_existing_label() -> None:
 
     assert stamped[0].agent == "claude"
     assert stamped[1].agent == "codex"
+
+
+def test_persist_attempt_result_writes_to_sqlite_and_github() -> None:
+    """Each attempt is persisted to SQLite and rendered into a GitHub comment."""
+    import sqlite3
+
+    from backend.infrastructure.persistence.console_store import SqliteConsoleStore
+
+    fake_client = FakeGitHubClient()
+    db_path = Path("/tmp/iar-test-attempt-records.db")
+    db_path.unlink(missing_ok=True)
+    store = SqliteConsoleStore(db_path)
+
+    result = AttemptResult(
+        attempt_number=1,
+        failure_type=FailureType.NO_COMMITS,
+        recovered=False,
+        detail="No commits.",
+        agent="claude",
+        started_at="2026-06-26T10:00:00",
+        finished_at="2026-06-26T10:00:05",
+        duration_seconds=5.0,
+    )
+
+    from backend.core.use_cases.agent_runner_orchestrate import _persist_attempt_result
+
+    _persist_attempt_result(
+        result=result,
+        attempt_results=[result],
+        repo_id="test-repo",
+        issue_number=42,
+        github_client=fake_client,
+        run_history_store=store,
+    )
+
+    # SQLite
+    with sqlite3.connect(str(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT repo_id, issue_number, agent, attempt_number, failure_type, "
+            "recovered, detail, duration_seconds FROM attempt_records"
+        ).fetchall()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row[0] == "test-repo"
+    assert row[1] == 42
+    assert row[2] == "claude"
+    assert row[3] == 1
+    assert row[4] == "no_commits"
+    assert row[5] == 0
+    assert row[6] == "No commits."
+    assert row[7] == 5.0
+
+    # GitHub: first attempt creates a new comment
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "<!-- iar-attempt-history -->" in comment_calls[0]["body"]
+    assert "claude" in comment_calls[0]["body"]
+    assert "5.0s" in comment_calls[0]["body"]
+
+
+def test_persist_attempt_result_updates_existing_github_comment() -> None:
+    """Subsequent attempts update the existing attempt-history comment."""
+    fake_client = FakeGitHubClient()
+    # Seed an existing attempt-history comment
+    fake_client.comment_issue(42, "<!-- iar-attempt-history -->\nold body")
+    fake_client.calls.clear()
+
+    result = AttemptResult(
+        attempt_number=2,
+        failure_type=FailureType.SUCCESS,
+        recovered=True,
+        detail="Done.",
+        agent="claude",
+        started_at="",
+        finished_at="",
+        duration_seconds=3.0,
+    )
+
+    from backend.core.use_cases.agent_runner_orchestrate import _persist_attempt_result
+
+    _persist_attempt_result(
+        result=result,
+        attempt_results=[result],
+        repo_id="test-repo",
+        issue_number=42,
+        github_client=fake_client,
+        run_history_store=None,
+    )
+
+    edit_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_comment"]
+    assert len(edit_calls) == 1
+    assert "<!-- iar-attempt-history -->" in edit_calls[0]["body"]
+    assert "Done." in edit_calls[0]["body"]
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 0
 
 
 def test_run_once_switches_agent_on_provider_capacity(monkeypatch) -> None:

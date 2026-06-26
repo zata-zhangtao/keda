@@ -85,6 +85,27 @@ class RunRecord:
 
 
 @dataclass(frozen=True)
+class AttemptRecord:
+    """一次 agent execution attempt 的旁路记录。
+
+    与 :class:`backend.core.shared.models.agent_runner.AttemptResult` 同构，
+    用于本地 SQLite 持久化，方便在 runner 崩溃或跨 agent fallback 后仍能
+    复盘每轮耗时与失败原因。
+    """
+
+    repo_id: str
+    issue_number: int
+    agent: str
+    attempt_number: int
+    failure_type: str
+    recovered: bool
+    detail: str
+    started_at: str  # ISO8601 UTC
+    finished_at: str  # ISO8601 UTC
+    duration_seconds: float
+
+
+@dataclass(frozen=True)
 class AuditEntry:
     """一次管理终端写操作的审计条目。"""
 
@@ -202,6 +223,11 @@ class IRunHistoryStore(ABC):
     @abstractmethod
     def append_run(self, run_record: RunRecord) -> None:
         """追加一条运行记录。实现必须不抛出阻断 runner 的异常。"""
+        ...
+
+    @abstractmethod
+    def append_attempt(self, attempt_record: AttemptRecord) -> None:
+        """追加一条 attempt 记录。实现必须不抛出阻断 runner 的异常。"""
         ...
 
     @abstractmethod

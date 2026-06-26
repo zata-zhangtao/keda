@@ -256,6 +256,13 @@ _TRANSIENT_HINT_PATTERN = re.compile(
     r"|gateway time-?out"
     r"|temporarily unavailable"
     r"|\b50[234]\b"
+    r"|\b400\b"
+    r"|invalid params"
+    r"|invalid parameter"
+    r"|invalid request"
+    r"|bad request"
+    r"|malformed request"
+    r"|input should be a valid dictionary"
     r"|timed out"
     r"|read timeout"
     r"|network error",
@@ -298,9 +305,10 @@ def is_transient_failure(exc: BaseException) -> bool:
     """Return whether ``exc`` looks like a transient network/transport error.
 
     Transient failures (dropped sockets, connection resets, gateway timeouts,
-    5xx) often succeed on a simple retry with the same agent. Provider-capacity
-    failures are intentionally excluded so capacity errors escalate instead of
-    being retried in place.
+    5xx, and occasional provider-side 400 / invalid-parameter responses) often
+    succeed on a simple retry with the same agent. Provider-capacity failures
+    are intentionally excluded so capacity errors escalate instead of being
+    retried in place.
 
     Args:
         exc: The exception raised by an agent invocation.
@@ -416,16 +424,17 @@ def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
     lines = [
         "### Attempt History",
         "",
-        "| Attempt | Agent | Failure Type | Recovered | Detail |",
-        "|---------|-------|-------------|-----------|--------|",
+        "| Attempt | Agent | Failure Type | Recovered | Duration | Detail |",
+        "|---------|-------|-------------|-----------|----------|--------|",
     ]
     for result in attempt_results:
         detail = _summarize_attempt_detail(result.detail)
         recovered = "Yes" if result.recovered else "No"
         agent = result.agent or "-"
+        duration = f"{result.duration_seconds:.1f}s"
         lines.append(
             f"| {result.attempt_number} | {agent} | "
-            f"{result.failure_type.value} | {recovered} | {detail} |"
+            f"{result.failure_type.value} | {recovered} | {duration} | {detail} |"
         )
     return "\n".join(lines)
 

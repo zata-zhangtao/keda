@@ -83,3 +83,23 @@
 ## 2026-06-26 13:39 · runner-context
 
 > 可以直接查看 just ai check  这个里面就提供了会话恢复的能力,  关于runner agnet ,完全可以服用相关的逻辑, 防止说出了问题就完全忘记前面的内容了
+
+## 2026-06-26 15:55 · agent-runner
+
+> session 丢失问题,  当前在 agnet runner , 尝试失败之后, 可能session 就直接丢失了, 这个需要解决, 无论 claude / codex 还是 kimi 都有解决办法的
+
+## 2026-06-26 15:56 · memory · skill
+
+> 当前缺少memory 机制,  每一次的任务都没有记录, 没有沉淀, 这个是一个问题, 是不是要沉淀一个skill
+
+## 2026-06-26 15:57 · deploy · docker
+
+> 还需要增加一个额docker 部署的能力 , 将当前的项目部署到远程服务器, 在服务器上面配置 api key 然后iar 项目直接长期的在远程服务器上面运行
+
+## 2026-06-26 15:59 · token · metrics
+
+> 缺少关于token 的统计功能, 现在的agent 在每个环节消耗了多少token是一个未知数
+
+## 2026-06-26 16:01 · test · benchmark
+
+> 需要增加一个用于测试的能力, 预设几个prd ,copy  ~/code/zata_code_template的模板之后 在模板仓库上面完成prd  然后对比完成的效果  ( 可以让人自己去评判完成度, 也可以对比没有用 iar 的效果) 以及耗时( 人介入的时间)

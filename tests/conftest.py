@@ -38,6 +38,8 @@ class FakeGitHubClient(IGitHubClient):
         self._issue_url = issue_url
         self.calls: list[dict] = []
         self._issue_comments: dict[int, list[str]] = {}
+        self._issue_comment_entries: dict[int, list[tuple[int, str]]] = {}
+        self._next_comment_id = 1
         self._issue_bodies: dict[int, str] = {}
         self._pr_comments: dict[int, list[str]] = {}
         self._pr_contexts: dict[str, object | None] = {}
@@ -96,6 +98,11 @@ class FakeGitHubClient(IGitHubClient):
             {"method": "comment_issue", "issue_number": issue_number, "body": body}
         )
         self._issue_comments.setdefault(issue_number, []).append(body)
+        comment_id = self._next_comment_id
+        self._next_comment_id += 1
+        self._issue_comment_entries.setdefault(issue_number, []).append(
+            (comment_id, body)
+        )
 
     def edit_issue_body(self, issue_number: int, body: str) -> None:
         self.calls.append(
@@ -166,6 +173,25 @@ class FakeGitHubClient(IGitHubClient):
             {"method": "list_issue_comments", "issue_number": issue_number}
         )
         return list(self._issue_comments.get(issue_number, []))
+
+    def list_issue_comment_entries(self, issue_number: int) -> list[tuple[int, str]]:
+        self.calls.append(
+            {
+                "method": "list_issue_comment_entries",
+                "issue_number": issue_number,
+            }
+        )
+        return list(self._issue_comment_entries.get(issue_number, []))
+
+    def edit_issue_comment(self, comment_id: int, body: str) -> None:
+        self.calls.append(
+            {"method": "edit_issue_comment", "comment_id": comment_id, "body": body}
+        )
+        for entries in self._issue_comment_entries.values():
+            for index, (existing_id, _) in enumerate(entries):
+                if existing_id == comment_id:
+                    entries[index] = (comment_id, body)
+                    return
 
     def list_pr_comments(self, pr_number: int) -> list[str]:
         self.calls.append({"method": "list_pr_comments", "pr_number": pr_number})

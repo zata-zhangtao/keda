@@ -41,6 +41,22 @@ class RunRecord:
 
 
 @dataclass(frozen=True)
+class AttemptRecord:
+    """一次 agent execution attempt 的本地记录（与 core 同构）。"""
+
+    repo_id: str
+    issue_number: int
+    agent: str
+    attempt_number: int
+    failure_type: str
+    recovered: bool
+    detail: str
+    started_at: str
+    finished_at: str
+    duration_seconds: float
+
+
+@dataclass(frozen=True)
 class AuditEntry:
     """一次管理终端写操作的审计条目（与 core 同构）。"""
 
@@ -65,7 +81,7 @@ class DailyRunTrendEntry:
     average_duration_seconds: float | None
 
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _CREATE_RUN_RECORDS = """
 CREATE TABLE IF NOT EXISTS run_records (
@@ -80,6 +96,23 @@ CREATE TABLE IF NOT EXISTS run_records (
     started_at TEXT NOT NULL,
     finished_at TEXT NOT NULL,
     duration_seconds REAL NOT NULL
+)
+"""
+
+_CREATE_ATTEMPT_RECORDS = """
+CREATE TABLE IF NOT EXISTS attempt_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id TEXT NOT NULL,
+    issue_number INTEGER NOT NULL,
+    agent TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    failure_type TEXT NOT NULL,
+    recovered INTEGER NOT NULL,
+    detail TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    duration_seconds REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 )
 """
 
@@ -152,6 +185,8 @@ class SqliteConsoleStore:
         if current_version < 2:
             connection.execute(_CREATE_ROADMAP_QUEUE)
             connection.execute(_CREATE_ROADMAP_SETTINGS)
+        if current_version < 3:
+            connection.execute(_CREATE_ATTEMPT_RECORDS)
         connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
         connection.commit()
 
@@ -180,6 +215,34 @@ class SqliteConsoleStore:
                 connection.commit()
         except Exception as exc:  # noqa: BLE001 - side-channel must not break runs.
             _logger.warning("Failed to append run record to %s: %s", self._db_path, exc)
+
+    def append_attempt(self, attempt_record: AttemptRecord) -> None:
+        """追加 attempt 记录；失败时降级为日志警告，不阻断 runner。"""
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO attempt_records "
+                    "(repo_id, issue_number, agent, attempt_number, failure_type, "
+                    " recovered, detail, started_at, finished_at, duration_seconds) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        attempt_record.repo_id,
+                        attempt_record.issue_number,
+                        attempt_record.agent,
+                        attempt_record.attempt_number,
+                        attempt_record.failure_type,
+                        int(attempt_record.recovered),
+                        attempt_record.detail,
+                        attempt_record.started_at,
+                        attempt_record.finished_at,
+                        attempt_record.duration_seconds,
+                    ),
+                )
+                connection.commit()
+        except Exception as exc:  # noqa: BLE001 - side-channel must not break runs.
+            _logger.warning(
+                "Failed to append attempt record to %s: %s", self._db_path, exc
+            )
 
     def append_audit(self, audit_entry: AuditEntry) -> None:
         """追加审计条目；失败时降级为日志警告。"""

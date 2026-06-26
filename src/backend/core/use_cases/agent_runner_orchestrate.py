@@ -32,7 +32,10 @@ from backend.core.shared.interfaces.agent_runner import (
     IGitHubClient,
     IProcessRunner,
 )
-from backend.core.shared.interfaces.runner_console import IRunHistoryStore
+from backend.core.shared.interfaces.runner_console import (
+    AttemptRecord,
+    IRunHistoryStore,
+)
 from backend.core.shared.interfaces.runner_live_view import (
     IRunnerLiveView,
     NoOpRunnerLiveView,
@@ -111,6 +114,7 @@ from backend.core.use_cases.agent_runner_failure import (
     MaxRetriesExceededError,
     ProviderCapacityError,
     UnrecoverableError,
+    format_attempt_history,
 )
 from backend.core.use_cases.agent_runner_failure_marking import (
     _mark_issue_blocked,
@@ -314,6 +318,8 @@ def _process_blocked_resolution(
     process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
     marker: ReviewEventMarker,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None]
+    | None = None,
 ) -> None:
     """处理带 blocked_resolution marker 的 blocked Issue。
 
@@ -381,6 +387,7 @@ def _process_blocked_resolution(
             before_sha=before_sha,
             expected_branch=current_branch,
             prompt_override=continuation_prompt,
+            on_attempt_recorded=on_attempt_recorded,
         )
 
         # 完成发布流程
@@ -408,6 +415,8 @@ def _process_ready_issue(
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None]
+    | None = None,
 ) -> None:
     """处理 ready 状态的 Issue（完整实现路径）。
 
@@ -515,6 +524,7 @@ def _process_ready_issue(
             before_sha=before_sha,
             expected_branch=expected_branch,
             prompt_override=continuation_prompt,
+            on_attempt_recorded=on_attempt_recorded,
         )
     except (MaxRetriesExceededError, ProviderCapacityError):
         # 切换 agent 前先把在途进度 checkpoint，让 fallback 链上的下一个
@@ -567,6 +577,7 @@ def _process_running_rework(
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
     marker: ReviewEventMarker,
+    **kwargs: object,
 ) -> None:
     """处理带 rework 标记的 running Issue。
 
@@ -729,6 +740,7 @@ def _process_running_publish_recovery(
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
+    **kwargs: object,
 ) -> None:
     """恢复 running Issue 的发布流程。
 
@@ -794,10 +806,10 @@ def _stamp_attempts_with_agent(
 ) -> list[AttemptResult]:
     """Return attempts labeled with the agent that produced them.
 
-    Attempts recorded inside a single agent's run carry an empty ``agent``
-    field; the fallback layer stamps the agent so the merged failure history
-    shows which agent produced each attempt. Attempts that already carry an
-    agent label are left untouched.
+    Attempts recorded inside a single agent's run already carry the agent
+    name; this helper remains for backward compatibility and cross-agent
+    fallback merging. Attempts that already carry an agent label are left
+    untouched.
 
     Args:
         attempts: Attempt history from one agent's run.
@@ -812,12 +824,91 @@ def _stamp_attempts_with_agent(
     ]
 
 
+_ATTEMPT_HISTORY_MARKER = "<!-- iar-attempt-history -->"
+_ATTEMPT_HISTORY_TITLE = "### Attempt History"
+
+
+def _build_attempt_history_comment(attempt_results: list[AttemptResult]) -> str:
+    """Build a GitHub comment body that carries the attempt history table."""
+    history_table = format_attempt_history(attempt_results)
+    if not history_table:
+        history_table = "_(No attempts recorded yet.)_"
+    return "\n".join(
+        [
+            _ATTEMPT_HISTORY_MARKER,
+            f"{_ATTEMPT_HISTORY_TITLE} (live)",
+            "",
+            history_table,
+        ]
+    )
+
+
+def _persist_attempt_result(
+    *,
+    result: AttemptResult,
+    attempt_results: list[AttemptResult],
+    repo_id: str,
+    issue_number: int,
+    github_client: IGitHubClient,
+    run_history_store: IRunHistoryStore | None,
+) -> None:
+    """Persist one attempt to SQLite and update the GitHub running comment.
+
+    This is the incremental persistence callback wired into
+    :func:`run_agent_until_committed`. Failures are logged and swallowed so the
+    runner state machine is never blocked by the side-channel storage.
+    """
+    if run_history_store is not None:
+        try:
+            run_history_store.append_attempt(
+                AttemptRecord(
+                    repo_id=repo_id,
+                    issue_number=issue_number,
+                    agent=result.agent,
+                    attempt_number=result.attempt_number,
+                    failure_type=result.failure_type.value,
+                    recovered=result.recovered,
+                    detail=result.detail,
+                    started_at=result.started_at,
+                    finished_at=result.finished_at,
+                    duration_seconds=result.duration_seconds,
+                )
+            )
+        except Exception:  # noqa: BLE001 - side-channel must not break runs
+            _logger.warning(
+                "Failed to append attempt record for Issue #%d",
+                issue_number,
+                exc_info=True,
+            )
+
+    try:
+        entries = github_client.list_issue_comment_entries(issue_number)
+        comment_id: int | None = None
+        for existing_id, body in entries:
+            if _ATTEMPT_HISTORY_MARKER in body:
+                comment_id = existing_id
+                break
+        comment_body = _build_attempt_history_comment(attempt_results)
+        if comment_id is not None:
+            github_client.edit_issue_comment(comment_id, comment_body)
+        else:
+            github_client.comment_issue(issue_number, comment_body)
+    except Exception:  # noqa: BLE001 - side-channel must not break runs
+        _logger.warning(
+            "Failed to update GitHub attempt history for Issue #%d",
+            issue_number,
+            exc_info=True,
+        )
+
+
 def run_issue_with_agent_fallback(
     *,
     issue: IssueSummary,
     config: AppConfig,
     agent: str,
     process_for_agent: Callable[..., None],
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None]
+    | None = None,
 ) -> str:
     """Process an Issue across the configured agent fallback chain.
 
@@ -860,7 +951,10 @@ def run_issue_with_agent_fallback(
     for candidate_index, candidate_agent in enumerate(candidate_agents):
         is_last_candidate = candidate_index == len(candidate_agents) - 1
         try:
-            process_for_agent(agent=candidate_agent)
+            process_for_agent(
+                agent=candidate_agent,
+                on_attempt_recorded=on_attempt_recorded,
+            )
             return candidate_agent
         except (UnrecoverableError, ForbiddenBlockedError):
             # Every agent would hit the same wall; do not switch.
@@ -943,6 +1037,19 @@ def _process_single_issue(
     output_view.register_issue(issue.number, selected_agent)
     run_started_at = datetime.now(timezone.utc)
     used_agent = selected_agent
+
+    def _on_attempt_recorded(
+        result: AttemptResult, attempt_results: list[AttemptResult]
+    ) -> None:
+        _persist_attempt_result(
+            result=result,
+            attempt_results=attempt_results,
+            repo_id=effective_repo_id,
+            issue_number=issue.number,
+            github_client=github_client,
+            run_history_store=run_history_store,
+        )
+
     try:
         if issue_kind == "ready":
             used_agent = run_issue_with_agent_fallback(
@@ -958,6 +1065,7 @@ def _process_single_issue(
                     process_runner=process_runner,
                     content_generator=content_generator,
                 ),
+                on_attempt_recorded=_on_attempt_recorded,
             )
         elif issue_kind == "running_rework":
             _, marker = _guard_running_issue_is_rework(issue, config, github_client)
@@ -1005,6 +1113,7 @@ def _process_single_issue(
                     content_generator=content_generator,
                     marker=marker,
                 ),
+                on_attempt_recorded=_on_attempt_recorded,
             )
         else:
             used_agent = run_issue_with_agent_fallback(

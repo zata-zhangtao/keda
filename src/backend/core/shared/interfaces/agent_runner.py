@@ -451,6 +451,28 @@ class IGitHubClient(ABC):
         ...
 
     @abstractmethod
+    def list_issue_comment_entries(self, issue_number: int) -> list[tuple[int, str]]:
+        """返回某个 Issue 的评论 ID 与正文列表。
+
+        Args:
+            issue_number: 目标 Issue 编号。
+
+        Returns:
+            list[tuple[int, str]]: 按时间顺序排列的评论 (id, body) 列表。
+        """
+        ...
+
+    @abstractmethod
+    def edit_issue_comment(self, comment_id: int, body: str) -> None:
+        """编辑某个 Issue 评论的正文。
+
+        Args:
+            comment_id: 目标评论的 numeric ID。
+            body: 新的 Markdown 正文。
+        """
+        ...
+
+    @abstractmethod
     def comment_pr(self, pr_number: int, body: str) -> None:
         """向某个 Pull Request 发布一条 Markdown 评论。
 

@@ -22,6 +22,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
@@ -754,6 +755,49 @@ def wait_before_recovery_attempt(
     time.sleep(delay_seconds)
 
 
+def _make_attempt_result(
+    *,
+    attempt_number: int,
+    failure_type: FailureType,
+    recovered: bool,
+    detail: str,
+    agent: str,
+    started_mono: float,
+    started_iso: str,
+) -> AttemptResult:
+    """Build an ``AttemptResult`` with wall-clock timing filled in now."""
+    finished_mono = time.monotonic()
+    finished_iso = datetime.now(timezone.utc).isoformat()
+    return AttemptResult(
+        attempt_number=attempt_number,
+        failure_type=failure_type,
+        recovered=recovered,
+        detail=detail,
+        agent=agent,
+        started_at=started_iso,
+        finished_at=finished_iso,
+        duration_seconds=round(finished_mono - started_mono, 3),
+    )
+
+
+def _append_attempt_and_notify(
+    attempt_results: list[AttemptResult],
+    result: AttemptResult,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None] | None,
+) -> None:
+    """Append a result and notify the incremental persistence callback."""
+    attempt_results.append(result)
+    if on_attempt_recorded is not None:
+        try:
+            on_attempt_recorded(result, list(attempt_results))
+        except Exception:  # noqa: BLE001 - persistence side-channel must not break runs
+            _logger.warning(
+                "Attempt persistence callback failed for attempt %d; continuing.",
+                result.attempt_number,
+                exc_info=True,
+            )
+
+
 def run_agent_until_committed(
     *,
     selected_agent: str,
@@ -764,6 +808,8 @@ def run_agent_until_committed(
     before_sha: str,
     expected_branch: str,
     prompt_override: str | None = None,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None]
+    | None = None,
 ) -> AgentCommitResult:
     """Run the agent, recover failed verification, and return final checks.
 
@@ -808,6 +854,9 @@ def run_agent_until_committed(
                 max_recovery_attempts=max_recovery_attempts,
                 delay_seconds=recovery_retry_delay_seconds,
             )
+
+        attempt_started_mono = time.monotonic()
+        attempt_started_iso = datetime.now(timezone.utc).isoformat()
 
         # Phase 1: 运行 agent 或 recovery prompt
         try:
@@ -883,13 +932,18 @@ def run_agent_until_committed(
                 exc=exc,
                 detect_provider_errors=True,
             )
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
                     detail=format_agent_execution_failure(exc),
-                )
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             if failure_type == FailureType.UNRECOVERABLE:
                 raise UnrecoverableError(str(exc), attempt_results) from exc
@@ -926,8 +980,9 @@ def run_agent_until_committed(
                 verification_results=exc.verification_results,
                 exc=None,
             )
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
@@ -935,7 +990,11 @@ def run_agent_until_committed(
                         "Verification before staging failed.",
                         exc.verification_results,
                     ),
-                )
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
@@ -965,13 +1024,18 @@ def run_agent_until_committed(
                 verification_results=verification_results,
                 exc=exc,
             )
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
                     detail=format_prd_delivery_failure(str(exc)),
-                )
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
@@ -998,13 +1062,18 @@ def run_agent_until_committed(
                 verification_results=verification_results,
                 exc=exc,
             )
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
                     detail=format_validation_evidence_failure(str(exc)),
-                )
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
@@ -1088,8 +1157,9 @@ def run_agent_until_committed(
                         verification_results=exc.verification_results,
                         exc=None,
                     )
-                    attempt_results.append(
-                        AttemptResult(
+                    _append_attempt_and_notify(
+                        attempt_results,
+                        _make_attempt_result(
                             attempt_number=attempt_index + 1,
                             failure_type=failure_type,
                             recovered=False,
@@ -1097,7 +1167,11 @@ def run_agent_until_committed(
                                 "Verification after runner staged changes with git add -A failed.",
                                 exc.verification_results,
                             ),
-                        )
+                            agent=selected_agent,
+                            started_mono=attempt_started_mono,
+                            started_iso=attempt_started_iso,
+                        ),
+                        on_attempt_recorded,
                     )
                     if attempt_index >= max_recovery_attempts:
                         raise MaxRetriesExceededError(attempt_results) from exc
@@ -1130,13 +1204,18 @@ def run_agent_until_committed(
                         verification_results=final_verification_results,
                         exc=exc,
                     )
-                    attempt_results.append(
-                        AttemptResult(
+                    _append_attempt_and_notify(
+                        attempt_results,
+                        _make_attempt_result(
                             attempt_number=attempt_index + 1,
                             failure_type=failure_type,
                             recovered=False,
                             detail=str(exc),
-                        )
+                            agent=selected_agent,
+                            started_mono=attempt_started_mono,
+                            started_iso=attempt_started_iso,
+                        ),
+                        on_attempt_recorded,
                     )
                     if failure_type == FailureType.UNRECOVERABLE:
                         raise UnrecoverableError(str(exc), attempt_results) from exc
@@ -1153,13 +1232,18 @@ def run_agent_until_committed(
                     verification_results=final_verification_results,
                     exc=None,
                 )
-                attempt_results.append(
-                    AttemptResult(
+                _append_attempt_and_notify(
+                    attempt_results,
+                    _make_attempt_result(
                         attempt_number=attempt_index + 1,
                         failure_type=failure_type,
                         recovered=False,
                         detail=f"The runner could not process the commit request.\n{exc}",
-                    )
+                        agent=selected_agent,
+                        started_mono=attempt_started_mono,
+                        started_iso=attempt_started_iso,
+                    ),
+                    on_attempt_recorded,
                 )
                 if attempt_index >= max_recovery_attempts:
                     raise MaxRetriesExceededError(attempt_results) from exc
@@ -1182,13 +1266,18 @@ def run_agent_until_committed(
         # Phase 5: 检查 agent 是否实际产生了 commit
         after_sha = get_head_sha(worktree_path, process_runner)
         if before_sha != after_sha:
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=FailureType.SUCCESS,
                     recovered=attempt_index > 0,
                     detail="Agent produced commits and passed verification.",
-                )
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             return AgentCommitResult(final_verification_results, attempt_results)
 
@@ -1202,13 +1291,18 @@ def run_agent_until_committed(
             verification_results=verification_results,
             exc=None,
         )
-        attempt_results.append(
-            AttemptResult(
+        _append_attempt_and_notify(
+            attempt_results,
+            _make_attempt_result(
                 attempt_number=attempt_index + 1,
                 failure_type=failure_type,
                 recovered=False,
                 detail="Agent produced no git commits.",
-            )
+                agent=selected_agent,
+                started_mono=attempt_started_mono,
+                started_iso=attempt_started_iso,
+            ),
+            on_attempt_recorded,
         )
         if attempt_index >= max_recovery_attempts:
             raise MaxRetriesExceededError(attempt_results)

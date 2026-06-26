@@ -54,10 +54,10 @@ class AttemptResult:
         failure_type: Classified outcome of the attempt.
         recovered: Whether this attempt recovered from a prior failure.
         detail: Human-readable detail rendered into the failure comment.
-        agent: Name of the agent that produced this attempt. Empty when
-            recorded before an agent label is attached; the orchestration
-            layer stamps it when merging attempts across a cross-agent
-            fallback chain.
+        agent: Name of the agent that produced this attempt.
+        started_at: ISO-8601 UTC timestamp when the attempt started.
+        finished_at: ISO-8601 UTC timestamp when the attempt finished.
+        duration_seconds: Wall-clock seconds spent in the attempt.
     """
 
     attempt_number: int
@@ -65,6 +65,9 @@ class AttemptResult:
     recovered: bool
     detail: str
     agent: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    duration_seconds: float = 0.0
 
 
 @dataclass(frozen=True)

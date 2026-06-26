@@ -1564,10 +1564,10 @@ def test_run_once_recovers_after_agent_command_failure(
             if command_tuple[:1] == ("codex",):
                 self._agent_calls += 1
                 if self._agent_calls == 1:
-                    raise RuntimeError("API Error: 400 Invalid request Error")
+                    raise RuntimeError("API Error: unknown provider failure")
                 prompt = command_tuple[-1]
                 assert "Recovery attempt: 1/2" in prompt
-                assert "API Error: 400 Invalid request Error" in prompt
+                assert "API Error: unknown provider failure" in prompt
                 _write_commit_request(worktree_path, "agent: recovered after api error")
                 return CommandResult(command_tuple, 0, "", "")
             if command_tuple == ("git", "rev-parse", "HEAD"):
@@ -1694,12 +1694,21 @@ def test_run_once_uncommitted_changes_validation_failure_does_not_stage(
         and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
-    comment_calls = [
+    history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue" and "Command failed" in c.get("body", "")
+        if c["method"] == "comment_issue"
+        and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
-    assert len(comment_calls) == 1
+    assert len(history_comment_calls) >= 1
+    failure_comment_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "comment_issue"
+        and "Command failed" in c.get("body", "")
+        and "<!-- iar-attempt-history -->" not in c.get("body", "")
+    ]
+    assert len(failure_comment_calls) == 1
 
 
 def test_run_once_uncommitted_changes_missing_request_fails(tmp_path: Path) -> None:
@@ -1760,12 +1769,21 @@ def test_run_once_uncommitted_changes_missing_request_fails(tmp_path: Path) -> N
         if command[:2] == ("git", "commit") and "--no-verify" not in command
     ]
     assert proxy_commits == []
-    comment_calls = [
+    history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue" and "commit request" in c.get("body", "")
+        if c["method"] == "comment_issue"
+        and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
-    assert len(comment_calls) == 1
+    assert len(history_comment_calls) >= 1
+    failure_comment_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "comment_issue"
+        and "commit request" in c.get("body", "")
+        and "<!-- iar-attempt-history -->" not in c.get("body", "")
+    ]
+    assert len(failure_comment_calls) == 1
 
 
 def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> None:
@@ -1840,12 +1858,21 @@ def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> No
         and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
-    comment_calls = [
+    history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue" and "Command failed" in c.get("body", "")
+        if c["method"] == "comment_issue"
+        and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
-    assert len(comment_calls) == 1
+    assert len(history_comment_calls) >= 1
+    failure_comment_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "comment_issue"
+        and "Command failed" in c.get("body", "")
+        and "<!-- iar-attempt-history -->" not in c.get("body", "")
+    ]
+    assert len(failure_comment_calls) == 1
 
 
 def test_commit_requested_changes_rejects_branch_change(tmp_path: Path) -> None:
@@ -2157,12 +2184,21 @@ def test_run_once_no_new_commits_fails() -> None:
         and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
-    comment_calls = [
+    history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue" and "no git commits" in c.get("body", "")
+        if c["method"] == "comment_issue"
+        and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
-    assert len(comment_calls) == 1
+    assert len(history_comment_calls) >= 1
+    failure_comment_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "comment_issue"
+        and "no git commits" in c.get("body", "")
+        and "<!-- iar-attempt-history -->" not in c.get("body", "")
+    ]
+    assert len(failure_comment_calls) == 1
 
 
 def test_run_once_success(tmp_path: Path) -> None:
@@ -3839,9 +3875,9 @@ def test_format_attempt_history_table() -> None:
         ),
     ]
     table = format_attempt_history(results)
-    assert "| Attempt | Agent | Failure Type | Recovered | Detail |" in table
-    assert "| 1 | - | no_commits | No | No commits produced. |" in table
-    assert "| 2 | - | success | Yes | Agent fixed the issue. |" in table
+    assert "| Attempt | Agent | Failure Type | Recovered | Duration | Detail |" in table
+    assert "| 1 | - | no_commits | No | 0.0s | No commits produced. |" in table
+    assert "| 2 | - | success | Yes | 0.0s | Agent fixed the issue. |" in table
 
 
 def test_format_attempt_history_includes_agent_column() -> None:
@@ -3863,8 +3899,10 @@ def test_format_attempt_history_includes_agent_column() -> None:
         ),
     ]
     table = format_attempt_history(results)
-    assert "| 1 | claude | provider_capacity | No | Claude at capacity. |" in table
-    assert "| 1 | codex | success | Yes | Codex finished. |" in table
+    assert (
+        "| 1 | claude | provider_capacity | No | 0.0s | Claude at capacity. |" in table
+    )
+    assert "| 1 | codex | success | Yes | 0.0s | Codex finished. |" in table
 
 
 _USAGE_LIMIT_STDOUT = (
@@ -3923,6 +3961,26 @@ def test_detect_usage_limit_root_cause() -> None:
     assert "429" in summary
     assert "2026-06-10T15:00:00+08:00" in summary
     assert detect_usage_limit_root_cause("just lint failed with exit code 1") is None
+
+
+def test_is_transient_failure_matches_400_invalid_params() -> None:
+    """400 / invalid-parameter provider errors are retried like network errors."""
+    transient_cases = [
+        RuntimeError("API Error: 400 invalid params"),
+        RuntimeError("InvalidParameter: input should be a valid dictionary"),
+        RuntimeError("BadRequest: malformed request"),
+        subprocess.CalledProcessError(
+            1, ["claude"], output="Error: 400 invalid request", stderr=""
+        ),
+    ]
+    for exc in transient_cases:
+        assert is_transient_failure(exc), f"{exc} should be transient"
+
+
+def test_is_transient_failure_still_excludes_provider_capacity() -> None:
+    """429 / usage-limit errors are not transient so the runner switches agents."""
+    capacity_exc = RuntimeError("API Error: 429 usage limit exceeded")
+    assert not is_transient_failure(capacity_exc)
 
 
 def test_format_failure_comment_surfaces_usage_limit_root_cause() -> None:
