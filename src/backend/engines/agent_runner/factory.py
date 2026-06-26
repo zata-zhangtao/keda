@@ -215,6 +215,7 @@ def build_app_config_from_settings(
             validation_passed=label_settings.validation_passed,
             group_prefix=label_settings.group_prefix,
             rework_prd=label_settings.rework_prd,
+            deliberate=label_settings.deliberate,
             agent_labels=label_settings.agent_labels,
         ),
         git=GitConfig(
@@ -418,6 +419,7 @@ def _merge_label_config(
         ),
         group_prefix=override_data.get("group_prefix", base_config.group_prefix),
         rework_prd=override_data.get("rework_prd", base_config.rework_prd),
+        deliberate=override_data.get("deliberate", base_config.deliberate),
         agent_labels=agent_labels,
     )
 

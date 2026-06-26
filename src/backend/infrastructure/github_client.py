@@ -117,6 +117,7 @@ class LabelConfig:
     validation_passed: str = "validation/passed"
     group_prefix: str = "task-group/"
     rework_prd: str = "agent/rework-prd"
+    deliberate: str = "agent/deliberate"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",
@@ -460,6 +461,11 @@ class GitHubCliClient:
                 "Request the AI runner to generate or rewrite this Issue's PRD.",
             ),
             (
+                "agent/deliberate",
+                "D4C5F9",
+                "Issue needs multi-agent deliberation (Phase 0) before implementation.",
+            ),
+            (
                 "validation/pending",
                 "FBCA04",
                 "Realistic Validation evidence awaits human sign-off on the PR.",
@@ -498,6 +504,7 @@ class GitHubCliClient:
             "agent/blocked": labels.blocked,
             "agent/waiting": labels.waiting,
             "agent/rework-prd": labels.rework_prd,
+            "agent/deliberate": labels.deliberate,
             "validation/pending": labels.validation_pending,
             "validation/passed": labels.validation_passed,
         }

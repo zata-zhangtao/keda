@@ -99,6 +99,60 @@ def test_factory_build_app_config_maps_waiting_and_group_prefix() -> None:
     assert app_config.labels.group_prefix == "task-group/"
 
 
+def test_label_config_includes_deliberate() -> None:
+    """All label configs must include the deliberate label."""
+    assert CoreLabelConfig().deliberate == "agent/deliberate"
+    assert AgentRunnerLabelSettings().deliberate == "agent/deliberate"
+    assert InfraLabelConfig().deliberate == "agent/deliberate"
+
+
+def _label_config_scalar_field_names() -> list[str]:
+    """Scalar (string) field names on the core LabelConfig dataclass."""
+    import dataclasses
+
+    return [
+        f.name for f in dataclasses.fields(CoreLabelConfig) if f.name != "agent_labels"
+    ]
+
+
+def test_factory_maps_every_label_config_field() -> None:
+    """build_app_config_from_settings must forward every LabelConfig field.
+
+    Reflects over all scalar label fields so a newly-added label can never be
+    silently dropped by the pydantic -> dataclass mapping in the factory (the
+    regression that left ``deliberate`` overrides ignored).
+    """
+    from backend.engines.agent_runner.factory import build_app_config_from_settings
+
+    field_names = _label_config_scalar_field_names()
+    sentinels = {name: f"sentinel/{name}" for name in field_names}
+    settings = AgentRunnerSettings()
+    settings.labels = AgentRunnerLabelSettings(**sentinels)  # type: ignore[misc]
+
+    app_config = build_app_config_from_settings(settings)
+
+    for field_name, sentinel in sentinels.items():
+        assert (
+            getattr(app_config.labels, field_name) == sentinel
+        ), f"Factory dropped label '{field_name}' in build_app_config_from_settings"
+
+
+def test_merge_label_config_preserves_every_overridden_field() -> None:
+    """Per-repository label overrides must forward every LabelConfig field."""
+    from backend.engines.agent_runner.factory import _merge_label_config
+
+    field_names = _label_config_scalar_field_names()
+    overrides = {name: f"override/{name}" for name in field_names}
+    override_settings = AgentRunnerLabelSettings(**overrides)
+
+    merged = _merge_label_config(CoreLabelConfig(), override_settings)
+
+    for field_name, value in overrides.items():
+        assert (
+            getattr(merged, field_name) == value
+        ), f"_merge_label_config dropped overridden label field '{field_name}'"
+
+
 def test_app_config_has_review_and_supervisor_settings() -> None:
     """AppConfig must aggregate pre-PR review and post-PR supervisor configs."""
     app_config = CoreAppConfig()
