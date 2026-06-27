@@ -74,6 +74,35 @@ _PRD_WITH_VALIDATION = """# PRD: Demo
 ## 2. Requirement Shape
 """
 
+_PRD_WITH_ORACLE_BLOCK = """# PRD: Demo
+
+## 7. Implementation Guide
+
+### 7.6 Realistic Validation Plan (Oracle 块)
+
+```yaml
+# Realistic Validation Oracle —— 注释行(测试围栏感知,不应截断小节)
+- id: rv-1
+  behavior: 行为 A 真实验证
+  real_entry: "demo run"
+  expected: "输出 OK"
+  negative_control: "改坏 demo run"
+  expected_fail: "非零退出"
+  test_layer: integration
+  required_for_acceptance: true
+- id: rv-2
+  behavior: 行为 B 真实验证
+  real_entry: "demo serve"
+  expected: "页面 200"
+  negative_control: "停掉服务"
+  expected_fail: "连接拒绝"
+  test_layer: e2e
+  required_for_acceptance: true
+```
+
+## 8. Delivery Dependencies
+"""
+
 _PRD_WITH_WAIVER = """# PRD: Docs only
 
 ### Realistic Validation
@@ -116,6 +145,20 @@ def test_extract_items_normalizes_checked_state() -> None:
     items = extract_realistic_validation_items(_PRD_WITH_VALIDATION)
     assert len(items) == 2
     assert all(item.startswith("- [ ] ") for item in items)
+
+
+def test_extract_items_from_oracle_block() -> None:
+    """Structured YAML oracle block is parsed deterministically into items.
+
+    同时验证围栏感知：YAML 内的 ``# 注释`` 行不会被当作标题而提前截断小节，
+    且多级编号标题 ``### 7.6 Realistic Validation Plan`` 能被识别。
+    """
+    items = extract_realistic_validation_items(_PRD_WITH_ORACLE_BLOCK)
+    assert items == [
+        "- [ ] rv-1: 行为 A 真实验证",
+        "- [ ] rv-2: 行为 B 真实验证",
+    ]
+    assert validation_required(_PRD_WITH_ORACLE_BLOCK, AppConfig())
 
 
 def test_extract_items_stops_at_next_section() -> None:

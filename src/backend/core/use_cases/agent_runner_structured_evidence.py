@@ -63,7 +63,12 @@ class StructuredEvidenceMarker:
 
 @dataclass(frozen=True)
 class EvidenceBlock:
-    """A single checklist item's structured evidence block from the manifest."""
+    """A single checklist item's structured evidence block from the manifest.
+
+    ``negative_control`` / ``expected_fail`` 承载"红→绿"判别力证据：能让该项
+    变红的命令或注入故障,以及变红时的样子。当前为可选字段（向后兼容旧
+    manifest）;门禁层按配置决定是否对高证据项强制要求。
+    """
 
     item_number: int
     item_name: str
@@ -72,6 +77,8 @@ class EvidenceBlock:
     output_summary: str
     explanation: str
     risks: str
+    negative_control: str = ""
+    expected_fail: str = ""
 
 
 @dataclass(frozen=True)
@@ -219,6 +226,8 @@ def _parse_evidence_block(block_data: object, item_number: int) -> EvidenceBlock
     explanation = _extract_nonempty_string(block_data, "explanation", item_number)
     risks = _extract_nonempty_string(block_data, "risks", item_number)
     evidence_files = _extract_evidence_files(block_data, item_number)
+    negative_control = _extract_optional_string(block_data, "negative_control")
+    expected_fail = _extract_optional_string(block_data, "expected_fail")
 
     return EvidenceBlock(
         item_number=item_number,
@@ -228,6 +237,8 @@ def _parse_evidence_block(block_data: object, item_number: int) -> EvidenceBlock
         output_summary=output_summary,
         explanation=explanation,
         risks=risks,
+        negative_control=negative_control,
+        expected_fail=expected_fail,
     )
 
 
@@ -242,6 +253,14 @@ def _extract_nonempty_string(
             f"`{field_name}` in evidence manifest."
         )
     return value.strip()
+
+
+def _extract_optional_string(block_data: dict[str, object], field_name: str) -> str:
+    """Extract an optional string field; return '' when absent, blank, or non-string."""
+    value = block_data.get(field_name)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
 
 
 def _extract_evidence_files(
@@ -647,7 +666,10 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
             "按 Realistic Validation checklist item 分组。每个证据块必须包含："
             "`item_number`（序号）、`item_name`（名称）、`command`（可复现命令）、"
             "`evidence_files`（关联证据文件列表）、`output_summary`（关键输出摘要）、"
-            "`explanation`（为什么该证据能证明检查点成立）、`risks`（潜在风险或不适用说明）。"
+            "`explanation`（为什么该证据能证明检查点成立）、`risks`（潜在风险或不适用说明）、"
+            "`negative_control`（能让该项变红的命令或注入的故障）、`expected_fail`（变红时的样子）。"
+            "每个检查点都要证明'这测试会失败'：先用 negative_control 让它变红、记录 expected_fail，"
+            "再展示修复后变绿——只有绿、无法证明会红的证据视为无效。"
             'manifest 顶层必须声明 `version: 1` 和 `language: "{language}"`。'
             "所有证据文件必须命名为 `rv-<item_number>-<slug>.<ext>` 并放在 `{evidence_dir}/` 下。"
             "重要：每个证据文件必须只包含对应 item 的输出，禁止混入其他 item 的内容；"
@@ -658,7 +680,12 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
         "`{evidence_dir}/evidence.json`, grouped by Realistic Validation checklist item. "
         "Each evidence block must include: `item_number`, `item_name`, `command`, "
         "`evidence_files`, `output_summary`, `explanation` (why the evidence satisfies "
-        "the checkpoint), and `risks` (potential risks or not-applicable notes). "
+        "the checkpoint), `risks` (potential risks or not-applicable notes), "
+        "`negative_control` (a command or injected fault that makes this item go RED), "
+        "and `expected_fail` (what red looks like). "
+        "Every checkpoint must prove the test can fail: use negative_control to make it "
+        "red and record expected_fail, then show it green after the fix — evidence that "
+        "is only ever green, with no way to show it failing, is not accepted. "
         'The manifest top level must declare `version: 1` and `language: "{language}"`. '
         "All evidence files must be named `rv-<item_number>-<slug>.<ext>` and placed "
         "under `{evidence_dir}/`. "

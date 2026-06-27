@@ -36,6 +36,7 @@ dependencies = [
     "psycopg2-binary>=2.9.0",
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.1.0",
+    "pyyaml>=6.0.3",
     "rich>=13.0.0",
     "tomli-w>=1.0.0",
     "tomlkit>=0.15.0",

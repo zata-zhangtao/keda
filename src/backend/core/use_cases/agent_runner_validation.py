@@ -25,6 +25,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 from backend.core.shared.interfaces.agent_runner import (
     IGitHubClient,
     IProcessRunner,
@@ -62,7 +64,7 @@ _logger = logging.getLogger(__name__)
 
 _VALIDATION_SECTION_TITLE = "realistic validation"
 _VALIDATION_SECTION_HEADER_RE = re.compile(
-    r"^(?:\d+\.\s+)?" + re.escape(_VALIDATION_SECTION_TITLE),
+    r"^(?:\d+(?:\.\d+)*\.?\s+)?" + re.escape(_VALIDATION_SECTION_TITLE),
     re.IGNORECASE,
 )
 _WAIVER_LINE_PATTERN = re.compile(
@@ -128,35 +130,81 @@ def _iterate_validation_section_lines(markdown_text: str) -> list[str]:
     """Return the lines inside the Realistic Validation section.
 
     接受任意级别的 Markdown 标题（PRD 用 ``###``、Issue body 用 ``##``），
-    标题文本以 ``Realistic Validation`` 开头（大小写不敏感）即进入小节，
-    遇到同级或更高级标题退出。
+    支持多级编号前缀（``7.6 Realistic Validation Plan``），标题文本以
+    ``Realistic Validation`` 开头（大小写不敏感）即进入小节，遇到同级或
+    更高级标题退出。围栏代码块（``` fenced）内的行按内容收集、不当作标题
+    解析——否则 YAML 注释行（``# ...``）会被误判为标题而提前截断小节。
     """
     section_lines: list[str] = []
     section_heading_level = 0
+    in_code_fence = False
     for line in markdown_text.splitlines():
         stripped_line = line.strip()
-        heading_match = re.match(r"^(#{1,6})\s+(.*)$", stripped_line)
-        if heading_match:
-            heading_level = len(heading_match.group(1))
-            heading_text = heading_match.group(2).strip().lower()
+        if stripped_line.startswith("```"):
+            in_code_fence = not in_code_fence
             if section_heading_level:
-                if heading_level <= section_heading_level:
-                    break
                 section_lines.append(line)
-                continue
-            if _VALIDATION_SECTION_HEADER_RE.match(heading_text):
-                section_heading_level = heading_level
             continue
+        if not in_code_fence:
+            heading_match = re.match(r"^(#{1,6})\s+(.*)$", stripped_line)
+            if heading_match:
+                heading_level = len(heading_match.group(1))
+                heading_text = heading_match.group(2).strip().lower()
+                if section_heading_level:
+                    if heading_level <= section_heading_level:
+                        break
+                    section_lines.append(line)
+                    continue
+                if _VALIDATION_SECTION_HEADER_RE.match(heading_text):
+                    section_heading_level = heading_level
+                continue
         if section_heading_level:
             section_lines.append(line)
     return section_lines
 
 
-def extract_realistic_validation_items(markdown_text: str) -> list[str]:
-    """Extract checkbox items from the Realistic Validation section.
+def _extract_rv_oracle_entries(section_lines: list[str]) -> list[dict[str, object]]:
+    """Deterministically parse the structured YAML oracle block.
 
-    勾选状态会被规范化为未勾选 ``- [ ]``，因为清单代表的是*待人工确认*
-    的验证项。
+    在 Realistic Validation 小节内定位第一个 ```yaml 围栏，``yaml.safe_load``
+    后要求是一个非空的 mapping 列表且每项含 ``id`` 与 ``behavior``。无围栏、
+    解析失败或结构不符时返回空列表，由调用方回退到旧式 checkbox 解析。
+    本函数不引入 LLM，纯确定性解析。
+    """
+    fence_open = False
+    yaml_lines: list[str] = []
+    for line in section_lines:
+        stripped_line = line.strip()
+        if stripped_line.startswith("```"):
+            if fence_open:
+                break
+            if stripped_line.lower().startswith("```yaml"):
+                fence_open = True
+            continue
+        if fence_open:
+            yaml_lines.append(line)
+    if not yaml_lines:
+        return []
+    try:
+        parsed_block = yaml.safe_load("\n".join(yaml_lines))
+    except yaml.YAMLError:
+        _logger.warning("RV oracle YAML block present but failed to parse; ignoring.")
+        return []
+    if not isinstance(parsed_block, list):
+        return []
+    oracle_entries: list[dict[str, object]] = []
+    for entry in parsed_block:
+        if isinstance(entry, dict) and entry.get("id") and entry.get("behavior"):
+            oracle_entries.append(entry)
+    return oracle_entries
+
+
+def extract_realistic_validation_items(markdown_text: str) -> list[str]:
+    """Extract validation checklist items from the Realistic Validation section.
+
+    优先解析结构化 YAML oracle 块（每项 ``id`` + ``behavior``），映射为规范化
+    复选框 ``- [ ] <id>: <behavior>``；无 oracle 块时回退解析旧式 ``- [ ]``
+    checkbox 行。勾选状态一律规范化为未勾选，因为清单代表的是*待人工确认*项。
 
     Args:
         markdown_text: PRD 全文或 Issue body。
@@ -164,8 +212,12 @@ def extract_realistic_validation_items(markdown_text: str) -> list[str]:
     Returns:
         规范化后的 Markdown 复选框行列表；无小节或无条目时为空列表。
     """
+    section_lines = _iterate_validation_section_lines(markdown_text)
+    oracle_entries = _extract_rv_oracle_entries(section_lines)
+    if oracle_entries:
+        return [f"- [ ] {entry['id']}: {entry['behavior']}" for entry in oracle_entries]
     checklist_items: list[str] = []
-    for section_line in _iterate_validation_section_lines(markdown_text):
+    for section_line in section_lines:
         stripped_line = section_line.strip()
         if stripped_line.startswith("- ["):
             checklist_items.append(re.sub(r"^- \[[ xX]\]", "- [ ]", stripped_line))
