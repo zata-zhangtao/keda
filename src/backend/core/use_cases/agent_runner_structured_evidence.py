@@ -127,6 +127,8 @@ _LABELS: dict[str, dict[str, str]] = {
         "output_summary": "关键输出摘要",
         "explanation": "为什么能证明该检查点成立",
         "risks": "潜在风险 / 不适用说明",
+        "negative_control": "负控（如何让它变红）",
+        "expected_fail": "变红时的样子",
         "open_file": "打开文件",
         "image_alt": "证据图片",
         "truncated": "[内容已截断；请在证据分支打开完整文件]",
@@ -144,6 +146,8 @@ _LABELS: dict[str, dict[str, str]] = {
         "output_summary": "Key output summary",
         "explanation": "Why this satisfies the checkpoint",
         "risks": "Potential risks / not-applicable notes",
+        "negative_control": "Negative control (how it goes red)",
+        "expected_fail": "What red looks like",
         "open_file": "Open file",
         "image_alt": "Evidence image",
         "truncated": "[evidence truncated; open the file on the evidence branch]",
@@ -526,6 +530,20 @@ def validate_evidence_manifest(
             StructuredEvidenceItemReport(block=block, files=tuple(file_infos))
         )
 
+    if config.validation.require_negative_control:
+        missing_control = sorted(
+            block.item_number for block in manifest.items if not block.negative_control
+        )
+        if missing_control:
+            raise ValidationEvidenceError(
+                "Structured evidence manifest is missing `negative_control` "
+                "(red→green proof) for item(s): "
+                f"{', '.join(str(num) for num in missing_control)}. Each item must "
+                "show the test failing when the feature is broken (provide "
+                "`negative_control` and `expected_fail`), not only passing. Set "
+                "`validation.require_negative_control=false` to opt out."
+            )
+
     return StructuredEvidenceReport(
         language=manifest.language,
         items=tuple(item_reports),
@@ -654,6 +672,18 @@ def render_structured_evidence_comment(
                 block.risks,
             ]
         )
+        if block.negative_control:
+            comment_lines.extend(
+                [
+                    "",
+                    f"**{_label(language, 'negative_control')}**",
+                    f"`{block.negative_control}`",
+                ]
+            )
+            if block.expected_fail:
+                comment_lines.append(
+                    f"- {_label(language, 'expected_fail')}: {block.expected_fail}"
+                )
 
     return "\n".join(comment_lines)
 

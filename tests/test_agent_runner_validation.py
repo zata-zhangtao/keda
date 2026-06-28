@@ -1173,6 +1173,8 @@ def _write_manifest(evidence_dir: Path, **overrides: object) -> None:
                 "output_summary": "demo run 输出匹配预期。",
                 "explanation": "真实运行了 demo run 命令。",
                 "risks": "无",
+                "negative_control": "改坏 demo run 后重跑",
+                "expected_fail": "demo run 非零退出",
             },
             {
                 "item_number": 2,
@@ -1182,6 +1184,8 @@ def _write_manifest(evidence_dir: Path, **overrides: object) -> None:
                 "output_summary": "demo serve 启动成功。",
                 "explanation": "真实启动了 demo serve。",
                 "risks": "仅本地验证",
+                "negative_control": "停掉 demo serve 后访问",
+                "expected_fail": "连接被拒绝",
             },
         ],
     }
@@ -1359,6 +1363,71 @@ def test_validate_evidence_manifest_computes_sha256(
     )
 
 
+def test_validate_evidence_manifest_rejects_missing_negative_control(
+    tmp_path: Path,
+) -> None:
+    """With require_negative_control on (default), items lacking it are rejected."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(
+        evidence_dir,
+        items=[
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "demo run",
+                "evidence_files": ["rv-1-run.txt"],
+                "output_summary": "输出匹配。",
+                "explanation": "真实运行。",
+                "risks": "无",
+            }
+        ],
+    )
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+    issue_body = _STRUCTURED_ISSUE_BODY.replace(
+        "- [ ] **行为 B 真实验证**：通过 `demo serve` 验证页面。", ""
+    )
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        validate_evidence_manifest(
+            issue_body=issue_body,
+            checklist_items=["- [ ] **行为 A 真实验证**：通过 `demo run` 验证输出。"],
+            worktree_path=tmp_path,
+            config=AppConfig(),
+        )
+    assert "negative_control" in str(exc_info.value)
+
+
+def test_validate_evidence_manifest_allows_missing_control_when_opted_out(
+    tmp_path: Path,
+) -> None:
+    """``require_negative_control=False`` restores the legacy control-free gate."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(
+        evidence_dir,
+        items=[
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "demo run",
+                "evidence_files": ["rv-1-run.txt"],
+                "output_summary": "输出匹配。",
+                "explanation": "真实运行。",
+                "risks": "无",
+            }
+        ],
+    )
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+    issue_body = _STRUCTURED_ISSUE_BODY.replace(
+        "- [ ] **行为 B 真实验证**：通过 `demo serve` 验证页面。", ""
+    )
+    report = validate_evidence_manifest(
+        issue_body=issue_body,
+        checklist_items=["- [ ] **行为 A 真实验证**：通过 `demo run` 验证输出。"],
+        worktree_path=tmp_path,
+        config=AppConfig(validation=ValidationConfig(require_negative_control=False)),
+    )
+    assert len(report.items) == 1
+
+
 def test_render_structured_evidence_comment_groups_by_item(
     tmp_path: Path,
 ) -> None:
@@ -1375,6 +1444,8 @@ def test_render_structured_evidence_comment_groups_by_item(
                 "output_summary": "输出匹配。",
                 "explanation": "真实运行。",
                 "risks": "无",
+                "negative_control": "改坏 demo run 后重跑",
+                "expected_fail": "非零退出",
             }
         ],
     )

@@ -256,6 +256,7 @@ def build_app_config_from_settings(
             parse_evidence_format_with_agent=validation_settings.parse_evidence_format_with_agent,
             language=validation_settings.language,
             structured_evidence=validation_settings.structured_evidence,
+            require_negative_control=validation_settings.require_negative_control,
         ),
         prompts=PromptConfig(
             default_phase=prompt_settings.default_phase,

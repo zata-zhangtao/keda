@@ -516,6 +516,7 @@ class AgentRunnerValidationSettings(BaseModel):
     parse_evidence_format_with_agent: bool = True
     language: str = "zh-CN"
     structured_evidence: bool = True
+    require_negative_control: bool = True
 
 
 class AgentRunnerConsoleSettings(BaseModel):

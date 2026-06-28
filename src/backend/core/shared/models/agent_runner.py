@@ -269,6 +269,9 @@ class ValidationConfig:
     ``language`` controls the fixed labels in prompts and PR evidence comments.
     ``structured_evidence`` enables the ``evidence.json`` manifest requirement
     for new Issues that carry the ``iar:structured-evidence`` marker.
+    ``require_negative_control`` (default on) makes the gate reject any
+    structured-evidence item lacking a ``negative_control`` (red→green proof);
+    set it off to opt out per repository.
     """
 
     enabled: bool = True
@@ -278,6 +281,7 @@ class ValidationConfig:
     parse_evidence_format_with_agent: bool = True
     language: str = "zh-CN"
     structured_evidence: bool = True
+    require_negative_control: bool = True
 
 
 @dataclass(frozen=True)
