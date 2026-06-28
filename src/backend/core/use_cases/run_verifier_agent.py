@@ -15,17 +15,27 @@ fail-safe——没有可解析的 verdict(verifier 没产出 / 产出畸形)一�
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IProcessRunner
-from backend.core.shared.models.agent_runner import IssueSummary
-from backend.core.use_cases.agent_runner_structured_evidence import EvidenceManifest
+from backend.core.shared.models.agent_runner import AppConfig, IssueSummary
+from backend.core.use_cases.agent_runner_structured_evidence import (
+    EvidenceManifest,
+    ValidationEvidenceError,
+    has_structured_evidence_marker,
+    load_evidence_manifest,
+)
+from backend.core.use_cases.agent_runner_validation import validation_required
 from backend.core.use_cases.run_agent_once import (
     extract_agent_response_text,
+    get_head_sha,
     run_agent_with_prompt_resilient,
 )
+
+_logger = logging.getLogger(__name__)
 
 _VALID_RISKS: tuple[str, ...] = ("green", "yellow", "red")
 _VERDICT_MARKER_PATTERN = re.compile(
@@ -185,3 +195,79 @@ def run_verifier_agent(
     )
     response_text = extract_agent_response_text(result)
     return parse_verifier_verdict(response_text, findings=response_text.strip()[:4000])
+
+
+def _choose_verifier_agent(config: AppConfig, builder_agent: str) -> str:
+    """Pick an agent for the verifier, preferring one different from the builder.
+
+    ``verifier_agent`` 配成具体 agent 则用它;``auto`` 时从 fallback 链里挑
+    第一个 ≠ builder 的(独立性来自换 model);都没有再退回 builder。
+    """
+    configured = config.validation.verifier_agent
+    if configured and configured != "auto":
+        return configured
+    for candidate in config.runner.agent_fallback_order:
+        if candidate != builder_agent:
+            return candidate
+    return builder_agent
+
+
+def run_verifier_gate(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    builder_agent: str,
+) -> None:
+    """Pre-PR independent-verifier gate (PR#2 T3 integration).
+
+    在 builder 通过证据门禁后、开 PR 之前运行:换一个 agent 对带结构化证据的
+    issue 做独立对抗复验。
+
+    - **red** → 抛 ``ValidationEvidenceError``,落进 builder 既有的 recovery
+      循环(verifier findings 当 repair 反馈,自动重做、bounded;耗尽才升级给
+      人)。因为是 pre-PR 门禁,所以"PR 存在 ⟹ verifier 已通过",无需额外的
+      daemon 双门禁。
+    - **yellow** → 记警告并放行。
+    - **green** → 放行。
+
+    默认关(``verifier_enabled``),按仓库灰度开启。仅对带 ``iar:structured-
+    evidence`` marker、且要求验证的 issue 生效。
+
+    Raises:
+        ValidationEvidenceError: verifier 判定 red(经 recovery 自动打回 builder)。
+    """
+    if not config.validation.verifier_enabled:
+        return
+    if not validation_required(issue.body, config):
+        return
+    if not has_structured_evidence_marker(issue.body):
+        return
+
+    manifest = load_evidence_manifest(worktree_path, config)
+    verifier_agent = _choose_verifier_agent(config, builder_agent)
+    builder_sha = get_head_sha(worktree_path, process_runner)
+    verdict = run_verifier_agent(
+        issue,
+        worktree_path,
+        builder_sha,
+        manifest,
+        verifier_agent,
+        process_runner,
+        timeout_seconds=config.validation.verifier_timeout_seconds,
+    )
+    if verdict.blocks:
+        raise ValidationEvidenceError(
+            f"Independent verifier (agent '{verifier_agent}') returned RED for "
+            f"issue #{issue.number}: it could not independently confirm the change "
+            "does what the issue asks. Findings:\n"
+            f"{verdict.findings}\n"
+            "Fix what the verifier found, or correct the Realistic Validation "
+            "oracle if the check itself is wrong."
+        )
+    if verdict.risk == "yellow":
+        _logger.warning(
+            "Independent verifier returned YELLOW for issue #%d: %s",
+            issue.number,
+            verdict.findings,
+        )

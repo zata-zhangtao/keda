@@ -1056,6 +1056,14 @@ def run_agent_until_committed(
             ensure_validation_commands_pass(
                 issue, worktree_path, config, process_runner
             )
+            # Phase 3.6: independent verifier (pre-PR; red -> this same recovery
+            # loop auto-repairs, bounded; escalates to a human only on exhaustion).
+            # Local import breaks the run_agent_once <-> run_verifier_agent cycle.
+            from backend.core.use_cases.run_verifier_agent import run_verifier_gate
+
+            run_verifier_gate(
+                issue, worktree_path, config, process_runner, selected_agent
+            )
         except ValidationEvidenceError as exc:
             after_sha = get_head_sha(worktree_path, process_runner)
             failure_type = classify_failure(
