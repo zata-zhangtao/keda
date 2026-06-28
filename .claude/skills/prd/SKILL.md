@@ -1,9 +1,11 @@
 ---
 name: prd
-description: "[Updated 2026-05-22] Generate an architecture-aware technical PRD. Triggers on: create a prd, write prd for, plan this feature. Prioritizes reuse, minimal-change plans, required output compliance, realistic validation, and conditional web research."
+description: "[Updated 2026-06-28] Generate an architecture-aware technical PRD split into two altitudes — a human review layer (Part A) and an executor build layer (Part B) — with a risk-tiered human review map, a front-loaded interpretation lock, and a risk-map-ordered acceptance evidence package for a single end-of-flow human review. Triggers on: create a prd, write prd for, plan this feature. Prioritizes reuse, minimal-change plans, required output compliance, realistic validation, and conditional web research."
 ---
 
 # PRD Generator (Architecture-First)
+
+> **Maintenance note:** The `[Updated YYYY-MM-DD]` tag in the frontmatter reflects the date of the last **substantive** change to this SKILL.md (core rules, workflow phases, output contract, or templates). When committing a change to this file or any template under `skills/prd/`, bump the date to match the commit day so it never lags behind git history.
 
 Create technical PRDs that fit the existing codebase instead of expanding it unnecessarily.
 The default recommendation must be the smallest change that cleanly solves the problem.
@@ -21,6 +23,10 @@ The default recommendation must be the smallest change that cleanly solves the p
 7. **Output Contract:** Treat the required PRD structure as mandatory. Do not omit, rename, or bury required sections unless the user explicitly requests a different format.
 8. **Realistic Validation:** Every PRD must identify the highest-fidelity validation needed to prove the behavior works through real project entry points, not only isolated unit or integration tests.
 9. **Executor-Resilient Detail:** Write implementation detail for a less capable executor: be concrete, but prefer semantic anchors and repository searches over brittle coordinates such as line numbers.
+10. **Full-Stack Surface:** Treat the user-visible frontend as first-class. Discover the repo's actual frontend app(s) (don't assume a framework or directory) and plan any user-facing change with backend-level rigor; a genuinely backend-only PRD must state `No frontend impact` with a one-line reason rather than omit it silently. (Detailed gate: Phase 1.5.)
+11. **Two-Altitude Output:** Structure every PRD as **Part A · Review Layer** (problem, user-facing value, human review map, requirement shape) and **Part B · Build Layer** (mechanism, change tree, validation commands, dependency metadata). Part A must let a human accept or reject the work *without* reading implementation mechanism, file paths, commands, or scheduling metadata; all executor detail lives in Part B. Do not front-load Part A with mechanism — the historical failure mode was a first section so full of code/test/scheduling detail that human review was hard.
+12. **Risk-Tiered Human Review Map:** Part A must contain a Human Review Map that classifies each change point by architecture layer, assigns a risk tier (layer gives the default, then risk factors — irreversibility, blast radius, security/money, correctness-criticality — adjust it), and routes it to either **human confirmation** or **executor + automated gate** (hook / test / architecture check). Keep the human-confirm set short and principled; over-flagging defeats the map.
+13. **Two-Touch Autonomy + Evidence Package:** The operating model is two batched human touches with autonomous execution between them — up front the human approves the Agent's interpretation (Section 1) and the acceptance oracles (Section 2); at the end the human reads a risk-map-ordered **Acceptance Evidence Package** (Section 9). There is no mid-flow human gate: the Agent self-verifies as deeply as needed (many rounds, adversarial checks — tokens are cheaper than human attention). So "human confirmation" means **high evidence burden** (the item tops the end package with an executable oracle), not an interruption; and every Review Map row — high or low — must name executable evidence that would fail if the change were wrong.
 
 ---
 
@@ -35,6 +41,8 @@ State in plain language:
 
 If you cannot rewrite the request concretely, call that out before generating a PRD.
 
+This restatement is the **Interpretation Echo** recorded in Section 1 and is the human's first of two touches — they approve it (and the Section 2 acceptance oracles) before autonomous implementation begins. A wrong-but-unconfirmed interpretation is the one failure downstream evidence cannot catch, so make the reading explicit and falsifiable ("I read this as X, not Y").
+
 ### Phase 1: Repository Context And Architecture Gate
 
 Before asking questions or proposing changes, inspect the repository for:
@@ -43,14 +51,43 @@ Before asking questions or proposing changes, inspect the repository for:
 - existing extension points and reusable code paths
 - current data model and state ownership
 - existing docs, tests, and workflows relevant to the request
+- user-facing surface: which frontend app(s) the repository ships (discover from top-level app directories, `package.json`, and framework configs) and whether the request touches them, including the closest routes/components/state
+- existing PRDs under `tasks/pending/` and related archived PRDs under `tasks/archive/`
+
+You must inspect existing PRDs before creating a new one:
+- search `tasks/pending/` first for duplicate, overlapping, prerequisite, or downstream work
+- search `tasks/archive/` when a completed PRD may define context, prior decisions, or reusable acceptance criteria
+- reuse or update an existing pending PRD when it clearly represents the same work instead of creating a duplicate
+- populate `Delivery Dependencies` from explicit pending PRD relationships when a task must wait for another task or group
+- use `none` only after checking pending PRDs and finding no sequencing dependency
+- do not infer hard dependencies from vague topic similarity; record uncertain relationships as `soft` or ask the user when dependency choice changes scope or execution order
 
 You must explicitly identify:
 - **Existing Path:** the current code path that is closest to the requested change
 - **Reuse Candidates:** files/modules that can be extended directly
 - **Architecture Constraints:** boundaries that should not be broken
+- **Frontend Impact:** which of the repository's frontend app(s) change, or none with a reason
+- **Existing PRD Relationship:** whether the request duplicates, depends on, blocks, or is independent from current pending PRDs
 - **Potential Redundancy Risks:** likely sources of duplicated logic or parallel abstractions
 
 Do not ask questions that can be answered by reading the repository.
+
+### Phase 1.5: Frontend Impact Gate
+
+Decide the user-facing surface before designing the backend. First discover what frontend(s) the repository actually ships — do not assume a fixed framework or directory name. Inspect:
+- top-level application directories and the repository's architecture docs
+- each candidate's `package.json` (framework, and the dev/build/test/e2e scripts) and framework config files
+- how each frontend is run and tested in this repo (its dev command, app-run command, and e2e/UI test command)
+
+Record each frontend app's path, stack, run command, and e2e/UI test command from what you find, and reuse those concrete values in the Change Impact Tree and validation.
+
+Then classify the request as exactly one of:
+
+- **Full-stack:** backend behavior plus a user-visible change. Plan the affected frontend app(s) as first-class: components, routes/pages, state, the API client call that hits the new/changed backend endpoint, and type/contract sync. These must appear in the Change Impact Tree and in validation.
+- **Frontend-only:** UI/UX change with no backend contract change. Plan the frontend with full concreteness; note that no backend layer changes.
+- **Backend-only:** no user-visible surface (internal CLI, worker job, migration, infra). The PRD must state `No frontend impact` with a one-line reason, so omission is a documented decision rather than a silent default.
+
+**Hard rule:** if the request changes anything a user sees or interacts with, the PRD MUST plan the frontend with the same concreteness as the backend. A lone "update UI" line is not acceptable — name the app, the components/routes, and the API wiring. If more than one frontend could plausibly host the surface, ask the user which one in Phase 2 instead of guessing.
 
 ### Phase 2: Clarify Only What The Code Cannot Answer
 
@@ -96,33 +133,34 @@ If you cannot justify the new item, do not recommend it.
 
 ### Phase 3.5: Realistic Validation Gate
 
-Before finalizing the PRD, identify the highest-fidelity validation needed to prove the requested behavior works through real project entry points.
+Identify the highest-fidelity validation that proves the behavior through a real project entry point, and record it in the Section 7 **Realistic Validation Plan** (content rule F defines the table columns, mock boundary, opt-in live, and fallback rules). Mirror it in plain language as the Part A "如何证明它生效" note in the Human Review Map.
 
-For each behavior that changes user-visible output, API behavior, persistence, background workflow, external integration, or deployment/runtime behavior, specify:
-- the real entry point to exercise, such as CLI command, HTTP API, app startup, Playwright flow, worker job, migration, or service composition root
-- which dependencies may be mocked and which must remain real
-- required test data, environment variables, service state, or sandbox accounts
-- the exact automated command or manual/sandbox validation procedure
-- why lower-level unit or integration tests alone are sufficient or insufficient
+**Hard rule:** if the PRD introduces or changes executable behavior (CLI, API, jobs, file output, external integrations, or user-visible frontend), the plan MUST contain at least one row exercising a real entry point; user-visible changes need at least one real frontend entry point (the repo's e2e/UI test command or a manual app run), not only a unit test. "Unit tests are sufficient" is acceptable only for pure internal refactoring with no executable surface. Do not require live external services by default — gate them behind opt-in env vars and document the no-credential fallback.
 
-**Hard rule:** If the PRD introduces or changes executable behavior (CLI commands, API endpoints, background jobs, file output, or external integrations), the Realistic Validation Plan MUST contain at least one validation row that exercises the behavior through the real entry point. "Unit tests are sufficient" is NOT an acceptable substitute unless the change is purely internal refactoring with no user-visible or executable surface. Use dry-run, local file output, or sandbox mode to avoid requiring live external services when credentials are unavailable.
-
-Do not require live external services by default. If live or sandbox validation is necessary, make it opt-in, explicitly gated by environment variables, and document the fallback validation when credentials are unavailable.
-
-When validating delivery/archive readiness, run the bundled checklist checker when a Python runtime is available. Resolve `scripts/check_prd_acceptance_checklist.py` relative to this skill directory; do not hard-code an installation path.
+For delivery/archive readiness, run the bundled checker when a Python runtime is available (resolve `scripts/check_prd_acceptance_checklist.py` relative to this skill directory, do not hard-code a path):
 
 ```bash
 python scripts/check_prd_acceptance_checklist.py --repo-root <repo-root> --all
 ```
 
-For a pending PRD that is about to be archived, explicitly validate that file:
+Pending PRDs may keep unchecked acceptance items, so this completion checker is not a blocker for a normal newly generated PRD; for a pending PRD about to be archived, validate it with `--check-provided tasks/pending/<prd-file>.md`.
 
-```bash
-python scripts/check_prd_acceptance_checklist.py --repo-root <repo-root> --check-provided tasks/pending/P0-BUG-20260527-120000-example.md
-```
+### Phase 3.6: Human Review Map Gate
 
-Pending PRDs may intentionally keep unchecked acceptance items while waiting for implementation, so do not run the acceptance-completion checker as a blocker for a normal newly generated PRD.
-This checker is intentionally bundled with the skill for installed-skill usage; repository `pre-commit` integration is optional and may use a project-local hook instead.
+Once the change surface is known (from the architecture analysis, recommendation, and Change Impact Tree), classify it for the Part A **Human Review Map** (Section 2). For each meaningful change point:
+
+1. **Layer:** which architecture layer it lands in (`api` / `core` / `engines` / `infrastructure` / a frontend app). The layer sets the default intervention: `core` business logic leans human; `api` adapters and `infrastructure` plumbing lean executor + automated gate.
+2. **Risk tier:** start from the layer default, then adjust with risk factors — **irreversibility, blast radius, security/money, correctness-criticality**.
+3. **Intervention:** route to **human confirmation** or **executor + automated gate**, and name the concrete gate (a specific hook, test, or architecture check) when it is the latter.
+
+Always flag these for human confirmation regardless of where the code lands:
+
+- **Fixed zones:** core business logic / orchestration (`core/`); database structure / schema / migration (even under `infrastructure/`); security / auth / trust boundaries; external API contracts / breaking changes.
+- **Cross-cutting triggers** (escalate any layer): money / billing / quota (when applicable); irreversible or destructive data operations (bulk delete, backfill, down-migration); concurrency / transaction / idempotency.
+
+**Hard rule:** keep the human-confirm set short and justified — if everything is flagged, the map adds no signal. Anything not in a fixed zone and not hitting a trigger defaults to executor + automated gate; do not list it as human-confirm. In Section 2, name only the menu items the change actually hits and summarize all misses in one line — do not write `不涉及` for every unmatched zone. When a schema change is present, the ER diagram (Section 7.5) must be surfaced in the Human Review Map for human review. Every human-confirm change point must get a matching item under the `Human-Confirmed` group in the Section 9 Acceptance Checklist.
+
+**Acceptance Oracle Lock (up front):** For every human-confirm row, name the executable oracle that locks its correct behavior — characterization/golden test for core logic; round-trip + migration up/down for schema; an actual unauthorized-access test for auth; contract/snapshot test for an external API. For executor + automated-gate rows, name a gate that genuinely discriminates *this* change's failure (a generic `build`/`lint` that would pass even if the change were wrong is not valid). These oracles are agreed up front, run continuously during autonomous implementation, and presented as the Section 9 Acceptance Evidence Package. A high-risk row with no definable oracle is flagged, not marked done.
 
 ### Phase 4: Conditional Web Research
 
@@ -143,41 +181,13 @@ Do not use web results as a reason to add abstractions by default.
 
 ### Phase 5: Prototype And Visual Artifact Gate
 
-Visual artifacts should clarify the change, not pad the PRD.
+Always include a **Change Impact Tree** and at least one **flow/architecture diagram** (content rules A, B). Add a **low-fidelity prototype** (rule C) only when the request is UI-heavy, depends on multi-step interaction, or layout is needed to resolve scope; add an **ER diagram** (rule D) only when the data model or persistent state changes.
 
-Always include:
-- a **Change Impact Tree**
-- at least one **flow or architecture diagram**
-
-Include a **low-fidelity prototype** only when:
-- the request is UI-heavy, or
-- behavior depends on multi-step user interaction, or
-- layout is necessary to resolve scope ambiguity
-
-Include an **ER diagram** only when data model or persistent state changes.
-
-Create or modify interactive prototype files under `docs/prototypes/` only when:
-- the user explicitly asks for a prototype, wireframe, or interactive demo, or
-- static diagrams cannot adequately express the behavior under review
-
-Do not create prototype files merely because the feature touches UI.
+Create or modify interactive prototype files under `docs/prototypes/` only when the user explicitly asks for a prototype/wireframe/demo, or static diagrams cannot express the behavior. Skipping a prototype file does not waive the Frontend Impact Gate — the frontend must still be planned in the Change Impact Tree and validation when the user-visible surface changes.
 
 ### Phase 5.5: Executor Resilience Gate
 
-Implementation guidance may be detailed, especially when the PRD will be handed to another agent, but it must be resilient to normal repository drift.
-
-Required:
-- use file paths, symbol names, recipe names, config keys, routes, selectors, or section headings as anchors
-- include `rg` search commands for legacy references, new target references, and likely hidden references when repository-wide references may exist
-- state that the listed files are the starting point, not a guarantee that no other affected files exist
-- include short validation-failure triage notes for risky commands, such as Docker build context, CI working directory, cache path, artifact path, route path, env var, or composition-root checks
-- mark live production, vendor, or credential-dependent validation as opt-in or post-merge unless it is truly required to prove the change
-
-Forbidden:
-- instructions that depend on deleting, editing, or trusting exact line numbers or line ranges
-- shell commands that are not copy-paste executable in the target repository environment
-- `grep` alternation such as `a\|b` unless the command explicitly uses a compatible mode such as `grep -E`; prefer `rg`
-- acceptance criteria that imply the explicit file list is exhaustive when a repository search can verify the final state
+Implementation detail may be thorough, but must survive normal repository drift. Anchor fragile edits to file paths, symbol/recipe/route names, config keys, or headings — never to line numbers or line ranges. Include `rg` searches for legacy, new-target, and likely-hidden references when repo-wide references exist, and state that the listed files are a starting point, not an exhaustive set. Keep every shell command copy-paste executable (prefer `rg`; if `grep` alternation is used, use `grep -E 'a|b'`), add a short failure-triage note for risky commands (build context, CI working dir, cache/artifact path, route, env var, composition root), and mark live/credential-dependent validation as opt-in or post-merge unless truly required.
 
 ### Phase 6: Generate And Save The PRD
 
@@ -196,81 +206,94 @@ Timestamp must use local current time in `YYYYMMDD-HHMMSS` format.
 
 ### Phase 7: PRD Compliance Gate
 
-Before handing off the PRD, verify the whole document has:
-- all required top-level sections in the required order
-- Section 1 includes a `### Realistic Validation` checklist immediately after the goals/objectives
-- Section 5 starts with the required living implementation guide statement
-- a Change Impact Tree
-- at least one Mermaid flow or architecture diagram
-- a Realistic Validation Plan that contains at least one row with a real entry point (not only pytest/helper functions), unless the PRD explicitly documents why the change is pure internal refactoring with no executable surface
-- an Acceptance Checklist with grouped headings and concrete checkbox items
-- Functional Requirements using `FR-1`, `FR-2`, ... identifiers
-- Non-Goals
-- Risks And Follow-Ups
-- a Decision Log with at least one row
-- no line-number-dependent implementation instructions
-- copy-paste executable validation/search commands, with `rg` preferred for repository searches
-- executor drift guards for repository-wide refactors, migrations, path moves, config rewires, or other changes where hidden references are likely
+Before handing off, verify the document against the **Checklist** at the end of this skill — that list is the single source of truth for required sections, blocks, and blockers. Use `rg -n "^## " <prd-file>` for a quick section-header check.
 
-When updating an existing PRD, run this gate against the entire file. If the existing file is non-compliant, preserve valid context and decisions but reorganize the document into the required structure instead of appending a compliant fragment to a non-compliant PRD.
+When updating an existing PRD, run the Checklist against the entire file. If the existing file is non-compliant, preserve valid context and decisions but reorganize the document into the required structure instead of appending a compliant fragment to a non-compliant PRD.
 
 **If the PRD changes executable behavior and the Realistic Validation Plan contains only unit/integration test entries with no real entry point, or the Validation Acceptance lacks a real entry-point item without a justified internal-refactoring exception, this gate FAILS. Do not hand off the PRD.**
-
-Use `rg -n "^## " <prd-file>` or an equivalent section-header check when a PRD file exists.
 
 ---
 
 ## Required PRD Structure
 
-This structure is the output contract for generated and updated PRDs.
+This structure is the output contract for generated and updated PRDs. PRDs are organized into two altitudes, read top-down:
+
+- **Part A · Review Layer** (Sections 1-4): what a human reads to accept or reject the work and to see where they must personally confirm. No implementation mechanism, file paths, commands, or scheduling metadata.
+- **Part B · Build Layer** (Sections 5-13): what the executor (human or Agent) reads to implement. The human drills in only where the Part A Human Review Map points.
+
+The PRD opens with a short two-altitude orientation note, then the heading `# Part A · 人审层 (Review Layer)`.
 
 ### 1. Introduction & Goals
 
-Brief problem statement plus measurable objectives.
+Review-altitude only. Must include, in order:
+- `### Problem Statement` — the pain, who feels it, why the current behavior is insufficient. Problem only; no solution, mechanism, files, or commands.
+- `### Interpretation (解读回显)` — the Agent's plain-language restatement of how it read the request (from Phase 0), kept falsifiable ("read as X, not Y"); this is the human's up-front approval target, the first of the two human touches.
+- `### What The User Gets` — plain-language description of the capability/behavior the consumer (end user / caller / operator) receives, from the consumer's point of view. No implementation mechanism or module paths — mechanism belongs in Section 6.
+- `### Measurable Objectives` — measurable success criteria.
 
-Must include a `### Realistic Validation` checklist before Section 2.
-This first-section checklist is a concise, reviewer-facing summary of the highest-fidelity validation expected for the task. It must use Markdown checkbox items and mirror the style of:
+Do not place a proposed solution summary, validation commands, or delivery-dependency metadata here — those live in Sections 6, 7, and 8 respectively. The first section must stay reviewable without implementation detail.
 
-```markdown
-### Realistic Validation
+### 2. Human Review Map (介入与风险地图)
 
-除单元测试和集成测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
+The heart of the review layer: it decides how a human allocates attention. Must include:
 
-- [ ] **[行为名称] 真实验证**：通过 `[真实入口命令或流程]` 验证 `[关键可观察结果]`。
-- [ ] **[配置/状态/回退] 真实验证**：通过 `[真实入口命令或流程]` 验证 `[关键可观察结果]`。
-- [ ] **为什么单元测试不够**：说明真实入口验证覆盖了哪些单元测试无法证明的行为。
-```
+- A **numbered reference menu** of fixed zones (① core business logic/orchestration `core/`; ② database structure/schema/migration even under `infrastructure/`; ③ security/auth/trust boundaries; ④ external API contracts/breaking changes) and cross-cutting triggers (⑤ money/billing/quota; ⑥ irreversible or destructive data operations; ⑦ concurrency/transaction/idempotency).
+- A **命中的人审项 (hits)** list naming only the menu items this change actually triggers (or `本次无人工确认项` when none); each hit becomes a 人工确认 row in the table.
+- A **未命中 (misses)** one-liner summarizing the remaining menu numbers as executor + automated gate — do not enumerate each miss as its own `不涉及` line.
+- A **classification table** with columns: `改动点 | 架构层 | 风险 | 介入方式（人工确认=高证据负担 / 执行器+门禁=兜底） | 证据 / Oracle`. The last column **references the `rv-id`(s) in the Section 7.6 oracle block** (e.g. `rv-1, rv-3`), keeping Section 2 scannable; the oracle detail lives once in Section 7.6. Every human-confirm row must point to at least one `rv-id`; a low-risk executor row may name a failure-discriminating gate instead. A row with no nameable evidence is a red flag, not a pass.
+- For each **未命中** item, add a one-line worst-case-if-wrong; if the worst case is severe or irreversible, it cannot be left as a miss.
+- A **"如何证明它生效（真实入口，白话）"** note — the plain-language mirror of the Section 7.6 Realistic Validation Plan, without command-level detail.
+- A **数据库结构评审** note: when schema changes, surface the ER diagram here for human review; otherwise state `本次无数据库结构变化。`
 
-Rules:
-- Keep this checklist short enough to scan, usually 2-5 items.
-- Use concrete real entry points such as CLI commands, HTTP endpoints, app startup, Playwright flows, worker jobs, migrations, or publish/deploy procedures.
-- Include dry-run, local file output, sandbox mode, or mocked external boundary details when live services are not required.
-- This checklist does not replace the detailed `Realistic Validation Plan` table in Section 5.
+Keep the human-confirm set short and principled (see Core Rules 12-13 and Phase 3.6). Anything not in a fixed zone and not hitting a trigger defaults to executor + automated gate and must not be listed as human-confirm. "人工确认" here means **high evidence burden** — the item tops the Section 9 evidence package with an executable oracle for the single end-of-flow review — not a mid-flow interruption.
 
-### 2. Requirement Shape
+### 3. Usage And Impact After Implementation
+
+Part of the review layer so reviewers see the concrete delivered outcome before requirement and implementation detail. Write it at PRD time as a target end state — a usage script to build toward and verify against — not a post-hoc log.
+
+Required when the change is user-visible or has executable behavior (API/CLI/UI/job/startup/migration). For a purely internal change with no user-facing or executable surface, keep the section and state `No user-facing usage change; internal-only change.`
+
+See the `Usage And Impact After Implementation` content rule for the per-role walkthrough, entry commands/API examples, backward-compatibility impact, and anti-duplication rules.
+
+### 4. Requirement Shape
 
 - actor
 - trigger
 - expected behavior
 - explicit scope boundary
 
-### 3. Repository Context And Architecture Fit
+The PRD then begins the build layer with the heading `# Part B · 执行器层 (Build Layer)`.
+
+### 5. Repository Context And Architecture Fit
 
 Must include:
 - current relevant modules/files
 - existing architecture pattern to follow
 - ownership and dependency boundaries
+- frontend impact: the affected frontend app(s) and the closest existing routes/components, or `No frontend impact` with a reason
 - constraints from runtime, docs, tests, or workflows
+- matching or related PRDs found in `tasks/pending/` and relevant prior PRDs from `tasks/archive/`
 
-### 4. Recommendation
+If no related PRDs are found, state that explicitly.
+If related PRDs are found, identify whether this PRD:
+
+- duplicates existing pending work and should update that PRD instead
+- depends on another pending PRD
+- blocks another pending PRD
+- can run independently
+
+Reflect dependency decisions in the Section 8 `Delivery Dependencies` block.
+
+### 6. Recommendation
 
 Must include:
 - **Recommended Approach**
 - why this is the best fit for the current architecture
 - rationale for rejecting redundant abstractions
+- a `### Proposed Solution Summary (实现机制)` that hands the implementer the mechanism: name the core mechanism or architecture path; state who supplies any required declaration/configuration/input and whether the system infers it or only consumes explicit data; identify the existing entry point, module boundary, API, workflow, or UI surface it plugs into; state the main system state/output/user-visible behavior change; and state the complexity intentionally avoided (new storage, parallel abstraction, changed state machine)
 - **Alternatives Considered** only when a plausible non-trivial alternative exists
 
-### 5. Implementation Guide
+### 7. Implementation Guide
 
 This section must start with this sentence or a close equivalent:
 
@@ -281,56 +304,76 @@ Must include:
 - **Change Impact Tree**
 - **Executor Drift Guard** when hidden references or repository drift could affect implementation
 - **Flow or Architecture Diagram**
-- **Realistic Validation Plan**
+- **ER Diagram** when the data model changes (this is the detail figure linked from the Section 2 schema-review note)
+- **Realistic Validation Plan** (a structured YAML oracle block — see content rule F)
 - **Low-Fidelity Prototype** when required
-- **ER Diagram** when required
 - **Interactive Prototype Change Log** when prototype files changed
 - **External Validation** when web research was used
 
-### 6. Definition Of Done
+### 8. Delivery Dependencies
 
-Include:
-- implementation validation
-- realistic validation through the highest feasible real entry point
-- docs updates
-- no regression checks
-- architecture-fit checks
-- overall delivery/readiness gates only; do not use this section as a substitute for the Acceptance Checklist
+Tool-neutral sequencing metadata, not a tool-specific queue syntax. Use `none` explicitly when the task has no dependency.
 
-### 7. Acceptance Checklist
+Use this shape:
+
+```markdown
+### Delivery Dependencies
+
+- Group: [logical-delivery-group-or-none]
+- Depends on groups:
+  - none
+- Depends on tasks/issues:
+  - none
+- Gate type: none
+- Notes: [Use tool-neutral dependency names. Do not put tool-specific hidden markers here.]
+```
+
+Rules:
+- `Group` names the logical delivery group for this PRD, or `none`.
+- `Depends on groups` lists logical upstream groups, not tool-specific labels.
+- `Depends on tasks/issues` lists upstream task names, PRD slugs, issue numbers, or `none`.
+- `Gate type` must be `none`, `soft`, or `hard`.
+- `hard` means an execution tool may treat the dependency as a blocking gate when that repository has a deterministic adapter.
+- `soft` documents sequencing context but must not be treated as a blocking gate unless a repository-specific PRD explicitly defines that behavior.
+- Do not place tool-specific hidden markers, labels, or queue syntax in this block. Repository-specific publish tooling may translate the block into its own markers or labels.
+
+### 9. Acceptance Checklist
 
 Include:
 - a dedicated section named `Acceptance Checklist`
-- grouped checklist headings such as `Architecture Acceptance`, `Dependency Acceptance`, `Behavior Acceptance`, `Documentation Acceptance`, and `Validation Acceptance` when relevant
+- this section is the **single human-facing acceptance artifact** ("look once at the end"): organize it as an **Acceptance Evidence Package** ordered by the Human Review Map — high-risk oracle results first, then the Review Map's Predicted→Reconciled reconciliation, then adversarial-check results on the misses, then diffs against locked contracts, then folded low-risk gate results
+- every checkbox must be **evidence-bearing**: name the command output, observation, or artifact that proves it, not a bare claim
+- a `Human-Confirmed` group whose checkbox items correspond one-to-one to the human-confirm change points in the Section 2 Human Review Map
+- grouped checklist headings such as `Architecture Acceptance`, `Dependency Acceptance`, `Behavior Acceptance`, `Frontend Acceptance` (when a frontend app changes), `Documentation Acceptance`, `Validation Acceptance`, and `Delivery Readiness` (the overall delivery gate formerly in Definition Of Done) when relevant
 - concrete, repository-verifiable checkbox items
 - exact paths, API contracts, commands, or search assertions where applicable
 - at least one `Validation Acceptance` item that exercises the changed behavior through the highest feasible real entry point; if no real entry-point validation is included, the PRD must explicitly document that the change is pure internal refactoring with no executable surface, and this justification must be reviewed in the Decision Log
-- no checklist item may be replaced by a `Definition Of Done` bullet or by local requirement acceptance notes
+- this checklist is the single completion gate; do not replace any item with a vague summary bullet or local requirement acceptance notes
 
-### 8. Functional Requirements
+### 10. Functional Requirements
 
 Use numbered requirements such as `FR-1`, `FR-2`.
 
-### 9. Non-Goals
+### 11. Non-Goals
 
 List explicit out-of-scope items.
 
-### 10. Risks And Follow-Ups
+### 12. Risks And Follow-Ups
 
 List only unavoidable migration risk, rollout risk, or explicitly approved non-blocking follow-up.
 Do not use this section to park work that is actually required for the recommended target state.
 
-### 11. Decision Log
+### 13. Decision Log
 
 Record every key decision made during this PRD as a permanent reference that survives archival.
 
 Rules:
 - Each row answers one decision question (e.g. "which architecture pattern", "which storage backend").
-- **Chosen** must match the recommendation in Section 4.
-- **Rejected** must name the concrete alternative from Section 4 when one is documented, not a vague "other approaches".
+- **Chosen** must match the recommendation in Section 6.
+- **Rejected** must name the concrete alternative from Section 6 when one is documented, not a vague "other approaches".
 - **Rationale** must be one concrete sentence — not "fits the architecture" but why specifically.
 - Assign sequential IDs: D-01, D-02, …
-- Minimum one row per PRD. Add rows for major trade-offs or alternatives explicitly resolved in Section 4.
+- Minimum one row per PRD. Add rows for major trade-offs or alternatives explicitly resolved in Section 6.
 
 ---
 
@@ -361,12 +404,14 @@ Database
 Infrastructure
 Domain
 API
-Frontend
+Frontend (per the repo's frontend app(s))
 Tests
 Docs
 ```
 
-内容重点覆盖：SQL 变化、字段变化、数据流变化、API 变化、ORM 变化、Domain Logic 变化、UI 展示变化、类型同步、测试同步。
+内容重点覆盖：SQL 变化、字段变化、数据流变化、API 变化、ORM 变化、Domain Logic 变化、前端组件/路由/状态变化、前端调用后端 API 的客户端代码、UI 展示变化、类型同步、测试同步。
+
+当需求触达用户可见界面时，Change Impact Tree 必须包含仓库实际前端 app 的具体改动：组件、路由/页面、状态、调用后端 API 的客户端代码、类型同步。禁止用一行"更新 UI"代替前端规划。
 
 不要包含：import 调整、格式化、lint 修复、无意义 rename、与任务无关的小改动。
 
@@ -410,30 +455,35 @@ Include only when prototype files were actually changed.
 If no prototype files changed, state:
 - `No interactive prototype file changes in this PRD.`
 
-### F. Realistic Validation Plan
+### F. Realistic Validation Plan (Oracle block)
 
-Every PRD must include this section.
+Every PRD with executable behavior must include this as a **structured YAML block** — the single machine-and-human-readable oracle source. Section 2's evidence column, the Section 9 evidence package, and any deterministic extractor reference/parse the `id`s here. Do not restate oracles as prose tables elsewhere.
 
-Use this structure:
+Each entry:
 
-| Behavior | Real Entry Point | Test Layer | Mock Boundary | Data/Env Needed | Command Or Procedure | Required For Acceptance |
-|---|---|---|---|---|---|---|
-| [changed behavior] | [API/CLI/UI/job/startup/migration/etc.] | [unit/integration/e2e/smoke/sandbox/manual] | [what is mocked vs real] | [fixtures/env/services] | `[exact command]` | Yes/No |
+```yaml
+- id: rv-1
+  behavior: <user-visible behavior this proves, plain language>
+  real_entry: "<exact command / URL / entry point the real user runs>"   # not a unit test or helper
+  expected: "<observable that proves it works>"
+  mock_boundary: "<what may be mocked vs must be real>"   # the under-test boundary must NOT be mocked
+  negative_control: "<command or seeded break that makes this entry go RED>"   # proves the test can fail
+  expected_fail: "<what red looks like>"
+  test_layer: unit|integration|e2e|smoke|sandbox|manual
+  required_for_acceptance: true
+```
+
+Rules:
+- One entry per real observable behavior; every Section 2 human-confirm row points to ≥1 `id`.
+- `real_entry` is the highest-fidelity real entry point (not pytest/helpers); for user-visible changes at least one entry's `real_entry` is the repo's e2e/UI command or a manual app run.
+- `negative_control` + `expected_fail` are **mandatory for human-confirm / high-risk entries** — a test that cannot be shown to fail proves nothing. A purely mechanical low-risk entry may instead name a discriminating gate.
+- `real_entry` / `negative_control` commands must be copy-paste executable from the documented working directory; prefer `rg`; any `grep` alternation uses `grep -E 'a|b'`.
+- Treat production / vendor / credential-dependent entries as `opt-in` / `post-merge`; document the no-credential fallback that still runs.
+- Add a short failure-triage note beneath the block (first config/path/boundary to inspect).
+- Deterministic tooling parses this block; if a PRD declares executable behavior but the block is missing or unparseable, that is a loud failure — never infer it.
 
 If the change has no executable behavior, state:
 - `No executable behavior changes; realistic validation is limited to documentation/build checks.`
-
-If live or sandbox validation needs credentials or external services that may be unavailable, state:
-- the opt-in environment variables or service prerequisites
-- the fallback automated validation that must still run without those credentials
-- whether skipped live validation blocks acceptance
-
-Command rules:
-- commands must be copy-paste executable from the documented working directory
-- prefer `rg` over `grep` for repository searches
-- if `grep` is used with alternation, use an explicit compatible form such as `grep -E 'a|b'`
-- do not make production deploys or live vendor calls blocking acceptance unless the behavior cannot be proven through local, CI, dry-run, sandbox, or staged validation
-- add a short failure-triage note for high-friction validation, naming the first paths, config keys, or boundaries to inspect
 
 ### G. External Validation
 
@@ -448,18 +498,37 @@ Use this structure:
 If no web research was needed, state:
 - `No external validation required; repository evidence was sufficient.`
 
-### H. Acceptance Checklist
+### H. Usage And Impact After Implementation
+
+Describe the post-implementation world from the consumer's point of view, written at PRD time as a concrete target end state — not a post-hoc log filled in after delivery. It gives reviewers and the implementer a usage script to build toward and to verify against later.
+
+Include this section when the change is user-visible or has executable behavior (API/CLI/UI/job/startup/migration). When the change is purely internal with no user-facing or executable surface, state instead:
+- `No user-facing usage change; internal-only change.`
+
+When included, cover only what the abstract sections cannot:
+- **Per-role usage walkthrough:** for each affected role that actually applies (end user, admin, developer, operator), the concrete steps to use the delivered capability — which page/route, which entry point, which fields, and the resulting identifier or output format. Anchor to real paths and entry points, not line numbers.
+- **Entry commands / API examples:** copy-paste `curl`, CLI, or client snippets that exercise the new or changed entry points. This is usually the only place these concrete examples live.
+- **Impact on existing behavior:** backward-compatibility and migration effects only — what stays the same for existing users/data/config, plus any new optional config/env and its default-off behavior.
+
+Rules:
+- This subsection is the concrete walkthrough; keep `Goals`, `Functional Requirements`, and `Requirement Shape` abstract and do not restate them verbatim here.
+- Do not introduce a capability that has no matching `FR-n`; if writing this subsection surfaces one, add the `FR` first.
+- The impact list covers backward-compatibility/migration, not the "won't build" scope — keep negative scope in `Non-Goals` and do not duplicate it here.
+
+### I. Acceptance Checklist
 
 This section is required even when Functional Requirements already include acceptance criteria.
-Do not merge it into `Definition Of Done`.
+It is the single completion artifact and also serves as the overall delivery-readiness gate (the former Definition Of Done); there is no separate Definition Of Done section.
 
 Use grouped subsections.
 For architecture-heavy or refactor work, prefer:
 - `Architecture Acceptance`
 - `Dependency Acceptance`
 - `Behavior Acceptance`
+- `Frontend Acceptance` (when a frontend app changes)
 - `Documentation Acceptance`
 - `Validation Acceptance`
+- `Delivery Readiness` (recommended approach fully implemented; no open regression or rollout blocker — the former Definition Of Done)
 
 Each checkbox must describe a concrete, verifiable end state.
 Prefer exact file paths, commands, API paths/contracts, dependency boundaries, or repository search assertions over vague quality statements.
@@ -476,17 +545,33 @@ The checklist must validate the final target state, not merely the completion of
 
 * [ ] Rewrote the request into a concrete behavior change
 * [ ] Inspected the repository before asking questions
+* [ ] Searched existing `tasks/pending/` PRDs for duplicate, prerequisite, blocking, or downstream work before creating/updating this PRD
+* [ ] Checked relevant `tasks/archive/` PRDs when prior decisions or completed related work could affect the plan
 * [ ] Identified the closest existing code path
+* [ ] Documented the Existing PRD Relationship in Section 5 and reflected sequencing decisions in the Section 8 Delivery Dependencies block
 * [ ] Handled critical unresolved questions correctly: asked the user only when repository evidence was insufficient and the answer would materially affect the PRD
 * [ ] Compared a minimal-change option against a heavier option
 * [ ] Justified every new abstraction, dependency, or file path
 * [ ] Rejected redundant layers where reuse was sufficient
+* [ ] **BLOCKER:** Structured as Part A (Review Layer, Sections 1-4) and Part B (Build Layer, Sections 5-13); Part A contains no implementation mechanism, file paths, commands, or scheduling metadata
+* [ ] Section 1 stays review-altitude: Problem Statement, an `Interpretation (解读回显)` of how the request was read (the up-front approval target), What The User Gets, and Measurable Objectives only — no proposed solution summary, validation commands, or delivery-dependency metadata
+* [ ] **BLOCKER:** Section 2 Human Review Map present: a numbered zone/trigger menu, a 命中的人审项 list (only hit items, or `本次无人工确认项`), a 未命中 one-liner for the rest, a per-change-point classification table (layer + risk tier + intervention + 证据/Oracle column), a plain-language "如何证明它生效" note, and an ER-diagram surfacing or `本次无数据库结构变化` note
+* [ ] Every Section 2 Review Map row points its 证据/Oracle column to ≥1 `rv-id` in the Section 7.6 oracle block (or a failure-discriminating gate name for low-risk executor rows); rows with no nameable evidence are flagged, not passed
+* [ ] Each Section 2 未命中 item carries a one-line worst-case-if-wrong; severe or irreversible worst cases are not left as misses
+* [ ] Human-confirm set is short and principled (fixed zones + triggers only); ordinary low-risk changes are routed to executor + automated gate, not flagged for human review
+* [ ] Section 6 Recommendation includes the `Proposed Solution Summary (实现机制)` carrying the mechanism that moved out of Section 1
+* [ ] Section 8 includes a tool-neutral Delivery Dependencies block, using explicit `none` values when no sequencing dependency exists
+* [ ] Section 9 Acceptance Checklist includes a `Human-Confirmed` group whose items map one-to-one to the Section 2 human-confirm change points
+* [ ] **BLOCKER:** Section 9 is organized as a risk-map-ordered Acceptance Evidence Package with evidence-bearing items (oracle results / observations / artifacts named), suitable for a single end-of-flow human review
 * [ ] Included a Change Impact Tree with architecture-fit reasoning
+* [ ] **BLOCKER:** Stated frontend impact explicitly — for user-visible features named the affected frontend app(s) and their changes (components, routes, API wiring) in the Change Impact Tree; for backend-only work recorded `No frontend impact` with a reason; never omitted the frontend silently
+* [ ] For user-visible changes, the Realistic Validation Plan includes a real frontend entry point (the repo's e2e/UI test command or a manual app run), not only component unit tests
+* [ ] For user-visible or executable-behavior changes, included a `Usage And Impact After Implementation` section with a per-role usage walkthrough and entry commands/API examples; for purely internal changes recorded `No user-facing usage change`
 * [ ] **BLOCKER:** Did not include line-number-dependent edit instructions; all fragile edits use semantic anchors and/or `rg` search commands
 * [ ] Included at least one flow or architecture diagram
 * [ ] Implementation Guide includes the required living implementation guide statement
 * [ ] Included an Executor Drift Guard when hidden references, moved paths, config rewires, or repository-wide updates are likely
-* [ ] **BLOCKER:** Included a Realistic Validation Plan that names real entry points, mock boundaries, data/env needs, and commands or procedures
+* [ ] **BLOCKER:** Included a Realistic Validation Plan as a structured YAML oracle block (`id` / `real_entry` / `expected` / `mock_boundary` / `negative_control` / `expected_fail`) parseable by deterministic tooling; human-confirm / high-risk entries carry a `negative_control` + `expected_fail`
 * [ ] Added low-fidelity prototype only when actually needed
 * [ ] Added ER diagram only when data model changes are present
 * [ ] Used web research only when external facts were required
@@ -494,10 +579,11 @@ The checklist must validate the final target state, not merely the completion of
 * [ ] Saved new PRDs to `tasks/pending/<PRIORITY>-<TYPE>-<YYYYMMDD-HHMMSS>-<slug>.md`
 * [ ] Did not require acceptance-completion checks for normal pending PRDs; for archive readiness, ran the bundled `scripts/check_prd_acceptance_checklist.py` checker when available
 * [ ] For existing PRD updates, restructured the whole PRD to the required shape instead of appending to a non-compliant file
-* [ ] Ran a section compliance check, manually or with `rg -n "^## " <prd-file>`
-* [ ] Included a dedicated `Acceptance Checklist` section and did not collapse it into `Definition Of Done` or local requirement notes
+* [ ] Ran a section compliance check, manually or with `rg -n "^## " <prd-file>`; all required sections are present in order
+* [ ] Functional Requirements use `FR-1`, `FR-2`, … identifiers, and Non-Goals + Risks And Follow-Ups sections are present
+* [ ] Included a dedicated `Acceptance Checklist` section (the single completion gate; no separate Definition Of Done) and did not collapse it into local requirement notes
 * [ ] **BLOCKER:** All validation/search commands are copy-paste executable; repository searches prefer `rg`, and any `grep` alternation uses an explicit compatible mode
 * [ ] **BLOCKER:** Validation Acceptance includes the highest feasible real entry-point validation or explicitly documents why the change is pure internal refactoring with no executable surface
 * [ ] Recommended a full target state rather than leaving required work in `Phase 2`, `follow-up`, or temporary compatibility layers unless a hard constraint was explicitly documented
-* [ ] Decision Log has at least one row for each major trade-off or documented alternative resolved in Section 4
+* [ ] Decision Log has at least one row for each major trade-off or documented alternative resolved in Section 6
 * [ ] Each Decision Log row names a concrete rejected alternative (not a vague "other approaches")

@@ -516,6 +516,12 @@ class AgentRunnerValidationSettings(BaseModel):
     parse_evidence_format_with_agent: bool = True
     language: str = "zh-CN"
     structured_evidence: bool = True
+    require_negative_control: bool = True
+    reexecute_commands: bool = True
+    reexecute_timeout_seconds: int = 300
+    verifier_enabled: bool = False
+    verifier_agent: str = "auto"
+    verifier_timeout_seconds: int = 1800
 
 
 class AgentRunnerConsoleSettings(BaseModel):

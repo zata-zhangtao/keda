@@ -68,6 +68,8 @@ def _write_manifest(
             "output_summary": "demo run 输出 ok。",
             "explanation": "真实执行了 demo run。",
             "risks": "无外部依赖。",
+            "negative_control": "改坏被测逻辑后重跑该用例",
+            "expected_fail": "pytest 该用例 FAILED",
         }
     ]
     if with_item_2:
@@ -79,6 +81,8 @@ def _write_manifest(
             "output_summary": "demo serve 输出 ok。",
             "explanation": "真实执行了 demo serve。",
             "risks": "无外部依赖。",
+            "negative_control": "停掉服务后访问",
+            "expected_fail": "连接被拒绝",
         }
         if omit_command_for_item == 2:
             item_2.pop("command")

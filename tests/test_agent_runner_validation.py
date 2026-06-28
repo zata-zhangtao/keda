@@ -26,6 +26,7 @@ from backend.core.use_cases.agent_runner_validation import (
     collect_evidence_coverage_problems,
     ensure_evidence_dir_excluded,
     ensure_no_evidence_paths_in_changes,
+    ensure_validation_commands_pass,
     ensure_validation_evidence_ready,
     evidence_branch_name,
     evidence_format_check_required,
@@ -74,6 +75,35 @@ _PRD_WITH_VALIDATION = """# PRD: Demo
 ## 2. Requirement Shape
 """
 
+_PRD_WITH_ORACLE_BLOCK = """# PRD: Demo
+
+## 7. Implementation Guide
+
+### 7.6 Realistic Validation Plan (Oracle 块)
+
+```yaml
+# Realistic Validation Oracle —— 注释行(测试围栏感知,不应截断小节)
+- id: rv-1
+  behavior: 行为 A 真实验证
+  real_entry: "demo run"
+  expected: "输出 OK"
+  negative_control: "改坏 demo run"
+  expected_fail: "非零退出"
+  test_layer: integration
+  required_for_acceptance: true
+- id: rv-2
+  behavior: 行为 B 真实验证
+  real_entry: "demo serve"
+  expected: "页面 200"
+  negative_control: "停掉服务"
+  expected_fail: "连接拒绝"
+  test_layer: e2e
+  required_for_acceptance: true
+```
+
+## 8. Delivery Dependencies
+"""
+
 _PRD_WITH_WAIVER = """# PRD: Docs only
 
 ### Realistic Validation
@@ -116,6 +146,20 @@ def test_extract_items_normalizes_checked_state() -> None:
     items = extract_realistic_validation_items(_PRD_WITH_VALIDATION)
     assert len(items) == 2
     assert all(item.startswith("- [ ] ") for item in items)
+
+
+def test_extract_items_from_oracle_block() -> None:
+    """Structured YAML oracle block is parsed deterministically into items.
+
+    同时验证围栏感知：YAML 内的 ``# 注释`` 行不会被当作标题而提前截断小节，
+    且多级编号标题 ``### 7.6 Realistic Validation Plan`` 能被识别。
+    """
+    items = extract_realistic_validation_items(_PRD_WITH_ORACLE_BLOCK)
+    assert items == [
+        "- [ ] rv-1: 行为 A 真实验证",
+        "- [ ] rv-2: 行为 B 真实验证",
+    ]
+    assert validation_required(_PRD_WITH_ORACLE_BLOCK, AppConfig())
 
 
 def test_extract_items_stops_at_next_section() -> None:
@@ -1130,6 +1174,8 @@ def _write_manifest(evidence_dir: Path, **overrides: object) -> None:
                 "output_summary": "demo run 输出匹配预期。",
                 "explanation": "真实运行了 demo run 命令。",
                 "risks": "无",
+                "negative_control": "改坏 demo run 后重跑",
+                "expected_fail": "demo run 非零退出",
             },
             {
                 "item_number": 2,
@@ -1139,6 +1185,8 @@ def _write_manifest(evidence_dir: Path, **overrides: object) -> None:
                 "output_summary": "demo serve 启动成功。",
                 "explanation": "真实启动了 demo serve。",
                 "risks": "仅本地验证",
+                "negative_control": "停掉 demo serve 后访问",
+                "expected_fail": "连接被拒绝",
             },
         ],
     }
@@ -1316,6 +1364,135 @@ def test_validate_evidence_manifest_computes_sha256(
     )
 
 
+def test_validate_evidence_manifest_rejects_missing_negative_control(
+    tmp_path: Path,
+) -> None:
+    """With require_negative_control on (default), items lacking it are rejected."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(
+        evidence_dir,
+        items=[
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "demo run",
+                "evidence_files": ["rv-1-run.txt"],
+                "output_summary": "输出匹配。",
+                "explanation": "真实运行。",
+                "risks": "无",
+            }
+        ],
+    )
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+    issue_body = _STRUCTURED_ISSUE_BODY.replace(
+        "- [ ] **行为 B 真实验证**：通过 `demo serve` 验证页面。", ""
+    )
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        validate_evidence_manifest(
+            issue_body=issue_body,
+            checklist_items=["- [ ] **行为 A 真实验证**：通过 `demo run` 验证输出。"],
+            worktree_path=tmp_path,
+            config=AppConfig(),
+        )
+    assert "negative_control" in str(exc_info.value)
+
+
+def test_validate_evidence_manifest_allows_missing_control_when_opted_out(
+    tmp_path: Path,
+) -> None:
+    """``require_negative_control=False`` restores the legacy control-free gate."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(
+        evidence_dir,
+        items=[
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "demo run",
+                "evidence_files": ["rv-1-run.txt"],
+                "output_summary": "输出匹配。",
+                "explanation": "真实运行。",
+                "risks": "无",
+            }
+        ],
+    )
+    (evidence_dir / "rv-1-run.txt").write_text("run output", encoding="utf-8")
+    issue_body = _STRUCTURED_ISSUE_BODY.replace(
+        "- [ ] **行为 B 真实验证**：通过 `demo serve` 验证页面。", ""
+    )
+    report = validate_evidence_manifest(
+        issue_body=issue_body,
+        checklist_items=["- [ ] **行为 A 真实验证**：通过 `demo run` 验证输出。"],
+        worktree_path=tmp_path,
+        config=AppConfig(validation=ValidationConfig(require_negative_control=False)),
+    )
+    assert len(report.items) == 1
+
+
+def test_ensure_validation_commands_pass_rejects_failing_command(
+    tmp_path: Path,
+) -> None:
+    """keda re-runs each RV command; a non-zero exit is rejected (seeded-bug oracle)."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(evidence_dir)
+    failing_responses = {
+        ("bash", "-lc", "demo run"): CommandResult(
+            command=("bash", "-lc", "demo run"),
+            return_code=1,
+            stdout="",
+            stderr="boom",
+        )
+    }
+    runner = FakeProcessRunner(responses=failing_responses)
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_commands_pass(
+            _issue(body=_STRUCTURED_ISSUE_BODY),
+            tmp_path,
+            AppConfig(),
+            runner,
+        )
+    assert "re-ran" in str(exc_info.value)
+    assert "demo run" in str(exc_info.value)
+
+
+def test_ensure_validation_commands_pass_accepts_passing_commands(
+    tmp_path: Path,
+) -> None:
+    """All commands exit 0 → gate passes, and keda actually re-ran each one."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(evidence_dir)
+    runner = FakeProcessRunner()
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), runner
+    )
+    assert ["bash", "-lc", "demo run"] in runner.calls
+    assert ["bash", "-lc", "demo serve"] in runner.calls
+
+
+def test_ensure_validation_commands_pass_skips_when_opted_out(
+    tmp_path: Path,
+) -> None:
+    """``reexecute_commands=False`` restores the no-re-execution behavior."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(evidence_dir)
+    failing_responses = {
+        ("bash", "-lc", "demo run"): CommandResult(
+            command=("bash", "-lc", "demo run"),
+            return_code=1,
+            stdout="",
+            stderr="boom",
+        )
+    }
+    runner = FakeProcessRunner(responses=failing_responses)
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY),
+        tmp_path,
+        AppConfig(validation=ValidationConfig(reexecute_commands=False)),
+        runner,
+    )
+    assert runner.calls == []
+
+
 def test_render_structured_evidence_comment_groups_by_item(
     tmp_path: Path,
 ) -> None:
@@ -1332,6 +1509,8 @@ def test_render_structured_evidence_comment_groups_by_item(
                 "output_summary": "输出匹配。",
                 "explanation": "真实运行。",
                 "risks": "无",
+                "negative_control": "改坏 demo run 后重跑",
+                "expected_fail": "非零退出",
             }
         ],
     )

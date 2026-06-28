@@ -100,6 +100,7 @@ from backend.core.use_cases.agent_runner_validation import (
     ValidationEvidenceError,
     build_validation_prompt_line,
     ensure_evidence_dir_excluded,
+    ensure_validation_commands_pass,
     ensure_validation_evidence_ready,
     format_validation_evidence_failure,
 )
@@ -1052,6 +1053,17 @@ def run_agent_until_committed(
         # Phase 3.5: Realistic Validation 证据门禁（要求验证且无豁免时）
         try:
             ensure_validation_evidence_ready(issue, worktree_path, config)
+            ensure_validation_commands_pass(
+                issue, worktree_path, config, process_runner
+            )
+            # Phase 3.6: independent verifier (pre-PR; red -> this same recovery
+            # loop auto-repairs, bounded; escalates to a human only on exhaustion).
+            # Local import breaks the run_agent_once <-> run_verifier_agent cycle.
+            from backend.core.use_cases.run_verifier_agent import run_verifier_gate
+
+            run_verifier_gate(
+                issue, worktree_path, config, process_runner, selected_agent
+            )
         except ValidationEvidenceError as exc:
             after_sha = get_head_sha(worktree_path, process_runner)
             failure_type = classify_failure(
