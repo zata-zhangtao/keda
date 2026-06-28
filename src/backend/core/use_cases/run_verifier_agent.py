@@ -17,6 +17,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
+
+from backend.core.shared.interfaces.agent_runner import IProcessRunner
+from backend.core.shared.models.agent_runner import IssueSummary
+from backend.core.use_cases.agent_runner_structured_evidence import EvidenceManifest
+from backend.core.use_cases.run_agent_once import (
+    extract_agent_response_text,
+    run_agent_with_prompt_resilient,
+)
 
 _VALID_RISKS: tuple[str, ...] = ("green", "yellow", "red")
 _VERDICT_MARKER_PATTERN = re.compile(
@@ -79,3 +88,100 @@ def parse_verifier_verdict(text: str, *, findings: str = "") -> ValidationVerdic
     if latest_match is None:
         return ValidationVerdict(risk="red", findings=findings or _NO_VERDICT_FINDINGS)
     return ValidationVerdict(risk=latest_match.group("risk"), findings=findings)
+
+
+def build_verifier_prompt(
+    issue: IssueSummary,
+    builder_sha: str,
+    manifest: EvidenceManifest,
+) -> str:
+    """Assemble the independent-verifier prompt.
+
+    给 verifier 注入需求意图(issue 正文)与验收 oracle(manifest 各项的真实
+    入口命令 / 负控 / 期望失败),并下达"从意图独立出题、亲自跑真实入口、对抗
+    证伪、跑负控、给 verdict"的指令;明令不许信 builder 的绿,确认不了即 red。
+    """
+    oracle_lines: list[str] = []
+    for block in manifest.items:
+        oracle_lines.append(f"- Item {block.item_number} ({block.item_name}):")
+        oracle_lines.append(f"    real entry / command: {block.command}")
+        if block.negative_control:
+            oracle_lines.append(
+                f"    negative control (must go RED): {block.negative_control}"
+            )
+        if block.expected_fail:
+            oracle_lines.append(f"    expected failure: {block.expected_fail}")
+    oracle_block = "\n".join(oracle_lines) or "(no structured oracle items)"
+
+    return "\n".join(
+        [
+            f"You are an INDEPENDENT verifier for issue #{issue.number}: "
+            f'"{issue.title}". A different agent (the builder) already implemented',
+            f"it at commit {builder_sha} in this worktree. Your job is NOT to trust",
+            "their work — it is to independently decide whether the feature actually",
+            "does what was asked, and to try to prove it does NOT.",
+            "",
+            "What it is supposed to do (derive your OWN checks from this; do not just",
+            "re-run the builder's tests):",
+            issue.body.strip(),
+            "",
+            "The acceptance oracle it was meant to satisfy:",
+            oracle_block,
+            "",
+            "Do this:",
+            '1. From the intent above, independently decide what "working" means.',
+            "   Do not assume the builder tested the right thing.",
+            "2. Run the real entry point yourself in this worktree and observe the",
+            "   result with your own eyes. Do not mock or stub the thing under test.",
+            '3. Adversarially probe the gap between "tests pass" and "a real user runs',
+            '   it and it works": edge cases, empty/invalid input, the real end-to-end',
+            "   path, anything the happy-path tests would miss.",
+            "4. Run each negative control to confirm the check actually goes RED when",
+            "   the feature is broken — a test that cannot fail proves nothing.",
+            "5. Verdict: green = you independently confirmed it (incl. adversarial",
+            "   probes); yellow = main path works but a real, non-blocking gap/risk",
+            "   (state it); red = does NOT match the intent, OR you found a break, OR",
+            "   you could not independently confirm it.",
+            "",
+            "Be a skeptic. If you cannot independently confirm it works, the verdict",
+            "is RED — do not give the builder the benefit of the doubt.",
+            "",
+            "End your report with concrete findings (what you ran, what you observed,",
+            "any gap between intent and behavior), then exactly one final line:",
+            "<!-- iar:verifier-verdict risk=green -->   (or yellow, or red)",
+        ]
+    )
+
+
+def run_verifier_agent(
+    issue: IssueSummary,
+    worktree_path: Path,
+    builder_sha: str,
+    manifest: EvidenceManifest,
+    verifier_agent: str,
+    process_runner: IProcessRunner,
+    *,
+    timeout_seconds: int | None = None,
+) -> ValidationVerdict:
+    """Run the independent verifier agent and return its parsed verdict.
+
+    在 builder 提交点的(干净)worktree、用 ``verifier_agent``(应不同于 builder)
+    跑 :func:`build_verifier_prompt`,捕获输出并 :func:`parse_verifier_verdict`。
+    解析为 fail-safe:无可解析 verdict 即 ``red``。本函数只负责"跑 + 解析",
+    是否启用、选哪个 agent、red 后如何 repair,由编排层决定。
+
+    Returns:
+        ``ValidationVerdict``;verifier 的输出文本作为 ``findings`` 带回。
+    """
+    prompt = build_verifier_prompt(issue, builder_sha, manifest)
+    result = run_agent_with_prompt_resilient(
+        verifier_agent,
+        prompt,
+        worktree_path,
+        process_runner,
+        capture_output=True,
+        timeout_seconds=timeout_seconds,
+        issue=issue,
+    )
+    response_text = extract_agent_response_text(result)
+    return parse_verifier_verdict(response_text, findings=response_text.strip()[:4000])
