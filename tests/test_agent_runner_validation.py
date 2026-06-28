@@ -26,6 +26,7 @@ from backend.core.use_cases.agent_runner_validation import (
     collect_evidence_coverage_problems,
     ensure_evidence_dir_excluded,
     ensure_no_evidence_paths_in_changes,
+    ensure_validation_commands_pass,
     ensure_validation_evidence_ready,
     evidence_branch_name,
     evidence_format_check_required,
@@ -1426,6 +1427,70 @@ def test_validate_evidence_manifest_allows_missing_control_when_opted_out(
         config=AppConfig(validation=ValidationConfig(require_negative_control=False)),
     )
     assert len(report.items) == 1
+
+
+def test_ensure_validation_commands_pass_rejects_failing_command(
+    tmp_path: Path,
+) -> None:
+    """keda re-runs each RV command; a non-zero exit is rejected (seeded-bug oracle)."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(evidence_dir)
+    failing_responses = {
+        ("bash", "-lc", "demo run"): CommandResult(
+            command=("bash", "-lc", "demo run"),
+            return_code=1,
+            stdout="",
+            stderr="boom",
+        )
+    }
+    runner = FakeProcessRunner(responses=failing_responses)
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        ensure_validation_commands_pass(
+            _issue(body=_STRUCTURED_ISSUE_BODY),
+            tmp_path,
+            AppConfig(),
+            runner,
+        )
+    assert "re-ran" in str(exc_info.value)
+    assert "demo run" in str(exc_info.value)
+
+
+def test_ensure_validation_commands_pass_accepts_passing_commands(
+    tmp_path: Path,
+) -> None:
+    """All commands exit 0 → gate passes, and keda actually re-ran each one."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(evidence_dir)
+    runner = FakeProcessRunner()
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), runner
+    )
+    assert ["bash", "-lc", "demo run"] in runner.calls
+    assert ["bash", "-lc", "demo serve"] in runner.calls
+
+
+def test_ensure_validation_commands_pass_skips_when_opted_out(
+    tmp_path: Path,
+) -> None:
+    """``reexecute_commands=False`` restores the no-re-execution behavior."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest(evidence_dir)
+    failing_responses = {
+        ("bash", "-lc", "demo run"): CommandResult(
+            command=("bash", "-lc", "demo run"),
+            return_code=1,
+            stdout="",
+            stderr="boom",
+        )
+    }
+    runner = FakeProcessRunner(responses=failing_responses)
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY),
+        tmp_path,
+        AppConfig(validation=ValidationConfig(reexecute_commands=False)),
+        runner,
+    )
+    assert runner.calls == []
 
 
 def test_render_structured_evidence_comment_groups_by_item(

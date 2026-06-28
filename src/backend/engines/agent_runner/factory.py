@@ -257,6 +257,8 @@ def build_app_config_from_settings(
             language=validation_settings.language,
             structured_evidence=validation_settings.structured_evidence,
             require_negative_control=validation_settings.require_negative_control,
+            reexecute_commands=validation_settings.reexecute_commands,
+            reexecute_timeout_seconds=validation_settings.reexecute_timeout_seconds,
         ),
         prompts=PromptConfig(
             default_phase=prompt_settings.default_phase,

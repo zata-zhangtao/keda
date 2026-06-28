@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,6 +57,7 @@ from backend.core.use_cases.agent_runner_structured_evidence import (
     build_structured_evidence_prompt_suffix,
     format_structured_evidence_marker,
     has_structured_evidence_marker,
+    load_evidence_manifest,
     render_structured_evidence_comment,
     validate_evidence_manifest,
 )
@@ -540,6 +542,61 @@ def ensure_validation_evidence_ready(
             "Execute every item through the real entry point it describes — "
             "fakes, mocks, or TestClient substitutes do not satisfy the item."
         )
+
+
+def ensure_validation_commands_pass(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> None:
+    """Re-run each structured-evidence item's command and require it to pass.
+
+    keda 以自己复跑的退出码为准,而不是只信 agent 写的证据文件——这样
+    "测试通过但功能其实坏了 / agent 没真跑" 无法蒙混过关。仅对带
+    ``iar:structured-evidence`` marker、要求验证、且开启 ``reexecute_commands``
+    的 Issue 生效。命令经 ``bash -lc`` 在 worktree 内执行并带超时;非零退出
+    或超时即判失败,抛 ``ValidationEvidenceError`` 进入既有 recovery 循环。
+
+    Raises:
+        ValidationEvidenceError: 任一命令被 keda 复跑后未通过或超时。
+    """
+    if not config.validation.reexecute_commands:
+        return
+    if not validation_required(issue.body, config):
+        return
+    if not has_structured_evidence_marker(issue.body):
+        return
+
+    manifest = load_evidence_manifest(worktree_path, config)
+    timeout_seconds = config.validation.reexecute_timeout_seconds
+    for block in manifest.items:
+        try:
+            result = process_runner.run(
+                ["bash", "-lc", block.command],
+                cwd=worktree_path,
+                check=False,
+                capture_output=True,
+                timeout=timeout_seconds,
+                label=f"rv-reexec-{block.item_number}",
+            )
+        except subprocess.TimeoutExpired as timeout_error:
+            raise ValidationEvidenceError(
+                f"Realistic Validation item {block.item_number} timed out when keda "
+                f"re-ran its command (>{timeout_seconds}s): `{block.command}`. The "
+                "reproducible command must be a self-terminating check that probes the "
+                "real entry point and exits, not a long-running server. Set "
+                "`validation.reexecute_commands=false` to opt out."
+            ) from timeout_error
+        if result.return_code != 0:
+            raise ValidationEvidenceError(
+                f"Realistic Validation item {block.item_number} failed when keda "
+                f"re-ran its command: `{block.command}` exited {result.return_code}. "
+                "keda re-executes RV commands to confirm they actually pass — the "
+                "agent's evidence file alone is not trusted. Fix the behavior so the "
+                "command passes (or correct the command). Set "
+                "`validation.reexecute_commands=false` to opt out."
+            )
 
 
 def format_validation_evidence_failure(message: str) -> str:

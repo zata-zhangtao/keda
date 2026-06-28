@@ -282,6 +282,8 @@ class ValidationConfig:
     language: str = "zh-CN"
     structured_evidence: bool = True
     require_negative_control: bool = True
+    reexecute_commands: bool = True
+    reexecute_timeout_seconds: int = 300
 
 
 @dataclass(frozen=True)
