@@ -74,6 +74,7 @@ from backend.core.use_cases.agent_runner_feedback import (
     ensure_verification_passed,
     extract_prd_path,
     failed_verification_results,
+    format_prd_delivery_detail,
     format_prd_delivery_failure,
     format_result_for_recovery,
     format_verification_failure,
@@ -102,6 +103,7 @@ from backend.core.use_cases.agent_runner_validation import (
     ensure_evidence_dir_excluded,
     ensure_validation_commands_pass,
     ensure_validation_evidence_ready,
+    format_validation_evidence_detail,
     format_validation_evidence_failure,
 )
 from backend.core.use_cases.agent_runner_worktree_branch import (
@@ -1031,7 +1033,7 @@ def run_agent_until_committed(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
-                    detail=format_prd_delivery_failure(str(exc)),
+                    detail=format_prd_delivery_detail(str(exc)),
                     agent=selected_agent,
                     started_mono=attempt_started_mono,
                     started_iso=attempt_started_iso,
@@ -1080,7 +1082,7 @@ def run_agent_until_committed(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
-                    detail=format_validation_evidence_failure(str(exc)),
+                    detail=format_validation_evidence_detail(str(exc)),
                     agent=selected_agent,
                     started_mono=attempt_started_mono,
                     started_iso=attempt_started_iso,

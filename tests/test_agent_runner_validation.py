@@ -36,6 +36,8 @@ from backend.core.use_cases.agent_runner_validation import (
     extract_realistic_validation_items,
     extract_validation_waiver_reason,
     format_evidence_format_waiver_marker,
+    format_validation_evidence_detail,
+    format_validation_evidence_failure,
     format_validation_waiver_marker,
     has_validation_waiver_marker,
     list_evidence_files,
@@ -222,6 +224,30 @@ def test_build_validation_prompt_line() -> None:
     prompt_line = build_validation_prompt_line(_issue(), config)
     assert ".iar/evidence" in prompt_line
     assert build_validation_prompt_line(_issue(body="plain"), config) == ""
+
+
+def test_validation_evidence_detail_keeps_reason_last_and_drops_boilerplate() -> None:
+    """Recorded attempt detail must end with the real reason, not boilerplate.
+
+    The attempt-history summarizer keeps the last informative line, so the
+    specific failure reason has to be last and the generic recovery
+    instruction must stay out of the recorded detail entirely.
+    """
+    reason = (
+        "Realistic Validation item 2 failed when keda re-ran its command: "
+        "`uv run python -m iar.evidence.run_realistic_validation (item 2)` exited 2."
+    )
+    detail = format_validation_evidence_detail(reason)
+    assert detail.splitlines()[-1] == reason
+    assert "do not fabricate evidence" not in detail
+
+
+def test_validation_evidence_failure_recovery_prompt_keeps_instruction() -> None:
+    """The recovery prompt fed back to the agent keeps the actionable steps."""
+    prompt = format_validation_evidence_failure("item 2 exited 2")
+    assert "item 2 exited 2" in prompt
+    assert "Run the validation plan for real" in prompt
+    assert "do not fabricate evidence" in prompt
 
 
 # ---------------------------------------------------------------------------

@@ -599,12 +599,29 @@ def ensure_validation_commands_pass(
             )
 
 
-def format_validation_evidence_failure(message: str) -> str:
-    """Build the failure section for an evidence recovery prompt."""
+def format_validation_evidence_detail(message: str) -> str:
+    """Build the recorded attempt detail for a validation-evidence failure.
+
+    Keeps the specific failure ``message`` as the last line so the attempt
+    history Detail column surfaces the real reason — the table summarizer
+    (``_summarize_attempt_detail``) keeps the last informative line. The
+    generic "run it for real" instruction belongs only in the recovery prompt
+    (:func:`format_validation_evidence_failure`), never in the diagnostic
+    record, where appending it as the last line would mask the actual cause.
+    """
     return "\n".join(
         [
             "Realistic Validation evidence check failed.",
             message,
+        ]
+    )
+
+
+def format_validation_evidence_failure(message: str) -> str:
+    """Build the failure section for an evidence recovery prompt."""
+    return "\n".join(
+        [
+            format_validation_evidence_detail(message),
             "Run the validation plan for real and write the evidence files; "
             "do not fabricate evidence and do not capture secrets.",
         ]

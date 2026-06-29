@@ -452,12 +452,27 @@ def assert_prd_archived_for_publish(
         )
 
 
-def format_prd_delivery_failure(message: str) -> str:
-    """Build the failure section for a PRD delivery recovery prompt."""
+def format_prd_delivery_detail(message: str) -> str:
+    """Build the recorded attempt detail for a PRD delivery failure.
+
+    Keeps the specific failure ``message`` as the last line so the attempt
+    history Detail column surfaces the real reason. The generic "update the
+    PRD" instruction belongs only in the recovery prompt
+    (:func:`format_prd_delivery_failure`), never in the diagnostic record.
+    """
     return "\n".join(
         [
             "PRD delivery check failed.",
             message,
+        ]
+    )
+
+
+def format_prd_delivery_failure(message: str) -> str:
+    """Build the failure section for a PRD delivery recovery prompt."""
+    return "\n".join(
+        [
+            format_prd_delivery_detail(message),
             "Update the canonical PRD: ensure all Acceptance Checklist items are checked, "
             "and move the PRD from tasks/pending/ to tasks/archive/ if complete.",
         ]

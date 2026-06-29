@@ -61,6 +61,10 @@ from backend.core.use_cases.agent_runner_failure import (
 from backend.infrastructure.process_runner import CommandFailedError
 from backend.core.use_cases.agent_runner_feedback import (
     build_progress_continuation_prompt,
+    format_prd_delivery_detail,
+)
+from backend.core.use_cases.agent_runner_validation import (
+    format_validation_evidence_detail,
 )
 from backend.core.use_cases.agent_runner_feedback import (
     _build_prd_context_block,
@@ -3937,6 +3941,47 @@ def test_format_attempt_history_keeps_error_tail() -> None:
     assert "usage limit exceeded" in table
     assert "resets at 2026-06-10T15:00:00+08:00" in table
     assert "Agent command failed before runner verification" not in table
+
+
+def test_format_attempt_history_surfaces_validation_reason() -> None:
+    """RV evidence failures must show the real reason, not recovery boilerplate.
+
+    Regression for the case where the Detail column only showed "Run the
+    validation plan for real…" and hid the actual command exit-code failure.
+    """
+    reason = (
+        "Realistic Validation item 2 failed when keda re-ran its command: "
+        "`uv run python -m iar.evidence.run_realistic_validation (item 2)` exited 2."
+    )
+    table = format_attempt_history(
+        [
+            AttemptResult(
+                attempt_number=1,
+                failure_type=FailureType.AGENT_ERROR,
+                recovered=False,
+                detail=format_validation_evidence_detail(reason),
+            )
+        ]
+    )
+    assert "exited 2" in table
+    assert "Run the validation plan for real" not in table
+
+
+def test_format_attempt_history_surfaces_prd_delivery_reason() -> None:
+    """PRD delivery failures must show the real reason, not recovery boilerplate."""
+    reason = "Acceptance Checklist has 3 unchecked items before archival."
+    table = format_attempt_history(
+        [
+            AttemptResult(
+                attempt_number=1,
+                failure_type=FailureType.AGENT_ERROR,
+                recovered=False,
+                detail=format_prd_delivery_detail(reason),
+            )
+        ]
+    )
+    assert "3 unchecked items" in table
+    assert "Update the canonical PRD" not in table
 
 
 def test_format_attempt_history_escapes_table_pipes() -> None:
