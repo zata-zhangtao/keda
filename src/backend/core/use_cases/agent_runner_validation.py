@@ -20,10 +20,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -49,7 +52,7 @@ from backend.core.use_cases.agent_runner_evidence_format import (
     demanded_evidence_kinds as demanded_evidence_kinds,
     extract_evidence_format_markers as extract_evidence_format_markers,
 )
-from backend.core.use_cases.agent_runner_git import list_changed_paths
+from backend.core.use_cases.agent_runner_git import has_changes, list_changed_paths
 from backend.core.use_cases.agent_runner_structured_evidence import (
     EvidenceUpload,
     ValidationEvidenceError,
@@ -435,7 +438,10 @@ def ensure_evidence_dir_excluded(
     config: AppConfig,
     process_runner: IProcessRunner,
 ) -> None:
-    """Idempotently exclude the evidence dir via git ``info/exclude``.
+    """Idempotently exclude the evidence dir and RV cache via git ``info/exclude``.
+
+    除证据目录外,同样排除 RV 复跑缓存文件(:func:`_rv_reexec_cache_relpath`),
+    避免它让工作区显示为脏或泄漏进代码 diff。
 
     使用 ``git rev-parse --git-path info/exclude`` 解析排除文件位置
     （worktree 下指向 commondir，规则对主仓与所有 worktree 共享生效）。
@@ -467,17 +473,21 @@ def ensure_evidence_dir_excluded(
             exclude_path,
         )
         return
-    exclude_line = f"/{config.validation.evidence_dir.strip('/')}/"
+    evidence_line = f"/{config.validation.evidence_dir.strip('/')}/"
+    cache_line = f"/{_rv_reexec_cache_relpath(config)}"
+    desired_lines = [evidence_line, cache_line]
     existing_text = ""
     if exclude_path.exists():
         existing_text = exclude_path.read_text(encoding="utf-8")
-    if exclude_line in existing_text.splitlines():
+    existing_lines = existing_text.splitlines()
+    missing_lines = [line for line in desired_lines if line not in existing_lines]
+    if not missing_lines:
         return
     exclude_path.parent.mkdir(parents=True, exist_ok=True)
     appended_text = existing_text
     if appended_text and not appended_text.endswith("\n"):
         appended_text += "\n"
-    appended_text += f"{exclude_line}\n"
+    appended_text += "".join(f"{line}\n" for line in missing_lines)
     exclude_path.write_text(appended_text, encoding="utf-8")
 
 
@@ -544,6 +554,76 @@ def ensure_validation_evidence_ready(
         )
 
 
+def _rv_reexec_cache_relpath(config: AppConfig) -> str:
+    """Worktree-relative path of the RV re-execution cache file.
+
+    Placed beside the evidence dir but outside it, so RV scripts that wipe
+    their own ``rv-*`` evidence on each run never clear the cache.
+    """
+    evidence_dir = Path(config.validation.evidence_dir.strip("/"))
+    parent = evidence_dir.parent
+    base = parent if str(parent) not in (".", "") else Path(".iar")
+    return (base / "rv_reexec_cache.json").as_posix()
+
+
+def _rv_reexec_cache_path(worktree_path: Path, config: AppConfig) -> Path:
+    """Absolute path of the RV re-execution cache inside ``worktree_path``."""
+    return worktree_path / _rv_reexec_cache_relpath(config)
+
+
+def _clean_tree_fingerprint(
+    worktree_path: Path, process_runner: IProcessRunner
+) -> str | None:
+    """Return ``HEAD`` 的 tree SHA(工作区干净时),否则 ``None``。
+
+    tree SHA 是已提交代码的纯内容指纹(不含提交时间/作者/message)。工作区
+    一旦脏——有未提交的已跟踪改动,或非排除的 untracked 文件——返回 ``None``,
+    让调用方照常复跑而非信任过期的通过结果;v1 只对完全已提交的状态做缓存。
+    """
+    if has_changes(worktree_path, process_runner):
+        return None
+    result = process_runner.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=worktree_path,
+        check=False,
+    )
+    tree_sha = result.stdout.strip()
+    if result.return_code != 0 or not tree_sha:
+        return None
+    return tree_sha
+
+
+def _rv_reexec_cache_key(tree_fingerprint: str, item_number: int, command: str) -> str:
+    """Cache key 绑定"某命令在某代码树上、对某 item 已通过"。
+
+    键里含命令的哈希:在(gitignore 的)manifest 里改命令不会改 tree SHA,
+    但会改命令哈希 → 缓存未命中 → 照常复跑,不会用旧命令的结果蒙混。
+    """
+    command_digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
+    return f"{tree_fingerprint}|{item_number}|{command_digest}"
+
+
+def _load_rv_reexec_cache(cache_path: Path) -> dict[str, str]:
+    """Load the RV re-exec cache entries; tolerate a missing/corrupt file."""
+    if not cache_path.exists():
+        return {}
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    return entries if isinstance(entries, dict) else {}
+
+
+def _save_rv_reexec_cache(cache_path: Path, entries: dict[str, str]) -> None:
+    """Persist the RV re-exec cache entries as json."""
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(
+        json.dumps({"version": 1, "entries": entries}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def ensure_validation_commands_pass(
     issue: IssueSummary,
     worktree_path: Path,
@@ -558,6 +638,12 @@ def ensure_validation_commands_pass(
     的 Issue 生效。命令经 ``bash -lc`` 在 worktree 内执行并带超时;非零退出
     或超时即判失败,抛 ``ValidationEvidenceError`` 进入既有 recovery 循环。
 
+    当 ``reexecute_cache_enabled`` 开启且工作区干净时,按 ``HEAD`` 的 tree SHA
+    指纹缓存"该 item 的该命令已通过":同一份已提交代码再次进入(如
+    blocked-continue、换 agent、重新 claim)直接跳过复跑,避免重复跑 e2e。
+    工作区一旦脏(有未提交改动)即不读不写缓存、照常复跑。证据文件是否齐全
+    仍由 ``ensure_validation_evidence_ready`` 单独把关,缓存命中不绕过它。
+
     Raises:
         ValidationEvidenceError: 任一命令被 keda 复跑后未通过或超时。
     """
@@ -570,7 +656,30 @@ def ensure_validation_commands_pass(
 
     manifest = load_evidence_manifest(worktree_path, config)
     timeout_seconds = config.validation.reexecute_timeout_seconds
+
+    tree_fingerprint = (
+        _clean_tree_fingerprint(worktree_path, process_runner)
+        if config.validation.reexecute_cache_enabled
+        else None
+    )
+    cache_path = _rv_reexec_cache_path(worktree_path, config)
+    cache_entries = _load_rv_reexec_cache(cache_path) if tree_fingerprint else {}
+    newly_passed: dict[str, str] = {}
+
     for block in manifest.items:
+        cache_key = (
+            _rv_reexec_cache_key(tree_fingerprint, block.item_number, block.command)
+            if tree_fingerprint
+            else None
+        )
+        if cache_key is not None and cache_key in cache_entries:
+            _logger.info(
+                "Realistic Validation item %s: skipping re-execution; command "
+                "already passed at tree %s.",
+                block.item_number,
+                tree_fingerprint,
+            )
+            continue
         try:
             result = process_runner.run(
                 ["bash", "-lc", block.command],
@@ -597,6 +706,12 @@ def ensure_validation_commands_pass(
                 "command passes (or correct the command). Set "
                 "`validation.reexecute_commands=false` to opt out."
             )
+        if cache_key is not None:
+            newly_passed[cache_key] = datetime.now(timezone.utc).isoformat()
+
+    if newly_passed:
+        cache_entries.update(newly_passed)
+        _save_rv_reexec_cache(cache_path, cache_entries)
 
 
 def format_validation_evidence_detail(message: str) -> str:

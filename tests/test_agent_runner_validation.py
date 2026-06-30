@@ -531,6 +531,9 @@ def test_ensure_evidence_dir_excluded_is_idempotent(tmp_path: Path) -> None:
 
     exclude_lines = exclude_path.read_text(encoding="utf-8").splitlines()
     assert exclude_lines.count("/.iar/evidence/") == 1
+    # The RV re-exec cache must also be excluded so it never dirties the
+    # worktree or leaks into a commit, and it is appended exactly once.
+    assert exclude_lines.count("/.iar/rv_reexec_cache.json") == 1
     assert "existing-rule" in exclude_lines
 
 
@@ -1517,6 +1520,106 @@ def test_ensure_validation_commands_pass_skips_when_opted_out(
         runner,
     )
     assert runner.calls == []
+
+
+def _clean_tree_git_responses(tree_sha: str) -> dict:
+    """FakeProcessRunner responses for a clean worktree at ``tree_sha``."""
+    return {
+        ("git", "status", "--porcelain"): CommandResult(
+            command=("git", "status", "--porcelain"),
+            return_code=0,
+            stdout="",
+            stderr="",
+        ),
+        ("git", "rev-parse", "HEAD^{tree}"): CommandResult(
+            command=("git", "rev-parse", "HEAD^{tree}"),
+            return_code=0,
+            stdout=f"{tree_sha}\n",
+            stderr="",
+        ),
+    }
+
+
+def test_ensure_validation_commands_pass_caches_pass_on_clean_tree(
+    tmp_path: Path,
+) -> None:
+    """A clean-tree pass is cached so the next run skips re-execution."""
+    _write_manifest(tmp_path / ".iar" / "evidence")
+    responses = _clean_tree_git_responses("tree-aaa")
+
+    first = FakeProcessRunner(responses=responses)
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), first
+    )
+    assert ["bash", "-lc", "demo run"] in first.calls
+    assert (tmp_path / ".iar" / "rv_reexec_cache.json").exists()
+
+    second = FakeProcessRunner(responses=responses)
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), second
+    )
+    assert ["bash", "-lc", "demo run"] not in second.calls
+    assert ["bash", "-lc", "demo serve"] not in second.calls
+
+
+def test_ensure_validation_commands_pass_reruns_when_tree_changes(
+    tmp_path: Path,
+) -> None:
+    """A different HEAD tree fingerprint misses the cache and re-runs."""
+    _write_manifest(tmp_path / ".iar" / "evidence")
+    first = FakeProcessRunner(responses=_clean_tree_git_responses("tree-aaa"))
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), first
+    )
+
+    second = FakeProcessRunner(responses=_clean_tree_git_responses("tree-bbb"))
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), second
+    )
+    assert ["bash", "-lc", "demo run"] in second.calls
+
+
+def test_ensure_validation_commands_pass_does_not_cache_dirty_tree(
+    tmp_path: Path,
+) -> None:
+    """A dirty worktree is never cached; commands always re-run."""
+    _write_manifest(tmp_path / ".iar" / "evidence")
+    dirty_responses = {
+        ("git", "status", "--porcelain"): CommandResult(
+            command=("git", "status", "--porcelain"),
+            return_code=0,
+            stdout=" M src/app.py\n",
+            stderr="",
+        ),
+    }
+    runner = FakeProcessRunner(responses=dirty_responses)
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), runner
+    )
+    assert ["bash", "-lc", "demo run"] in runner.calls
+    assert not (tmp_path / ".iar" / "rv_reexec_cache.json").exists()
+
+
+def test_ensure_validation_commands_pass_cache_disabled_always_reruns(
+    tmp_path: Path,
+) -> None:
+    """``reexecute_cache_enabled=False`` keeps re-running and writes no cache."""
+    _write_manifest(tmp_path / ".iar" / "evidence")
+    config = AppConfig(validation=ValidationConfig(reexecute_cache_enabled=False))
+    responses = _clean_tree_git_responses("tree-aaa")
+
+    first = FakeProcessRunner(responses=responses)
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, config, first
+    )
+    assert ["bash", "-lc", "demo run"] in first.calls
+    assert not (tmp_path / ".iar" / "rv_reexec_cache.json").exists()
+
+    second = FakeProcessRunner(responses=responses)
+    ensure_validation_commands_pass(
+        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, config, second
+    )
+    assert ["bash", "-lc", "demo run"] in second.calls
 
 
 def test_render_structured_evidence_comment_groups_by_item(

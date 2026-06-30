@@ -259,6 +259,7 @@ def build_app_config_from_settings(
             require_negative_control=validation_settings.require_negative_control,
             reexecute_commands=validation_settings.reexecute_commands,
             reexecute_timeout_seconds=validation_settings.reexecute_timeout_seconds,
+            reexecute_cache_enabled=validation_settings.reexecute_cache_enabled,
             verifier_enabled=validation_settings.verifier_enabled,
             verifier_agent=validation_settings.verifier_agent,
             verifier_timeout_seconds=validation_settings.verifier_timeout_seconds,

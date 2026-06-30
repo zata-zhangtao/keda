@@ -232,6 +232,7 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "validation.require_negative_control": "是否要求每个结构化证据项提供 negative_control（红→绿判别力,默认开;关掉则回退旧行为）",
     "validation.reexecute_commands": "是否由 keda 复跑每个结构化证据项的 command 以确认其真的通过（默认开;关掉则只信 agent 证据文件）",
     "validation.reexecute_timeout_seconds": "keda 复跑单条命令的超时秒数（默认 300;超时判失败,命令须为自终止的检查）",
+    "validation.reexecute_cache_enabled": "命中代码树指纹(HEAD^{tree})时跳过该项 RV 命令复跑,避免 blocked-continue/换 agent 重复跑（默认开;工作区脏则不缓存、照常复跑）",
     "validation.verifier_enabled": "是否启用独立 verifier agent 复验（默认关;开启后在开 PR 前换一个 agent 对抗复验,red 自动打回 builder）",
     "validation.verifier_agent": "verifier 用哪个 agent（auto=自动挑一个≠builder 的）",
     "validation.verifier_timeout_seconds": "verifier agent 运行超时秒数（默认 1800）",

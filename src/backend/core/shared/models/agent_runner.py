@@ -284,6 +284,7 @@ class ValidationConfig:
     require_negative_control: bool = True
     reexecute_commands: bool = True
     reexecute_timeout_seconds: int = 300
+    reexecute_cache_enabled: bool = True
     verifier_enabled: bool = False
     verifier_agent: str = "auto"
     verifier_timeout_seconds: int = 1800

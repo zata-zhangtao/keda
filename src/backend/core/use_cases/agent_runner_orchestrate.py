@@ -18,6 +18,7 @@ Issue 有三条处理路径：
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import threading
 from collections.abc import Callable
@@ -66,6 +67,7 @@ from backend.core.use_cases.agent_runner_git import (
     get_current_branch,
     has_changes,
 )
+from backend.core.use_cases.agent_runner_reclaim import format_claim_marker
 from backend.core.use_cases.agent_runner_workflow import (
     claim_blocked_issue,
     find_latest_unconsumed_marker,
@@ -452,11 +454,15 @@ def _process_ready_issue(
     transition_issue_workflow_state(
         github_client, issue.number, config, config.labels.running
     )
+    claim_host = socket.gethostname()
+    claim_pid = os.getpid()
     github_client.comment_issue(
         issue.number,
         "## Agent Runner Claimed\n\n"
-        f"- Host: `{socket.gethostname()}`\n"
-        f"- Agent: `{selected_agent}`\n",
+        f"- Host: `{claim_host}`\n"
+        f"- PID: `{claim_pid}`\n"
+        f"- Agent: `{selected_agent}`\n\n"
+        f"{format_claim_marker(claim_host, claim_pid)}",
     )
 
     # 步骤 2: 准备 worktree

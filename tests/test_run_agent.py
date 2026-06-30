@@ -3458,6 +3458,9 @@ def test_checkpoint_uncommitted_progress_commits_and_returns_sha(
             ("git", "status", "--porcelain"): CommandResult(
                 ("git", "status", "--porcelain"), 0, " M src/feature.py\n", ""
             ),
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                ("git", "status", "--porcelain", "-z"), 0, " M src/feature.py\0", ""
+            ),
             ("git", "branch", "--show-current"): CommandResult(
                 ("git", "branch", "--show-current"), 0, "issue-84\n", ""
             ),
@@ -3477,7 +3480,9 @@ def test_checkpoint_uncommitted_progress_commits_and_returns_sha(
 
     assert result_sha == "checkpoint-sha"
     commands = [tuple(call) for call in runner.calls]
-    assert ("git", "add", "-A") in commands
+    # Only the safe path is staged (explicitly), never a blanket ``git add -A``.
+    assert ("git", "add", "--", "src/feature.py") in commands
+    assert ("git", "add", "-A") not in commands
     commit_calls = [c for c in commands if c[:2] == ("git", "commit")]
     assert len(commit_calls) == 1
     assert "--no-verify" in commit_calls[0]
@@ -3535,10 +3540,10 @@ def test_checkpoint_uncommitted_progress_returns_none_on_branch_mismatch(
     assert not [c for c in runner.calls if tuple(c)[:2] == ("git", "commit")]
 
 
-def test_checkpoint_uncommitted_progress_blocks_forbidden_paths(
+def test_checkpoint_uncommitted_progress_returns_none_when_all_forbidden(
     tmp_path: Path,
 ) -> None:
-    """触碰禁改路径时拒绝 checkpoint，绝不把敏感文件提交进历史。"""
+    """全是禁改路径时无可安全提交的内容,返回 None 且不提交、不抛错。"""
     from backend.core.use_cases.run_agent_once import checkpoint_uncommitted_progress
 
     runner = FakeProcessRunner(
@@ -3555,16 +3560,59 @@ def test_checkpoint_uncommitted_progress_blocks_forbidden_paths(
         }
     )
 
-    with pytest.raises(RuntimeError, match="forbidden"):
-        checkpoint_uncommitted_progress(
-            _checkpoint_issue(),
-            tmp_path,
-            AppConfig(),
-            runner,
-            expected_branch="issue-84",
-        )
+    result_sha = checkpoint_uncommitted_progress(
+        _checkpoint_issue(),
+        tmp_path,
+        AppConfig(),
+        runner,
+        expected_branch="issue-84",
+    )
 
+    assert result_sha is None
     assert not [c for c in runner.calls if tuple(c)[:2] == ("git", "commit")]
+
+
+def test_checkpoint_uncommitted_progress_excludes_forbidden_but_keeps_safe(
+    tmp_path: Path,
+) -> None:
+    """混合改动时只 checkpoint 安全文件,禁改文件被排除、绝不进历史。"""
+    from backend.core.use_cases.run_agent_once import checkpoint_uncommitted_progress
+
+    runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): CommandResult(
+                ("git", "status", "--porcelain"), 0, " M src/feature.py\n M .env\n", ""
+            ),
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                ("git", "status", "--porcelain", "-z"),
+                0,
+                " M src/feature.py\0 M .env\0",
+                "",
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                ("git", "branch", "--show-current"), 0, "issue-84\n", ""
+            ),
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                ("git", "rev-parse", "HEAD"), 0, "checkpoint-sha\n", ""
+            ),
+        }
+    )
+
+    result_sha = checkpoint_uncommitted_progress(
+        _checkpoint_issue(),
+        tmp_path,
+        AppConfig(),
+        runner,
+        expected_branch="issue-84",
+    )
+
+    assert result_sha == "checkpoint-sha"
+    commands = [tuple(call) for call in runner.calls]
+    # The safe path is staged; the forbidden path is never added.
+    assert ("git", "add", "--", "src/feature.py") in commands
+    add_calls = [c for c in commands if c[:2] == ("git", "add")]
+    assert all(".env" not in token for call in add_calls for token in call)
+    assert [c for c in commands if c[:2] == ("git", "commit")]
 
 
 def test_build_progress_continuation_prompt_mentions_existing_progress() -> None:
@@ -4390,6 +4438,8 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
                 return CommandResult(command_tuple, 0, "issue-123\n", "")
             if command_tuple == ("git", "status", "--porcelain"):
                 return CommandResult(command_tuple, 0, " M file.txt\n", "")
+            if command_tuple == ("git", "status", "--porcelain", "-z"):
+                return CommandResult(command_tuple, 0, " M file.txt\0", "")
             if command_tuple == ("just", "lint"):
                 return CommandResult(command_tuple, 1, "lint stdout\n", "lint stderr\n")
             return CommandResult(command_tuple, 0, "", "")
@@ -4422,7 +4472,7 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
     add_indices = [
         index
         for index, command in enumerate(commands)
-        if command == ("git", "add", "-A")
+        if command == ("git", "add", "--", "file.txt")
     ]
     reset_indices = [
         index
@@ -4431,8 +4481,8 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
     ]
 
     # just lint 在 3 次尝试的预 staging 验证都失败，正常流程从不进入 commit proxy。
-    # 重试耗尽后，runner 把在途改动 checkpoint 成一个 WIP commit（git add -A +
-    # git commit --no-verify），供下次 claim 在已提交进度上续作。
+    # 重试耗尽后，runner 把在途改动 checkpoint 成一个 WIP commit（只 stage 非禁改
+    # 路径 git add -- file.txt + git commit --no-verify），供下次 claim 续作。
     assert len(lint_indices) == 3
     assert len(add_indices) == 1
     assert len(reset_indices) == 0

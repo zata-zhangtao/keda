@@ -841,6 +841,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     max_deliberation_issues=runner_settings.daemon.max_deliberation_issues,
                     concurrency=daemon_concurrency,
                     output_view=daemon_output_view,
+                    reclaim_stale_running=runner_settings.daemon.reclaim_stale_running,
                 )
             finally:
                 release_daemon_locks(acquired_daemon_locks)

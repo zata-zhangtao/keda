@@ -20,6 +20,9 @@ from backend.core.use_cases.agent_runner_orchestrate import (
     process_prd_rework_issues,
     run_once,
 )
+from backend.core.use_cases.agent_runner_reclaim import (
+    reclaim_stale_running_issues,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -40,6 +43,7 @@ def run_agent_daemon(
     max_deliberation_issues: int = 1,
     concurrency: int = 1,
     output_view: IRunnerLiveView | None = None,
+    reclaim_stale_running: bool = False,
 ) -> None:
     """Run the queue poller forever across all target repositories.
 
@@ -80,6 +84,29 @@ def run_agent_daemon(
                 if content_generator_factory is not None
                 else None
             )
+
+            # Phase -1: reclaim Issues stuck at agent/running because their
+            # runner process died (hard kill / crash). Conservative — only
+            # same-host, provably-dead PIDs — so it never disturbs a live run.
+            # Reclaimed Issues become agent/ready and are picked up in Phase 2.
+            if reclaim_stale_running:
+                try:
+                    reclaimed = reclaim_stale_running_issues(
+                        config=context.config, github_client=github_client
+                    )
+                    if reclaimed:
+                        _logger.info(
+                            "Reclaimed %d stale agent/running Issue(s) for '%s': %s",
+                            len(reclaimed),
+                            context.repo_id,
+                            reclaimed,
+                        )
+                except Exception as exc:  # noqa: BLE001 - daemon must survive reclaim faults.
+                    _logger.error(
+                        "Stale-running reclaim failed for repository '%s': %s",
+                        context.repo_id,
+                        exc,
+                    )
 
             # Phase 0: Asynchronous Issue-comment deliberation on Issues that
             # explicitly opt in via the ``agent/deliberate`` label. Skipped
