@@ -532,10 +532,12 @@ def _process_ready_issue(
             prompt_override=continuation_prompt,
             on_attempt_recorded=on_attempt_recorded,
         )
-    except (MaxRetriesExceededError, ProviderCapacityError):
-        # 切换 agent 前先把在途进度 checkpoint，让 fallback 链上的下一个
-        # agent 能在已提交进度上续作（provider 容量错误同样适用）。
-        # best-effort：checkpoint 自身失败（如触碰禁改路径）不得掩盖原始失败。
+    except (MaxRetriesExceededError, ProviderCapacityError, KeyboardInterrupt):
+        # 切换 agent 前、或被 Ctrl-C / SIGINT 优雅打断时,先把在途进度 checkpoint：
+        # 让 fallback 链上的下一个 agent、或重新 claim 时能在已提交进度上续作,而不是
+        # 从零重来。KeyboardInterrupt 同样 checkpoint 后再抛出,让中断照常退出。
+        # best-effort：checkpoint 自身异常不得掩盖原始失败/中断（禁改路径已被
+        # checkpoint 内部隔离,不再整块放弃）。
         try:
             checkpoint_sha = checkpoint_uncommitted_progress(
                 issue,

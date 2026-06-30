@@ -4510,6 +4510,83 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
     assert "| 3 |" in failure_comment["body"]
 
 
+def test_keyboard_interrupt_checkpoints_in_flight_work_before_exit(
+    tmp_path: Path,
+) -> None:
+    """Ctrl-C (KeyboardInterrupt) during a run checkpoints the safe in-flight
+    work, then propagates so the interrupt still exits the process."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _InterruptingRunner(FakeProcessRunner):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            inactivity_timeout=None,
+            capture_output=True,
+            input_text=None,
+            label=None,
+            output_sink=None,
+        ):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple[:1] in {("codex",), ("claude",), ("kimi",)}:
+                # The operator hits Ctrl-C while the agent is running.
+                raise KeyboardInterrupt()
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                return CommandResult(command_tuple, 0, "before-sha\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                return CommandResult(command_tuple, 0, " M src/wip.py\n", "")
+            if command_tuple == ("git", "status", "--porcelain", "-z"):
+                return CommandResult(command_tuple, 0, " M src/wip.py\0", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _InterruptingRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_with_review_disabled(worktree_path, "just lint")
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    with pytest.raises(KeyboardInterrupt):
+        run_once(
+            repo_path=Path("."),
+            config=config,
+            dry_run=False,
+            agent="auto",
+            max_issues=1,
+            github_client=fake_client,
+            process_runner=fake_runner,
+        )
+
+    commands = [tuple(command) for command in fake_runner.calls]
+    # The safe in-flight file was checkpointed before the interrupt propagated.
+    assert ("git", "add", "--", "src/wip.py") in commands
+    checkpoint_commits = [
+        command
+        for command in commands
+        if command[:2] == ("git", "commit") and "--no-verify" in command
+    ]
+    assert len(checkpoint_commits) == 1
+
+
 def test_run_once_rebase_conflict_detached_head(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
