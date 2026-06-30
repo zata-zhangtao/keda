@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IProcessRunner
@@ -102,11 +101,17 @@ def run_verification(
 
     验证命令按配置顺序串行执行，第一个失败即短路停止，
     避免在已知失败的情况下继续执行后续耗时命令。
+
+    每条命令以 ``bash -lc <command>`` 形式执行，与
+    :func:`backend.core.use_cases.agent_runner_validation.ensure_validation_commands_pass`
+    的 RV 复跑行为保持一致，从而支持命令展开（``$(...)`` / 通配符 /
+    管道 / 变量插值）。``-l`` 加载登录 shell 配置以复用用户环境；
+    命令仍以单字符串形式传入，未改变 ``verification_commands`` 的语义。
     """
     verification_results: list[CommandResult] = []
     for command in config.runner.verification_commands:
         result = process_runner.run(
-            shlex.split(command),
+            ["bash", "-lc", command],
             cwd=worktree_path,
             check=False,
         )

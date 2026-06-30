@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -287,7 +288,26 @@ class FakeProcessRunner(IProcessRunner):
         input_text: str | None = None,
         label: str | None = None,
     ) -> CommandResult:
-        self.calls.append(list(command))
+        command_list = list(command)
+        # When the runner wraps verification commands in ``bash -lc``,
+        # unwrap transparently so test assertions can keep matching the
+        # inner command tuple (e.g. ``("just", "lint")``). The recorded
+        # call shape stays stable for any test that asserts on
+        # ``fake_runner.calls``.
+        if (
+            len(command_list) == 3
+            and command_list[0] == "bash"
+            and command_list[1] == "-lc"
+        ):
+            inner_command_text = command_list[2]
+            try:
+                inner_tokens = shlex.split(inner_command_text)
+            except ValueError:
+                inner_tokens = [inner_command_text]
+            recorded_call = inner_tokens
+        else:
+            recorded_call = command_list
+        self.calls.append(recorded_call)
         self.input_texts.append(input_text)
         self.labels.append(label)
         key = tuple(command)
@@ -303,6 +323,25 @@ class FakeProcessRunner(IProcessRunner):
                     stderr="",
                 )
             return result
+        # When the call was a ``bash -lc`` wrap, fall back to matching the
+        # inner command tuple against test responses. This keeps the
+        # per-test FakeProcessRunner subclasses (``_LintExhaustedRunner``
+        # etc.) that register ``("just", "lint")`` working after the
+        # runner started wrapping verification commands in bash.
+        if recorded_call is not command_list:
+            inner_key = tuple(recorded_call)
+            if inner_key in self.responses:
+                result = self.responses[inner_key]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                if not capture_output:
+                    return CommandResult(
+                        command=result.command,
+                        return_code=result.return_code,
+                        stdout="",
+                        stderr="",
+                    )
+                return result
         return CommandResult(
             command=tuple(command), return_code=0, stdout="", stderr=""
         )

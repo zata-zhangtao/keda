@@ -75,9 +75,7 @@ def main(argv: list[str]) -> int:
                 proc.kill()
                 break
 
-            readable, _, _ = select.select(
-                [proc.stdout, proc.stderr], [], [], 0.5
-            )
+            readable, _, _ = select.select([proc.stdout, proc.stderr], [], [], 0.5)
             for stream in readable:
                 chunk = stream.read(4096)
                 if not chunk:
@@ -135,8 +133,7 @@ def main(argv: list[str]) -> int:
     stderr_text = stderr_buffer.decode("utf-8", errors="replace")
     print(f"[rv-follow] stderr:\n{stderr_text}", file=sys.stderr)
     print(f"[rv-follow] exit code: {exit_code}", file=sys.stderr)
-    print(f"[rv-follow] saw_initial={saw_initial} appended={appended}",
-          file=sys.stderr)
+    print(f"[rv-follow] saw_initial={saw_initial} appended={appended}", file=sys.stderr)
 
     if exit_code == 0 and saw_initial and appended:
         return 0

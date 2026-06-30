@@ -67,7 +67,9 @@ def render(input_path: Path, output_path: Path, *, font_size: int) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path, format="PNG", optimize=True)
-    print(f"[rv-render] {input_path} → {output_path} ({width}x{height})", file=sys.stderr)
+    print(
+        f"[rv-render] {input_path} → {output_path} ({width}x{height})", file=sys.stderr
+    )
 
 
 def main(argv: list[str]) -> int:

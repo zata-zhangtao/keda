@@ -28,10 +28,15 @@ def build_fixture(
     kind: str,
     log_lines: int,
     running: bool,
+    live_pid: int | None = None,
 ) -> dict[str, str]:
     """Materialize a temp IAR config + processes.json + log file.
 
     Returns a dict of paths the caller can pass as env vars / CLI args.
+    If ``live_pid`` is given, that pid is written into the registry so the
+    supervisor's liveness probe (``os.kill(pid, 0)``) reports the record as
+    alive — required for the ``iar daemon status`` RV to render a managed
+    running row.
     """
     fixture_dir.mkdir(parents=True, exist_ok=True)
     config_path = fixture_dir / "config.toml"
@@ -47,12 +52,13 @@ def build_fixture(
             log_file.write(f"line {index:04d}: daemon step {index}\n")
 
     status = "running" if running else "exited"
+    pid_value = live_pid if live_pid is not None else 4321
     processes_payload = {
         process_id: {
             "process_id": process_id,
             "repo_id": repo_id,
             "kind": kind,
-            "pid": 4321,
+            "pid": pid_value,
             "status": status,
             "exit_code": None,
             "log_path": str(log_path),
@@ -125,6 +131,15 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="Mark the record as exited instead of running.",
     )
+    parser.add_argument(
+        "--live-pid",
+        type=int,
+        default=None,
+        help=(
+            "Write this real pid into the registry so the supervisor liveness "
+            "probe reports the record as alive (use for daemon-status RV)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     paths = build_fixture(
@@ -134,6 +149,7 @@ def main(argv: list[str]) -> int:
         kind=args.kind,
         log_lines=args.log_lines,
         running=not args.not_running,
+        live_pid=args.live_pid,
     )
     json.dump(paths, sys.stdout, indent=2)
     sys.stdout.write("\n")

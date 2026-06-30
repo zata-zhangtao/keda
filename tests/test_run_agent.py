@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -52,6 +53,30 @@ from backend.core.use_cases.run_agent_once import (
 )
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
+
+
+def _is_bash_wrapped_verification_call(
+    command: Sequence[str], expected_inner: tuple[str, ...]
+) -> bool:
+    """Match either the legacy flat argv or the ``bash -lc <cmd>`` wrap.
+
+    ``run_verification`` wraps each command in ``bash -lc`` so that shell
+    metacharacters (command substitution, globs, pipes, env var
+    interpolation) are honored. Custom ``FakeProcessRunner`` subclasses in
+    this file register responses keyed on the inner command tuple
+    (e.g. ``("just", "test")``); they need a stable way to recognize the
+    wrap so that pre- and post-wrap test assertions keep matching.
+    """
+    if tuple(command) == expected_inner:
+        return True
+    if len(command) == 3 and command[0] == "bash" and command[1] == "-lc":
+        import shlex as _shlex
+
+        try:
+            return tuple(_shlex.split(command[2])) == expected_inner
+        except ValueError:
+            return False
+    return False
 
 
 def test_format_command_substitutes_issue_number() -> None:
@@ -1319,7 +1344,9 @@ def test_run_once_uncommitted_changes_runner_commits(
         "agent: implement example",
     )
     validation_indices = [
-        index for index, command in enumerate(commands) if command == ("npm", "test")
+        index
+        for index, command in enumerate(commands)
+        if _is_bash_wrapped_verification_call(command, ("npm", "test"))
     ]
     add_index = commands.index(("git", "add", "-A"))
     commit_index = commands.index(commit_command)
@@ -1331,7 +1358,10 @@ def test_run_once_uncommitted_changes_runner_commits(
     assert len(validation_indices) == 2
     assert validation_indices[0] < add_index < validation_indices[1] < commit_index
     assert commit_index < head_indices[-1]
-    assert ("just", "test") not in commands
+    assert not any(
+        _is_bash_wrapped_verification_call(command, ("just", "test"))
+        for command in commands
+    )
     assert not (worktree_path / ".agent-runner" / "commit-request.json").exists()
     assert ("git", "push", "-u", "origin", "issue-123") in commands
     assert (
@@ -1405,7 +1435,9 @@ def test_run_once_recovers_after_staged_verification_failure(
             if command_tuple == ("git", "status", "--porcelain"):
                 stdout = "" if self._committed else " M file.txt\n"
                 return CommandResult(command_tuple, 0, stdout, "")
-            if command_tuple == ("just", "test"):
+            if command_tuple == ("just", "test") or _is_bash_wrapped_verification_call(
+                command, ("just", "test")
+            ):
                 self._test_calls += 1
                 if self._test_calls == 2:
                     return CommandResult(
@@ -1448,7 +1480,9 @@ def test_run_once_recovers_after_staged_verification_failure(
         if command == ("git", "add", "-A")
     ]
     test_indices = [
-        index for index, command in enumerate(commands) if command == ("just", "test")
+        index
+        for index, command in enumerate(commands)
+        if _is_bash_wrapped_verification_call(command, ("just", "test"))
     ]
     reset_index = commands.index(("git", "reset", "--mixed"))
     recovery_prompt = [
@@ -1623,7 +1657,12 @@ def test_run_once_uncommitted_changes_validation_failure_does_not_stage(
 
     assert exit_code == 1
     commands = [tuple(command) for command in fake_runner.calls]
-    assert commands.count(("just", "test")) == 3
+    just_test_count = sum(
+        1
+        for command in commands
+        if _is_bash_wrapped_verification_call(command, ("just", "test"))
+    )
+    assert just_test_count == 3
     assert ("git", "add", "-A") not in commands
     assert ("git", "commit", "-m", "[Agent] Issue #123: Example") not in commands
     failed_calls = [
@@ -1766,7 +1805,9 @@ def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> No
     commands = [tuple(command) for command in fake_runner.calls]
     commit_command = ("git", "commit", "-m", "[Agent] Issue #123: Example")
     test_indices = [
-        index for index, command in enumerate(commands) if command == ("just", "test")
+        index
+        for index, command in enumerate(commands)
+        if _is_bash_wrapped_verification_call(command, ("just", "test"))
     ]
     add_index = commands.index(("git", "add", "-A"))
     assert len(test_indices) == 2
@@ -1898,7 +1939,11 @@ def test_commit_requested_changes_restages_tracked_verification_edits(
 
     commands = [tuple(command) for command in fake_runner.calls]
     initial_stage_index = commands.index(("git", "add", "-A"))
-    verification_index = commands.index(("just", "test"))
+    verification_index = next(
+        index
+        for index, command in enumerate(commands)
+        if _is_bash_wrapped_verification_call(command, ("just", "test"))
+    )
     tracked_diff_index = commands.index(("git", "diff", "--quiet"))
     tracked_restage_index = commands.index(("git", "add", "-u"))
     commit_index = commands.index(("git", "commit", "-m", "agent: implement example"))
@@ -4061,7 +4106,9 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
             if command_tuple == ("git", "status", "--porcelain"):
                 stdout = "" if self._committed else " M file.txt\n"
                 return CommandResult(command_tuple, 0, stdout, "")
-            if command_tuple == ("just", "lint"):
+            if command_tuple == ("just", "lint") or _is_bash_wrapped_verification_call(
+                command, ("just", "lint")
+            ):
                 self._lint_calls += 1
                 if self._lint_calls == 2:
                     return CommandResult(
@@ -4104,7 +4151,9 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
         if command == ("git", "add", "-A")
     ]
     lint_indices = [
-        index for index, command in enumerate(commands) if command == ("just", "lint")
+        index
+        for index, command in enumerate(commands)
+        if _is_bash_wrapped_verification_call(command, ("just", "lint"))
     ]
     reset_index = commands.index(("git", "reset", "--mixed"))
     recovery_prompt = [
@@ -4190,7 +4239,9 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
                 return CommandResult(command_tuple, 0, "issue-123\n", "")
             if command_tuple == ("git", "status", "--porcelain"):
                 return CommandResult(command_tuple, 0, " M file.txt\n", "")
-            if command_tuple == ("just", "lint"):
+            if command_tuple == ("just", "lint") or _is_bash_wrapped_verification_call(
+                command, ("just", "lint")
+            ):
                 return CommandResult(command_tuple, 1, "lint stdout\n", "lint stderr\n")
             return CommandResult(command_tuple, 0, "", "")
 
@@ -4217,7 +4268,9 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
     assert exit_code == 1
     commands = [tuple(command) for command in fake_runner.calls]
     lint_indices = [
-        index for index, command in enumerate(commands) if command == ("just", "lint")
+        index
+        for index, command in enumerate(commands)
+        if _is_bash_wrapped_verification_call(command, ("just", "lint"))
     ]
     add_indices = [
         index
