@@ -663,17 +663,25 @@ uv run iar workflow install preview --force
 
 ## worktree 中的前端依赖（node_modules）
 
-同理，gitignored 的 `node_modules` 也不会被 `git worktree add` 物化，否则 worktree 里跑 `vite` 等构建会报 `vite: command not found`。runner 在补齐 env 文件之后，会把前端依赖从主仓库**软链**进 worktree（等价于 `just worktree` 脚本的 `symlink-from-main` 策略）：
+同理，gitignored 的 `node_modules` 也不会被 `git worktree add` 物化，否则 worktree 里跑 `vite` 等构建会报 `vite: command not found`。runner 在补齐 env 文件之后，会按以下优先级处理 worktree 中的前端依赖：
 
-- 扫描 worktree（而非主仓库）中所有含 `package.json` 的前端项目，对每个项目把 `node_modules` 软链到主仓库对应目录（含 `frontend/`、`frontend-admin/` 这类子目录）
-- 只链 worktree 中**缺失**的 `node_modules`：worktree 内已有的真实目录或软链（例如已 `npm install` 过）永远不会被覆盖
+1. **优先在 worktree 内真实安装**：扫描 worktree（而非主仓库）中所有含 `package.json` 的前端项目，根据锁文件自动选择包管理器并执行安装：
+   - `pnpm-lock.yaml` → `pnpm install --ignore-scripts`
+   - `package-lock.json` → `npm ci --ignore-scripts`
+   - `yarn.lock` → `yarn install --ignore-scripts`
+   - `bun.lock` / `bun.lockb` → `bun install --ignore-scripts`
+2. **无锁文件或安装失败时回退到软链**：如果项目没有锁文件，或者安装命令非零退出，则把 `node_modules` 软链到主仓库对应目录（等价于 `just worktree` 脚本旧的 `symlink-from-main` 策略）。
+
+行为约束：
+
+- 只处理 worktree 中**缺失**的 `node_modules`：worktree 内已有的真实目录或软链（例如已 `npm install` 过）永远不会被覆盖
 - 复用已有 worktree 时同样补齐：旧 worktree 缺 `node_modules` 的，下一次 `iar run` 会自动治愈
-- 采用软链而非重新安装：主仓库已装好依赖，软链是秒级、零安装成本；代价是 worktree 与主仓库共享依赖，分支间 `package.json` 差异较大时可能不准
-- 主仓库该项目缺 `node_modules` 时**无法软链**，会记一条 `warning`（而非静默跳过），方便把后续 `vite: command not found` 追溯到"主仓库没装依赖"
-- 链接是 best effort：单个项目失败（权限、竞态）只记日志，不会中断 agent run
+- 真实安装优先是为了兼容所有前端工具链（包括 Next.js/Turbopack 等不允许跨根目录软链的工具）；pnpm 等内容可寻址存储会复用本机缓存，通常不会明显慢于软链
+- 主仓库该项目缺 `node_modules` 且无法安装时**无法软链**，会记一条 `warning`（而非静默跳过），方便把后续 `vite: command not found` 追溯到"主仓库没装依赖"或"安装失败"
+- 处理是 best effort：单个项目失败（权限、竞态、网络）只记日志，不会中断 agent run
 - 软链同样保持 gitignored 状态，不会让 worktree 变脏
 
-> 守护进程路径（`iar worktree create` / `iar run`）不读 `WORKTREE_FRONTEND_STRATEGY` 环境变量——该变量只对手动 `just worktree`（`scripts/shared/worktree/create.sh`）生效。daemon 路径固定采用上面的软链策略。
+> 守护进程路径（`iar worktree create` / `iar run`）不读 `WORKTREE_FRONTEND_STRATEGY` 环境变量——该变量只对手动 `just worktree`（`scripts/shared/worktree/create.sh`）生效。daemon 路径固定采用上面的"先安装、后软链回退"策略。
 
 ## worktree 分支安全与自动修复
 

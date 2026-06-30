@@ -112,8 +112,8 @@ from backend.core.use_cases.agent_runner_worktree_branch import (
 )
 from backend.core.use_cases.worktree_env import copy_missing_env_files
 from backend.core.use_cases.worktree_frontend import (
+    ensure_frontend_node_modules,
     exclude_frontend_node_modules_from_git,
-    link_frontend_node_modules,
 )
 
 _logger = logging.getLogger(__name__)
@@ -349,19 +349,27 @@ def create_or_reuse_worktree(
             worktree_path,
             ", ".join(str(env_path) for env_path in copied_env_paths),
         )
-    # node_modules is gitignored, so `git worktree add` never materializes it;
-    # symlink each frontend project's deps from the main checkout so worktree
-    # builds (vite, etc.) work without a per-worktree install. Reused worktrees
-    # are healed the same way; existing node_modules are left untouched.
-    linked_frontend_paths = link_frontend_node_modules(repo_path, worktree_path)
+    # node_modules is gitignored, so `git worktree add` never materializes it.
+    # Install deps directly in the worktree when a lockfile is present; this is
+    # the only form guaranteed to work with every frontend toolchain (including
+    # Next.js/Turbopack). If no lockfile exists or the install fails, fall back
+    # to symlinking from the main checkout. Reused worktrees are healed the same
+    # way; existing node_modules are left untouched.
+    installed_frontend_paths, linked_frontend_paths = ensure_frontend_node_modules(
+        repo_path, worktree_path, process_runner
+    )
     if linked_frontend_paths:
         exclude_frontend_node_modules_from_git(
             worktree_path, linked_frontend_paths, process_runner
         )
+    handled_frontend_paths = installed_frontend_paths + linked_frontend_paths
+    if handled_frontend_paths:
         _logger.info(
-            "Linked node_modules for %d frontend project(s) into worktree %s: %s",
-            len(linked_frontend_paths),
+            "Prepared node_modules for %d frontend project(s) in worktree %s: "
+            "installed=%s, linked=%s",
+            len(handled_frontend_paths),
             worktree_path,
+            ", ".join(str(frontend_path) for frontend_path in installed_frontend_paths),
             ", ".join(str(frontend_path) for frontend_path in linked_frontend_paths),
         )
     expected_branch = f"issue-{issue.number}"

@@ -103,3 +103,41 @@
 ## 2026-06-26 16:01 · test · benchmark
 
 > 需要增加一个用于测试的能力, 预设几个prd ,copy  ~/code/zata_code_template的模板之后 在模板仓库上面完成prd  然后对比完成的效果  ( 可以让人自己去评判完成度, 也可以对比没有用 iar 的效果) 以及耗时( 人介入的时间)
+
+## 2026-06-30 09:52 · SIGTERM
+
+```text
+L3.1 的 SIGTERM 覆盖  是什么
+
+"SIGTERM 覆盖"是指补上 L3.1 现在没接住的那类停止信号。
+
+现在 L3.1 接的是哪种
+KeyboardInterrupt 在 Python 里只对应 SIGINT(也就是 Ctrl-C)——收到 SIGINT 时解释器自动抛 KeyboardInterrupt,于是落进我加的那个 except → checkpoint。所以 L3.1 实际只覆盖"你在终端手动 Ctrl-C"。
+
+SIGTERM 是另一回事
+SIGTERM 是用进程管理器停后台进程的常规方式发的信号:
+
+kill <pid>(默认就是 SIGTERM)
+systemctl stop / docker stop / supervisor 重启 / 机器关机
+Python 对 SIGTERM 的默认行为是"立刻终止,不抛任何异常"——所以我那个 except KeyboardInterrupt 根本不会触发,checkpoint 不会跑,在途工作只留在脏 worktree 里。对一个常驻 daemon来说,被 kill/systemctl stop 停掉远比被 Ctrl-C 常见,所以这块恰恰是更现实的场景。
+
+"覆盖 SIGTERM"要做什么
+装一个 SIGTERM 处理器,把它转成可捕获的异常,引到同一条 checkpoint 路径:
+
+import signal
+signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+# 或抛一个自定义 GracefulShutdown 异常,再在 except 里一并处理
+这样 kill 也能像 Ctrl-C 一样先 checkpoint 再退出。
+
+为什么我先没做(以及它现在值不值)
+风险:信号处理器是异步的,会在主线程任意一点打断(可能正卡在 git 子进程/写文件中途),从处理器里抛异常本身就比较微妙;再叠加线程池(concurrency>1,worker 线程收不到)和"agent 子进程可能和 daemon 同进程组、一起吃到 SIGTERM"这些,要想清楚。
+价值被 L1 摊薄了:就算 SIGTERM 没 checkpoint,Issue 停在 agent/running、PID 已死 → L1 下一轮回收到 ready,worktree 复用,活儿没丢。SIGTERM 覆盖的边际收益还是那句"优雅停机时把活儿落成 commit,续作时看到的是已提交而非脏树"。
+三种停止信号的全貌
+信号    触发方式    现状
+SIGINT (Ctrl-C)    终端手动中断    ✅ L3.1 已覆盖
+SIGTERM (kill/systemctl stop/docker stop)    进程管理器停 daemon    ❌ 未覆盖(默认直接死,无异常)——就是这块
+SIGKILL (kill -9)/崩溃/断电    强杀    ⚠️ 永远无法捕获,只能靠 L1 回收兜底
+要的话我可以把 SIGTERM 处理器加上(只在 daemon/run 入口装、顺序路径生效,保持和 L3.1 一样的保守边界)。但说实话,考虑到 L1 已经兜住"不丢活儿",这个更多是锦上添花——你可以先放着,等真遇到"systemctl stop 后续作总是从脏树重来很烦"再补。
+
+那就不管， 但是你可以记录到inbox里面， 说考虑过就不管了
+```
