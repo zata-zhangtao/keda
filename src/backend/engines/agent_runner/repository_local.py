@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +105,7 @@ class RepositoryInitResult:
     wrote_file: bool
     repo_id: str | None = None
     display_name: str | None = None
+    verification_commands: list[str] = field(default_factory=list)
 
 
 def detect_git_repository_root(
@@ -619,7 +620,7 @@ def detect_verification_commands(repo_root_path: Path) -> list[str]:
 def build_repository_local_config_text(
     options: RepositoryInitOptions,
     process_runner: SubprocessRunner | None = None,
-) -> tuple[Path, str]:
+) -> tuple[Path, str, list[str]]:
     """Render repository-local IAR TOML for a Git repository.
 
     Args:
@@ -627,7 +628,8 @@ def build_repository_local_config_text(
         process_runner: Optional subprocess runner.
 
     Returns:
-        A tuple of the detected repository root path and rendered TOML text.
+        A tuple of the detected repository root path, rendered TOML text, and
+        the verification commands that were detected for the repository.
     """
     repo_root_path = detect_git_repository_root(options.cwd, process_runner)
     selected_remote = options.remote_override or _detect_default_remote(
@@ -642,6 +644,7 @@ def build_repository_local_config_text(
         repo_root_path, selected_remote, process_runner
     )
 
+    verification_commands = detect_verification_commands(repo_root_path)
     settings = AgentRunnerLocalSettings(
         repository=AgentRunnerRepositoryMetadataSettings(
             id=selected_repo_id,
@@ -653,9 +656,7 @@ def build_repository_local_config_text(
             base_branch=selected_base_branch,
         ),
         worktree=AgentRunnerWorktreeSettings(),
-        runner=AgentRunnerRunnerSettings(
-            verification_commands=detect_verification_commands(repo_root_path)
-        ),
+        runner=AgentRunnerRunnerSettings(verification_commands=verification_commands),
         safety=AgentRunnerSafetySettings(),
         validation=AgentRunnerValidationSettings(),
         prompts=AgentRunnerPromptSettings(),
@@ -666,7 +667,7 @@ def build_repository_local_config_text(
         deliberation=AgentRunnerDeliberationSettings(),
     )
 
-    return repo_root_path, settings_to_toml_string(settings)
+    return repo_root_path, settings_to_toml_string(settings), verification_commands
 
 
 def initialize_repository_local_config(
@@ -685,8 +686,8 @@ def initialize_repository_local_config(
     Raises:
         ValueError: If ``.iar.toml`` already exists and overwrite was not forced.
     """
-    repo_root_path, config_text = build_repository_local_config_text(
-        options, process_runner
+    repo_root_path, config_text, verification_commands = (
+        build_repository_local_config_text(options, process_runner)
     )
     config_path = repo_root_path / IAR_REPOSITORY_CONFIG_FILENAME
     selected_remote = options.remote_override or _detect_default_remote(
@@ -706,6 +707,7 @@ def initialize_repository_local_config(
             wrote_file=wrote_file,
             repo_id=selected_repo_id,
             display_name=selected_display_name,
+            verification_commands=verification_commands,
         )
 
     if config_path.exists() and not options.force and not options.dry_run:

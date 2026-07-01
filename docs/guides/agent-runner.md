@@ -288,6 +288,16 @@ uv run --project /path/to/keda iar init
 >
 > 探测只在 `iar init` 时发生：已存在的 `.iar.toml` 不会自动更新，需重跑 `iar init --force` 或手改 `verification_commands` 才会采用新探测结果。
 
+> **init 后务必复核 verification_commands / Please review verification_commands after init**
+>
+> `iar init`（含 `--dry-run`）完成后会打印一条黄色提示，列出当前生成的 `[agent_runner.runner].verification_commands`。规则探测只能识别常见技术栈，非 Python 仓库、自定义脚本或特殊结构可能只得到 `git diff --check`。
+>
+> 看到提示后请打开 `.iar.toml`，根据项目真实的 test / lint / build 流程检查并调整这些命令；也可以把列表复制到自己的 AI 工具询问建议。这是交付门禁的最后防线，务必确认它确实能拦住未通过检查的代码。
+>
+> After `iar init` (including `--dry-run`) a yellow reminder prints the detected `[agent_runner.runner].verification_commands`. Rule-based detection only covers common stacks; non-Python repos, custom scripts, or special layouts may receive only `git diff --check`.
+>
+> Please open `.iar.toml` and review the commands against your actual test / lint / build workflow, or paste the list into your own AI tool for suggestions. This is the final gate before the runner commits, so make sure it can actually block broken changes.
+
 生成示例：
 
 ```toml

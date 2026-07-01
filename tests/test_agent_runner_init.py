@@ -13,6 +13,7 @@ from backend.engines.agent_runner.repository_local import (
     _detect_default_remote,
     build_repository_local_config_text,
     detect_verification_commands,
+    initialize_repository_local_config,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -61,7 +62,57 @@ def test_iar_init_dry_run_real_entry(tmp_path: Path) -> None:
     assert completed.returncode == 0, completed.stderr
     assert "[agent_runner.repository]" in completed.stdout
     assert 'id = "target"' in completed.stdout
+    assert "请检查" in completed.stderr
+    assert "Please review verification_commands" in completed.stderr
+    assert "git diff --check" in completed.stderr
     assert not (repo_path / ".iar.toml").exists()
+
+
+def test_iar_init_result_includes_verification_commands(tmp_path: Path) -> None:
+    """RepositoryInitResult should carry the detected verification commands."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "target"',
+                'version = "0.1.0"',
+                "dependencies = []",
+                "",
+                "[project.optional-dependencies]",
+                'dev = ["mkdocs>=1.6.1"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_path / "mkdocs.yml").write_text("site_name: target\n", encoding="utf-8")
+
+    init_result = initialize_repository_local_config(
+        RepositoryInitOptions(cwd=repo_path, dry_run=True)
+    )
+
+    assert init_result.verification_commands == [
+        "git diff --check",
+        "uv run --extra dev mkdocs build",
+    ]
+
+
+def test_iar_init_prints_review_hint_after_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`iar init` should print the bilingual review hint after writing .iar.toml."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    monkeypatch.chdir(repo_path)
+    monkeypatch.setenv("IAR_CONFIG", str(_create_isolated_config(tmp_path)))
+
+    assert main(["init"]) == 0
+
+    captured = capsys.readouterr()
+    assert "请检查" in captured.err
+    assert "Please review verification_commands" in captured.err
+    assert "git diff --check" in captured.err
 
 
 def _create_isolated_config(tmp_path: Path) -> Path:
@@ -429,7 +480,7 @@ def test_iar_init_renders_detected_commands_and_validation_section(
     )
     (repo_path / "mkdocs.yml").write_text("site_name: target\n", encoding="utf-8")
 
-    _, config_text = build_repository_local_config_text(
+    _, config_text, verification_commands = build_repository_local_config_text(
         RepositoryInitOptions(cwd=repo_path, dry_run=True)
     )
 
@@ -437,6 +488,10 @@ def test_iar_init_renders_detected_commands_and_validation_section(
     assert "[agent_runner.validation]" in config_text
     assert "enabled = true" in config_text
     assert 'evidence_dir = ".iar/evidence"' in config_text
+    assert verification_commands == [
+        "git diff --check",
+        "uv run --extra dev mkdocs build",
+    ]
 
 
 def test_iar_init_renders_interactive_decision_and_deliberation_sections(
@@ -444,7 +499,7 @@ def test_iar_init_renders_interactive_decision_and_deliberation_sections(
 ) -> None:
     """The rendered .iar.toml template includes ask and deliberate config."""
     repo_path = _init_git_repository(tmp_path, "target")
-    _, config_text = build_repository_local_config_text(
+    _, config_text, _ = build_repository_local_config_text(
         RepositoryInitOptions(cwd=repo_path, dry_run=True)
     )
 

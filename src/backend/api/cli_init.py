@@ -23,6 +23,7 @@ from backend.engines.agent_runner.init_flow import (
 )
 from backend.engines.agent_runner.repository_local import (
     RepositoryInitOptions,
+    RepositoryInitResult,
     initialize_repository_local_config,
 )
 from backend.engines.agent_runner.takeover import upsert_repository
@@ -51,6 +52,7 @@ def _run_init_command(
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
         logger.error("iar init failed: %s", exc)
         return 1
+    _print_verification_commands_review_hint(init_result)
     if parsed.dry_run:
         print(init_result.config_text, end="")
         console.print(
@@ -122,6 +124,21 @@ def _run_init_command(
     except Exception as exc:  # noqa: BLE001
         error_console.print(f"[yellow]Label sync failed:[/] {exc}")
     return 0
+
+
+def _print_verification_commands_review_hint(
+    init_result: RepositoryInitResult,
+) -> None:
+    """Print a fixed bilingual reminder to review verification_commands."""
+    commands_repr = repr(init_result.verification_commands)
+    message = (
+        f"⚠️  请检查 {init_result.config_path} 中的 verification_commands / "
+        f"Please review verification_commands in {init_result.config_path}:\n"
+        f"    {commands_repr}\n"
+        "    这些命令由 iar init 自动探测生成，建议根据项目实际 test/lint/build 命令复核并调整。\n"
+        "    These commands are auto-detected by iar init; please review against your actual test/lint/build setup."
+    )
+    error_console.print(message, style="yellow", markup=False)
 
 
 def _print_workflow_config_plan(config_plan, *, dry_run: bool) -> None:
