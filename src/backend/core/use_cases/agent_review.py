@@ -52,6 +52,12 @@ DEFAULT_REVIEW_PROMPT_TEMPLATE: tuple[str, ...] = (
     "`.agent-runner/commit-request.json` with a descriptive `commit_message`.",
     "Do not leave findings unaddressed while returning `approved`.",
     "",
+    "CRITICAL: The `code-reviewer` skill's Chinese text report is input for your "
+    "judgment, NOT your final answer to the runner. After calling the skill, you "
+    "MUST still produce a final ```json code block with the verdict/summary/findings "
+    "schema below. The runner parses only that JSON block; without it the review "
+    "fails with 'no parseable verdict'.",
+    "",
     "Findings JSON schema:",
     "```json",
     "[",
