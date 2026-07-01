@@ -12,6 +12,10 @@ set allow-duplicate-recipes := true
 
 import "justfile.shared"
 
+# Default recipe (runs when you type `just`)
+default: _check-completion
+    @just --list
+
 # Reinstall the `iar` CLI tool globally via uv in editable mode
 # Usage:
 #   just reinstall-iar
