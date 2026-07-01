@@ -571,6 +571,7 @@ implement prd_file ai_tool prompt="":
     prd_file="{{prd_file}}"
     ai_tool="{{ai_tool}}"
     prompt_text="{{prompt}}"
+    repo_root="$(git rev-parse --show-toplevel)"
 
     # Validate PRD file exists
     if [ ! -f "$prd_file" ]; then
@@ -599,8 +600,13 @@ implement prd_file ai_tool prompt="":
         else
             prd_display="$prd_name"
         fi
-        prompt_text="Implement the feature per PRD '${prd_display}', complete the acceptance checklist"
-        echo "ℹ️  No prompt provided, using default: $prompt_text"
+        evidence_dir="tasks/evidence/${prd_name}"
+        executor_prompt_file="$repo_root/scripts/shared/just/executor_prompt.txt"
+        prompt_text=$(cat "$executor_prompt_file")
+        prompt_text="${prompt_text//<PRD_DISPLAY>/$prd_display}"
+        prompt_text="${prompt_text//<EVIDENCE_DIR>/$evidence_dir}"
+        prompt_text="${prompt_text//<PRD_BASENAME>/$prd_name}"
+        echo "ℹ️  No prompt provided, using evidence-aware default prompt."
         echo ""
     fi
 
@@ -614,9 +620,13 @@ implement prd_file ai_tool prompt="":
         branch_name="${BASH_REMATCH[1]}"
     fi
 
+    # Evidence directory (must match prompt and verifier expectations)
+    evidence_dir="tasks/evidence/${prd_name}"
+
     echo "PRD: $prd_file"
     echo "Branch: $branch_name"
     echo "Tool: $ai_tool"
+    echo "Evidence dir: $evidence_dir"
     echo "Prompt: $prompt_text"
     echo ""
 
@@ -625,7 +635,6 @@ implement prd_file ai_tool prompt="":
     echo ""
 
     # Determine worktree path (must match scripts/shared/worktree/create.sh)
-    repo_root="$(git rev-parse --show-toplevel)"
     repo_name="$(basename "$repo_root")"
     worktree_path="$(dirname "$repo_root")/${repo_name}-worktrees/tasks/$branch_name"
 
@@ -638,10 +647,94 @@ implement prd_file ai_tool prompt="":
     echo "PRD copied to worktree: $prd_rel"
     echo ""
 
-    # Run AI tool in worktree via user's interactive shell (needed for alias resolution)
-    echo "Running $ai_tool in worktree..."
+    # Ensure evidence directory exists before executor runs
+    mkdir -p "$worktree_path/$evidence_dir"
+
+    # Run executor AI in worktree
+    echo "Running executor ($ai_tool) in worktree..."
     cd "$worktree_path"
     ./scripts/shared/just/ai_run.sh "$ai_tool" "$prompt_text"
+
+    echo ""
+
+    # --- Verifier stage ---
+    # Pick the opposite tool as the default verifier tool
+    if [ "$ai_tool" = "claude" ]; then
+        verifier_tool="kimi"
+    else
+        verifier_tool="claude"
+    fi
+
+    verifier_prompt_file="$repo_root/scripts/shared/just/verifier_prompt.txt"
+    verifier_prompt=$(cat "$verifier_prompt_file")
+    verifier_prompt="${verifier_prompt//<PRD_PATH>/$prd_rel}"
+    verifier_prompt="${verifier_prompt//<EVIDENCE_DIR>/$evidence_dir}"
+    verifier_prompt="${verifier_prompt//<PRD_BASENAME>/$prd_name}"
+
+    run_verifier() {
+        local tool="$1"
+        echo "Running verifier ($tool)..."
+        if ./scripts/shared/just/ai_run.sh "$tool" "$verifier_prompt"; then
+            return 0
+        fi
+        return 1
+    }
+
+    verifier_ran=false
+
+    if run_verifier "$verifier_tool"; then
+        verifier_ran=true
+    else
+        echo "Verifier with $verifier_tool failed. Trying same tool as executor ($ai_tool)..."
+        verifier_tool="$ai_tool"
+        if run_verifier "$verifier_tool"; then
+            verifier_ran=true
+        fi
+    fi
+
+    if [ "$verifier_ran" != "true" ]; then
+        echo ""
+        echo "❌ ERROR: Both verifier tools are unavailable."
+        echo "This usually indicates a quota, rate-limit, or API issue."
+        echo "No PRD checkbox has been marked. Please resolve the issue and rerun 'just ai implement'."
+        exit 1
+    fi
+
+    verifier_report="$worktree_path/$evidence_dir/${prd_name}.verifier-report.md"
+    if [ ! -f "$verifier_report" ]; then
+        echo ""
+        echo "❌ ERROR: Verifier did not produce a report at $verifier_report"
+        echo "Please review the output above and rerun 'just ai implement' if needed."
+        exit 1
+    fi
+
+    verdict=$(head -n 1 "$verifier_report" | tr -d '[:space:]')
+    if [ "$verdict" = "PASS" ]; then
+        echo "✅ Verifier ($verifier_tool) passed."
+    elif [ "$verdict" = "REJECT" ]; then
+        echo ""
+        echo "❌ Verifier ($verifier_tool) rejected the evidence."
+        echo "Verifier report: $verifier_report"
+        echo "Please review the report, fix the issues in the worktree, and rerun 'just ai implement'."
+        exit 1
+    else
+        echo ""
+        echo "⚠️  Verifier report has no clear PASS/REJECT verdict (first line: '$verdict')."
+        echo "Verifier report: $verifier_report"
+        echo "Please review manually."
+        exit 1
+    fi
+
+    # --- Final evidence check ---
+    echo ""
+    echo "Running final evidence check..."
+    cd "$repo_root"
+    if ./scripts/shared/just/check_prd_evidence.sh "$prd_rel" "$worktree_path"; then
+        echo "✅ Final evidence check passed."
+    else
+        echo "❌ Final evidence check failed."
+        exit 1
+    fi
 
     echo ""
 
@@ -816,7 +909,7 @@ _ai_fix ai_tool="claude" prompt="" :
     if [ "$rebase_in_progress" = "true" ]; then
         echo ""
         echo "✅ All conflicts resolved. Continuing rebase..."
-        git rebase --continue
+        GIT_EDITOR=true git rebase --continue
     elif [ "$merge_in_progress" = "true" ]; then
         echo ""
         echo "✅ All conflicts resolved. Continuing merge..."

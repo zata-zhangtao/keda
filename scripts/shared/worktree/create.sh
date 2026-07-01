@@ -801,8 +801,24 @@ function ai_worktree() {
             ;;
     esac
 
+    # 2. 为新 worktree 分配随机端口，避免与主仓库/其他 worktree 冲突
+    echo "🔌 正在分配随机运行端口 ..."
+    local worktree_run_state_file=""
+    worktree_run_state_file="$(git -C "$target_abs_path" rev-parse --git-path vanta-run.env)"
+    mkdir -p "$(dirname "$worktree_run_state_file")"
+    local random_backend_port random_frontend_port random_frontend_public_port
+    random_backend_port=$((8000 + RANDOM % 1000))
+    random_frontend_port=$((5180 + RANDOM % 820))
+    random_frontend_public_port=$((3010 + RANDOM % 990))
+    {
+        printf 'BACKEND_PORT=%s\n' "$random_backend_port"
+        printf 'FRONTEND_PORT=%s\n' "$random_frontend_port"
+        printf 'FRONTEND_PUBLIC_PORT=%s\n' "$random_frontend_public_port"
+    } > "$worktree_run_state_file"
+    echo "✅ worktree 运行端口：backend=$random_backend_port, admin=$random_frontend_port, public=$random_frontend_public_port"
+
     echo "🔗 正在处理 .env ..."
-    # 2. 复制仓库中所有以 .env 结尾的文件（保持相对路径），避免子目录环境文件丢失
+    # 3. 复制仓库中所有以 .env 结尾的文件（保持相对路径），避免子目录环境文件丢失
     copied_env_file_count=0
     while IFS= read -r source_env_file_path; do
         relative_env_file_path="${source_env_file_path#"$repo_root_path"/}"

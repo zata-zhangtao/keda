@@ -36,7 +36,7 @@ src/<module>/api/ -> src/<module>/core/ -> src/<module>/engines/ -> src/<module>
 - `src/<module>/api/` 不得直接导入 `src/<module>/infrastructure/` 或 `src/<module>/engines/`
 - 跨层依赖必须通过 `src/<module>/core/shared/interfaces/` 中的抽象接口
 
-新增模块若采用相同的四层结构，同样受 `hooks/check_architecture.py` 约束。
+新增模块若采用相同的四层结构，同样受 `hooks/shared/check_architecture.py` 约束。
 
 ## Placement Checklist
 
@@ -54,4 +54,12 @@ src/<module>/api/ -> src/<module>/core/ -> src/<module>/engines/ -> src/<module>
 
 ## Frontend Boundary
 
-`frontend/` 不属于后端四层的一部分。它是系统边界外的 Web 客户端，通过 HTTP 或 WebSocket 调用 `src/backend/api/`。
+仓库包含一个 Web 前端，是后端四层之外的 Web 客户端，通过 HTTP 或 WebSocket 调用 `src/backend/api/`：
+
+| App | Path | Stack | 定位 |
+|---|---|---|---|
+| Web 前端 | `frontend/` | Vite + React + TypeScript (npm) | 用户可见的 Web 界面 |
+
+它不受后端四层依赖规则约束，遵循 `frontend/` 目录下的前端约定（见 `frontend/README.md`，若存在）。
+
+**"边界外" 指架构层次不同，不等于规划时可以忽略。** 任何带用户可见界面的功能，PRD 与实现都必须把对应前端 app 当作一等公民规划：组件、路由/页面、状态、调用 `src/backend/api/` 的客户端代码与类型同步。纯后端任务需显式声明 `No frontend impact`，而不是默默省略前端。

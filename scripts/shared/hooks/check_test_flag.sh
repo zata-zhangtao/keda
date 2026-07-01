@@ -8,7 +8,7 @@ source "$script_dir/quality_flag.sh"
 # 如果所有变更均为非代码文件，直接跳过 just test 检查
 all_changes_are_excluded() {
     local files
-    files="$(git diff --cached --name-only)"
+    files="$(git -c core.quotepath=false diff --cached --name-only)"
     if [ -z "$files" ]; then
         files="$(quality_working_file_paths)"
     fi
@@ -46,7 +46,7 @@ current_head="$(quality_head_hash)"
 # commit 阶段优先检查 staged tree；manual just lint 无 staged 文件时回退到
 # working tree，这样刚运行过 just test 的本地工作区也能通过 lint。
 # 排除文档、图片等不进入 test/lint 的文件类型。
-staged_files="$(git diff --cached --name-only)"
+staged_files="$(git -c core.quotepath=false diff --cached --name-only)"
 if [ -n "$staged_files" ]; then
     current_tree="$(quality_effective_tree staged test)"
 else

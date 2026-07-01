@@ -160,9 +160,13 @@ recovery_retry_delay_seconds = 30
 timeout_seconds = 14400
 # Inactivity timeout: kill the agent if it produces no stdout/stderr for this long.
 inactivity_timeout_seconds = 1200
+# 提交前自动运行的验证命令；任一命令失败会进入 recovery。
+# 这里显式拆出 pre-commit，避免 `just test` 的 quality-flag 缓存把 lint 跳过；
+# `SKIP=check-test-flag` 防止 pre-commit 在 just test 还没跑完就因标记不存在而失败。
 verification_commands = [
   "git diff --check",
-  "just test",
+  "SKIP=check-test-flag uv run pre-commit run --all-files --show-diff-on-failure",
+  "just test all",
   "uv run mkdocs build --strict",
 ]
 

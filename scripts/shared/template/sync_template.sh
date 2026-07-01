@@ -280,6 +280,13 @@ _is_always_skipped() {
         scripts/shared/*|scripts/build/*) ;;
         scripts/*) return 0 ;;
     esac
+    # Project-private hooks: anything under hooks/ that is NOT in
+    # hooks/shared/ is project-owned. The upstream template maintains
+    # hooks/shared/.
+    case "$p" in
+        hooks/shared/*) ;;
+        hooks/*) return 0 ;;
+    esac
     return 1
 }
 
@@ -308,9 +315,9 @@ _is_upstream_owned() {
         .github/copilot-instructions.md) return 0 ;;
         .github/instructions/*.md) return 0 ;;
         # Template-owned pre-commit / architecture hooks. Project-private
-        # hooks (e.g. check_prd_acceptance_checklist.py) must not match
-        # the check_*.py pattern — name them differently.
-        hooks/check_*.py) return 0 ;;
+        # hooks must live directly under hooks/ and must not be placed in
+        # hooks/shared/.
+        hooks/shared/*) return 0 ;;
     esac
     return 1
 }

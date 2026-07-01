@@ -43,19 +43,19 @@ quality_head_hash() {
 }
 
 quality_staged_file_paths() {
-    git diff --cached --name-only
+    git -c core.quotepath=false diff --cached --name-only
 }
 
 quality_working_file_paths() {
     if quality_has_head; then
         {
-            git diff --name-only HEAD
-            git ls-files --others --exclude-standard
+            git -c core.quotepath=false diff --name-only HEAD
+            git -c core.quotepath=false ls-files --others --exclude-standard
         } | awk 'NF && !seen[$0]++'
         return 0
     fi
 
-    git ls-files --cached --others --exclude-standard
+    git -c core.quotepath=false ls-files --cached --others --exclude-standard
 }
 
 quality_effective_tree() {
@@ -155,7 +155,7 @@ quality_has_staged_archive_prd_transition() {
         if [[ "$staged_file_path" =~ $QUALITY_ARCHIVED_PRD_PATH_PATTERN ]]; then
             return 0
         fi
-    done < <(git diff --cached --name-only --diff-filter=ACR -- tasks/archive)
+    done < <(git -c core.quotepath=false diff --cached --name-only --diff-filter=ACR -- tasks/archive)
 
     return 1
 }
