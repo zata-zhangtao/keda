@@ -722,7 +722,7 @@ class AgentRunnerGeneratedContentTargetSettings(BaseModel):
     enabled: bool = True
     # 仅接受 template / agent；非法值（如手误 "agnet"）在配置加载期直接报错，
     # 而不是静默退回 fallback。
-    mode: Literal["template", "agent"] = "template"
+    mode: Literal["template", "agent"] = "agent"
     output: str = "json"
     title_template: str | list[str] = ""
     body_template: str | list[str] = ""

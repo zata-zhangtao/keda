@@ -449,6 +449,22 @@ def _merge_prompt_config(
     )
 
 
+def _drop_empty_template_overrides(
+    override_data: dict[str, object],
+) -> dict[str, object]:
+    """Drop empty string template/prompt overrides so base config defaults survive.
+
+    ``.iar.toml`` often materializes ``title_template = ""``, ``body_template = ""``
+    and ``prompt = ""`` as placeholders. Without this filter, those empty strings
+    would wipe out meaningful defaults from ``config.toml``.
+    """
+    filtered = dict(override_data)
+    for key in ("title_template", "body_template", "prompt"):
+        if filtered.get(key) == "":
+            del filtered[key]
+    return filtered
+
+
 def _merge_generated_content_target_config(
     base_config: GeneratedContentTargetConfig,
     override: AgentRunnerGeneratedContentTargetSettings | None,
@@ -456,7 +472,7 @@ def _merge_generated_content_target_config(
     """Merge repository-specific generated-content target overrides."""
     if override is None:
         return base_config
-    override_data = _pydantic_override_dict(override)
+    override_data = _drop_empty_template_overrides(_pydantic_override_dict(override))
     return GeneratedContentTargetConfig(
         enabled=override_data.get("enabled", base_config.enabled),
         mode=override_data.get("mode", base_config.mode),

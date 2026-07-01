@@ -547,6 +547,44 @@ def test_merge_repository_config_overrides_generated_content() -> None:
     assert merged.generated_content.issue_from_prd.mode == "agent"
 
 
+def test_generated_content_target_defaults_to_agent_mode() -> None:
+    """Generated-content targets should default to agent mode for richer output."""
+    target = AgentRunnerGeneratedContentTargetSettings()
+    assert target.mode == "agent"
+
+
+def test_merge_repository_config_ignores_empty_template_overrides() -> None:
+    """Empty .iar.toml template/prompt placeholders must not wipe config.toml defaults."""
+    from backend.engines.agent_runner.factory import merge_repository_config
+
+    global_config = AppConfig(
+        generated_content=AgentRunnerGeneratedContentSettings(
+            draft_pr=AgentRunnerGeneratedContentTargetSettings(
+                mode="agent",
+                title_template="global title",
+                body_template="global body",
+                prompt="global prompt",
+            ),
+        )
+    )
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        generated_content=AgentRunnerGeneratedContentSettings(
+            draft_pr=AgentRunnerGeneratedContentTargetSettings(
+                mode="agent",
+                title_template="",
+                body_template="",
+                prompt="",
+            ),
+        ),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.generated_content.draft_pr.mode == "agent"
+    assert merged.generated_content.draft_pr.title_template == "global title"
+    assert merged.generated_content.draft_pr.body_template == "global body"
+    assert merged.generated_content.draft_pr.prompt == "global prompt"
+
+
 def test_require_iar_repository_initialized_accepts_valid_config(
     tmp_path: Path,
 ) -> None:
