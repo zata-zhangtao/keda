@@ -156,6 +156,7 @@ def extract_title(prd_text: str, fallback_title: str) -> str:
 
     逐行扫描 PRD，查找第一个 Markdown H1 标题（``# ...``）。
     如果存在 ``PRD:`` / ``PRD：`` 前缀则将其去除。
+    跳过 Part A / Part B 这类章节标题，避免把结构标题误当成 feature 标题。
     未找到 H1 时回退到 ``fallback_title``。
 
     Args:
@@ -169,7 +170,9 @@ def extract_title(prd_text: str, fallback_title: str) -> str:
     for line in prd_text.splitlines():
         stripped = line.strip()
         if stripped.startswith("# "):
-            return re.sub(r"^PRD[:：]\s*", "", stripped[2:]).strip() or fallback_title
+            title = re.sub(r"^PRD[:：]\s*", "", stripped[2:]).strip()
+            if title and not re.match(r"^Part\s+[AB]\b", title, re.IGNORECASE):
+                return title or fallback_title
     return fallback_title
 
 

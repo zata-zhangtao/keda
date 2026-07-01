@@ -340,12 +340,15 @@ def build_issue_context(
     )
 
     # 从 PRD 的第一行 H1 标题中提取纯净标题，去掉 "PRD:" / "PRD：" 前缀。
+    # 跳过 Part A / Part B 这类结构标题，避免把章节标题误当成 feature 标题。
     prd_title_text = title
     for line in prd_text.splitlines():
         stripped = line.strip()
         if stripped.startswith("# "):
-            prd_title_text = re.sub(r"^PRD[:：]\s*", "", stripped[2:]).strip()
-            break
+            candidate = re.sub(r"^PRD[:：]\s*", "", stripped[2:]).strip()
+            if candidate and not re.match(r"^Part\s+[AB]\b", candidate, re.IGNORECASE):
+                prd_title_text = candidate
+                break
 
     return IssueContext(
         issue_type=issue_type,

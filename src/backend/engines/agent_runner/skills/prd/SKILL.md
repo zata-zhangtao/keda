@@ -204,6 +204,8 @@ Write the PRD to:
 Feature slug must be lowercase with hyphens.
 Timestamp must use local current time in `YYYYMMDD-HHMMSS` format.
 
+The PRD document itself must start with `# PRD: <descriptive feature title>` as its first Markdown H1 heading. This title is used to derive the GitHub Issue title and roadmap display name; it must describe the feature, not repeat the Part A/Part B section headings.
+
 ### Phase 7: PRD Compliance Gate
 
 Before handing off, verify the document against the **Checklist** at the end of this skill — that list is the single source of truth for required sections, blocks, and blockers. Use `rg -n "^## " <prd-file>` for a quick section-header check.
@@ -221,7 +223,7 @@ This structure is the output contract for generated and updated PRDs. PRDs are o
 - **Part A · Review Layer** (Sections 1-4): what a human reads to accept or reject the work and to see where they must personally confirm. No implementation mechanism, file paths, commands, or scheduling metadata.
 - **Part B · Build Layer** (Sections 5-13): what the executor (human or Agent) reads to implement. The human drills in only where the Part A Human Review Map points.
 
-The PRD opens with a short two-altitude orientation note, then the heading `# Part A · 人审层 (Review Layer)`.
+The PRD opens with `# PRD: <descriptive feature title>` as the very first heading, followed by a short two-altitude orientation note, then the heading `# Part A · 人审层 (Review Layer)`. The `<title>` must be a human-readable feature name, not the literal text "Part A · 人审层 (Review Layer)".
 
 ### 1. Introduction & Goals
 
@@ -553,6 +555,7 @@ The checklist must validate the final target state, not merely the completion of
 * [ ] Compared a minimal-change option against a heavier option
 * [ ] Justified every new abstraction, dependency, or file path
 * [ ] Rejected redundant layers where reuse was sufficient
+* [ ] **BLOCKER:** The PRD starts with `# PRD: <descriptive feature title>` as its first Markdown H1 heading; the title describes the feature and is not the literal Part A/Part B heading text
 * [ ] **BLOCKER:** Structured as Part A (Review Layer, Sections 1-4) and Part B (Build Layer, Sections 5-13); Part A contains no implementation mechanism, file paths, commands, or scheduling metadata
 * [ ] Section 1 stays review-altitude: Problem Statement, an `Interpretation (解读回显)` of how the request was read (the up-front approval target), What The User Gets, and Measurable Objectives only — no proposed solution summary, validation commands, or delivery-dependency metadata
 * [ ] **BLOCKER:** Section 2 Human Review Map present: a numbered zone/trigger menu, a 命中的人审项 list (only hit items, or `本次无人工确认项`), a 未命中 one-liner for the rest, a per-change-point classification table (layer + risk tier + intervention + 证据/Oracle column), a plain-language "如何证明它生效" note, and an ER-diagram surfacing or `本次无数据库结构变化` note
