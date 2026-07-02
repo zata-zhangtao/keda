@@ -228,6 +228,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     daemon_parser.set_defaults(daemon_command="run")
 
+    logs_parser = subparsers.add_parser(
+        "logs",
+        help="Tail the daemon or review-daemon process log.",
+    )
+    logs_parser.add_argument(
+        "--kind",
+        choices=("daemon", "review_daemon"),
+        default="daemon",
+        help="Process kind (default: daemon).",
+    )
+    logs_parser.add_argument(
+        "--lines",
+        "-n",
+        type=int,
+        default=200,
+        help="Number of lines to show from the tail (default: 200).",
+    )
+    logs_parser.add_argument(
+        "--follow",
+        "-f",
+        action="store_true",
+        help="Follow the log in real time (Ctrl-C to stop).",
+    )
+    add_common_options(logs_parser)
+
     review_parser = subparsers.add_parser("review")
     review_parser.add_argument("--dry-run", action="store_true")
     review_parser.add_argument(

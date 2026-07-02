@@ -1494,8 +1494,8 @@ def test_ensure_validation_commands_pass_accepts_passing_commands(
     ensure_validation_commands_pass(
         _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), runner
     )
-    assert ["bash", "-lc", "demo run"] in runner.calls
-    assert ["bash", "-lc", "demo serve"] in runner.calls
+    assert ["bash", "-lc", "demo run"] in runner.raw_calls
+    assert ["bash", "-lc", "demo serve"] in runner.raw_calls
 
 
 def test_ensure_validation_commands_pass_skips_when_opted_out(
@@ -1551,15 +1551,15 @@ def test_ensure_validation_commands_pass_caches_pass_on_clean_tree(
     ensure_validation_commands_pass(
         _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), first
     )
-    assert ["bash", "-lc", "demo run"] in first.calls
+    assert ["bash", "-lc", "demo run"] in first.raw_calls
     assert (tmp_path / ".iar" / "rv_reexec_cache.json").exists()
 
     second = FakeProcessRunner(responses=responses)
     ensure_validation_commands_pass(
         _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), second
     )
-    assert ["bash", "-lc", "demo run"] not in second.calls
-    assert ["bash", "-lc", "demo serve"] not in second.calls
+    assert ["bash", "-lc", "demo run"] not in second.raw_calls
+    assert ["bash", "-lc", "demo serve"] not in second.raw_calls
 
 
 def test_ensure_validation_commands_pass_reruns_when_tree_changes(
@@ -1576,7 +1576,7 @@ def test_ensure_validation_commands_pass_reruns_when_tree_changes(
     ensure_validation_commands_pass(
         _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), second
     )
-    assert ["bash", "-lc", "demo run"] in second.calls
+    assert ["bash", "-lc", "demo run"] in second.raw_calls
 
 
 def test_ensure_validation_commands_pass_does_not_cache_dirty_tree(
@@ -1596,7 +1596,7 @@ def test_ensure_validation_commands_pass_does_not_cache_dirty_tree(
     ensure_validation_commands_pass(
         _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, AppConfig(), runner
     )
-    assert ["bash", "-lc", "demo run"] in runner.calls
+    assert ["bash", "-lc", "demo run"] in runner.raw_calls
     assert not (tmp_path / ".iar" / "rv_reexec_cache.json").exists()
 
 
@@ -1612,14 +1612,14 @@ def test_ensure_validation_commands_pass_cache_disabled_always_reruns(
     ensure_validation_commands_pass(
         _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, config, first
     )
-    assert ["bash", "-lc", "demo run"] in first.calls
+    assert ["bash", "-lc", "demo run"] in first.raw_calls
     assert not (tmp_path / ".iar" / "rv_reexec_cache.json").exists()
 
     second = FakeProcessRunner(responses=responses)
     ensure_validation_commands_pass(
         _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, config, second
     )
-    assert ["bash", "-lc", "demo run"] in second.calls
+    assert ["bash", "-lc", "demo run"] in second.raw_calls
 
 
 def test_render_structured_evidence_comment_groups_by_item(

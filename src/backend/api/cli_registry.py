@@ -1,11 +1,14 @@
-"""Implementation of the ``iar registry`` subcommands.
+"""Implementation of the ``iar registry`` and ``iar logs`` subcommands.
 
-Provides ``scan``, ``sync``, ``reinit``, and ``remove`` for managing the
-repository registry in ``config.toml``.
+Provides ``scan``, ``sync``, ``reinit``, ``remove``, ``logs``, and ``daemon
+status`` for managing the repository registry in ``config.toml`` and viewing
+managed process logs.
 """
 
 from __future__ import annotations
 
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,13 +18,16 @@ from backend.core.shared.interfaces.runner_console import (
     RunnerProcessRecord,
 )
 from backend.core.use_cases.console_processes import (
+    _DEFAULT_LOG_CHUNK_BYTES,
     start_runner_process,
     stop_runner_process,
+    tail_runner_log,
 )
 from backend.engines.agent_runner.factory import (
     create_process_supervisor,
     create_registry_editor,
     load_fresh_agent_runner_settings,
+    resolve_project_root_path,
     resolve_registry_config_toml_path,
     resolve_repository_targets,
     resolve_repository_targets_with_diagnostics,
@@ -483,6 +489,7 @@ def _run_daemon_status_command(
     table.add_column("pid", justify="right")
     table.add_column("process_id")
     table.add_column("started_at")
+    table.add_column("log_path", overflow="fold")
     table.add_column("executable", overflow="fold")
     table.add_column("command", overflow="fold")
 
@@ -493,6 +500,7 @@ def _run_daemon_status_command(
             else "[yellow]unmanaged running[/]"
         )
         executable = _resolve_executable_from_command(record.command)
+        log_path_display = record.log_path or "-"
         table.add_row(
             record.repo_id,
             record.kind,
@@ -500,9 +508,236 @@ def _run_daemon_status_command(
             str(record.pid),
             record.process_id,
             record.started_at,
+            log_path_display,
             executable,
             " ".join(record.command),
         )
 
     console.print(table)
     return 0
+
+
+_LOGS_DEFAULT_LINES = 200
+_LOGS_POLL_INTERVAL_SECONDS = 1.0
+
+
+def _normalize_process_kind(record_kind: RunnerProcessKind | str) -> str:
+    """Return the string value of a process kind, accepting enum or string."""
+    if isinstance(record_kind, str):
+        return record_kind
+    return record_kind.value
+
+
+def _select_logs_record(
+    records: list[RunnerProcessRecord], repo_id: str, kind: str
+) -> RunnerProcessRecord | None:
+    """Select the most relevant record for ``iar logs`` display.
+
+    Preference order:
+
+    1. The newest running record for ``(repo_id, kind)``.
+    2. Otherwise the newest historical record with a non-empty ``log_path``
+       (so the user can still inspect past output and ``-f`` to EOF).
+    3. Otherwise ``None`` — caller renders the fallback hint.
+    """
+    matching = [
+        record
+        for record in records
+        if record.repo_id == repo_id and _normalize_process_kind(record.kind) == kind
+    ]
+    if not matching:
+        return None
+    running = [record for record in matching if record.status == "running"]
+    if running:
+        return running[-1]
+    with_log = [record for record in matching if record.log_path]
+    if with_log:
+        return with_log[-1]
+    return None
+
+
+def _compute_tail_window_offset(log_path: str, lines: int) -> int:
+    """Return the byte offset where the tail reader should start reading.
+
+    Reads ``Path(log_path).stat().st_size`` only (no file open), so the CLI
+    stays inside the api→infra boundary while still honouring very large
+    logs that exceed the default 64 KiB chunk window.
+    """
+    if lines <= 0:
+        return 0
+    try:
+        file_size = Path(log_path).stat().st_size
+    except OSError:
+        return 0
+    return max(0, file_size - _DEFAULT_LOG_CHUNK_BYTES)
+
+
+def _trim_to_last_lines(content: str, lines: int) -> str:
+    """Return ``content`` keeping only its trailing ``lines`` lines."""
+    if lines <= 0 or not content:
+        return content
+    split_lines = content.splitlines()
+    if len(split_lines) <= lines:
+        return content
+    return "\n".join(split_lines[-lines:]) + "\n"
+
+
+def _format_logs_initial_payload(
+    *,
+    initial_chunk: Any,
+    log_path: str,
+    requested_start_offset: int,
+    lines: int,
+) -> str:
+    """Render the initial tail payload, prefixing a truncation notice when needed."""
+    pieces: list[str] = []
+    if requested_start_offset > 0 and initial_chunk.content:
+        pieces.append(f"[dim](earlier log lines omitted; see {log_path})[/]\n")
+    trimmed = _trim_to_last_lines(initial_chunk.content, lines)
+    if trimmed and not trimmed.endswith("\n"):
+        trimmed = trimmed + "\n"
+    pieces.append(trimmed)
+    return "".join(pieces)
+
+
+def _print_logs_fallback(repo_id: str, kind: str) -> int:
+    """Print a fallback hint when no running or historical log is available."""
+    supervisor = create_process_supervisor()
+    all_records = supervisor.list_processes()
+    kind_records = sorted(
+        [
+            r
+            for r in all_records
+            if r.repo_id == repo_id and _normalize_process_kind(r.kind) == kind
+        ],
+        key=lambda r: r.started_at or "",
+        reverse=True,
+    )
+    recent_with_log = next(
+        (r for r in kind_records if r.log_path and Path(r.log_path).exists()),
+        None,
+    )
+    if recent_with_log:
+        console.print(
+            f"[yellow]No running {kind} process for '{repo_id}'.[/]\n"
+            f"Most recent process log: [cyan]{recent_with_log.log_path}[/]"
+        )
+    else:
+        # Resolve the daily app-log path through the engines layer
+        # (resolve_project_root_path keeps api→core→engines→infra direction
+        # intact). The format mirrors infrastructure/logging/logger.py:
+        # ``<log_dir>/app-YYYY-MM-DD.log`` where ``log_dir`` defaults to
+        # ``<project_root>/logs``.
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        app_log_path = resolve_project_root_path() / "logs" / f"app-{today_str}.log"
+        console.print(
+            f"[yellow]No running {kind} process for '{repo_id}' "
+            "and no process log records found.[/]\n"
+            f"Global app log: [cyan]{app_log_path}[/]"
+        )
+    return 0
+
+
+def _run_logs_command(
+    parsed: argparse.Namespace,
+    process_runner: IProcessRunner,
+    runner_settings: Any,
+    repo_id: str,
+    repo_override: str | None,
+) -> int:
+    """Print the recent log of a managed daemon / review-daemon process."""
+    del (
+        process_runner
+    )  # Unused; kept for dispatch signature parity with sibling handlers.
+
+    supervisor = create_process_supervisor()
+
+    contexts = resolve_repository_targets(
+        runner_settings,
+        repo_id=repo_id,
+        repo_path_override=repo_override,
+        all_repositories=getattr(parsed, "all_repositories", False),
+    )
+    if len(contexts) != 1:
+        error_console.print(
+            "[red]iar logs requires exactly one target repository. "
+            "Use --repo or --repo-id to specify.[/]"
+        )
+        return 1
+    context = contexts[0]
+
+    kind = getattr(parsed, "kind", _DAEMON_KIND) or _DAEMON_KIND
+    if kind not in (_DAEMON_KIND, _REVIEW_DAEMON_KIND):
+        error_console.print(
+            f"[red]Unsupported --kind value:[/] {kind!r}. "
+            f"Use '{_DAEMON_KIND}' or '{_REVIEW_DAEMON_KIND}'."
+        )
+        return 1
+
+    lines = int(getattr(parsed, "lines", _LOGS_DEFAULT_LINES) or _LOGS_DEFAULT_LINES)
+    follow = bool(getattr(parsed, "follow", False))
+
+    records = supervisor.list_processes()
+    selected = _select_logs_record(records, context.repo_id, kind)
+
+    if (
+        selected is None
+        or not selected.log_path
+        or not Path(selected.log_path).exists()
+    ):
+        return _print_logs_fallback(context.repo_id, kind)
+
+    start_offset = _compute_tail_window_offset(selected.log_path, lines)
+    initial_chunk = tail_runner_log(
+        process_id=selected.process_id,
+        offset=start_offset,
+        supervisor=supervisor,
+        max_bytes=_DEFAULT_LOG_CHUNK_BYTES,
+    )
+
+    print(
+        _format_logs_initial_payload(
+            initial_chunk=initial_chunk,
+            log_path=selected.log_path,
+            requested_start_offset=start_offset,
+            lines=lines,
+        ),
+        end="",
+    )
+
+    next_offset = initial_chunk.next_offset
+    if not follow:
+        return 0
+
+    while True:
+        try:
+            time.sleep(_LOGS_POLL_INTERVAL_SECONDS)
+        except KeyboardInterrupt:
+            return 0
+        try:
+            latest = supervisor.get_process(selected.process_id)
+        except KeyError:
+            error_console.print(
+                f"[yellow]Process {selected.process_id} is no longer registered.[/]"
+            )
+            return 0
+        if latest is None:
+            error_console.print(
+                f"[yellow]Process {selected.process_id} is no longer registered.[/]"
+            )
+            return 0
+        chunk = tail_runner_log(
+            process_id=selected.process_id,
+            offset=next_offset,
+            supervisor=supervisor,
+            max_bytes=_DEFAULT_LOG_CHUNK_BYTES,
+        )
+        if chunk.content:
+            print(chunk.content, end="")
+        next_offset = chunk.next_offset
+        if latest.status != "running" and chunk.eof:
+            print(
+                f"\n[dim](process exited; status={latest.status}, "
+                f"exit_code={latest.exit_code}; tail ends here)[/]"
+            )
+            return 0

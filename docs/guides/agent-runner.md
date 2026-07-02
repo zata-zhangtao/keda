@@ -873,7 +873,7 @@ iar registry list
 
 #### 查看 daemon 进程明细（`iar daemon status`）
 
-`iar registry list` 只显示每个仓库 daemon / review-daemon 的汇总状态。如果你需要查看具体进程的 PID、启动时间、可执行路径、命令行，以及该进程是托管还是未托管，使用：
+`iar registry list` 只显示每个仓库 daemon / review-daemon 的汇总状态。如果你需要查看具体进程的 PID、启动时间、可执行路径、命令行、日志文件路径，以及该进程是托管还是未托管，使用：
 
 ```bash
 # 在当前仓库目录下查看当前仓库
@@ -890,16 +890,46 @@ iar daemon status --all
 
 ```
                                  Daemon status
-┏━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
-┃ repo_id ┃ kind          ┃ status        ┃  pid ┃ process_id ┃ started_at ┃ executable ┃ command              ┃
-┡━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
-│ keda-m… │ daemon        │ managed run…  │ 1234 │ abc123def  │ 2026-06-2… │ iar        │ iar daemon --repo-i… │
-│ keda-m… │ review_daemon │ unmanaged r…  │ 5678 │ unmanaged… │ 2026-06-2… │ /usr/bin…  │ /usr/bin/iar review… │
-└─────────┴───────────────┴───────────────┴──────┴────────────┴────────────┴────────────┴──────────────────────┘
+┏━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ repo_id ┃ kind          ┃ status        ┃  pid ┃ process_id ┃ started_at ┃ log_path ┃ executable           ┃ command              ┃
+┡━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ keda-m… │ daemon        │ managed run…  │ 1234 │ abc123def  │ 2026-06-2… │ …/proce… │ iar                  │ iar daemon --repo-i… │
+│ keda-m… │ review_daemon │ unmanaged r…  │ 5678 │ unmanaged… │ 2026-06-2… │ -        │ /usr/bin…            │ /usr/bin/iar review… │
+└─────────┴───────────────┴───────────────┴──────┴────────────┴────────────┴──────────┴──────────────────────┴──────────────────────┘
 ```
 
 - `managed running`：通过 `iar registry start` / `iar takeover` / console 启动的托管进程。
 - `unmanaged running`：直接在命令行执行 `iar daemon` / `iar review-daemon` 启动的进程。
+- `log_path`：托管进程的真实日志文件路径；`-` 表示未托管进程（无独立日志文件）。
+
+#### 查看进程日志（`iar logs`）
+
+`iar logs` 让你直接从命令行查看 daemon / review-daemon 的进程日志，无需拼接文件路径或打开 Web 管理终端。
+
+```bash
+# 查看当前仓库 daemon 的最近 200 行日志
+iar logs
+
+# 指定仓库和进程类型
+iar logs --repo-id keda-main --kind review_daemon
+
+# 查看最近 50 行
+iar logs --lines 50
+
+# 实时跟随日志（Ctrl-C 退出）
+iar logs -f
+
+# 跟随 review-daemon 日志
+iar logs --kind review_daemon -f
+```
+
+行为说明：
+
+- `iar logs` 默认查看 `daemon` 进程；`--kind review_daemon` 可切换到 review-daemon。
+- `-n / --lines N` 控制初始回看行数（默认 200）。
+- `-f / --follow` 在初始回看后持续输出新增内容，直到 Ctrl-C 或进程退出。
+- 无 running 进程时，打印回退指引（最近进程日志路径或全局 `logs/app-YYYY-MM-DD.log`），退出码 0。
+- 仓库目标推断逻辑与 `iar daemon` 一致：未指定 `--repo-id` 时从当前工作目录推断唯一 enabled 注册仓。
 
 `iar daemon` 本身继续作为启动 daemon 的快捷命令，等效于 `iar daemon run`。例如：
 

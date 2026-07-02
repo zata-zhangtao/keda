@@ -65,6 +65,13 @@ class IssueTypeChoice(str, Enum):
     bug = "bug"
 
 
+class LogsKindChoice(str, Enum):
+    """Kind selector for ``iar logs``."""
+
+    daemon = "daemon"
+    review_daemon = "review_daemon"
+
+
 _HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
 
 app = typer.Typer(
@@ -783,6 +790,43 @@ def daemon_status_command(
         daemon_command="status",
         all_repositories=all_repositories,
         **selector_options,
+    )
+
+
+@app.command("logs")
+def logs_command(
+    ctx: typer.Context,
+    kind: Annotated[
+        LogsKindChoice,
+        typer.Option("--kind", help="Process kind to tail: daemon or review_daemon."),
+    ] = LogsKindChoice.daemon,
+    lines: Annotated[
+        int,
+        typer.Option("--lines", "-n", help="Number of recent lines to print."),
+    ] = 200,
+    follow: Annotated[
+        bool,
+        typer.Option("-f", "--follow", help="Follow log output continuously."),
+    ] = False,
+    repo: RepoOption = None,
+    repo_id: RepoIdOption = None,
+    config: ConfigOption = None,
+) -> int:
+    """Print the most recent log lines for a managed daemon process.
+
+    By default the command targets the daemon for the repository inferred
+    from the current working directory.  Pass --kind review_daemon to tail
+    the review-daemon log instead.
+    """
+    selector_options = _typer_selector_options(
+        ctx, repo=repo, repo_id=repo_id, config=config
+    )
+    return _run_typer_command(
+        "logs",
+        **selector_options,
+        kind=_enum_value(kind),
+        lines=lines,
+        follow=follow,
     )
 
 
