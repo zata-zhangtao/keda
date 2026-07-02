@@ -4,27 +4,46 @@
 
 由于仓库使用 `mkdocstrings`，公共 Python API 必须使用 Google Style Docstrings。
 
-最低要求：
+### 语言
+
+**所有内部注释、docstring、JSDoc/TSDoc 统一使用中文**。中文信息密度高，团队阅读效率更好。专有名词（如 DTO、HTTP、Redis、SQLAlchemy）可保留英文。
+
+### 最低要求
 
 - 模块需要模块级 docstring
 - 公共类需要类 docstring
 - 公共函数需要完整 docstring
 - 公共函数 docstring 至少包含 `Args`、`Returns`，有异常时包含 `Raises`
 
-推荐结构：
+### 推荐结构
 
 ```python
 def function_name(param1: str, param2: int) -> bool:
-    """Executes a specific function.
+    """执行特定功能。
 
     Args:
-        param1 (str): Description of parameter 1.
-        param2 (int): Description of parameter 2.
+        param1 (str): 参数 1 的说明。
+        param2 (int): 参数 2 的说明。
 
     Returns:
-        bool: Description of the return value.
+        bool: 返回值的说明。
     """
 ```
+
+## Automated Checks
+
+注释/docstring 规范由 lint 工具强制执行：
+
+- **Python 后端**：启用 Ruff `pydocstyle` 规则（`D100`–`D107`、`D419`）。
+  - `D100`–`D104`：模块、公共类、公共函数、包 `__init__` 必须有 docstring。
+  - `D105`–`D107`：magic method、嵌套类、`__init__` 必须有 docstring。
+  - `D419`：禁止空 docstring。
+  - 配置位于 `pyproject.toml` 的 `[tool.ruff.lint]`。
+  - 运行 `uv run ruff check src/backend tests hooks` 或 `just lint --full` 进行检查。
+- **前端**：`frontend/` 启用 `eslint-plugin-jsdoc`。
+  - 公共函数、类、方法需要 JSDoc/TSDoc 说明。
+  - 当前为 `warn` 级别，后续随代码补齐可升级为 `error`。
+  - 运行 `cd frontend && npm run lint`。
 
 ## Inline Comments
 
@@ -34,10 +53,12 @@ def function_name(param1: str, param2: int) -> bool:
 - 说明边界条件或异常路径
 - 说明为什么这样做，而不是代码表面上做了什么
 
+**内联注释必须使用中文**（专有名词除外）。
+
 避免这种低信息量注释：
 
 ```python
-# Assign value to x
+# 把值赋给 x
 x = value
 ```
 

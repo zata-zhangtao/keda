@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -103,6 +103,9 @@ class RepositoryInitResult:
     config_path: Path
     config_text: str
     wrote_file: bool
+    repo_id: str | None = None
+    display_name: str | None = None
+    verification_commands: list[str] = field(default_factory=list)
 
 
 def detect_git_repository_root(
@@ -199,9 +202,24 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "worktree.reuse_command": "复用已有 worktree 时定位路径的命令",
     "worktree.path_command": "获取 worktree 绝对路径的命令",
     "runner.max_issues": "每次轮询每个仓库最多处理多少个 Issue",
+    "runner.max_concurrent_issues": (
+        "单轮内并行处理的 Issue 数量：1 为串行（默认）；>1 时同一轮并行跑多个 "
+        "Issue，仅 iar daemon --concurrency 未指定时作为默认值"
+    ),
     "runner.default_agent": "默认使用的 AI agent：auto / claude / codex / kimi",
     "runner.max_recovery_attempts": "Agent 失败后的最大重试次数",
     "runner.recovery_retry_delay_seconds": "每次重试前等待的秒数",
+    "runner.agent_fallback_order": (
+        "跨 agent fallback 链：主 agent 失败后依次尝试本机可用 agent（如 "
+        '["claude", "kimi", "codex"]），命令不存在则自动跳过；设为空列表可关闭切换'
+    ),
+    "runner.max_agent_switches": (
+        "最多切换 agent 次数（order=[a,b,c] 且此值=2 时最多尝试 3 个 agent）"
+    ),
+    "runner.transient_retry_attempts": (
+        "瞬时网络错误（socket 断开 / 5xx / 超时）的就地重试次数"
+    ),
+    "runner.transient_retry_delay_seconds": "瞬时错误每次重试前等待的秒数",
     "runner.verification_commands": "提交前自动运行的验证命令；任一命令失败会进入 recovery",
     "safety.auto_merge": "是否允许自动合并 PR（强烈建议保持 false）",
     "safety.forbidden_path_patterns": "提交前禁止变更的路径通配模式",
@@ -212,6 +230,13 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "validation.parse_evidence_format_with_agent": "是否用 agent 解析 PRD 中的格式要求",
     "validation.language": "证据 prompt 与 PR 评论的固定标签语言，如 zh-CN / en-US",
     "validation.structured_evidence": "是否要求带 iar:structured-evidence marker 的 Issue 提供 evidence.json manifest",
+    "validation.require_negative_control": "是否要求每个结构化证据项提供 negative_control（红→绿判别力,默认开;关掉则回退旧行为）",
+    "validation.reexecute_commands": "是否由 keda 复跑每个结构化证据项的 command 以确认其真的通过（默认开;关掉则只信 agent 证据文件）",
+    "validation.reexecute_timeout_seconds": "keda 复跑单条命令的超时秒数（默认 300;超时判失败,命令须为自终止的检查）",
+    "validation.reexecute_cache_enabled": "命中代码树指纹(HEAD^{tree})时跳过该项 RV 命令复跑,避免 blocked-continue/换 agent 重复跑（默认开;工作区脏则不缓存、照常复跑）",
+    "validation.verifier_enabled": "是否启用独立 verifier agent 复验（默认关;开启后在开 PR 前换一个 agent 对抗复验,red 自动打回 builder）",
+    "validation.verifier_agent": "verifier 用哪个 agent（auto=自动挑一个≠builder 的）",
+    "validation.verifier_timeout_seconds": "verifier agent 运行超时秒数（默认 1800）",
     "prompts.default_phase": "默认使用的 prompt 阶段",
     "prompts.phases": "自定义阶段模板，值为字符串或字符串列表",
     "pre_pr_review.enabled": "是否启用 Draft PR 创建前的 AI review",
@@ -595,7 +620,7 @@ def detect_verification_commands(repo_root_path: Path) -> list[str]:
 def build_repository_local_config_text(
     options: RepositoryInitOptions,
     process_runner: SubprocessRunner | None = None,
-) -> tuple[Path, str]:
+) -> tuple[Path, str, list[str]]:
     """Render repository-local IAR TOML for a Git repository.
 
     Args:
@@ -603,7 +628,8 @@ def build_repository_local_config_text(
         process_runner: Optional subprocess runner.
 
     Returns:
-        A tuple of the detected repository root path and rendered TOML text.
+        A tuple of the detected repository root path, rendered TOML text, and
+        the verification commands that were detected for the repository.
     """
     repo_root_path = detect_git_repository_root(options.cwd, process_runner)
     selected_remote = options.remote_override or _detect_default_remote(
@@ -618,6 +644,7 @@ def build_repository_local_config_text(
         repo_root_path, selected_remote, process_runner
     )
 
+    verification_commands = detect_verification_commands(repo_root_path)
     settings = AgentRunnerLocalSettings(
         repository=AgentRunnerRepositoryMetadataSettings(
             id=selected_repo_id,
@@ -629,9 +656,7 @@ def build_repository_local_config_text(
             base_branch=selected_base_branch,
         ),
         worktree=AgentRunnerWorktreeSettings(),
-        runner=AgentRunnerRunnerSettings(
-            verification_commands=detect_verification_commands(repo_root_path)
-        ),
+        runner=AgentRunnerRunnerSettings(verification_commands=verification_commands),
         safety=AgentRunnerSafetySettings(),
         validation=AgentRunnerValidationSettings(),
         prompts=AgentRunnerPromptSettings(),
@@ -642,7 +667,7 @@ def build_repository_local_config_text(
         deliberation=AgentRunnerDeliberationSettings(),
     )
 
-    return repo_root_path, settings_to_toml_string(settings)
+    return repo_root_path, settings_to_toml_string(settings), verification_commands
 
 
 def initialize_repository_local_config(
@@ -661,10 +686,30 @@ def initialize_repository_local_config(
     Raises:
         ValueError: If ``.iar.toml`` already exists and overwrite was not forced.
     """
-    repo_root_path, config_text = build_repository_local_config_text(
-        options, process_runner
+    repo_root_path, config_text, verification_commands = (
+        build_repository_local_config_text(options, process_runner)
     )
     config_path = repo_root_path / IAR_REPOSITORY_CONFIG_FILENAME
+    selected_remote = options.remote_override or _detect_default_remote(
+        repo_root_path, process_runner
+    )
+    detected_repo_id = _detect_repository_id(
+        repo_root_path, selected_remote, process_runner
+    )
+    selected_repo_id = options.repo_id_override or detected_repo_id
+    selected_display_name = options.display_name_override or repo_root_path.name
+
+    def _make_result(wrote_file: bool) -> RepositoryInitResult:
+        return RepositoryInitResult(
+            repo_root_path=repo_root_path,
+            config_path=config_path,
+            config_text=config_text,
+            wrote_file=wrote_file,
+            repo_id=selected_repo_id,
+            display_name=selected_display_name,
+            verification_commands=verification_commands,
+        )
+
     if config_path.exists() and not options.force and not options.dry_run:
         existing_text = config_path.read_text(encoding="utf-8")
         if existing_text != config_text:
@@ -672,27 +717,12 @@ def initialize_repository_local_config(
                 f"IAR local config already exists at {config_path}. "
                 "Use --force to overwrite it."
             )
-        return RepositoryInitResult(
-            repo_root_path=repo_root_path,
-            config_path=config_path,
-            config_text=config_text,
-            wrote_file=False,
-        )
+        return _make_result(wrote_file=False)
     if options.dry_run:
-        return RepositoryInitResult(
-            repo_root_path=repo_root_path,
-            config_path=config_path,
-            config_text=config_text,
-            wrote_file=False,
-        )
+        return _make_result(wrote_file=False)
 
     config_path.write_text(config_text, encoding="utf-8")
-    return RepositoryInitResult(
-        repo_root_path=repo_root_path,
-        config_path=config_path,
-        config_text=config_text,
-        wrote_file=True,
-    )
+    return _make_result(wrote_file=True)
 
 
 def _run_git(

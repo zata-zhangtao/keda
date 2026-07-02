@@ -34,6 +34,21 @@ _MAX_GH_RETRIES = 3
 # Delay between retries in seconds.
 _GH_RETRY_DELAY_SECONDS = 1.0
 
+#: Extracts the numeric comment ID from a GitHub issue comment URL.
+_COMMENT_ID_URL_PATTERN = re.compile(r"/issues/(?:\d+)#issuecomment-(\d+)")
+
+
+def _extract_comment_id_from_url(url: str) -> int | None:
+    """Return the numeric comment ID from a GitHub comment URL."""
+    match = _COMMENT_ID_URL_PATTERN.search(url)
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 # Patterns matched against combined stdout/stderr of a failed ``gh`` call to
 # decide whether the failure is likely transient and worth retrying.
 _RETRYABLE_GH_ERROR_PATTERNS = (
@@ -117,6 +132,7 @@ class LabelConfig:
     validation_passed: str = "validation/passed"
     group_prefix: str = "task-group/"
     rework_prd: str = "agent/rework-prd"
+    deliberate: str = "agent/deliberate"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",
@@ -460,6 +476,11 @@ class GitHubCliClient:
                 "Request the AI runner to generate or rewrite this Issue's PRD.",
             ),
             (
+                "agent/deliberate",
+                "D4C5F9",
+                "Issue needs multi-agent deliberation (Phase 0) before implementation.",
+            ),
+            (
                 "validation/pending",
                 "FBCA04",
                 "Realistic Validation evidence awaits human sign-off on the PR.",
@@ -498,6 +519,7 @@ class GitHubCliClient:
             "agent/blocked": labels.blocked,
             "agent/waiting": labels.waiting,
             "agent/rework-prd": labels.rework_prd,
+            "agent/deliberate": labels.deliberate,
             "validation/pending": labels.validation_pending,
             "validation/passed": labels.validation_passed,
         }
@@ -827,6 +849,74 @@ class GitHubCliClient:
         raw_data = json.loads(result.stdout or "{}")
         comments = raw_data.get("comments", [])
         return [str(c.get("body", "")) for c in comments if c.get("body")]
+
+    def list_issue_comment_entries(self, issue_number: int) -> list[tuple[int, str]]:
+        """Return (comment_id, body) entries for an Issue.
+
+        The numeric comment ID is parsed from the comment URL so callers can
+        edit comments via the REST API. Comments without a usable URL are
+        included with ``comment_id=0`` so ``list_issue_comments`` semantics are
+        preserved and callers can still see the body.
+        """
+        result = self._run_with_retry(
+            [
+                "gh",
+                "issue",
+                "view",
+                str(issue_number),
+                "--comments",
+                "--json",
+                "comments",
+            ],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code != 0:
+            return []
+        raw_data = json.loads(result.stdout or "{}")
+        comments = raw_data.get("comments", [])
+        entries: list[tuple[int, str]] = []
+        for raw_comment in comments:
+            url = str(raw_comment.get("url", ""))
+            comment_id = _extract_comment_id_from_url(url) or 0
+            body = str(raw_comment.get("body", ""))
+            entries.append((comment_id, body))
+        return entries
+
+    def edit_issue_comment(self, comment_id: int, body: str) -> None:
+        """Edit an existing Issue comment."""
+        owner_repo = self._get_owner_repo()
+        with tempfile.TemporaryDirectory(prefix="iar-comment-edit-") as temp_dir:
+            body_path = self._write_body_file(temp_dir, "comment.md", body)
+            self._run_with_retry(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{owner_repo}/issues/comments/{comment_id}",
+                    "-X",
+                    "PATCH",
+                    "-F",
+                    f"body@{body_path}",
+                ],
+                cwd=self.repo_path,
+            )
+
+    def _get_owner_repo(self) -> str:
+        """Return 'owner/name' for the current repository."""
+        result = self._run_with_retry(
+            ["gh", "repo", "view", "--json", "nameWithOwner"],
+            cwd=self.repo_path,
+            check=False,
+        )
+        if result.return_code != 0:
+            raise RuntimeError(
+                f"Unable to determine repository owner/name: {result.stderr}"
+            )
+        raw_data = json.loads(result.stdout or "{}")
+        owner_repo = raw_data.get("nameWithOwner")
+        if not owner_repo:
+            raise RuntimeError("gh repo view did not return nameWithOwner")
+        return str(owner_repo)
 
     def comment_pr(self, pr_number: int, body: str) -> None:
         """Post a Markdown comment to a Pull Request."""

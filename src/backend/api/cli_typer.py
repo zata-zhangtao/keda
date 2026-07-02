@@ -9,7 +9,6 @@ entry point behave the same way.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
 from enum import Enum
 from importlib import metadata as importlib_metadata
@@ -17,9 +16,10 @@ from typing import Annotated, Any
 
 import typer
 from typer import _click as typer_click
-from typer.completion import get_completion_script
-
 from backend.api.cli import _run_parsed_command, error_console
+from backend.api.cli_completion import (
+    register_completion_commands,
+)
 
 
 def _resolve_keda_version() -> str:
@@ -65,14 +65,6 @@ class IssueTypeChoice(str, Enum):
     bug = "bug"
 
 
-class CompletionShellChoice(str, Enum):
-    """Shells supported by the explicit completion installer."""
-
-    bash = "bash"
-    zsh = "zsh"
-    fish = "fish"
-
-
 class LogsKindChoice(str, Enum):
     """Kind selector for ``iar logs``."""
 
@@ -85,7 +77,7 @@ _HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
 app = typer.Typer(
     name="iar",
     help="Issue Agent Runner CLI.",
-    no_args_is_help=True,
+    no_args_is_help=False,
     rich_markup_mode="rich",
     context_settings=_HELP_CONTEXT,
 )
@@ -122,13 +114,20 @@ workflow_app = typer.Typer(
     no_args_is_help=True,
     context_settings=_HELP_CONTEXT,
 )
+loop_app = typer.Typer(
+    help="Register and manage recurring task generators.",
+    no_args_is_help=True,
+    context_settings=_HELP_CONTEXT,
+)
 app.add_typer(labels_app, name="labels")
 app.add_typer(issue_app, name="issue")
 app.add_typer(completion_app, name="completion")
+register_completion_commands(completion_app)
 app.add_typer(worktree_app, name="worktree")
 app.add_typer(registry_app, name="registry")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(workflow_app, name="workflow")
+app.add_typer(loop_app, name="loop")
 
 RepoOption = Annotated[
     str | None, typer.Option("--repo", help="Target repository path.")
@@ -162,9 +161,15 @@ DaemonIntervalOption = Annotated[
     int | None,
     typer.Option("--interval", help="Polling interval."),
 ]
-CompletionShellOption = Annotated[
-    CompletionShellChoice,
-    typer.Option("--shell", "-s", help="Shell to generate completion for."),
+ConcurrencyOption = Annotated[
+    int | None,
+    typer.Option(
+        "--concurrency",
+        help=(
+            "Issues to process in parallel per pass (default: "
+            "[agent_runner.runner].max_concurrent_issues; 1 = sequential)."
+        ),
+    ),
 ]
 
 
@@ -213,92 +218,42 @@ def _run_typer_repository_command(
     return _run_typer_command(command, **selector_options, **kwargs)
 
 
-def _completion_script(shell: CompletionShellChoice) -> str:
-    """Return the shell completion script for the iAR executable."""
-    return get_completion_script(
-        prog_name="iar",
-        complete_var="_IAR_COMPLETE",
-        shell=_enum_value(shell),
-    )
-
-
-def _append_unique_line(file_path: Path, line: str) -> bool:
-    """Append a shell profile line when it is not already present."""
-    existing_text = ""
-    if file_path.exists():
-        existing_text = file_path.read_text(encoding="utf-8")
-        if line in existing_text.splitlines():
-            return False
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    with file_path.open("a", encoding="utf-8") as profile_file:
-        if existing_text and not existing_text.endswith("\n"):
-            profile_file.write("\n")
-        profile_file.write(f"{line}\n")
-    return True
-
-
-def _install_completion_script(
-    shell: CompletionShellChoice,
-) -> tuple[Path, Path | None]:
-    """Install iAR shell completion and return the script/profile paths."""
-    script_content = _completion_script(shell)
-    home_path = Path.home()
-    if shell is CompletionShellChoice.zsh:
-        completion_dir = home_path / ".zsh" / "completions"
-        completion_path = completion_dir / "_iar"
-        completion_path.parent.mkdir(parents=True, exist_ok=True)
-        completion_path.write_text(f"{script_content}\n", encoding="utf-8")
-        zshrc_path = home_path / ".zshrc"
-        _append_unique_line(zshrc_path, "autoload -Uz compinit && compinit")
-        source_line = f'[ -f "{completion_path}" ] && source "{completion_path}"'
-        _append_unique_line(zshrc_path, source_line)
-        return completion_path, zshrc_path
-    if shell is CompletionShellChoice.bash:
-        completion_path = home_path / ".config" / "iar" / "iar_completion.bash"
-        completion_path.parent.mkdir(parents=True, exist_ok=True)
-        completion_path.write_text(f"{script_content}\n", encoding="utf-8")
-        bashrc_path = home_path / ".bashrc"
-        source_line = f'[ -f "{completion_path}" ] && source "{completion_path}"'
-        _append_unique_line(bashrc_path, source_line)
-        return completion_path, bashrc_path
-    completion_path = home_path / ".config" / "fish" / "completions" / "iar.fish"
-    completion_path.parent.mkdir(parents=True, exist_ok=True)
-    completion_path.write_text(f"{script_content}\n", encoding="utf-8")
-    return completion_path, None
-
-
-@app.callback()
+@app.callback(invoke_without_command=True)
 def _app_callback(
     ctx: typer.Context,
     repo: RepoOption = None,
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
+    agent: Annotated[
+        RunAgentChoice | None,
+        typer.Option(
+            "--agent",
+            help="Override the REPL default agent. "
+            "Accepts codex/claude/kimi; 'auto' falls back to "
+            "[agent_runner.repl].default_agent.",
+        ),
+    ] = None,
 ) -> None:
-    """Store top-level options so legacy and modern forms both work."""
+    """Store top-level options and dispatch the no-arg REPL entrypoint."""
     ctx.obj = {"repo": repo, "repo_id": repo_id, "config": config}
-
-
-@completion_app.command("show")
-def completion_show_command(
-    shell: CompletionShellOption = CompletionShellChoice.zsh,
-) -> int:
-    """Print a shell completion script."""
-    typer.echo(_completion_script(shell))
-    return 0
-
-
-@completion_app.command("install")
-def completion_install_command(
-    shell: CompletionShellOption = CompletionShellChoice.zsh,
-) -> int:
-    """Install shell completion for the current user."""
-    completion_path, profile_path = _install_completion_script(shell)
-    typer.echo(f"Installed {shell.value} completion: {completion_path}")
-    if profile_path is not None:
-        typer.echo(f"Reload your shell with: source {profile_path}")
-    else:
-        typer.echo("Open a new terminal session to activate completion.")
-    return 0
+    if ctx.invoked_subcommand is not None:
+        return
+    # No subcommand and the user did not pass --help. The REPL entrypoint
+    # only makes sense inside an interactive terminal; otherwise fall back
+    # to Typer's standard help-and-exit behaviour so CI / pipe-driven
+    # scripts keep working.
+    agent_override = _enum_value(agent) if agent is not None else None
+    if sys.stdin.isatty():
+        _run_typer_command(
+            "repl",
+            repo=repo,
+            repo_id=repo_id,
+            config=config,
+            agent=agent_override,
+        )
+        return
+    typer.echo(ctx.get_help())
+    raise typer.Exit(code=1)
 
 
 @app.command("init")
@@ -740,6 +695,7 @@ def _run_daemon_command(
     repo_id: str | None,
     config: str | None,
     all_repositories: bool,
+    concurrency: int | None = None,
 ) -> int:
     """Run daemon or review-daemon through the shared dispatch path."""
     return _run_typer_repository_command(
@@ -752,6 +708,7 @@ def _run_daemon_command(
         agent=_enum_value(agent),
         max_issues=max_issues,
         all_repositories=all_repositories,
+        concurrency=concurrency,
     )
 
 
@@ -761,6 +718,7 @@ def daemon_callback(
     interval: DaemonIntervalOption = None,
     agent: RunAgentOption = RunAgentChoice.auto,
     max_issues: MaxIssuesOption = None,
+    concurrency: ConcurrencyOption = None,
     repo: RepoOption = None,
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
@@ -779,6 +737,7 @@ def daemon_callback(
         repo_id=repo_id,
         config=config,
         all_repositories=all_repositories,
+        concurrency=concurrency,
     )
     raise typer.Exit(code=exit_code)
 
@@ -789,12 +748,17 @@ def daemon_run_command(
     interval: DaemonIntervalOption = None,
     agent: RunAgentOption = RunAgentChoice.auto,
     max_issues: MaxIssuesOption = None,
+    concurrency: ConcurrencyOption = None,
     repo: RepoOption = None,
     repo_id: RepoIdOption = None,
     config: ConfigOption = None,
     all_repositories: AllRepositoriesOption = False,
 ) -> int:
-    """Run the agent runner continuously."""
+    """Run the agent runner continuously.
+
+    Defaults to the current initialized repository; pass --all to target
+    every enabled registry entry instead.
+    """
     return _run_daemon_command(
         ctx,
         command="daemon",
@@ -805,6 +769,7 @@ def daemon_run_command(
         repo_id=repo_id,
         config=config,
         all_repositories=all_repositories,
+        concurrency=concurrency,
     )
 
 
@@ -901,7 +866,11 @@ def review_daemon_command(
     config: ConfigOption = None,
     all_repositories: AllRepositoriesOption = False,
 ) -> int:
-    """Run supervisor review continuously."""
+    """Run supervisor review continuously.
+
+    Defaults to the current initialized repository; pass --all to target
+    every enabled registry entry instead.
+    """
     return _run_daemon_command(
         ctx,
         command="review-daemon",
@@ -1001,6 +970,31 @@ def ask_command(
         execute=execute,
         yes=yes,
         output=output,
+    )
+
+
+@app.command("repl")
+def repl_command(
+    ctx: typer.Context,
+    agent: Annotated[
+        RunAgentChoice,
+        typer.Option(
+            "--agent",
+            help="Override the REPL agent (defaults to [agent_runner.repl].default_agent).",
+        ),
+    ] = RunAgentChoice.claude,
+    repo: RepoOption = None,
+    repo_id: RepoIdOption = None,
+    config: ConfigOption = None,
+) -> int:
+    """Run the interactive REPL session."""
+    selector_options = _typer_selector_options(
+        ctx, repo=repo, repo_id=repo_id, config=config
+    )
+    return _run_typer_command(
+        "repl",
+        **selector_options,
+        agent=_enum_value(agent),
     )
 
 
@@ -1214,6 +1208,137 @@ def takeover_command(
         repos=tuple(repos or ()),
         start_daemons=not no_start,
         dry_run=dry_run,
+    )
+
+
+@loop_app.command("create")
+def loop_create_command(
+    loop_id: Annotated[str, typer.Argument(help="Short kebab-case identifier.")],
+    recipe: Annotated[
+        str, typer.Option("--recipe", help="Path to the loop recipe Markdown file.")
+    ],
+    cron: Annotated[
+        str | None,
+        typer.Option("--cron", help="5-field cron expression overriding the recipe."),
+    ] = None,
+    every: Annotated[
+        str | None,
+        typer.Option(
+            "--every",
+            help="Interval shorthand ('10m'/'1h'/'1d') overriding the recipe.",
+        ),
+    ] = None,
+    repo_id: Annotated[
+        str | None,
+        typer.Option(
+            "--repo-id",
+            help="Override the recipe's repo_id when registering the loop.",
+        ),
+    ] = None,
+    repo: Annotated[
+        str | None,
+        typer.Option("--repo", help="Override the target repository path."),
+    ] = None,
+    force: Annotated[
+        bool, typer.Option("--force", help="Replace an existing loop entry.")
+    ] = False,
+) -> int:
+    """Register a loop recipe as a persistent scheduler entry."""
+    return _run_typer_command(
+        "loop create",
+        loop_id=loop_id,
+        recipe=recipe,
+        cron=cron,
+        every=every,
+        loop_repo_id=repo_id,
+        loop_repo=repo,
+        force=force,
+    )
+
+
+@loop_app.command("list")
+def loop_list_command() -> int:
+    """List all registered loops with their schedules and next fires."""
+    return _run_typer_command("loop list")
+
+
+@loop_app.command("cancel")
+def loop_cancel_command(
+    loop_id: Annotated[str, typer.Argument(help="Identifier of the loop to cancel.")],
+) -> int:
+    """Remove a loop entry from the local scheduler state."""
+    return _run_typer_command("loop cancel", loop_id=loop_id)
+
+
+@loop_app.command("run")
+def loop_run_command(
+    loop_id: Annotated[str, typer.Argument(help="Identifier of the loop to fire.")],
+    now: Annotated[
+        bool,
+        typer.Option("--now", help="Fire the loop immediately (required by the MVP)."),
+    ] = True,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Render the PRD and report what would happen, no side effects.",
+        ),
+    ] = False,
+    repo_id: Annotated[
+        str | None, typer.Option("--repo-id", help="Override the recipe's repo_id.")
+    ] = None,
+    repo: Annotated[
+        str | None, typer.Option("--repo", help="Override the target repository path.")
+    ] = None,
+) -> int:
+    """Trigger a loop manually for testing or recovery."""
+    return _run_typer_command(
+        "loop run",
+        loop_id=loop_id,
+        now=now,
+        dry_run=dry_run,
+        loop_repo_id=repo_id,
+        loop_repo=repo,
+    )
+
+
+@app.command("loop-daemon")
+def loop_daemon_command(
+    interval: Annotated[
+        int | None,
+        typer.Option(
+            "--interval",
+            help="Seconds between polling passes (default: 60).",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Inspect the next fire plan once and exit without writing anything.",
+        ),
+    ] = False,
+    repo_id: Annotated[
+        str | None,
+        typer.Option(
+            "--repo-id",
+            help="Override the repository used to resolve all loop targets.",
+        ),
+    ] = None,
+    repo: Annotated[
+        str | None,
+        typer.Option(
+            "--repo", help="Override the local path of the target repository."
+        ),
+    ] = None,
+) -> int:
+    """Run the loop scheduler continuously (polls ~/.iar/loop-state.json)."""
+    return _run_typer_command(
+        "loop-daemon",
+        interval=interval,
+        dry_run=dry_run,
+        loop_repo_id=repo_id,
+        loop_repo=repo,
     )
 
 

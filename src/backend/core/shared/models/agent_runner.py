@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from backend.core.shared.models.agent_decision import InteractiveDecisionConfig
+from backend.core.shared.models.agent_decision import (
+    InteractiveDecisionConfig,
+    ReplConfig,
+)
 from backend.core.shared.models.agent_deliberation import DeliberationConfig
 
 
@@ -36,18 +39,35 @@ class FailureType(Enum):
     NO_COMMITS = "no_commits"
     VERIFICATION_FAILED = "verification_failed"
     AGENT_ERROR = "agent_error"
+    TRANSIENT = "transient"
+    PROVIDER_CAPACITY = "provider_capacity"
     UNRECOVERABLE = "unrecoverable"
     FORBIDDEN_BLOCKED = "forbidden_blocked"
 
 
 @dataclass(frozen=True)
 class AttemptResult:
-    """Record of a single agent execution attempt."""
+    """Record of a single agent execution attempt.
+
+    Attributes:
+        attempt_number: 1-based attempt index within a single agent's run.
+        failure_type: Classified outcome of the attempt.
+        recovered: Whether this attempt recovered from a prior failure.
+        detail: Human-readable detail rendered into the failure comment.
+        agent: Name of the agent that produced this attempt.
+        started_at: ISO-8601 UTC timestamp when the attempt started.
+        finished_at: ISO-8601 UTC timestamp when the attempt finished.
+        duration_seconds: Wall-clock seconds spent in the attempt.
+    """
 
     attempt_number: int
     failure_type: FailureType
     recovered: bool
     detail: str
+    agent: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    duration_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -126,6 +146,7 @@ class LabelConfig:
     validation_passed: str = "validation/passed"
     group_prefix: str = "task-group/"
     rework_prd: str = "agent/rework-prd"
+    deliberate: str = "agent/deliberate"
     agent_labels: dict[str, str] = field(
         default_factory=lambda: {
             "codex": "agent/codex",
@@ -165,12 +186,43 @@ class WorktreeConfig:
 
 @dataclass(frozen=True)
 class RunnerConfig:
-    """Local runner behavior."""
+    """Local runner behavior.
+
+    Attributes:
+        agent_fallback_order: Ordered agents to try for one Issue after the
+            primary agent. Empty disables cross-agent fallback (single-agent
+            behavior). The primary agent is prepended and de-duplicated by
+            ``resolve_agent_fallback_order``.
+        max_agent_switches: Maximum number of agent switches before the Issue
+            is marked failed.
+        transient_retry_attempts: In-place retries granted to transient
+            network/transport errors (Level 1 of the escalation ladder).
+        transient_retry_delay_seconds: Backoff between transient retries.
+        max_concurrent_issues: Maximum Issues processed in parallel within a
+            single daemon pass. ``1`` keeps the sequential path (zero
+            regression); ``> 1`` enables the thread-pool parallel path.
+        timeout_seconds: Wall-clock timeout for a single agent execution.
+        inactivity_timeout_seconds: Kill the agent if it produces no stdout or
+            stderr for this many seconds.
+        fix_timeout_seconds: Optional shorter timeout for the Fix Agent phase.
+            When ``None``, falls back to ``timeout_seconds``.
+        recovery_timeout_seconds: Optional timeout for the full Recovery Agent
+            phase. When ``None``, falls back to ``timeout_seconds``.
+    """
 
     max_issues: int = 1
+    max_concurrent_issues: int = 1
     default_agent: str = "auto"
     max_recovery_attempts: int = 5
     recovery_retry_delay_seconds: int = 30
+    agent_fallback_order: tuple[str, ...] = ("claude", "kimi", "codex")
+    max_agent_switches: int = 2
+    transient_retry_attempts: int = 2
+    transient_retry_delay_seconds: int = 10
+    timeout_seconds: int = 14400
+    fix_timeout_seconds: int | None = None
+    recovery_timeout_seconds: int | None = None
+    inactivity_timeout_seconds: int = 1200
     verification_commands: tuple[str, ...] = (
         "git diff --check",
         "uv run mkdocs build",
@@ -217,6 +269,9 @@ class ValidationConfig:
     ``language`` controls the fixed labels in prompts and PR evidence comments.
     ``structured_evidence`` enables the ``evidence.json`` manifest requirement
     for new Issues that carry the ``iar:structured-evidence`` marker.
+    ``require_negative_control`` (default on) makes the gate reject any
+    structured-evidence item lacking a ``negative_control`` (red→green proof);
+    set it off to opt out per repository.
     """
 
     enabled: bool = True
@@ -226,6 +281,13 @@ class ValidationConfig:
     parse_evidence_format_with_agent: bool = True
     language: str = "zh-CN"
     structured_evidence: bool = True
+    require_negative_control: bool = True
+    reexecute_commands: bool = True
+    reexecute_timeout_seconds: int = 300
+    reexecute_cache_enabled: bool = True
+    verifier_enabled: bool = False
+    verifier_agent: str = "auto"
+    verifier_timeout_seconds: int = 1800
 
 
 @dataclass(frozen=True)
@@ -382,9 +444,41 @@ class GeneratedPrContent:
 
 
 @dataclass(frozen=True)
+class RepositoryIdentity:
+    """Per-context view of a repository's identity (core/ dataclass).
+
+    The ``engines`` layer materialises this from the Pydantic
+    ``AgentRunnerRepositorySettings`` during ``merge_repository_config``
+    so that ``core/`` use cases can look up the GitHub owner/repo label
+    without depending on ``infrastructure/`` Pydantic types.
+
+    Attributes:
+        id: Optional iar-internal identifier (e.g. ``"keda-main"``). Falls
+            back to ``path`` when the registry entry did not set one.
+        path: Resolved absolute path to the repository working tree.
+        display_name: Human-readable label used by status surfaces.
+        github_repo: Optional ``owner/name`` string consumed by
+            ``gh pr list --repo``. ``None`` means the PR column should
+            remain empty with a one-shot stderr warning.
+    """
+
+    id: str | None
+    path: str
+    display_name: str | None
+    github_repo: str | None = None
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Application configuration."""
 
+    # ``repositories`` is the merged per-context view of repository identity
+    # (keyed by repo_id or path). It is **not** the same field as
+    # ``AgentRunnerSettings.repositories`` (the load-time registry); that
+    # field is Pydantic and lives in ``infrastructure/``. Keeping
+    # ``RepositoryIdentity`` as a frozen dataclass in ``core/`` avoids
+    # ``core/`` -> ``infrastructure/`` reverse dependency.
+    repositories: dict[str, RepositoryIdentity] = field(default_factory=dict)
     labels: LabelConfig = LabelConfig()
     git: GitConfig = GitConfig()
     worktree: WorktreeConfig = WorktreeConfig()
@@ -400,6 +494,7 @@ class AppConfig:
     interactive_decision: InteractiveDecisionConfig = field(
         default_factory=InteractiveDecisionConfig
     )
+    repl: ReplConfig = field(default_factory=ReplConfig)
     deliberation: DeliberationConfig = field(default_factory=DeliberationConfig)
 
 

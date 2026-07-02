@@ -1,6 +1,7 @@
 # PRD: iar 仓库标识到 GitHub owner/repo 的解析
 
-- GitHub Issue: TBD
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/116
+
 
 ## 1. Introduction & Goals
 
@@ -22,10 +23,10 @@
 
 除单元测试外，本 PRD 要求通过**真实项目入口点**验证关键行为，确保真实使用路径生效，而非仅在隔离 fixture 中通过。
 
-- [ ] **无选择器 ad-hoc 路径真实验证**：在 `/Users/zata/code/keda`（已注册 `keda-main`，无 `--repo-id`）下跑 `iar issue list`，验证返回 `RepositoryRunContext.github_repo` 已被 `merge_repository_config` 注入，且 PR 列非空。
-- [ ] **`--all-registered` 多仓路径真实验证**：跑 `iar issue list --all-registered`，验证多仓（keda-main、freshai、fsense）每行 PR 列各自连接正确 owner/repo。
-- [ ] **缺失降级真实验证**：临时把 `keda-main` 的 `github_repo` 注释掉，跑 `iar issue list`，验证 PR 列空、stderr 含未配置警告、退出码 0。
-- [ ] **格式校验真实验证**：把 `github_repo` 写成 `not-a-slash`，验证配置加载阶段报错指向具体行/字段名，而不是跑到 `gh` 才崩。
+- [x] **无选择器 ad-hoc 路径真实验证**：在 `/Users/zata/code/keda`（已注册 `keda-main`，无 `--repo-id`）下跑 `iar issue list`，验证返回 `RepositoryRunContext.github_repo` 已被 `merge_repository_config` 注入，且 PR 列非空。
+- [x] **`--all-registered` 多仓路径真实验证**：跑 `iar issue list --all-registered`，验证多仓（keda-main、freshai、fsense）每行 PR 列各自连接正确 owner/repo。
+- [x] **缺失降级真实验证**：临时把 `keda-main` 的 `github_repo` 注释掉，跑 `iar issue list`，验证 PR 列空、stderr 含未配置警告、退出码 0。
+- [x] **格式校验真实验证**：把 `github_repo` 写成 `not-a-slash`，验证配置加载阶段报错指向具体行/字段名，而不是跑到 `gh` 才崩。
 
 **为什么单元测试不够**：`merge_repository_config` 的输入是构造好的 `AppConfig` 与 `AgentRunnerRepositorySettings`，单测只能证 merge 后的 dict 内容正确；真实路径还需证 CLI 入口经过 `_resolve_repository_targets` → `_repo_label_for` → `gh pr list` 的整条调用链在没有手写 mock 时也能拿到正确 owner/repo 并被 gh 接受。
 
@@ -367,40 +368,40 @@ No external validation required; repository evidence was sufficient.
 
 ### Architecture Acceptance
 
-- [ ] `AgentRunnerRepositorySettings` 与 `AgentRunnerRepositoryMetadataSettings` 同时新增 `github_repo: str | None = None`，且都通过 `_AgentRunnerRepositoryOverrideSettings`（或同位置直接定义在 metadata）保持双源一致。
-- [ ] `core/shared/models/agent_runner.py` 新增 `RepositoryIdentity` dataclass（`id` / `path` / `display_name` / `github_repo` 四个字段，frozen）；`AppConfig` 新增 `repositories: dict[str, RepositoryIdentity] = field(default_factory=dict)`，注释说明与 `AgentRunnerSettings.repositories` 的边界以及与 Pydantic 类型的隔离原因。
-- [ ] `merge_repository_config` 在末尾把当前 `repo_settings` 合并进 `repositories` dict；key 选择策略（`id` 优先，回退 `path`）有单元测试覆盖。
-- [ ] `RepositoryRunContext` 形状不变（不新增 `github_repo` 字段）。
-- [ ] `_repo_label_for` 完全删除 `if repo_id and repo_id != "ad-hoc": return str(repo_id)` 这条路径；唯一来源是 `context.config.repositories[context.repo_id].github_repo`。
+- [x] `AgentRunnerRepositorySettings` 与 `AgentRunnerRepositoryMetadataSettings` 同时新增 `github_repo: str | None = None`，且都通过 `_AgentRunnerRepositoryOverrideSettings`（或同位置直接定义在 metadata）保持双源一致。
+- [x] `core/shared/models/agent_runner.py` 新增 `RepositoryIdentity` dataclass（`id` / `path` / `display_name` / `github_repo` 四个字段，frozen）；`AppConfig` 新增 `repositories: dict[str, RepositoryIdentity] = field(default_factory=dict)`，注释说明与 `AgentRunnerSettings.repositories` 的边界以及与 Pydantic 类型的隔离原因。
+- [x] `merge_repository_config` 在末尾把当前 `repo_settings` 合并进 `repositories` dict；key 选择策略（`id` 优先，回退 `path`）有单元测试覆盖。
+- [x] `RepositoryRunContext` 形状不变（不新增 `github_repo` 字段）。
+- [x] `_repo_label_for` 完全删除 `if repo_id and repo_id != "ad-hoc": return str(repo_id)` 这条路径；唯一来源是 `context.config.repositories[context.repo_id].github_repo`。
 
 ### Dependency Acceptance
 
-- [ ] 现有 `_AgentRunnerRepositoryOverrideSettings` 共享字段机制不被打破（labels / git / worktree / runner / safety / validation / prompts / pre_pr_review / post_pr_supervisor / generated_content / interactive_decision / deliberation 全部仍 merge 到顶层，非进 `repositories` dict）。
-- [ ] `load_agent_runner_local_settings` 末尾构造 `AgentRunnerRepositorySettings` 时透传 `repository_metadata.github_repo`。
+- [x] 现有 `_AgentRunnerRepositoryOverrideSettings` 共享字段机制不被打破（labels / git / worktree / runner / safety / validation / prompts / pre_pr_review / post_pr_supervisor / generated_content / interactive_decision / deliberation 全部仍 merge 到顶层，非进 `repositories` dict）。
+- [x] `load_agent_runner_local_settings` 末尾构造 `AgentRunnerRepositorySettings` 时透传 `repository_metadata.github_repo`。
 
 ### Behavior Acceptance
 
-- [ ] `gh pr list --repo` 在 iar 全代码路径下接收到的参数必含至少一个 `/`。可用 `rg -n 'gh .* --repo' src/` 确认所有调用点上游都有 owner/repo 校验。
-- [ ] `github_repo="not-a-slash"` 在 config 加载阶段抛错，错误信息含 `github_repo` 字段名（不是延迟到 `gh` 才报）。
-- [ ] 缺失 `github_repo` 的仓库：`iar issue list` 退出码 0，PR 列为空，stderr 一次性 WARN 警告（per-repo 不重复 per-issue）。
-- [ ] 缺失 `github_repo` 的仓库走 `list_issues_by_label` 仍正常工作（issue 列本身不依赖 owner/repo）。
+- [x] `gh pr list --repo` 在 iar 全代码路径下接收到的参数必含至少一个 `/`。可用 `rg -n 'gh .* --repo' src/` 确认所有调用点上游都有 owner/repo 校验。
+- [x] `github_repo="not-a-slash"` 在 config 加载阶段抛错，错误信息含 `github_repo` 字段名（不是延迟到 `gh` 才报）。
+- [x] 缺失 `github_repo` 的仓库：`iar issue list` 退出码 0，PR 列为空，stderr 一次性 WARN 警告（per-repo 不重复 per-issue）。
+- [x] 缺失 `github_repo` 的仓库走 `list_issues_by_label` 仍正常工作（issue 列本身不依赖 owner/repo）。
 
 ### Documentation Acceptance
 
-- [ ] `config.toml` 三条注册仓（`keda-main` / `zata-zhangtao-freshai` / `zata-zhangtao-fsense`）各自补 `github_repo = "..."` 字段。
-- [ ] `config.toml` 顶部 `[agent_runner.repositories]` 注释块（若存在）说明 `github_repo` 用途与可省略语义。
-- [ ] `docs/guides/agent-runner.md` 的 `[agent_runner.repositories.<id>]` 章节加 `github_repo` 字段说明 + 1 个示例。
-- [ ] `docs/guides/agent-runner.md` 不出现「目录名 = owner/repo」之类的错误表述。
+- [x] `config.toml` 三条注册仓（`keda-main` / `zata-zhangtao-freshai` / `zata-zhangtao-fsense`）各自补 `github_repo = "..."` 字段。
+- [x] `config.toml` 顶部 `[agent_runner.repositories]` 注释块（若存在）说明 `github_repo` 用途与可省略语义。
+- [x] `docs/guides/agent-runner.md` 的 `[agent_runner.repositories.<id>]` 章节加 `github_repo` 字段说明 + 1 个示例。
+- [x] `docs/guides/agent-runner.md` 不出现「目录名 = owner/repo」之类的错误表述。
 
 ### Validation Acceptance
 
-- [ ] `cd /Users/zata/code/keda && iar issue list --limit 5` 输出 PR 列非空，stderr 无 WARN。
-- [ ] `cd /Users/zata/code/keda && iar issue list --all-registered --limit 5` 三条仓库各自 PR 列非空，stderr 无 WARN。
-- [ ] 临时注释 `config.toml` 中 `keda-main.github_repo`，跑 `cd /Users/zata/code/keda && iar issue list --limit 5`：PR 列空，stderr 含 `[WARN] ... has no github_repo configured`，退出码 0；随后还原。
-- [ ] 临时把 `config.toml` 中 `keda-main.github_repo = "not-a-slash"`，跑 `cd /Users/zata/code/keda && iar issue list`：报错指向 `github_repo` 字段，exit code 非 0；随后还原。
-- [ ] `uv run pytest tests/test_agent_runner_config.py tests/test_agent_runner_dependencies.py tests/test_issue_list.py -v` 全绿。
-- [ ] `just test` 全套件通过。
-- [ ] `rg -n 'gh .* --repo' src/` 列出所有 gh `--repo` 调用，上游都有 owner/repo 来源可追溯（本 PRD 涉及的 `_repo_label_for` 已修改，其他点如有遗留需在 Decision Log 标注）。
+- [x] `cd /Users/zata/code/keda && iar issue list --limit 5` 输出 PR 列非空，stderr 无 WARN。
+- [x] `cd /Users/zata/code/keda && iar issue list --all-registered --limit 5` 三条仓库各自 PR 列非空，stderr 无 WARN。
+- [x] 临时注释 `config.toml` 中 `keda-main.github_repo`，跑 `cd /Users/zata/code/keda && iar issue list --limit 5`：PR 列空，stderr 含 `[WARN] ... has no github_repo configured`，退出码 0；随后还原。
+- [x] 临时把 `config.toml` 中 `keda-main.github_repo = "not-a-slash"`，跑 `cd /Users/zata/code/keda && iar issue list`：报错指向 `github_repo` 字段，exit code 非 0；随后还原。
+- [x] `uv run pytest tests/test_agent_runner_config.py tests/test_agent_runner_dependencies.py tests/test_issue_list.py -v` 全绿。
+- [x] `just test` 全套件通过。
+- [x] `rg -n 'gh .* --repo' src/` 列出所有 gh `--repo` 调用，上游都有 owner/repo 来源可追溯（本 PRD 涉及的 `_repo_label_for` 已修改，其他点如有遗留需在 Decision Log 标注）。
 
 ## 8. Functional Requirements
 

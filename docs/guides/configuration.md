@@ -144,6 +144,63 @@ allow_execute_yes = true
 - `max_context_chars`：传入 planner 的上下文最大字符数。
 - `allow_execute_yes`：是否允许 `--yes` 非交互确认。
 
+## Agent Runner REPL 配置
+
+`config.toml` 的 `[agent_runner.repl]` 段配置 `iar` 无参数进入的交互式
+REPL 入口。整段与 `[agent_runner.interactive_decision]` 隔离，二者可
+独立调整默认 agent、超时、白名单策略。
+
+```toml
+[agent_runner.repl]
+enabled = true
+default_agent = "claude"
+default_output_dir = "logs/agent-runner/repl"
+max_context_chars = 24000
+agent_timeout_seconds = 120
+auto_confirm_commands = [
+  "labels sync --dry-run",
+  "run --dry-run",
+  "review --dry-run",
+  "ask --plan-only",
+]
+confirm_commands = [
+  "run",
+  "daemon",
+  "review",
+  "review-daemon",
+  "issue create",
+  "recover",
+  "blocked-continue",
+  "worktree create",
+  "worktree remove",
+]
+```
+
+- `enabled`：是否启用 REPL 入口；设为 `false` 时 `iar` 无参数仍走
+  Typer 默认帮助路径。
+- `default_agent`：默认 REPL agent（支持 `claude`、`codex`、`kimi`）。
+  `auto` 不被接受为 REPL 默认 agent（`iar run` 才用 auto）。
+- `default_output_dir`：REPL 会话审计目录前缀；每次会话创建
+  `<default_output_dir>/<session-id>/`，包含 `session.json`、
+  `transcript.md`、`commands.json`。
+- `max_context_chars`：首条 system prompt 的最大字符数（超出部分被
+  截断并保留头尾）。
+- `agent_timeout_seconds`：每轮调用 agent 子进程的超时；超时或非零
+  退出码会作为 `[IAR_EXEC_RESULT] exit_code=...` 块追加到对话历史。
+- `auto_confirm_commands`：前缀匹配列表，匹配的命令直接执行。
+- `confirm_commands`：前缀匹配列表，匹配的命令执行前先询问用户
+  `Execute? [y/N]`。
+
+`auto_confirm_commands` 与 `confirm_commands` 都按「剥离 `iar` 后剩余
+的命令 tail」做前缀匹配，例如 `"run --dry-run"` 只对
+`iar run --dry-run` 自动放行；`"run"` 则对 `iar run ...` 的所有调用
+询问确认。
+
+`.iar.toml` 可在 `[agent_runner.repl]` 段覆盖上述任意字段，实现仓库级
+REPL 策略：默认全局 agent 是 `claude`，某个仓库可改为 `kimi` 或
+`codex`；默认 dry-run 白名单之外的命令可通过
+`confirm_commands` 在仓库层收紧或放宽。
+
 ## 预览部署配置
 
 `config.toml` 的 `[preview]` 段控制 PR 预览部署的非敏感结构。敏感值（服务器地址、SSH 密钥、镜像仓库密码、数据库密码）必须通过 GitHub Secrets 注入，不得写入仓库文件。

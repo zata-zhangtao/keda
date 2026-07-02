@@ -47,6 +47,7 @@ __all__ = [
     "DraftPRCreationError",
     "PushChangesError",
     "create_draft_pr",
+    "is_forbidden_path",
     "publish_changes",
     "push_changes",
     "run_preflight_checks",
@@ -55,22 +56,34 @@ __all__ = [
 ]
 
 
+def is_forbidden_path(changed_path_text: str, config: AppConfig) -> bool:
+    """Whether a changed path matches any configured forbidden pattern.
+
+    Matches both the full repo-relative path and its basename against
+    ``config.safety.forbidden_path_patterns`` (fnmatch), so a pattern like
+    ``.env`` blocks ``.env`` anywhere in the tree.
+    """
+    changed_path_name = Path(changed_path_text).name
+    for forbidden_pattern in config.safety.forbidden_path_patterns:
+        if fnmatch(changed_path_text, forbidden_pattern) or fnmatch(
+            changed_path_name,
+            forbidden_pattern,
+        ):
+            return True
+    return False
+
+
 def validate_safe_changes(
     worktree_path: Path,
     config: AppConfig,
     process_runner: IProcessRunner,
 ) -> None:
     """Refuse to publish changes to configured forbidden paths."""
-    blocked_paths: list[str] = []
-    for changed_path_text in list_changed_paths(worktree_path, process_runner):
-        changed_path_name = Path(changed_path_text).name
-        for forbidden_pattern in config.safety.forbidden_path_patterns:
-            if fnmatch(changed_path_text, forbidden_pattern) or fnmatch(
-                changed_path_name,
-                forbidden_pattern,
-            ):
-                blocked_paths.append(changed_path_text)
-                break
+    blocked_paths = [
+        changed_path_text
+        for changed_path_text in list_changed_paths(worktree_path, process_runner)
+        if is_forbidden_path(changed_path_text, config)
+    ]
     if blocked_paths:
         blocked_paths_text = ", ".join(sorted(set(blocked_paths)))
         raise RuntimeError(f"Refusing to publish forbidden paths: {blocked_paths_text}")

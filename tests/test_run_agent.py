@@ -27,6 +27,7 @@ from backend.core.shared.models.agent_runner import (
     WorktreeConfig,
 )
 from backend.core.use_cases.run_agent_once import (
+    AgentUnavailableError,
     MaxRetriesExceededError,
     PrdDeliveryError,
     build_recovery_prompt,
@@ -46,10 +47,29 @@ from backend.core.use_cases.run_agent_once import (
     format_minimal_failure_comment,
     get_head_sha,
     publish_changes,
+    resolve_agent_fallback_order,
     resolve_prd_archive_path,
+    run_agent_until_committed,
     run_agent_with_prompt,
+    run_agent_with_prompt_resilient,
     validate_safe_changes,
     _reconcile_worktree_with_remote_branch,
+)
+from backend.core.use_cases.agent_runner_failure import (
+    is_provider_capacity_failure,
+    is_transient_failure,
+)
+from backend.infrastructure.process_runner import CommandFailedError
+from backend.core.use_cases.agent_runner_feedback import (
+    build_progress_continuation_prompt,
+    format_prd_delivery_detail,
+)
+from backend.core.use_cases.agent_runner_validation import (
+    format_validation_evidence_detail,
+)
+from backend.core.use_cases.agent_runner_feedback import (
+    _build_prd_context_block,
+    _DEFAULT_PRD_INLINE_MAX_CHARS,
 )
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
@@ -167,33 +187,7 @@ def test_run_agent_with_prompt_can_capture_output(tmp_path: Path) -> None:
 
 def test_run_agent_with_prompt_passes_timeout(tmp_path: Path) -> None:
     """Prepared agent runs should pass timeout through to the process runner."""
-
-    class _RecordingTimeoutRunner(FakeProcessRunner):
-        def __init__(self) -> None:
-            super().__init__()
-            self.timeouts: list[int | None] = []
-
-        def run(
-            self,
-            command,
-            *,
-            cwd,
-            check=True,
-            timeout=None,
-            capture_output=True,
-            label=None,
-        ):
-            self.timeouts.append(timeout)
-            return super().run(
-                command,
-                cwd=cwd,
-                check=check,
-                timeout=timeout,
-                capture_output=capture_output,
-                label=label,
-            )
-
-    fake_runner = _RecordingTimeoutRunner()
+    fake_runner = FakeProcessRunner()
 
     run_agent_with_prompt(
         "codex",
@@ -202,9 +196,11 @@ def test_run_agent_with_prompt_passes_timeout(tmp_path: Path) -> None:
         fake_runner,
         capture_output=True,
         timeout_seconds=123,
+        inactivity_timeout_seconds=45,
     )
 
     assert fake_runner.timeouts == [123]
+    assert fake_runner.inactivity_timeouts == [45]
 
 
 def test_run_agent_with_prompt_logs_issue_context(
@@ -237,6 +233,62 @@ def test_run_agent_with_prompt_logs_issue_context(
         "Agent finished for Issue #23: https://github.com/zata-zhangtao/fsense/issues/23 (exit_code=0)"
         in caplog.text
     )
+
+
+def test_run_agent_until_committed_enters_recovery_after_timeout(
+    tmp_path: Path,
+) -> None:
+    """TimeoutExpired during agent execution should be caught and retried."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="https://github.com/example/repo/issues/1",
+        body="Body",
+        labels=(),
+    )
+
+    class _TimeoutRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            inactivity_timeout=None,
+            capture_output=True,
+            input_text=None,
+            label=None,
+        ):
+            self.attempts += 1
+            raise subprocess.TimeoutExpired(cmd=list(command), timeout=timeout)
+
+    fake_runner = _TimeoutRunner()
+    config = AppConfig(
+        runner=RunnerConfig(
+            max_recovery_attempts=1,
+            timeout_seconds=5,
+            inactivity_timeout_seconds=1,
+            recovery_retry_delay_seconds=0,
+        )
+    )
+
+    with pytest.raises(MaxRetriesExceededError):
+        run_agent_until_committed(
+            selected_agent="claude",
+            issue=issue,
+            worktree_path=tmp_path,
+            config=config,
+            process_runner=fake_runner,
+            before_sha="abc123",
+            expected_branch="issue-1",
+        )
+
+    assert fake_runner.attempts == 2
 
 
 def test_extract_agent_response_text_from_claude_stream_json() -> None:
@@ -551,7 +603,7 @@ def test_build_recovery_prompt_includes_prd_closeout() -> None:
     )
     assert "tasks/pending/example.md" in prompt
     assert "Acceptance Checklist" in prompt
-    assert "archived if complete" in prompt
+    assert "tasks/archive/" in prompt
 
 
 def test_resolve_prd_archive_path_converts_pending() -> None:
@@ -1130,6 +1182,7 @@ def _config_for_worktree(
     *verification_commands: str,
     max_recovery_attempts: int = 2,
     recovery_retry_delay_seconds: int = 0,
+    agent_fallback_order: tuple[str, ...] = (),
 ) -> AppConfig:
     commands = verification_commands or ("just test",)
     return AppConfig(
@@ -1137,6 +1190,7 @@ def _config_for_worktree(
             max_recovery_attempts=max_recovery_attempts,
             recovery_retry_delay_seconds=recovery_retry_delay_seconds,
             verification_commands=commands,
+            agent_fallback_order=agent_fallback_order,
         ),
         worktree=WorktreeConfig(path_command=f"echo {worktree_path}"),
     )
@@ -1147,8 +1201,13 @@ def _config_with_review_disabled(
     *verification_commands: str,
     max_recovery_attempts: int = 2,
     recovery_retry_delay_seconds: int = 0,
+    agent_fallback_order: tuple[str, ...] = (),
 ) -> AppConfig:
-    """Return a config with pre-PR review and post-PR supervisor disabled."""
+    """Return a config with pre-PR review and post-PR supervisor disabled.
+
+    Cross-agent fallback is disabled by default so that tests of the single-agent
+    recovery loop are not affected by the global default fallback chain.
+    """
     commands = verification_commands or ("just test",)
     worktree_cfg = (
         WorktreeConfig(path_command=f"echo {worktree_path}")
@@ -1160,6 +1219,7 @@ def _config_with_review_disabled(
             max_recovery_attempts=max_recovery_attempts,
             recovery_retry_delay_seconds=recovery_retry_delay_seconds,
             verification_commands=commands,
+            agent_fallback_order=agent_fallback_order,
         ),
         worktree=worktree_cfg,
         pre_pr_review=PrePrReviewConfig(enabled=False),
@@ -1269,6 +1329,7 @@ def test_run_once_uncommitted_changes_runner_commits(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -1411,6 +1472,7 @@ def test_run_once_recovers_after_staged_verification_failure(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -1487,11 +1549,13 @@ def test_run_once_recovers_after_staged_verification_failure(
     reset_index = commands.index(("git", "reset", "--mixed"))
     recovery_prompt = [
         command[-1] for command in commands if command[:1] == ("codex",)
-    ][1]
+    ][2]
     assert len(add_indices) == 2
-    assert len(test_indices) == 4
+    # With the Fix Agent layer, the runner runs an extra post-fix verification
+    # before falling back to the full recovery agent.
+    assert len(test_indices) == 5
     assert add_indices[0] < test_indices[1] < reset_index
-    assert reset_index < add_indices[1] < test_indices[3]
+    assert reset_index < add_indices[1] < test_indices[4]
     assert (
         "Verification after runner staged changes with git add -A failed"
         in recovery_prompt
@@ -1527,6 +1591,7 @@ def test_run_once_recovers_after_agent_command_failure(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -1537,10 +1602,10 @@ def test_run_once_recovers_after_agent_command_failure(
             if command_tuple[:1] == ("codex",):
                 self._agent_calls += 1
                 if self._agent_calls == 1:
-                    raise RuntimeError("API Error: 400 Invalid request Error")
+                    raise RuntimeError("API Error: unknown provider failure")
                 prompt = command_tuple[-1]
                 assert "Recovery attempt: 1/2" in prompt
-                assert "API Error: 400 Invalid request Error" in prompt
+                assert "API Error: unknown provider failure" in prompt
                 _write_commit_request(worktree_path, "agent: recovered after api error")
                 return CommandResult(command_tuple, 0, "", "")
             if command_tuple == ("git", "rev-parse", "HEAD"):
@@ -1672,12 +1737,21 @@ def test_run_once_uncommitted_changes_validation_failure_does_not_stage(
         and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
-    comment_calls = [
+    history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue" and "Command failed" in c.get("body", "")
+        if c["method"] == "comment_issue"
+        and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
-    assert len(comment_calls) == 1
+    assert len(history_comment_calls) >= 1
+    failure_comment_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "comment_issue"
+        and "Command failed" in c.get("body", "")
+        and "<!-- iar-attempt-history -->" not in c.get("body", "")
+    ]
+    assert len(failure_comment_calls) == 1
 
 
 def test_run_once_uncommitted_changes_missing_request_fails(tmp_path: Path) -> None:
@@ -1738,12 +1812,21 @@ def test_run_once_uncommitted_changes_missing_request_fails(tmp_path: Path) -> N
         if command[:2] == ("git", "commit") and "--no-verify" not in command
     ]
     assert proxy_commits == []
-    comment_calls = [
+    history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue" and "commit request" in c.get("body", "")
+        if c["method"] == "comment_issue"
+        and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
-    assert len(comment_calls) == 1
+    assert len(history_comment_calls) >= 1
+    failure_comment_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "comment_issue"
+        and "commit request" in c.get("body", "")
+        and "<!-- iar-attempt-history -->" not in c.get("body", "")
+    ]
+    assert len(failure_comment_calls) == 1
 
 
 def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> None:
@@ -1820,12 +1903,21 @@ def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> No
         and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
-    comment_calls = [
+    history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue" and "Command failed" in c.get("body", "")
+        if c["method"] == "comment_issue"
+        and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
-    assert len(comment_calls) == 1
+    assert len(history_comment_calls) >= 1
+    failure_comment_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "comment_issue"
+        and "Command failed" in c.get("body", "")
+        and "<!-- iar-attempt-history -->" not in c.get("body", "")
+    ]
+    assert len(failure_comment_calls) == 1
 
 
 def test_commit_requested_changes_rejects_branch_change(tmp_path: Path) -> None:
@@ -1977,6 +2069,7 @@ class _PrecommitCommitRunner(FakeProcessRunner):
         cwd,
         check=True,
         timeout=None,
+        inactivity_timeout=None,
         capture_output=True,
         input_text=None,
         label=None,
@@ -2140,12 +2233,21 @@ def test_run_once_no_new_commits_fails() -> None:
         and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
-    comment_calls = [
+    history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue" and "no git commits" in c.get("body", "")
+        if c["method"] == "comment_issue"
+        and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
-    assert len(comment_calls) == 1
+    assert len(history_comment_calls) >= 1
+    failure_comment_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "comment_issue"
+        and "no git commits" in c.get("body", "")
+        and "<!-- iar-attempt-history -->" not in c.get("body", "")
+    ]
+    assert len(failure_comment_calls) == 1
 
 
 def test_run_once_success(tmp_path: Path) -> None:
@@ -2175,6 +2277,7 @@ def test_run_once_success(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -2296,6 +2399,7 @@ def test_run_once_failure_removes_supervising_label(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -2524,6 +2628,7 @@ def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -2640,6 +2745,7 @@ def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3157,6 +3263,7 @@ def test_recovery_loop_success_on_second_attempt(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3242,6 +3349,7 @@ def test_recovery_loop_exhausted_raises_max_retries(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3312,6 +3420,7 @@ def test_run_once_reuses_existing_clean_local_commit(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3394,6 +3503,9 @@ def test_checkpoint_uncommitted_progress_commits_and_returns_sha(
             ("git", "status", "--porcelain"): CommandResult(
                 ("git", "status", "--porcelain"), 0, " M src/feature.py\n", ""
             ),
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                ("git", "status", "--porcelain", "-z"), 0, " M src/feature.py\0", ""
+            ),
             ("git", "branch", "--show-current"): CommandResult(
                 ("git", "branch", "--show-current"), 0, "issue-84\n", ""
             ),
@@ -3413,7 +3525,9 @@ def test_checkpoint_uncommitted_progress_commits_and_returns_sha(
 
     assert result_sha == "checkpoint-sha"
     commands = [tuple(call) for call in runner.calls]
-    assert ("git", "add", "-A") in commands
+    # Only the safe path is staged (explicitly), never a blanket ``git add -A``.
+    assert ("git", "add", "--", "src/feature.py") in commands
+    assert ("git", "add", "-A") not in commands
     commit_calls = [c for c in commands if c[:2] == ("git", "commit")]
     assert len(commit_calls) == 1
     assert "--no-verify" in commit_calls[0]
@@ -3471,10 +3585,10 @@ def test_checkpoint_uncommitted_progress_returns_none_on_branch_mismatch(
     assert not [c for c in runner.calls if tuple(c)[:2] == ("git", "commit")]
 
 
-def test_checkpoint_uncommitted_progress_blocks_forbidden_paths(
+def test_checkpoint_uncommitted_progress_returns_none_when_all_forbidden(
     tmp_path: Path,
 ) -> None:
-    """触碰禁改路径时拒绝 checkpoint，绝不把敏感文件提交进历史。"""
+    """全是禁改路径时无可安全提交的内容,返回 None 且不提交、不抛错。"""
     from backend.core.use_cases.run_agent_once import checkpoint_uncommitted_progress
 
     runner = FakeProcessRunner(
@@ -3491,16 +3605,59 @@ def test_checkpoint_uncommitted_progress_blocks_forbidden_paths(
         }
     )
 
-    with pytest.raises(RuntimeError, match="forbidden"):
-        checkpoint_uncommitted_progress(
-            _checkpoint_issue(),
-            tmp_path,
-            AppConfig(),
-            runner,
-            expected_branch="issue-84",
-        )
+    result_sha = checkpoint_uncommitted_progress(
+        _checkpoint_issue(),
+        tmp_path,
+        AppConfig(),
+        runner,
+        expected_branch="issue-84",
+    )
 
+    assert result_sha is None
     assert not [c for c in runner.calls if tuple(c)[:2] == ("git", "commit")]
+
+
+def test_checkpoint_uncommitted_progress_excludes_forbidden_but_keeps_safe(
+    tmp_path: Path,
+) -> None:
+    """混合改动时只 checkpoint 安全文件,禁改文件被排除、绝不进历史。"""
+    from backend.core.use_cases.run_agent_once import checkpoint_uncommitted_progress
+
+    runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain"): CommandResult(
+                ("git", "status", "--porcelain"), 0, " M src/feature.py\n M .env\n", ""
+            ),
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                ("git", "status", "--porcelain", "-z"),
+                0,
+                " M src/feature.py\0 M .env\0",
+                "",
+            ),
+            ("git", "branch", "--show-current"): CommandResult(
+                ("git", "branch", "--show-current"), 0, "issue-84\n", ""
+            ),
+            ("git", "rev-parse", "HEAD"): CommandResult(
+                ("git", "rev-parse", "HEAD"), 0, "checkpoint-sha\n", ""
+            ),
+        }
+    )
+
+    result_sha = checkpoint_uncommitted_progress(
+        _checkpoint_issue(),
+        tmp_path,
+        AppConfig(),
+        runner,
+        expected_branch="issue-84",
+    )
+
+    assert result_sha == "checkpoint-sha"
+    commands = [tuple(call) for call in runner.calls]
+    # The safe path is staged; the forbidden path is never added.
+    assert ("git", "add", "--", "src/feature.py") in commands
+    add_calls = [c for c in commands if c[:2] == ("git", "add")]
+    assert all(".env" not in token for call in add_calls for token in call)
+    assert [c for c in commands if c[:2] == ("git", "commit")]
 
 
 def test_build_progress_continuation_prompt_mentions_existing_progress() -> None:
@@ -3653,6 +3810,7 @@ def test_run_once_recovers_running_issue_with_existing_local_commit(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3726,6 +3884,7 @@ def test_attempt_history_in_issue_comment(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -3813,9 +3972,34 @@ def test_format_attempt_history_table() -> None:
         ),
     ]
     table = format_attempt_history(results)
-    assert "| Attempt | Failure Type | Recovered | Detail |" in table
-    assert "| 1 | no_commits | No | No commits produced. |" in table
-    assert "| 2 | success | Yes | Agent fixed the issue. |" in table
+    assert "| Attempt | Agent | Failure Type | Recovered | Duration | Detail |" in table
+    assert "| 1 | - | no_commits | No | 0.0s | No commits produced. |" in table
+    assert "| 2 | - | success | Yes | 0.0s | Agent fixed the issue. |" in table
+
+
+def test_format_attempt_history_includes_agent_column() -> None:
+    """Attempts stamped with an agent should render it in the Agent column."""
+    results = [
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.PROVIDER_CAPACITY,
+            recovered=False,
+            detail="Claude at capacity.",
+            agent="claude",
+        ),
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.SUCCESS,
+            recovered=True,
+            detail="Codex finished.",
+            agent="codex",
+        ),
+    ]
+    table = format_attempt_history(results)
+    assert (
+        "| 1 | claude | provider_capacity | No | 0.0s | Claude at capacity. |" in table
+    )
+    assert "| 1 | codex | success | Yes | 0.0s | Codex finished. |" in table
 
 
 _USAGE_LIMIT_STDOUT = (
@@ -3852,6 +4036,47 @@ def test_format_attempt_history_keeps_error_tail() -> None:
     assert "Agent command failed before runner verification" not in table
 
 
+def test_format_attempt_history_surfaces_validation_reason() -> None:
+    """RV evidence failures must show the real reason, not recovery boilerplate.
+
+    Regression for the case where the Detail column only showed "Run the
+    validation plan for real…" and hid the actual command exit-code failure.
+    """
+    reason = (
+        "Realistic Validation item 2 failed when keda re-ran its command: "
+        "`uv run python -m iar.evidence.run_realistic_validation (item 2)` exited 2."
+    )
+    table = format_attempt_history(
+        [
+            AttemptResult(
+                attempt_number=1,
+                failure_type=FailureType.AGENT_ERROR,
+                recovered=False,
+                detail=format_validation_evidence_detail(reason),
+            )
+        ]
+    )
+    assert "exited 2" in table
+    assert "Run the validation plan for real" not in table
+
+
+def test_format_attempt_history_surfaces_prd_delivery_reason() -> None:
+    """PRD delivery failures must show the real reason, not recovery boilerplate."""
+    reason = "Acceptance Checklist has 3 unchecked items before archival."
+    table = format_attempt_history(
+        [
+            AttemptResult(
+                attempt_number=1,
+                failure_type=FailureType.AGENT_ERROR,
+                recovered=False,
+                detail=format_prd_delivery_detail(reason),
+            )
+        ]
+    )
+    assert "3 unchecked items" in table
+    assert "Update the canonical PRD" not in table
+
+
 def test_format_attempt_history_escapes_table_pipes() -> None:
     """Pipes in the detail must not break the Markdown table."""
     table = format_attempt_history(
@@ -3874,6 +4099,26 @@ def test_detect_usage_limit_root_cause() -> None:
     assert "429" in summary
     assert "2026-06-10T15:00:00+08:00" in summary
     assert detect_usage_limit_root_cause("just lint failed with exit code 1") is None
+
+
+def test_is_transient_failure_matches_400_invalid_params() -> None:
+    """400 / invalid-parameter provider errors are retried like network errors."""
+    transient_cases = [
+        RuntimeError("API Error: 400 invalid params"),
+        RuntimeError("InvalidParameter: input should be a valid dictionary"),
+        RuntimeError("BadRequest: malformed request"),
+        subprocess.CalledProcessError(
+            1, ["claude"], output="Error: 400 invalid request", stderr=""
+        ),
+    ]
+    for exc in transient_cases:
+        assert is_transient_failure(exc), f"{exc} should be transient"
+
+
+def test_is_transient_failure_still_excludes_provider_capacity() -> None:
+    """429 / usage-limit errors are not transient so the runner switches agents."""
+    capacity_exc = RuntimeError("API Error: 429 usage limit exceeded")
+    assert not is_transient_failure(capacity_exc)
 
 
 def test_format_failure_comment_surfaces_usage_limit_root_cause() -> None:
@@ -4076,6 +4321,7 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -4158,14 +4404,15 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
     reset_index = commands.index(("git", "reset", "--mixed"))
     recovery_prompt = [
         command[-1] for command in commands if command[:1] == ("codex",)
-    ][1]
+    ][2]
 
     # Two staging rounds (initial + recovery)
     assert len(add_indices) == 2
-    # just lint runs: pre-stage attempt 0, staged attempt 0, pre-stage recovery, staged recovery
-    assert len(lint_indices) == 4
+    # With the Fix Agent layer there is one extra verification run after the
+    # Fix Agent attempt before falling back to the full recovery agent.
+    assert len(lint_indices) == 5
     assert add_indices[0] < lint_indices[1] < reset_index
-    assert reset_index < add_indices[1] < lint_indices[3]
+    assert reset_index < add_indices[1] < lint_indices[4]
     assert (
         "Verification after runner staged changes with git add -A failed"
         in recovery_prompt
@@ -4215,6 +4462,7 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -4239,6 +4487,8 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
                 return CommandResult(command_tuple, 0, "issue-123\n", "")
             if command_tuple == ("git", "status", "--porcelain"):
                 return CommandResult(command_tuple, 0, " M file.txt\n", "")
+            if command_tuple == ("git", "status", "--porcelain", "-z"):
+                return CommandResult(command_tuple, 0, " M file.txt\0", "")
             if command_tuple == ("just", "lint") or _is_bash_wrapped_verification_call(
                 command, ("just", "lint")
             ):
@@ -4275,7 +4525,7 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
     add_indices = [
         index
         for index, command in enumerate(commands)
-        if command == ("git", "add", "-A")
+        if command == ("git", "add", "--", "file.txt")
     ]
     reset_indices = [
         index
@@ -4284,8 +4534,8 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
     ]
 
     # just lint 在 3 次尝试的预 staging 验证都失败，正常流程从不进入 commit proxy。
-    # 重试耗尽后，runner 把在途改动 checkpoint 成一个 WIP commit（git add -A +
-    # git commit --no-verify），供下次 claim 在已提交进度上续作。
+    # 重试耗尽后，runner 把在途改动 checkpoint 成一个 WIP commit（只 stage 非禁改
+    # 路径 git add -- file.txt + git commit --no-verify），供下次 claim 续作。
     assert len(lint_indices) == 3
     assert len(add_indices) == 1
     assert len(reset_indices) == 0
@@ -4311,6 +4561,83 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
     assert "| 1 |" in failure_comment["body"]
     assert "| 2 |" in failure_comment["body"]
     assert "| 3 |" in failure_comment["body"]
+
+
+def test_keyboard_interrupt_checkpoints_in_flight_work_before_exit(
+    tmp_path: Path,
+) -> None:
+    """Ctrl-C (KeyboardInterrupt) during a run checkpoints the safe in-flight
+    work, then propagates so the interrupt still exits the process."""
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue()
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+
+    class _InterruptingRunner(FakeProcessRunner):
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            inactivity_timeout=None,
+            capture_output=True,
+            input_text=None,
+            label=None,
+            output_sink=None,
+        ):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple[:1] in {("codex",), ("claude",), ("kimi",)}:
+                # The operator hits Ctrl-C while the agent is running.
+                raise KeyboardInterrupt()
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                return CommandResult(command_tuple, 0, "before-sha\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-123\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                return CommandResult(command_tuple, 0, " M src/wip.py\n", "")
+            if command_tuple == ("git", "status", "--porcelain", "-z"):
+                return CommandResult(command_tuple, 0, " M src/wip.py\0", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _InterruptingRunner()
+    path_command, path_result = _worktree_path_response(worktree_path)
+    fake_runner.responses = {
+        path_command: path_result,
+        _git_remote_command(): _git_remote_result("origin"),
+    }
+    config = _config_with_review_disabled(worktree_path, "just lint")
+
+    from backend.core.use_cases.agent_runner_orchestrate import run_once
+
+    with pytest.raises(KeyboardInterrupt):
+        run_once(
+            repo_path=Path("."),
+            config=config,
+            dry_run=False,
+            agent="auto",
+            max_issues=1,
+            github_client=fake_client,
+            process_runner=fake_runner,
+        )
+
+    commands = [tuple(command) for command in fake_runner.calls]
+    # The safe in-flight file was checkpointed before the interrupt propagated.
+    assert ("git", "add", "--", "src/wip.py") in commands
+    checkpoint_commits = [
+        command
+        for command in commands
+        if command[:2] == ("git", "commit") and "--no-verify" in command
+    ]
+    assert len(checkpoint_commits) == 1
 
 
 def test_run_once_rebase_conflict_detached_head(
@@ -4390,6 +4717,7 @@ def test_run_once_rebase_conflict_detached_head(
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             label=None,
         ):
@@ -5809,6 +6137,7 @@ def test_worktree_reconcile_run_once(tmp_path: Path) -> None:
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             input_text=None,
             label=None,
@@ -6451,6 +6780,7 @@ def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> 
             cwd,
             check=True,
             timeout=None,
+            inactivity_timeout=None,
             capture_output=True,
             input_text=None,
             label=None,
@@ -6555,3 +6885,747 @@ def test_ensure_worktree_branch_resolves_conflicts_via_agent(tmp_path: Path) -> 
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "-c", "core.editor=true", "rebase", "--continue") in commands
     assert ("git", "commit", "-m", "agent: resolve rebase conflicts") in commands
+
+
+# ---------------------------------------------------------------------------
+# PRD inlining tests (deliberate-async-discussion PRD, Section 5 / FR-12/13)
+# ---------------------------------------------------------------------------
+
+
+def _write_prd(worktree_path: Path, relative_path: str, content: str) -> None:
+    prd_path = worktree_path / relative_path
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(content, encoding="utf-8")
+
+
+def test_build_prd_context_block_inlines_existing_prd(tmp_path: Path) -> None:
+    """When the worktree contains the PRD, the helper inlines its full body."""
+    _write_prd(tmp_path, "tasks/pending/example.md", "# Example PRD\n\nBody line.\n")
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="- PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "--- BEGIN PRD ---" in block
+    assert "--- END PRD ---" in block
+    assert "Body line." in block
+    assert "tasks/pending/example.md" in block
+    assert "Acceptance Checklist" in block
+    assert "tasks/archive/" in block
+
+
+def test_build_prd_context_block_truncates_oversized_prd(tmp_path: Path) -> None:
+    """PRDs above the ceiling are tail-truncated with a pointer note."""
+    big = "x" * 5000
+    _write_prd(tmp_path, "tasks/pending/big.md", big)
+    issue = IssueSummary(
+        number=2,
+        title="T",
+        url="U",
+        body="- PRD path: `tasks/pending/big.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path, max_chars=200)
+    assert "--- BEGIN PRD ---" in block
+    assert "truncated" in block
+    assert "tasks/pending/big.md" in block
+    # The first 200 chars of the body are present, the rest is dropped.
+    assert big[:200] in block
+    assert big[300:] not in block
+
+
+def test_build_prd_context_block_falls_back_when_prd_missing(tmp_path: Path) -> None:
+    """Missing PRD file → pointer line only, no BEGIN/END marker."""
+    issue = IssueSummary(
+        number=3,
+        title="T",
+        url="U",
+        body="- PRD path: `tasks/pending/missing.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "BEGIN PRD" not in block
+    assert "tasks/pending/missing.md" in block
+    assert "Acceptance Checklist" in block
+
+
+def test_build_prd_context_block_handles_no_prd_anchor(tmp_path: Path) -> None:
+    """Issue without a PRD anchor gets the generic pointer line."""
+    issue = IssueSummary(
+        number=4,
+        title="T",
+        url="U",
+        body="No PRD here.",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "BEGIN PRD" not in block
+    assert "If the Issue references a PRD" in block
+
+
+def test_build_prd_context_block_handles_archived_prd(tmp_path: Path) -> None:
+    """Archive-path PRDs inline the same way but don't mention tasks/archive/."""
+    _write_prd(tmp_path, "tasks/archive/done.md", "archived body\n")
+    issue = IssueSummary(
+        number=5,
+        title="T",
+        url="U",
+        body="- PRD path: `tasks/archive/done.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "--- BEGIN PRD ---" in block
+    assert "archived body" in block
+    # No archive instruction for already-archived PRDs.
+    assert "move the PRD from `tasks/pending/" not in block
+
+
+def test_build_prompt_inlines_prd(tmp_path: Path) -> None:
+    """``build_prompt`` should embed the worktree's PRD body, not just a pointer."""
+    _write_prd(tmp_path, "tasks/pending/feature.md", "# Feature PRD\n\nDetail A.\n")
+    issue = IssueSummary(
+        number=10,
+        title="Feature",
+        url="https://example/repo/issues/10",
+        body="- PRD path: `tasks/pending/feature.md`",
+        labels=(),
+    )
+    prompt = build_prompt(issue, tmp_path, PromptConfig())
+    assert "Detail A." in prompt
+    assert "BEGIN PRD" in prompt
+    assert "tasks/pending/feature.md" in prompt
+
+
+def test_build_prompt_inlines_prd_uses_default_ceiling(tmp_path: Path) -> None:
+    """The default ceiling is large enough for normal PRDs (no truncation)."""
+    body = "line\n" * 1000
+    _write_prd(tmp_path, "tasks/pending/normal.md", body)
+    issue = IssueSummary(
+        number=11,
+        title="Normal",
+        url="https://example/repo/issues/11",
+        body="- PRD path: `tasks/pending/normal.md`",
+        labels=(),
+    )
+    prompt = build_prompt(issue, tmp_path, PromptConfig())
+    assert "truncated" not in prompt
+    assert body in prompt
+    # Sanity-check the default ceiling is at least the published value.
+    assert _DEFAULT_PRD_INLINE_MAX_CHARS >= 20000
+
+
+def test_build_recovery_prompt_inlines_prd(tmp_path: Path) -> None:
+    """``build_recovery_prompt`` should also inline the PRD body."""
+    _write_prd(tmp_path, "tasks/pending/feature.md", "# Feature PRD\n\nRecover hint.\n")
+    issue = IssueSummary(
+        number=12,
+        title="Feature",
+        url="https://example/repo/issues/12",
+        body="- PRD path: `tasks/pending/feature.md`",
+        labels=(),
+    )
+    prompt = build_recovery_prompt(
+        issue,
+        tmp_path,
+        recovery_attempt=1,
+        max_recovery_attempts=2,
+        failure_summary="Something broke.",
+    )
+    assert "Recover hint." in prompt
+    assert "BEGIN PRD" in prompt
+
+
+def test_build_recovery_prompt_no_prd_uses_fallback(tmp_path: Path) -> None:
+    """Without a PRD anchor, recovery prompt uses the existing fallback line."""
+    issue = IssueSummary(
+        number=13,
+        title="No PRD",
+        url="https://example/repo/issues/13",
+        body="Plain body",
+        labels=(),
+    )
+    prompt = build_recovery_prompt(
+        issue,
+        tmp_path,
+        recovery_attempt=1,
+        max_recovery_attempts=2,
+        failure_summary="x",
+    )
+    assert "If the Issue references a PRD" in prompt
+
+
+def test_build_progress_continuation_prompt_inlines_prd(tmp_path: Path) -> None:
+    """``build_progress_continuation_prompt`` should also inline the PRD body."""
+    _write_prd(tmp_path, "tasks/pending/feature.md", "# Feature PRD\n\nContinue.\n")
+    issue = IssueSummary(
+        number=14,
+        title="Feature",
+        url="https://example/repo/issues/14",
+        body="- PRD path: `tasks/pending/feature.md`",
+        labels=(),
+    )
+    prompt = build_progress_continuation_prompt(issue, tmp_path)
+    assert "Continue." in prompt
+    assert "BEGIN PRD" in prompt
+
+
+def test_build_prompt_no_prd_keeps_pointer_line(tmp_path: Path) -> None:
+    """Without a PRD anchor, build_prompt keeps the existing generic line."""
+    issue = IssueSummary(
+        number=15,
+        title="No PRD",
+        url="https://example/repo/issues/15",
+        body="no PRD anchor here",
+        labels=(),
+    )
+    prompt = build_prompt(issue, tmp_path, PromptConfig())
+    assert "If the Issue references a PRD" in prompt
+    assert "BEGIN PRD" not in prompt
+
+
+def test_build_prd_context_block_handles_unicode_prd(tmp_path: Path) -> None:
+    """Reading the PRD uses UTF-8 explicitly (project rule)."""
+    _write_prd(tmp_path, "tasks/pending/cn.md", "# 中文 PRD\n\n详细描述。\n")
+    issue = IssueSummary(
+        number=16,
+        title="中文",
+        url="https://example/repo/issues/16",
+        body="- PRD path: `tasks/pending/cn.md`",
+        labels=(),
+    )
+    block = _build_prd_context_block(issue, tmp_path)
+    assert "中文 PRD" in block
+    assert "详细描述。" in block
+
+
+# ---------------------------------------------------------------------------
+# 错误分级与 fallback 链：错误分类层 + Level 1 瞬时重试 + agent 顺序解析
+# ---------------------------------------------------------------------------
+
+
+class _SequencedAgentRunner(FakeProcessRunner):
+    """Runner that yields a scripted sequence of outcomes per ``run`` call.
+
+    Each outcome is either a :class:`CommandResult` to return or an exception to
+    raise. The last outcome repeats once the sequence is exhausted.
+    """
+
+    def __init__(self, outcomes: list[object]) -> None:
+        super().__init__()
+        self._outcomes = list(outcomes)
+        self._index = 0
+
+    def run(
+        self,
+        command,
+        *,
+        cwd,
+        check=True,
+        timeout=None,
+        capture_output=True,
+        input_text=None,
+        label=None,
+    ):
+        self.calls.append(list(command))
+        outcome = self._outcomes[min(self._index, len(self._outcomes) - 1)]
+        self._index += 1
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+def _transient_command_error() -> CommandFailedError:
+    return CommandFailedError(
+        1,
+        ["claude", "--dangerously-skip-permissions", "-p", "PROMPT"],
+        output=(
+            "[agent error] API Error: The socket connection was closed " "unexpectedly."
+        ),
+        stderr="",
+    )
+
+
+def test_run_agent_with_prompt_resilient_retries_transient_then_succeeds(
+    tmp_path: Path,
+) -> None:
+    """A transient agent error should be retried in place and then succeed."""
+    success = CommandResult(("claude",), 0, "ok", "")
+    runner = _SequencedAgentRunner([_transient_command_error(), success])
+
+    result = run_agent_with_prompt_resilient(
+        "claude",
+        "prompt",
+        tmp_path,
+        runner,
+        transient_retry_attempts=2,
+        transient_retry_delay_seconds=0,
+    )
+
+    assert result.return_code == 0
+    assert len(runner.calls) == 2
+
+
+def test_run_agent_with_prompt_resilient_raises_agent_unavailable(
+    tmp_path: Path,
+) -> None:
+    """A missing agent CLI should surface as AgentUnavailableError without retry."""
+    runner = _SequencedAgentRunner([FileNotFoundError("claude: command not found")])
+
+    with pytest.raises(AgentUnavailableError):
+        run_agent_with_prompt_resilient(
+            "claude",
+            "prompt",
+            tmp_path,
+            runner,
+            transient_retry_attempts=2,
+            transient_retry_delay_seconds=0,
+        )
+
+    assert len(runner.calls) == 1
+
+
+def test_run_agent_with_prompt_resilient_propagates_non_transient(
+    tmp_path: Path,
+) -> None:
+    """Non-transient errors must propagate immediately without retry."""
+    error = CommandFailedError(1, ["claude"], output="some ordinary failure", stderr="")
+    runner = _SequencedAgentRunner([error, CommandResult(("claude",), 0, "", "")])
+
+    with pytest.raises(CommandFailedError):
+        run_agent_with_prompt_resilient(
+            "claude",
+            "prompt",
+            tmp_path,
+            runner,
+            transient_retry_attempts=2,
+            transient_retry_delay_seconds=0,
+        )
+
+    assert len(runner.calls) == 1
+
+
+def test_run_agent_with_prompt_resilient_does_not_retry_provider_capacity(
+    tmp_path: Path,
+) -> None:
+    """Provider-capacity errors must not be retried in place (they escalate)."""
+    error = CommandFailedError(
+        1, ["claude"], output="Request rejected (429) usage limit reached", stderr=""
+    )
+    runner = _SequencedAgentRunner([error, CommandResult(("claude",), 0, "", "")])
+
+    with pytest.raises(CommandFailedError):
+        run_agent_with_prompt_resilient(
+            "claude",
+            "prompt",
+            tmp_path,
+            runner,
+            transient_retry_attempts=2,
+            transient_retry_delay_seconds=0,
+        )
+
+    assert len(runner.calls) == 1
+
+
+def test_run_agent_with_prompt_resilient_reraises_after_exhausting_retries(
+    tmp_path: Path,
+) -> None:
+    """A persistent transient error re-raises after exhausting retries."""
+    runner = _SequencedAgentRunner([_transient_command_error()] * 5)
+
+    with pytest.raises(CommandFailedError):
+        run_agent_with_prompt_resilient(
+            "claude",
+            "prompt",
+            tmp_path,
+            runner,
+            transient_retry_attempts=2,
+            transient_retry_delay_seconds=0,
+        )
+
+    # 1 initial attempt + 2 retries.
+    assert len(runner.calls) == 3
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "The socket connection was closed unexpectedly",
+        "connection reset by peer",
+        "upstream connect error 503 service unavailable",
+        "Read timed out",
+        "502 bad gateway",
+    ],
+)
+def test_is_transient_failure_matches_network_errors(message: str) -> None:
+    """Network/transport signatures are classified as transient."""
+    assert is_transient_failure(RuntimeError(message))
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "5-hour usage limit reached",
+        "Request rejected (429)",
+        "Error 529 overloaded",
+        "too many requests",
+        "rate limit exceeded",
+    ],
+)
+def test_is_provider_capacity_failure_matches_capacity_errors(message: str) -> None:
+    """Capacity / rate-limit signatures are classified as provider capacity."""
+    assert is_provider_capacity_failure(RuntimeError(message))
+
+
+def test_provider_capacity_takes_precedence_over_transient() -> None:
+    """A 429 must classify as capacity, never as a retryable transient error."""
+    exc = RuntimeError("429 too many requests")
+    assert is_provider_capacity_failure(exc)
+    assert not is_transient_failure(exc)
+
+
+def test_transient_predicate_reads_subprocess_output() -> None:
+    """Signatures captured in subprocess output must be detected."""
+    assert is_transient_failure(_transient_command_error())
+
+
+def test_transient_predicate_ignores_unrelated_errors() -> None:
+    """A plain verification failure is not a transient error."""
+    assert not is_transient_failure(RuntimeError("verification failed: 3 tests"))
+
+
+def test_classify_failure_detects_provider_capacity_when_enabled() -> None:
+    """classify_failure flags provider capacity only when asked to."""
+    exc = CommandFailedError(1, ["claude"], output="usage limit reached", stderr="")
+    failure_type = classify_failure(
+        before_sha="a",
+        after_sha="a",
+        has_uncommitted=False,
+        agent_result=CommandResult(("",), 0, "", ""),
+        verification_results=[],
+        exc=exc,
+        detect_provider_errors=True,
+    )
+    assert failure_type == FailureType.PROVIDER_CAPACITY
+
+
+def test_classify_failure_detects_transient_when_enabled() -> None:
+    """classify_failure flags transient errors when detection is enabled."""
+    failure_type = classify_failure(
+        before_sha="a",
+        after_sha="a",
+        has_uncommitted=False,
+        agent_result=CommandResult(("",), 0, "", ""),
+        verification_results=[],
+        exc=_transient_command_error(),
+        detect_provider_errors=True,
+    )
+    assert failure_type == FailureType.TRANSIENT
+
+
+def test_classify_failure_ignores_provider_errors_by_default() -> None:
+    """Without detection, an agent error mentioning capacity stays AGENT_ERROR.
+
+    Guards against commit/verification failures being reclassified as transient
+    just because their output mentions a network word.
+    """
+    exc = CommandFailedError(1, ["claude"], output="usage limit reached", stderr="")
+    failure_type = classify_failure(
+        before_sha="a",
+        after_sha="a",
+        has_uncommitted=False,
+        agent_result=CommandResult(("",), 0, "", ""),
+        verification_results=[],
+        exc=exc,
+    )
+    assert failure_type == FailureType.AGENT_ERROR
+
+
+def test_resolve_agent_fallback_order_default_includes_primary_then_chain() -> None:
+    """With the default fallback chain, primary agent comes first, then defaults."""
+    issue = _make_ready_issue()
+    order = resolve_agent_fallback_order(issue, AppConfig(), "auto")
+    assert order == ["codex", "claude", "kimi"]
+
+
+def test_resolve_agent_fallback_order_dedupes_and_preserves_order() -> None:
+    """The primary agent is de-duplicated and configured order is preserved."""
+    issue = _make_ready_issue()
+    config = AppConfig(
+        runner=RunnerConfig(agent_fallback_order=("codex", "claude", "kimi"))
+    )
+    order = resolve_agent_fallback_order(issue, config, "auto")
+    assert order == ["codex", "claude", "kimi"]
+
+
+def test_resolve_agent_fallback_order_honors_override_primary() -> None:
+    """An explicit --agent override becomes the primary agent."""
+    issue = _make_ready_issue()
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
+    order = resolve_agent_fallback_order(issue, config, "claude")
+    assert order == ["claude", "codex"]
+
+
+def test_resolve_agent_fallback_order_empty_disables_fallback() -> None:
+    """Setting the fallback chain to empty disables cross-agent switching."""
+    issue = _make_ready_issue()
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=()))
+    order = resolve_agent_fallback_order(issue, config, "auto")
+    assert order == ["codex"]
+
+
+def test_run_fix_agent_uses_fix_timeout_seconds(tmp_path: Path) -> None:
+    """run_fix_agent should pass fix_timeout_seconds to the process runner."""
+    from backend.core.use_cases.run_agent_once import run_fix_agent
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_runner = FakeProcessRunner()
+    config = AppConfig(
+        runner=RunnerConfig(
+            timeout_seconds=100,
+            fix_timeout_seconds=30,
+            agent_fallback_order=(),
+        )
+    )
+
+    run_fix_agent(
+        "claude",
+        issue,
+        tmp_path,
+        config,
+        fake_runner,
+        verification_results=[
+            CommandResult(("just", "lint"), 1, "fail", ""),
+        ],
+    )
+
+    assert fake_runner.timeouts == [30]
+
+
+def test_run_fix_agent_falls_back_to_timeout_seconds(tmp_path: Path) -> None:
+    """run_fix_agent should fall back to timeout_seconds when fix timeout is unset."""
+    from backend.core.use_cases.run_agent_once import run_fix_agent
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_runner = FakeProcessRunner()
+    config = AppConfig(
+        runner=RunnerConfig(
+            timeout_seconds=100,
+            fix_timeout_seconds=None,
+            agent_fallback_order=(),
+        )
+    )
+
+    run_fix_agent(
+        "claude",
+        issue,
+        tmp_path,
+        config,
+        fake_runner,
+        verification_results=[
+            CommandResult(("just", "lint"), 1, "fail", ""),
+        ],
+    )
+
+    assert fake_runner.timeouts == [100]
+
+
+def test_run_agent_until_committed_calls_fix_agent_before_recovery(
+    tmp_path: Path,
+) -> None:
+    """Staged verification failure should trigger Fix Agent before full recovery."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="https://github.com/example/repo/issues/1",
+        body="Body",
+        labels=(),
+    )
+    worktree_path = tmp_path / "issue-1"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: initial")
+
+    class _FixThenRecoveryRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._agent_calls = 0
+            self._verification_calls = 0
+            self._committed = False
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            inactivity_timeout=None,
+            capture_output=True,
+            input_text=None,
+            label=None,
+        ):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple[:1] == ("claude",):
+                self._agent_calls += 1
+                self.timeouts.append(timeout)
+                self.inactivity_timeouts.append(inactivity_timeout)
+                prompt = command_tuple[-1]
+                if self._agent_calls == 1:
+                    # Normal agent: leave changes and a failing commit-request.
+                    return CommandResult(command_tuple, 0, "", "")
+                if self._agent_calls == 2:
+                    # Fix Agent: assert it received a focused prompt.
+                    assert "Fix the verification failure" in prompt
+                    assert "just lint" in prompt
+                    assert "Do not update evidence files" in prompt
+                    _write_commit_request(worktree_path, "agent: fixed")
+                    return CommandResult(command_tuple, 0, "", "")
+                # Recovery agent should not be reached.
+                raise AssertionError("Recovery agent should not be invoked")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                return CommandResult(
+                    command_tuple,
+                    0,
+                    "after-sha\n" if self._committed else "before-sha\n",
+                    "",
+                )
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-1\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                stdout = "" if self._committed else " M file.txt\n"
+                return CommandResult(command_tuple, 0, stdout, "")
+            if command_tuple == ("just", "lint") or _is_bash_wrapped_verification_call(
+                command, ("just", "lint")
+            ):
+                self._verification_calls += 1
+                # Pass pre-staging verification (call 1), fail staged verification
+                # inside commit proxy (call 2), then pass after Fix Agent (call 3).
+                if self._verification_calls == 2:
+                    return CommandResult(
+                        command_tuple, 1, "lint stdout\n", "lint stderr\n"
+                    )
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "commit", "-m", "agent: fixed"):
+                self._committed = True
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _FixThenRecoveryRunner()
+    config = AppConfig(
+        runner=RunnerConfig(
+            max_recovery_attempts=1,
+            recovery_retry_delay_seconds=0,
+            timeout_seconds=100,
+            fix_timeout_seconds=30,
+            verification_commands=("just lint",),
+            agent_fallback_order=(),
+        )
+    )
+
+    result = run_agent_until_committed(
+        selected_agent="claude",
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=fake_runner,
+        before_sha="before-sha",
+        expected_branch="issue-1",
+    )
+
+    assert result.attempt_results[-1].failure_type == FailureType.SUCCESS
+    agent_commands = [c for c in fake_runner.calls if tuple(c)[:1] == ("claude",)]
+    assert len(agent_commands) == 2
+    assert fake_runner.timeouts[1] == 30
+
+
+def test_run_agent_until_committed_recovery_uses_recovery_timeout_seconds(
+    tmp_path: Path,
+) -> None:
+    """Recovery agent invocations should use recovery_timeout_seconds."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="https://github.com/example/repo/issues/1",
+        body="Body",
+        labels=(),
+    )
+    worktree_path = tmp_path / "issue-1"
+    worktree_path.mkdir()
+
+    class _RecoveryTimeoutRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._agent_calls = 0
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            inactivity_timeout=None,
+            capture_output=True,
+            input_text=None,
+            label=None,
+        ):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple in self.responses:
+                result = self.responses[command_tuple]
+                if check and result.return_code != 0:
+                    raise RuntimeError(f"Command failed: {command}")
+                return result
+            if command_tuple[:1] == ("claude",):
+                self._agent_calls += 1
+                self.timeouts.append(timeout)
+                self.inactivity_timeouts.append(inactivity_timeout)
+                if self._agent_calls == 1:
+                    return CommandResult(command_tuple, 0, "", "")
+                # Recovery attempt.
+                assert "Recovery attempt: 1/1" in command_tuple[-1]
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                return CommandResult(command_tuple, 0, "same-sha\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _RecoveryTimeoutRunner()
+    config = AppConfig(
+        runner=RunnerConfig(
+            max_recovery_attempts=1,
+            recovery_retry_delay_seconds=0,
+            timeout_seconds=100,
+            recovery_timeout_seconds=60,
+            verification_commands=("git diff --check",),
+            agent_fallback_order=(),
+        )
+    )
+
+    with pytest.raises(MaxRetriesExceededError):
+        run_agent_until_committed(
+            selected_agent="claude",
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            process_runner=fake_runner,
+            before_sha="same-sha",
+            expected_branch="issue-1",
+        )
+
+    claude_indices = [
+        index
+        for index, call in enumerate(fake_runner.calls)
+        if tuple(call)[:1] == ("claude",)
+    ]
+    assert len(claude_indices) == 2
+    assert fake_runner.timeouts[1] == 60

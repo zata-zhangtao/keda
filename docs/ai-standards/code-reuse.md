@@ -7,9 +7,9 @@
 新增或修改功能前，先搜索现有实现：
 
 - Python 优先用 `rg` 搜索 `src/backend/core/`、`src/backend/api/`、`src/backend/engines/`
-- 前端优先搜索 `frontend/src/lib/`、`frontend/shared/`、`frontend/src/hooks/`
+- 前端优先搜索 `frontend/src/lib/`、`frontend/src/components/`、`frontend/src/auth/`、`frontend/src/pages/`
 - 业务规则优先复用 `src/backend/core/`
-- 前端纯工具、格式化、API 客户端优先复用 `frontend/src/lib/` 或 `frontend/shared/`
+- 前端纯工具、格式化、API 客户端优先复用 `frontend/src/lib/`
 
 禁止复制粘贴已有代码后微调。发现逻辑重复率明显超过 50% 时，优先直接调用已有函数；如果调用方向不合适，先提取公共业务规则或纯转换函数，再由调用方复用。
 
@@ -30,27 +30,6 @@
 - 业务代码不得直接调用"加载全量数据"的函数作为判断依据；调用方应只依赖规则函数，规则函数内部决定缓存、预计算或加载方式
 - 同一判断逻辑在当前变更中出现 2 次以上，即使只有两行，也必须提取为命名函数
 - `src/backend/core/` 是后端业务规则唯一可信源；`src/backend/api/` 只做入口适配、参数校验、DTO 转换和用例调用
-
-## 配置集中化
-
-同一组映射关系（如 agent 类型 → label、状态 → 行为）禁止分散硬编码到多个文件。当同一概念需要在 **3 个及以上文件中追加硬编码分支**时，必须提取为集中式数据结构（字典、注册表或配置对象），通过查表驱动逻辑。已有 2 个分支且预计会扩展的，也应提前提取。
-
-明确不会扩展的一次性映射允许保留硬编码，但须标注：
-
-```python
-# NOTE: 若扩展至第 3 个，需改为注册表/字典
-```
-
-**反例**：新增 agent 标签时在 `settings.py` 加字段、`factory.py` 透传、`run_agent_once.py` 加 `elif`——这是散弹枪修改。正确做法：
-
-```python
-agent_labels: dict[str, str] = {
-    "codex": "agent/codex",
-    "claude": "agent/claude",
-    "kimi": "agent/kimi",
-}
-label = config.labels.agent_labels.get(agent_name, default_label)
-```
 
 ## 参数收敛
 
@@ -96,7 +75,7 @@ cost_values = fetch_costs("2026-01-01", "2026-01-31", True)
 
 - 目标：单个 `.py` 文件非空行少于 500 行
 - 上限：新增或重写模块不应超过 800 行
-- 过渡：`hooks/check_max_file_lines.py` 仍以 1000 行 warn-only 兼容历史文件
+- 过渡：`hooks/shared/check_max_file_lines.py` 仍以 1000 行 warn-only 兼容历史文件
 
 模块拆分规则：
 
@@ -112,7 +91,7 @@ cost_values = fetch_costs("2026-01-01", "2026-01-31", True)
 - `jscpd`：跨 Python / TypeScript / JavaScript 的复制粘贴级重复检测
 - `pylint duplicate-code`：Python 结构级重复检测，只启用 `duplicate-code`
 
-这些 hook 使用候选文件和比较语料分离的策略：候选文件来自当前变更，`jscpd` 比较 `src/backend/` 与 `frontend/`，`pylint duplicate-code` 比较 `src/backend/`。`src/backend/core/`、`frontend/src/lib/` 和 `frontend/shared/` 必须始终作为优先复用目录参与判断。历史重复不会因为全量 lint 被一次性阻断，但新增或修改文件触达重复时必须修复。
+这些 hook 使用候选文件和比较语料分离的策略：候选文件来自当前变更，`jscpd` 比较 `src/backend/` 与 `frontend/`，`pylint duplicate-code` 比较 `src/backend/`。`src/backend/core/` 与 `frontend/src/lib/` 必须始终作为优先复用目录参与判断。历史重复不会因为全量 lint 被一次性阻断，但新增或修改文件触达重复时必须修复。
 
 ## AI 编码自检清单
 
@@ -120,7 +99,6 @@ cost_values = fetch_costs("2026-01-01", "2026-01-31", True)
 
 - [ ] 我没有复制粘贴已有代码后微调（复用优先于复制）
 - [ ] 我复用的是业务规则（`is_` / `can_` / `validate_`）而非数据加载操作（`load_` / `get_` / `fetch_`）
-- [ ] 当同一映射关系需要新增第 3 个硬编码分支时，我已提取为注册表/字典/配置对象
 - [ ] 我的函数参数不超过 4 个，成组参数已收敛到对象
 - [ ] 我没有在同一文件里无限追加逻辑（当前文件非空行少于 800 行，目标少于 500 行）
 - [ ] 我的 import 方向符合四层架构（`api -> core -> engines -> infrastructure`）

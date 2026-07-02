@@ -39,17 +39,12 @@
 
 - `src/backend/main.py`：后端真实 composition root，只做依赖组装。
 - `main.py`：根目录兼容启动包装器，转发到 `backend.main`。
-- `src/backend/infrastructure/config/`：承接配置管理。
+- `src/backend/infrastructure/config/`：承接配置管理；还承接 OpenAI 协议 provider 注册表与 `create_chat_model` 工厂（按 `provider/model_id` 分发）。
 - `src/backend/infrastructure/logging/`：承接日志实现。
 - `src/backend/infrastructure/persistence/`：承接数据库与持久化实现。
 - `src/backend/infrastructure/helpers.py`：承接通用无状态辅助函数。
-- `src/backend/infrastructure/models/`：承接模型配置解析与 LLM 客户端装配。
 - `src/backend/engines/`：承接项目特定的平台能力（如 RAG、爬虫、OCR 等）。
 - `tests/`：用于验证边界、用例和适配器行为。
-
-## core/use_cases 说明
-
-`src/backend/core/use_cases/` 包含业务编排用例。`create_issue_from_prd` 将 PRD 文件转为 GitHub Issue，而 `create_prd_from_issue` 是其对称反向流程：根据 Issue 标题、正文和评论生成或重写 PRD。两者共享 `IGitHubClient` 和 `IContentGenerator` 边界，并通过 `generated_content.py` 统一处理 template/agent/fallback 三级生成策略。`agent_runner_orchestrate.py` 在每次 runner pass 中先调用 `process_prd_rework_issues` 消费 `agent/rework-prd` 标签的 Issue，再执行正常的 ready-issue 处理，两个阶段错误隔离。
 
 ## 模块关系图
 
@@ -57,19 +52,19 @@
 flowchart TD
     Browser["浏览器 / 用户"] --> FE
 
-    subgraph FE["frontend/ 前端层"]
+    subgraph FE["前端层 frontend/"]
         direction TB
-        FE_PAGES["pages/\nLoginPage · DashboardPage"]
-        FE_LAYOUT["components/\nAppSidebar · SiteHeader · shadcn/ui"]
-        FE_AUTH["auth/\nSessionProvider · RequireSession"]
-        FE_SHARED["shared/\napi/client · auth/sessionStore"]
-        FE_PAGES --> FE_LAYOUT
+        FE_PAGES["src/pages/\nLoginPage · DashboardPage"]
+        FE_COMPONENTS["src/components/\nAppSidebar · SiteHeader · shadcn/ui"]
+        FE_AUTH["src/auth/\nSessionProvider · RequireSession"]
+        FE_LIB["src/lib/\nutils · api client"]
+        FE_PAGES --> FE_COMPONENTS
         FE_PAGES --> FE_AUTH
-        FE_AUTH --> FE_SHARED
-        FE_LAYOUT --> FE_SHARED
+        FE_AUTH --> FE_LIB
+        FE_COMPONENTS --> FE_LIB
     end
 
-    FE_SHARED -->|"HTTP /api/*\n(Vite proxy / nginx 反代)"| Apps
+    FE_LIB -->|"HTTP /api/*"| Apps
 
     subgraph Backend["Python 后端"]
         direction TB
@@ -115,14 +110,22 @@ flowchart TD
 
 ## 前端分层说明
 
+本仓库包含两个独立前端项目，分别服务不同场景：
+
+### Web 前端 `frontend/`
+
 | 层 | 路径 | 职责 |
 |---|---|---|
 | 页面层 | `src/pages/` | 路由级页面组件（登录、Dashboard） |
 | 布局层 | `src/components/` | Sidebar、Header、shadcn/ui 基础组件 |
 | 认证层 | `src/auth/` | SessionProvider 上下文、RequireSession 路由守卫 |
-| 共享层 | `shared/` | API 客户端封装、会话缓存，与后端唯一通信入口 |
+| API/工具层 | `src/lib/` | API 客户端封装、通用工具，与后端唯一通信入口 |
 
-前端与后端之间**仅通过 `/api/*` HTTP 接口通信**，开发时由 Vite 代理转发，生产时由 nginx 反代。两侧无任何代码直接依赖。
+前端与后端之间**仅通过 `/api/*` HTTP 接口通信**：
+
+- `frontend/` 开发时由 Vite 代理转发，生产时由 Nginx `/api/*` 反代到后端。
+
+前端与后端无任何代码直接依赖。
 
 ## 为什么前端不属于四层
 
@@ -141,7 +144,7 @@ src/backend/api/ → src/backend/core/ → src/backend/engines/ → src/backend/
 - 它通过 HTTP 或 WebSocket 调用 `src/backend/api/` 暴露的后端入口。
 - 它不参与后端内部的依赖传递，因此不应被硬塞进四层中的任意一层。
 
-如果需要讨论 `frontend/` 自身的模块拆分，应使用单独的前端内部架构文档，而不是混入后端四层依赖规则。详见 [`frontend-architecture.md`](frontend-architecture.md)。
+如果需要讨论前端自身的模块拆分，应使用单独的前端内部架构文档，而不是混入后端四层依赖规则。详见 [`frontend-architecture.md`](frontend-architecture.md)。
 
 ## 依赖规则
 
@@ -150,3 +153,37 @@ src/backend/api/ → src/backend/core/ → src/backend/engines/ → src/backend/
 3. `src/backend/engines/` 只能实现 `src/backend/core/` 定义的契约。
 4. `src/backend/infrastructure/` 负责具体集成，不包含业务编排。
 5. 配置、日志、数据库和通用辅助函数位于 `src/backend/infrastructure/` 下的正式模块。
+
+## 认证与会话域
+
+系统采用**两套物理隔离的认证域**，互不穿透：
+
+| 维度 | public 域（C 端用户） | admin 域（内部管理员） |
+|---|---|---|
+| 用户表 | `public_user`（开放自助注册，UUID 主键） | `admin_user`（仅种子创建，不开放注册） |
+| 登录端点 | `/auth/*`（login/register/logout/me） | `/admin/auth/*`（login/logout/me，无 register） |
+| 会话 Cookie | `session_id` | `admin_session_id` |
+| 会话存储 | Redis，key 前缀 `public:session:` | Redis，key 前缀 `admin:session:` |
+| 鉴权依赖 | `get_current_public_user` | `get_current_admin_user` |
+| 主要 API | 业务 `agents/workflows/sessions/tools`（`owner_id = public_user.id`） | `/admin/users` 管理 public 用户 |
+| 前端 | `frontend/` | `frontend/` |
+
+### 隔离保证
+
+- 两域各自独立的用户表、Cookie 与 Redis 命名空间；一个域的会话 token 在另一域命名空间中查不到，因此 public 会话无法通过 admin 守卫（反之亦然），均返回 401。
+- admin 专属路由集中在 `src/backend/api/admin/`，统一经 `get_current_admin_user` 守卫。
+- 业务资源归属 public 用户；admin 域仅用于管理，不拥有业务资源。
+- 被禁用（`is_active=false`）的用户既有会话在下次请求解析时立即失效。
+
+### 共享编排（避免重复）
+
+登录 / 登出 / 会话解析 / 注册的编排集中在单一的 `core/auth/AuthService`；两域通过注入不同的用户仓库、会话存储（不同前缀）与 `allow_registration` 标志复用同一实现，从而在保持物理隔离的同时不复制近似认证代码。`UserAccount` 领域模型位于 `core/shared/models/`，作为跨层契约被基础设施层仓库实现引用。
+
+### 关键实现位置
+
+- 领域编排：`core/auth/`（`service.py` / `directory.py` / `models.py`）、`core/shared/models/user_account.py`
+- 抽象端口：`core/shared/interfaces/`（`user_account_repository.py` / `password_hasher.py` / `session_store.py`）
+- 基础设施实现：`infrastructure/auth/`（`redis_session_store.py` / `bcrypt_password_hasher.py` / `redis_client.py`）、`infrastructure/persistence/repos/user_account_repo.py`、`infrastructure/persistence/models/{public_user,admin_user}.py`
+- 接入层：`api/auth_router.py`、`api/admin/`、`api/dependencies.py`
+- 初始管理员：`main.py` 启动时按 `AUTH_ADMIN_BOOTSTRAP_*` 幂等种子创建
+- 运行依赖：Redis（`REDIS_URL`）；密码以 bcrypt 哈希持久化

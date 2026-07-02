@@ -32,6 +32,13 @@ _REWORK_COMPLETION_PHASES = {
     "rebase_repair_complete",
 }
 
+# Phase value written by Phase 0 ``process_deliberation_issues`` after it posts
+# a structured clarifying-question list as an Issue comment. Paired with the
+# ``cycle`` and ``issue_comments_count`` fields in the marker, it lets the
+# daemon distinguish "AI has asked and is waiting for the user" from "user has
+# replied and it's the AI's turn again".
+DELIBERATION_QUESTION_PHASE = "deliberation_question_posted"
+
 
 def _parse_event_marker(comment_body: str) -> ReviewEventMarker | None:
     """Parse the first iar:event marker from one Issue comment."""

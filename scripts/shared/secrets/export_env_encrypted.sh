@@ -2,7 +2,7 @@
 # export_env_encrypted.sh — Pack all gitignored .env* files into a password-protected zip.
 #
 # - Only includes files that are both matching .env* AND gitignored.
-# - Output: ../mysecrets/<project_name>_secrets.zip  (one fixed file per project)
+# - Output: ../mysecrets/<project_name>.zip  (one fixed file per project)
 # - Password is prompted interactively; required again to extract.
 # - Uses AES-256 if the local zip binary supports it, otherwise ZipCrypto.
 #
@@ -47,7 +47,7 @@ fi
 
 PROJECT_ROOT="$(git rev-parse --show-toplevel)"
 PROJECT_NAME="$(basename "$PROJECT_ROOT")"
-OUTPUT_ZIP="$PROJECT_ROOT/${PROJECT_NAME}_secrets.zip"
+OUTPUT_ZIP="$PROJECT_ROOT/${PROJECT_NAME}.zip"
 
 cd "$PROJECT_ROOT"
 
@@ -63,7 +63,7 @@ while IFS= read -r f; do
     env_files+=("./$f")
 done < <(
     git ls-files --others --ignored --exclude-standard \
-        | grep -E '(^|/)\.env[^/]*$' \
+        | grep -E '\.env[^/]*$' \
         | sort
 )
 
@@ -77,6 +77,132 @@ for f in "${env_files[@]}"; do
     echo "  $f"
 done
 echo ""
+
+# ── Show changes relative to existing archive ────────────────────────────────
+# zip stores paths without the leading "./", so normalize both sides before comparing.
+if [ -f "$OUTPUT_ZIP" ] && command -v unzip &>/dev/null; then
+    echo "📦 Existing archive detected. Calculating changes..."
+
+    current_names=()
+    for f in "${env_files[@]}"; do
+        current_names+=("${f#./}")
+    done
+
+    archived_names=()
+    while IFS= read -r f; do
+        [ -n "$f" ] && archived_names+=("${f#./}")
+    done < <(unzip -Z -1 "$OUTPUT_ZIP" | sort)
+
+    added=()
+    while IFS= read -r f; do
+        [ -n "$f" ] && added+=("$f")
+    done < <(comm -23 <(printf '%s\n' "${current_names[@]}" | sort) <(printf '%s\n' "${archived_names[@]}" | sort))
+
+    removed=()
+    while IFS= read -r f; do
+        [ -n "$f" ] && removed+=("$f")
+    done < <(comm -13 <(printf '%s\n' "${current_names[@]}" | sort) <(printf '%s\n' "${archived_names[@]}" | sort))
+
+    common=()
+    while IFS= read -r f; do
+        [ -n "$f" ] && common+=("$f")
+    done < <(comm -12 <(printf '%s\n' "${current_names[@]}" | sort) <(printf '%s\n' "${archived_names[@]}" | sort))
+
+    modified=()
+    unchanged=()
+    _compare_contents=false
+
+    if [ "${#common[@]}" -gt 0 ]; then
+        printf "   Compare contents of files that exist in both versions? [y/N] "
+        read -r compare_choice </dev/tty
+        case "$compare_choice" in
+            y|Y)
+                printf "   Enter password for existing archive: "
+                read -rs archive_password </dev/tty
+                echo ""
+                _tmp_extract_dir=$(mktemp -d)
+                chmod 700 "$_tmp_extract_dir"
+                _cleanup_extract() { rm -rf "$_tmp_extract_dir"; }
+                trap _cleanup_extract EXIT
+
+                if unzip -q -P "$archive_password" "$OUTPUT_ZIP" -d "$_tmp_extract_dir" 2>/dev/null; then
+                    _compare_contents=true
+                    for f in "${common[@]}"; do
+                        _current_path="$PROJECT_ROOT/$f"
+                        _old_path="$_tmp_extract_dir/$f"
+                        if [ -f "$_old_path" ] && ! cmp -s "$_old_path" "$_current_path"; then
+                            modified+=("$f")
+                        else
+                            unchanged+=("$f")
+                        fi
+                    done
+                else
+                    echo "   ⚠️  Could not unlock archive. Content comparison skipped."
+                    unchanged=("${common[@]}")
+                fi
+                unset archive_password
+                ;;
+            *)
+                unchanged=("${common[@]}")
+                ;;
+        esac
+    fi
+
+    if [ "${#added[@]}" -eq 0 ] && [ "${#removed[@]}" -eq 0 ] && { [ "$_compare_contents" != true ] || [ "${#modified[@]}" -eq 0 ]; }; then
+        if [ "$_compare_contents" = true ]; then
+            echo "   No file additions, removals, or content changes since the last archive."
+        else
+            echo "   No file additions or removals since the last archive."
+        fi
+    else
+        echo "   Changes since the last archive:"
+        if [ "${#added[@]}" -gt 0 ]; then
+            echo "   + Added (${#added[@]}):"
+            for f in "${added[@]}"; do
+                echo "      + $f"
+            done
+        fi
+        if [ "${#removed[@]}" -gt 0 ]; then
+            echo "   - Removed (${#removed[@]}):"
+            for f in "${removed[@]}"; do
+                echo "      - $f"
+            done
+        fi
+        if [ "${#modified[@]}" -gt 0 ]; then
+            echo "   ~ Modified (${#modified[@]}):"
+            for f in "${modified[@]}"; do
+                echo "      ~ $f"
+            done
+        fi
+    fi
+
+    if [ "${#unchanged[@]}" -gt 0 ]; then
+        echo "   = Unchanged (${#unchanged[@]}):"
+        for f in "${unchanged[@]}"; do
+            echo "      = $f"
+        done
+    fi
+
+    if [ "${#modified[@]}" -gt 0 ]; then
+        printf "   Show detailed diff for modified files? [Y/n] "
+        read -r show_diff </dev/tty
+        case "$show_diff" in
+            n|N) ;;
+            *)
+                echo ""
+                for f in "${modified[@]}"; do
+                    echo "   --- diff: $f ---"
+                    diff -u --label "old/$f" --label "new/$f" "$_tmp_extract_dir/$f" "$PROJECT_ROOT/$f" || true
+                    echo ""
+                done
+                ;;
+        esac
+    fi
+    echo ""
+elif [ -f "$OUTPUT_ZIP" ]; then
+    echo "⚠️  Existing archive detected, but unzip is not installed. Cannot show changes."
+    echo ""
+fi
 
 # ── Check for existing archive ───────────────────────────────────────────────
 if [ -f "$OUTPUT_ZIP" ]; then

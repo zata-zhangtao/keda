@@ -7,11 +7,12 @@
 具体实现（如真正调用子进程、访问 GitHub CLI）由 ``engines`` /
 ``infrastructure`` 层提供，并在运行时通过工厂注入。
 
-模块内包含四个端口：
+模块内包含五个端口：
 
 - ``IProcessRunner``：执行任意外部命令的底层能力。
 - ``IAgentTranscriptRunner``：运行 AI Agent 并流式产出审议事件。
 - ``IContentGenerator``：以只读方式运行 Agent 生成 Markdown 文本。
+- ``IReplCommandExecutor``：在 REPL 入口中校验并执行 IAR 子命令。
 - ``IGitHubClient``：封装与 GitHub 仓库/Issue/PR 的交互。
 
 这种「依赖倒置 + 端口隔离」的设计，使 core 层的用例（use cases）
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -36,6 +38,53 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.shared.models.agent_deliberation import (
     DeliberationEvent,
 )
+
+
+@dataclass(frozen=True)
+class IarExecRequest:
+    """A single command request parsed from an ``<<IAR_EXEC>>`` marker.
+
+    Attributes:
+        argv: Argument vector of the requested command. The first element is
+            the IAR subcommand name (for example ``"labels"``); the remaining
+            elements are positional / optional arguments destined for that
+            subcommand.
+        raw_text: The original raw text inside the markers, preserved for
+            audit logging.
+    """
+
+    argv: tuple[str, ...]
+    raw_text: str
+
+
+@dataclass(frozen=True)
+class ReplExecOutcome:
+    """The result of executing a single IAR command from the REPL.
+
+    Attributes:
+        argv: The argv that was actually executed (echoed back so the REPL
+            can include it in audit logs and conversation history).
+        return_code: Exit code from the underlying subprocess.
+        stdout: Captured standard output, truncated by the executor.
+        stderr: Captured standard error, truncated by the executor.
+        rejected: True when the executor refused to execute the command
+            outright (whitelist violation or shell metacharacter).
+        rejection_reason: Human-readable explanation when ``rejected`` is
+            True; empty string otherwise.
+        confirmation_prompted: True when the user was asked to confirm the
+            command before execution (write/risky commands).
+        confirmation_granted: True when the user confirmed the command;
+            ``None`` when no confirmation was needed.
+    """
+
+    argv: tuple[str, ...]
+    return_code: int
+    stdout: str
+    stderr: str
+    rejected: bool = False
+    rejection_reason: str = ""
+    confirmation_prompted: bool = False
+    confirmation_granted: bool | None = None
 
 
 class IProcessRunner(ABC):
@@ -58,9 +107,11 @@ class IProcessRunner(ABC):
         cwd: Path,
         check: bool = True,
         timeout: int | None = None,
+        inactivity_timeout: int | None = None,
         capture_output: bool = True,
         input_text: str | None = None,
         label: str | None = None,
+        output_sink: Callable[[str], None] | None = None,
     ) -> CommandResult:
         """运行一条命令并捕获其结果。
 
@@ -77,8 +128,12 @@ class IProcessRunner(ABC):
                 非零退出会触发错误向上抛出；为 ``False`` 时则把非零
                 退出码原样放入返回的 ``CommandResult``，交由调用方
                 自行判断。
-            timeout: 可选的超时时间（秒）。超过该时间后子进程会被
-                终止并视为失败；为 ``None`` 表示不设超时、一直等待。
+            timeout: 可选的 wall-clock 超时时间（秒）。超过该时间后
+                子进程会被终止并视为失败；为 ``None`` 表示不设超时、
+                一直等待。
+            inactivity_timeout: 可选的无输出超时时间（秒）。当子进程
+                在指定时间内没有 stdout/stderr 输出时被终止；为
+                ``None`` 表示不检测无输出超时。
             capture_output: 是否捕获 stdout/stderr。为 ``True`` 时输出
                 被收集到返回值中；为 ``False`` 时输出直接透传到当前
                 终端（用于需要实时可见的交互场景），此时返回的
@@ -88,6 +143,11 @@ class IProcessRunner(ABC):
                 命令），并强制以捕获模式运行；为 ``None`` 时不写 stdin。
             label: 可选的运行上下文标签，用于在 watchdog 心跳或超时
                 日志中标识本次命令。例如 ``"Issue #23: https://..."``。
+            output_sink: 可选的流式输出回调。提供时，Claude ``stream-json``
+                的渲染文本块会逐块回传给该回调，而非直接 ``print`` 到当前
+                终端——用于并行处理时把每个 Issue 的 agent 输出分流到独立
+                面板/日志，避免多路输出在同一 stdout 交错。非 Claude 流式
+                命令忽略该参数。
 
         Returns:
             CommandResult: 包含退出码与（按需）捕获到的 stdout/stderr
@@ -95,7 +155,8 @@ class IProcessRunner(ABC):
 
         Raises:
             Exception: 当 ``check`` 为 ``True`` 且命令以非零码退出，
-                或在 ``timeout`` 内未完成时，向上抛出相应异常。
+                或在 ``timeout`` / ``inactivity_timeout`` 内未完成时，
+                向上抛出相应异常。
         """
         ...
 
@@ -186,6 +247,37 @@ class IContentGenerator(ABC):
         Returns:
             CommandResult: 包含已捕获输出的命令结果；其中 stdout 即为
             生成的 Markdown 文本。
+        """
+        ...
+
+
+class IReplCommandExecutor(ABC):
+    """在 REPL 入口中校验并执行 IAR 子命令的端口。
+
+    REPL use case 本身只负责「读取用户输入、调用 agent、解析
+    ``<<IAR_EXEC>>`` 标记、把结果回填到对话历史」。所有与命令本身
+    的策略（白名单、是否需要用户确认、如何执行、如何截断输出）都
+    收敛到本端口的实现里，方便在单元测试中替换成 fake 实现，也
+    方便未来扩展（例如集成 dry-run / 沙箱执行）。
+    """
+
+    @abstractmethod
+    def execute(
+        self,
+        request: IarExecRequest,
+        *,
+        repo_path: Path,
+    ) -> ReplExecOutcome:
+        """校验并执行一条来自 REPL 的 IAR 子命令请求。
+
+        Args:
+            request: 解析后的命令请求，包含 argv 与原始文本。
+            repo_path: 命令应在其下执行的目标仓库路径。
+
+        Returns:
+            ``ReplExecOutcome``：描述命令执行结果（成功、被拒、被
+            截断等）。被拒的命令也需要返回一个 outcome，由 REPL
+            use case 决定如何回写到对话历史。
         """
         ...
 
@@ -355,6 +447,28 @@ class IGitHubClient(ABC):
 
         Returns:
             list[str]: 按时间顺序排列的评论正文（原始文本）列表。
+        """
+        ...
+
+    @abstractmethod
+    def list_issue_comment_entries(self, issue_number: int) -> list[tuple[int, str]]:
+        """返回某个 Issue 的评论 ID 与正文列表。
+
+        Args:
+            issue_number: 目标 Issue 编号。
+
+        Returns:
+            list[tuple[int, str]]: 按时间顺序排列的评论 (id, body) 列表。
+        """
+        ...
+
+    @abstractmethod
+    def edit_issue_comment(self, comment_id: int, body: str) -> None:
+        """编辑某个 Issue 评论的正文。
+
+        Args:
+            comment_id: 目标评论的 numeric ID。
+            body: 新的 Markdown 正文。
         """
         ...
 

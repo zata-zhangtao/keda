@@ -297,6 +297,17 @@ def ensure_repository_initialized(
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class UpsertRepositoryResult:
+    """Outcome of registering or updating a repository in the global registry."""
+
+    repo_id: str
+    path: str
+    display_name: str | None
+    action: str  # "added", "updated", "unchanged"
+    previous_path: str | None = None
+
+
 def register_repository(
     *,
     repo_id: str,
@@ -334,6 +345,91 @@ def register_repository(
         display_name=display_name,
     )
     return True
+
+
+def upsert_repository(
+    *,
+    repo_id: str,
+    repo_path: Path,
+    display_name: str,
+    editor: IRepositoryRegistryEditor,
+    dry_run: bool = False,
+) -> UpsertRepositoryResult:
+    """Add or update a repository entry in the global registry.
+
+    If ``repo_id`` already exists but points to a different resolved path, the
+    existing entry is replaced with the new path so that ``iar init`` in a new
+    location for the same logical repository keeps ``iar daemon`` working.
+
+    Args:
+        repo_id: Registry identifier.
+        repo_path: Repository root path.
+        display_name: Human-readable display name.
+        editor: Registry editor.
+        dry_run: When ``True``, skip actual writes.
+
+    Returns:
+        Structured result describing whether the entry was added, updated, or
+        left unchanged.
+
+    Raises:
+        ValueError: If reading or writing the registry fails.
+    """
+    resolved_path = repo_path.expanduser().resolve()
+    registered_entries = {entry.repo_id: entry for entry in editor.list_repositories()}
+    existing = registered_entries.get(repo_id)
+
+    if existing is None:
+        if dry_run:
+            return UpsertRepositoryResult(
+                repo_id=repo_id,
+                path=str(resolved_path),
+                display_name=display_name,
+                action="added",
+            )
+        editor.add_repository(
+            repo_id=repo_id,
+            path=str(resolved_path),
+            display_name=display_name,
+        )
+        return UpsertRepositoryResult(
+            repo_id=repo_id,
+            path=str(resolved_path),
+            display_name=display_name,
+            action="added",
+        )
+
+    existing_path = Path(existing.path).expanduser().resolve()
+    if existing_path == resolved_path:
+        return UpsertRepositoryResult(
+            repo_id=repo_id,
+            path=str(resolved_path),
+            display_name=display_name,
+            action="unchanged",
+        )
+
+    if dry_run:
+        return UpsertRepositoryResult(
+            repo_id=repo_id,
+            path=str(resolved_path),
+            display_name=display_name,
+            action="updated",
+            previous_path=existing.path,
+        )
+
+    editor.remove_repository(repo_id)
+    editor.add_repository(
+        repo_id=repo_id,
+        path=str(resolved_path),
+        display_name=display_name,
+    )
+    return UpsertRepositoryResult(
+        repo_id=repo_id,
+        path=str(resolved_path),
+        display_name=display_name,
+        action="updated",
+        previous_path=existing.path,
+    )
 
 
 def filter_unregistered_candidates(

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import codecs
 import json
+import os
+import select
 import subprocess
 import sys
 import threading
@@ -13,6 +16,15 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from backend.infrastructure.logging.logger import logger
+
+try:
+    import pty
+except ImportError:  # pragma: no cover - pty is POSIX-only (absent on Windows).
+    pty = None  # type: ignore[assignment]
+
+# Streaming agents (kimi / codex) block-buffer stdout when it is a pipe, hiding
+# their progress until exit. A pseudo-terminal makes them line-buffer again.
+_PTY_AVAILABLE = pty is not None and hasattr(pty, "openpty")
 
 _MAX_BUFFER_SIZE = 4096
 _MAX_ERROR_DETAIL_LEN = 4096
@@ -103,11 +115,31 @@ class SubprocessRunner:
         cwd: Path,
         check: bool = True,
         timeout: int | None = None,
+        inactivity_timeout: int | None = None,
         capture_output: bool = True,
         input_text: str | None = None,
         label: str | None = None,
+        output_sink: Callable[[str], None] | None = None,
     ) -> CommandResult:
-        """Run a subprocess and capture output."""
+        """Run a subprocess and capture output.
+
+        Args:
+            command: Command and arguments to execute.
+            cwd: Working directory for the subprocess.
+            check: Raise CommandFailedError when return code is non-zero.
+            timeout: Optional wall-clock timeout in seconds.
+            inactivity_timeout: Optional timeout in seconds since the last
+                stdout/stderr output. Useful for detecting hung agents that
+                keep the process alive without producing data.
+            capture_output: Capture stdout/stderr instead of streaming.
+            input_text: Optional text to feed via stdin.
+            label: Optional label for heartbeat/timeout logs.
+            output_sink: Optional callback for streamed output chunks. When
+                provided for a streaming command (Claude ``stream-json`` or any
+                non-captured command), rendered text is routed to the sink
+                instead of the shared stdout, so parallel Issue runs can keep
+                each agent's output in its own panel/log without interleaving.
+        """
         if input_text is not None:
             completed = subprocess.run(
                 list(command),
@@ -124,13 +156,23 @@ class SubprocessRunner:
             stderr = completed.stderr
         elif should_filter_claude_stream(command):
             completed = run_filtered_claude_stream(
-                command, cwd=cwd, timeout=timeout, collect_stdout=True, label=label
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                inactivity_timeout=inactivity_timeout,
+                collect_stdout=True,
+                label=label,
+                output_sink=output_sink,
             )
             stdout = completed.stdout
             stderr = completed.stderr
         elif capture_output and timeout is not None:
             completed = _run_captured_process(
-                command, cwd=cwd, timeout=timeout, label=label
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                inactivity_timeout=inactivity_timeout,
+                label=label,
             )
             stdout = completed.stdout
             stderr = completed.stderr
@@ -144,6 +186,19 @@ class SubprocessRunner:
                 encoding="utf-8",
                 errors="replace",
                 timeout=timeout,
+            )
+            stdout = completed.stdout
+            stderr = completed.stderr
+        elif _PTY_AVAILABLE:
+            # Stream a non-Claude command (kimi / codex) under a PTY so it
+            # line-buffers and shows live progress instead of going silent.
+            completed = _run_pty_stream(
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                inactivity_timeout=inactivity_timeout,
+                label=label,
+                output_sink=output_sink,
             )
             stdout = completed.stdout
             stderr = completed.stderr
@@ -162,6 +217,7 @@ class SubprocessRunner:
                 process,
                 command,
                 timeout=timeout,
+                inactivity_timeout_seconds=inactivity_timeout,
                 heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
                 base_label="Command",
                 context_label=label,
@@ -172,14 +228,22 @@ class SubprocessRunner:
             try:
                 if process.stdout is not None:
                     for line in process.stdout:
-                        timestamped = _format_timestamped_line(line)
-                        print(timestamped, end="", flush=True)
+                        watchdog.note_output()
+                        if output_sink is not None:
+                            output_sink(line)
+                        else:
+                            timestamped = _format_timestamped_line(line)
+                            print(timestamped, end="", flush=True)
                         logger.info("%s", line.rstrip("\n"))
                         stdout_lines.append(line)
                 if process.stderr is not None:
                     for line in process.stderr:
-                        timestamped = _format_timestamped_line(line)
-                        print(timestamped, end="", file=sys.stderr, flush=True)
+                        watchdog.note_output()
+                        if output_sink is not None:
+                            output_sink(line)
+                        else:
+                            timestamped = _format_timestamped_line(line)
+                            print(timestamped, end="", file=sys.stderr, flush=True)
                         logger.warning("%s", line.rstrip("\n"))
                         stderr_lines.append(line)
                 return_code = process.wait(timeout=timeout)
@@ -219,9 +283,10 @@ def _run_captured_process(
     *,
     cwd: Path,
     timeout: int,
+    inactivity_timeout: int | None = None,
     label: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a captured subprocess with heartbeat logging."""
+    """Run a captured subprocess with heartbeat and optional inactivity logging."""
     process = subprocess.Popen(
         list(command),
         cwd=cwd,
@@ -235,13 +300,18 @@ def _run_captured_process(
         process,
         command,
         timeout=timeout,
+        inactivity_timeout_seconds=inactivity_timeout,
         heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
         base_label="Command",
         context_label=label,
     )
     watchdog.start()
     try:
-        stdout, stderr = process.communicate()
+        if inactivity_timeout is None:
+            stdout, stderr = process.communicate()
+        else:
+            stdout, stderr = _communicate_with_activity_tracking(process, watchdog)
+            process.wait()
         watchdog.raise_if_timed_out()
     except Exception:
         process.kill()
@@ -257,8 +327,44 @@ def _run_captured_process(
     )
 
 
+def _communicate_with_activity_tracking(
+    process: subprocess.Popen[str],
+    watchdog: "_ProcessWatchdog",
+) -> tuple[str, str]:
+    """Read stdout/stderr while resetting the inactivity timeout on each chunk."""
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    def _pump_stdout() -> None:
+        if process.stdout is None:
+            return
+        for line in process.stdout:
+            watchdog.note_output()
+            stdout_lines.append(line)
+
+    def _pump_stderr() -> None:
+        if process.stderr is None:
+            return
+        for line in process.stderr:
+            watchdog.note_output()
+            stderr_lines.append(line)
+
+    stdout_thread = threading.Thread(target=_pump_stdout, daemon=True)
+    stderr_thread = threading.Thread(target=_pump_stderr, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    stdout_thread.join(timeout=5)
+    stderr_thread.join(timeout=5)
+    return "".join(stdout_lines), "".join(stderr_lines)
+
+
 class _ProcessWatchdog:
-    """Log long-running subprocess heartbeats and enforce wall-clock timeout."""
+    """Log long-running subprocess heartbeats and enforce timeouts.
+
+    Supports both a wall-clock timeout and an inactivity (no-output)
+    timeout. The inactivity timeout resets whenever the watched process
+    produces stdout or stderr data.
+    """
 
     def __init__(
         self,
@@ -266,6 +372,7 @@ class _ProcessWatchdog:
         command: Sequence[str],
         *,
         timeout: int | None,
+        inactivity_timeout_seconds: int | None = None,
         heartbeat_seconds: int,
         base_label: str,
         context_label: str | None = None,
@@ -273,10 +380,14 @@ class _ProcessWatchdog:
         self._process = process
         self._command = tuple(command)
         self._timeout = timeout
+        self._inactivity_timeout = inactivity_timeout_seconds
+        self._effective_timeout: int | None = timeout
         self._heartbeat_seconds = heartbeat_seconds
         self._base_label = base_label
         self._context_label = context_label
         self._started_at = time.monotonic()
+        self._last_output_at = self._started_at
+        self._output_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._timed_out = False
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -290,12 +401,17 @@ class _ProcessWatchdog:
         self._stop_event.set()
         self._thread.join(timeout=1)
 
+    def note_output(self) -> None:
+        """Reset the inactivity timeout clock after observing output."""
+        with self._output_lock:
+            self._last_output_at = time.monotonic()
+
     def raise_if_timed_out(self) -> None:
         """Raise TimeoutExpired when the watchdog killed the process."""
         if self._timed_out:
             raise subprocess.TimeoutExpired(
                 cmd=list(self._command),
-                timeout=self._timeout,
+                timeout=self._effective_timeout,
             )
 
     def _format_label(self) -> str:
@@ -303,6 +419,37 @@ class _ProcessWatchdog:
         if self._context_label:
             return f"{self._base_label} ({self._context_label})"
         return self._base_label
+
+    def _check_timeouts(self, elapsed_seconds: int) -> bool:
+        """Return True if a timeout fired and the process was killed."""
+        if self._timeout is not None and elapsed_seconds >= self._timeout:
+            self._timed_out = True
+            self._effective_timeout = self._timeout
+            label = self._format_label()
+            logger.error(
+                "%s timed out after %ds; terminating: %s",
+                label,
+                elapsed_seconds,
+                _summarize_command(self._command),
+            )
+            self._process.kill()
+            return True
+        if self._inactivity_timeout is not None:
+            with self._output_lock:
+                inactive_seconds = int(time.monotonic() - self._last_output_at)
+            if inactive_seconds >= self._inactivity_timeout:
+                self._timed_out = True
+                self._effective_timeout = self._inactivity_timeout
+                label = self._format_label()
+                logger.error(
+                    "%s inactive for %ds; terminating: %s",
+                    label,
+                    inactive_seconds,
+                    _summarize_command(self._command),
+                )
+                self._process.kill()
+                return True
+        return False
 
     def _run(self) -> None:
         next_heartbeat_at = self._heartbeat_seconds
@@ -319,16 +466,7 @@ class _ProcessWatchdog:
                     _summarize_command(self._command),
                 )
                 next_heartbeat_at += self._heartbeat_seconds
-            if self._timeout is not None and elapsed_seconds >= self._timeout:
-                self._timed_out = True
-                label = self._format_label()
-                logger.error(
-                    "%s timed out after %ds; terminating: %s",
-                    label,
-                    elapsed_seconds,
-                    _summarize_command(self._command),
-                )
-                self._process.kill()
+            if self._check_timeouts(elapsed_seconds):
                 return
 
 
@@ -424,6 +562,7 @@ def run_filtered_claude_stream(
     *,
     cwd: Path,
     timeout: int | None,
+    inactivity_timeout: int | None = None,
     collect_stdout: bool = False,
     prompt_text: str | None = None,
     output_sink: Callable[[str], None] | None = None,
@@ -435,7 +574,9 @@ def run_filtered_claude_stream(
     Args:
         command: Command to run.
         cwd: Working directory.
-        timeout: Optional timeout in seconds.
+        timeout: Optional wall-clock timeout in seconds.
+        inactivity_timeout: Optional timeout in seconds since the last
+            stdout/stderr output.
         collect_stdout: Whether to collect rendered output.
         prompt_text: Optional prompt to pass via stdin.
         output_sink: Optional callback for rendered text chunks.
@@ -463,6 +604,7 @@ def run_filtered_claude_stream(
         process,
         command,
         timeout=timeout,
+        inactivity_timeout_seconds=inactivity_timeout,
         heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
         base_label="Claude stream",
         context_label=label,
@@ -473,6 +615,7 @@ def run_filtered_claude_stream(
         if process.stderr is None:
             return
         for stderr_line in process.stderr:
+            watchdog.note_output()
             display_sink(stderr_line)
 
     stderr_thread: threading.Thread | None = None
@@ -496,6 +639,7 @@ def run_filtered_claude_stream(
     try:
         if process.stdout is not None:
             for output_line in process.stdout:
+                watchdog.note_output()
                 rendered_text = renderer.render_line(output_line)
                 if collect_stdout and rendered_text:
                     stdout_lines.append(rendered_text)
@@ -545,6 +689,134 @@ def run_filtered_claude_stream(
         args=list(command),
         returncode=return_code,
         stdout="".join(stdout_lines),
+        stderr="",
+    )
+
+
+def _run_pty_stream(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    timeout: int | None,
+    inactivity_timeout: int | None,
+    label: str | None,
+    output_sink: Callable[[str], None] | None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a streaming command under a pseudo-terminal so it line-buffers.
+
+    Agents such as ``kimi`` / ``codex`` switch stdout to block buffering when it
+    is a pipe, so their progress stays invisible until they exit. Allocating a
+    PTY makes them believe stdout is a terminal, restoring live incremental
+    output. stdout and stderr are merged onto the PTY (natural ordering, no
+    second-pipe deadlock). Rendered chunks go to ``output_sink`` when provided,
+    otherwise to this process's stdout with line-buffered logging — mirroring
+    :func:`run_filtered_claude_stream`.
+
+    Args:
+        command: Command and arguments to execute.
+        cwd: Working directory for the subprocess.
+        timeout: Optional wall-clock timeout in seconds.
+        inactivity_timeout: Optional no-output timeout in seconds.
+        label: Optional label for heartbeat/timeout logs.
+        output_sink: Optional callback for rendered text chunks.
+
+    Returns:
+        CompletedProcess with the collected stdout (stderr merged into it).
+    """
+    master_fd, slave_fd = pty.openpty()
+    try:
+        process = subprocess.Popen(
+            list(command),
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+        )
+    finally:
+        os.close(slave_fd)
+    watchdog = _ProcessWatchdog(
+        process,
+        command,
+        timeout=timeout,
+        inactivity_timeout_seconds=inactivity_timeout,
+        heartbeat_seconds=_COMMAND_HEARTBEAT_SECONDS,
+        base_label="Command",
+        context_label=label,
+    )
+    watchdog.start()
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    stream_formatter = _TimestampedStreamFormatter()
+    collected: list[str] = []
+    line_buffer: list[str] = []
+
+    def _flush_log_lines(*, final: bool = False) -> None:
+        joined = "".join(line_buffer)
+        line_buffer.clear()
+        if not joined:
+            return
+        segments = joined.split("\n")
+        remainder = segments.pop()
+        for segment in segments:
+            stripped = segment.rstrip("\r").strip()
+            if stripped:
+                logger.info("Agent output: %s", stripped)
+        if final:
+            stripped_remainder = remainder.rstrip("\r").strip()
+            if stripped_remainder:
+                logger.info("Agent output: %s", stripped_remainder)
+        elif remainder:
+            line_buffer.append(remainder)
+
+    def _emit(text: str) -> None:
+        if not text:
+            return
+        collected.append(text)
+        if output_sink is not None:
+            output_sink(text)
+            return
+        print(stream_formatter.format_chunk(text), end="", flush=True)
+        line_buffer.append(text)
+        if "\n" in text:
+            _flush_log_lines()
+
+    try:
+        while True:
+            try:
+                ready, _, _ = select.select([master_fd], [], [], 1.0)
+            except (OSError, ValueError):
+                break
+            if not ready:
+                if process.poll() is not None:
+                    break
+                continue
+            try:
+                data = os.read(master_fd, 4096)
+            except OSError:
+                break  # EIO once the child closes the slave end == EOF.
+            if not data:
+                break
+            watchdog.note_output()
+            _emit(decoder.decode(data))
+        _emit(decoder.decode(b"", final=True))
+        if output_sink is None:
+            _flush_log_lines(final=True)
+        return_code = process.wait(timeout=timeout)
+        watchdog.raise_if_timed_out()
+    except Exception:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        watchdog.stop()
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+    return subprocess.CompletedProcess(
+        args=list(command),
+        returncode=return_code,
+        stdout="".join(collected),
         stderr="",
     )
 

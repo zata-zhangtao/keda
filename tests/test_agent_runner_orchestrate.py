@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -11,22 +12,30 @@ import pytest
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     AttemptResult,
+    CommandResult,
     FailureType,
     GeneratedContentConfig,
     IssueSummary,
     LabelConfig,
+    RunnerConfig,
     WorktreeConfig,
 )
 from backend.core.use_cases.agent_runner_events import format_event_marker
 from backend.core.use_cases.agent_runner_failure import (
+    AgentUnavailableError,
     ForbiddenBlockedError,
+    MaxRetriesExceededError,
+    ProviderCapacityError,
+    UnrecoverableError,
 )
 from backend.core.use_cases.agent_runner_orchestrate import (
     _READY_DISCOVERY_LIMIT,
     _guard_blocked_issue_has_resolution,
     _mark_issue_blocked,
     _mark_issue_failed,
+    _stamp_attempts_with_agent,
     process_prd_rework_issues,
+    run_issue_with_agent_fallback,
     run_once,
 )
 from backend.infrastructure.process_runner import SubprocessRunner
@@ -520,7 +529,7 @@ def test_run_once_routes_mid_rebase_running_issue_to_recovery(
         agent="auto",
         max_issues=1,
         github_client=fake_client,
-        process_runner=FakeProcessRunner(),
+        process_runner=_preflight_ok_runner(),
     )
 
     assert exit_code == 0
@@ -564,7 +573,7 @@ def test_run_once_skips_running_issue_without_recoverable_state(
         agent="auto",
         max_issues=1,
         github_client=fake_client,
-        process_runner=FakeProcessRunner(),
+        process_runner=_preflight_ok_runner(),
     )
 
     assert exit_code == 0
@@ -786,3 +795,551 @@ def test_process_prd_rework_issues_failure_rollback(tmp_path: Path) -> None:
     assert len(comment_calls) == 1
     assert "PRD generation failed" in comment_calls[0]["body"]
     assert "agent/rework-prd" in comment_calls[0]["body"]
+
+
+# ---------------------------------------------------------------------------
+# Level 2 跨 agent fallback 链：切换 / 抑制 / 封顶 / 历史合并
+# ---------------------------------------------------------------------------
+
+
+def _agent_outcomes(
+    outcomes: dict[str, object],
+) -> tuple[object, list[str]]:
+    """Build a ``process_for_agent`` callable from an ``{agent: outcome}`` map.
+
+    ``outcome`` is ``None`` for success or an exception instance to raise. The
+    returned ``calls`` list records the agents invoked, in order.
+    """
+    calls: list[str] = []
+
+    def process_for_agent(*, agent: str, **kwargs: object) -> None:
+        calls.append(agent)
+        outcome = outcomes[agent]
+        if isinstance(outcome, BaseException):
+            raise outcome
+
+    return process_for_agent, calls
+
+
+def _fallback_issue(agent_label: str) -> IssueSummary:
+    return _make_ready_issue(1, "T", "", (agent_label,))
+
+
+def _preflight_ok_runner() -> FakeProcessRunner:
+    """A runner whose ``git remote`` answers so run_once preflight passes."""
+    return FakeProcessRunner(
+        responses={
+            ("git", "remote"): CommandResult(
+                command=("git", "remote"), return_code=0, stdout="origin\n", stderr=""
+            )
+        }
+    )
+
+
+def _attempt(detail: str, failure_type: FailureType) -> AttemptResult:
+    return AttemptResult(
+        attempt_number=1, failure_type=failure_type, recovered=False, detail=detail
+    )
+
+
+def test_fallback_success_uses_first_agent_without_switching() -> None:
+    """A first-agent success returns immediately and never switches."""
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
+    process_for_agent, calls = _agent_outcomes({"claude": None})
+
+    used_agent = run_issue_with_agent_fallback(
+        issue=_fallback_issue("agent/claude"),
+        config=config,
+        agent="auto",
+        process_for_agent=process_for_agent,
+    )
+
+    assert used_agent == "claude"
+    assert calls == ["claude"]
+
+
+def test_fallback_switches_on_provider_capacity() -> None:
+    """A provider-capacity failure switches to the next agent."""
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
+    process_for_agent, calls = _agent_outcomes(
+        {"claude": ProviderCapacityError("429 usage limit", []), "codex": None}
+    )
+
+    used_agent = run_issue_with_agent_fallback(
+        issue=_fallback_issue("agent/claude"),
+        config=config,
+        agent="auto",
+        process_for_agent=process_for_agent,
+    )
+
+    assert used_agent == "codex"
+    assert calls == ["claude", "codex"]
+
+
+def test_fallback_switches_on_max_retries_exhausted() -> None:
+    """An agent that exhausts its recovery budget hands off to the next agent."""
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
+    process_for_agent, calls = _agent_outcomes(
+        {
+            "claude": MaxRetriesExceededError(
+                [_attempt("no commits", FailureType.NO_COMMITS)]
+            ),
+            "codex": None,
+        }
+    )
+
+    used_agent = run_issue_with_agent_fallback(
+        issue=_fallback_issue("agent/claude"),
+        config=config,
+        agent="auto",
+        process_for_agent=process_for_agent,
+    )
+
+    assert used_agent == "codex"
+    assert calls == ["claude", "codex"]
+
+
+def test_fallback_does_not_switch_on_unrecoverable() -> None:
+    """Unrecoverable failures propagate without trying other agents."""
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
+    process_for_agent, calls = _agent_outcomes(
+        {"claude": UnrecoverableError("bad branch", []), "codex": None}
+    )
+
+    with pytest.raises(UnrecoverableError):
+        run_issue_with_agent_fallback(
+            issue=_fallback_issue("agent/claude"),
+            config=config,
+            agent="auto",
+            process_for_agent=process_for_agent,
+        )
+
+    assert calls == ["claude"]
+
+
+def test_fallback_does_not_switch_on_forbidden_blocked() -> None:
+    """Forbidden-path blocks propagate without trying other agents."""
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
+    process_for_agent, calls = _agent_outcomes(
+        {"claude": ForbiddenBlockedError("forbidden", []), "codex": None}
+    )
+
+    with pytest.raises(ForbiddenBlockedError):
+        run_issue_with_agent_fallback(
+            issue=_fallback_issue("agent/claude"),
+            config=config,
+            agent="auto",
+            process_for_agent=process_for_agent,
+        )
+
+    assert calls == ["claude"]
+
+
+def test_fallback_skips_unavailable_agent() -> None:
+    """An unavailable agent CLI is skipped to the next candidate."""
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
+    process_for_agent, calls = _agent_outcomes(
+        {"claude": AgentUnavailableError("claude"), "codex": None}
+    )
+
+    used_agent = run_issue_with_agent_fallback(
+        issue=_fallback_issue("agent/claude"),
+        config=config,
+        agent="auto",
+        process_for_agent=process_for_agent,
+    )
+
+    assert used_agent == "codex"
+    assert calls == ["claude", "codex"]
+
+
+def test_fallback_respects_max_agent_switches() -> None:
+    """``max_agent_switches`` caps how many agents are attempted."""
+    config = AppConfig(
+        runner=RunnerConfig(
+            agent_fallback_order=("claude", "codex", "kimi"),
+            max_agent_switches=1,
+        )
+    )
+    process_for_agent, calls = _agent_outcomes(
+        {
+            "claude": MaxRetriesExceededError(
+                [_attempt("claude failed", FailureType.NO_COMMITS)]
+            ),
+            "codex": MaxRetriesExceededError(
+                [_attempt("codex failed", FailureType.VERIFICATION_FAILED)]
+            ),
+            "kimi": None,
+        }
+    )
+
+    with pytest.raises(MaxRetriesExceededError):
+        run_issue_with_agent_fallback(
+            issue=_fallback_issue("agent/claude"),
+            config=config,
+            agent="auto",
+            process_for_agent=process_for_agent,
+        )
+
+    # max_agent_switches=1 means at most 2 agents; kimi is never tried.
+    assert calls == ["claude", "codex"]
+
+
+def test_fallback_merges_attempt_history_with_agent_labels() -> None:
+    """Exhausting the chain raises merged, agent-stamped attempt history."""
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
+    process_for_agent, _calls = _agent_outcomes(
+        {
+            "claude": MaxRetriesExceededError(
+                [_attempt("claude failed", FailureType.NO_COMMITS)]
+            ),
+            "codex": ProviderCapacityError(
+                "codex at capacity",
+                [_attempt("codex capacity", FailureType.PROVIDER_CAPACITY)],
+            ),
+        }
+    )
+
+    with pytest.raises(MaxRetriesExceededError) as exc_info:
+        run_issue_with_agent_fallback(
+            issue=_fallback_issue("agent/claude"),
+            config=config,
+            agent="auto",
+            process_for_agent=process_for_agent,
+        )
+
+    attempts = exc_info.value.attempt_results
+    assert [attempt.agent for attempt in attempts] == ["claude", "codex"]
+
+
+def test_fallback_single_agent_reraises_with_agent_stamp() -> None:
+    """With fallback disabled, the single agent's failure is stamped."""
+    process_for_agent, calls = _agent_outcomes(
+        {
+            "codex": MaxRetriesExceededError(
+                [_attempt("no commits", FailureType.NO_COMMITS)]
+            )
+        }
+    )
+
+    with pytest.raises(MaxRetriesExceededError) as exc_info:
+        run_issue_with_agent_fallback(
+            issue=_fallback_issue("agent/codex"),
+            config=AppConfig(runner=RunnerConfig(agent_fallback_order=())),
+            agent="auto",
+            process_for_agent=process_for_agent,
+        )
+
+    assert calls == ["codex"]
+    assert exc_info.value.attempt_results[0].agent == "codex"
+
+
+def test_stamp_attempts_with_agent_preserves_existing_label() -> None:
+    """Stamping fills empty agent labels but never overwrites existing ones."""
+    pre_labeled = AttemptResult(1, FailureType.SUCCESS, False, "x", agent="claude")
+    unlabeled = AttemptResult(2, FailureType.NO_COMMITS, False, "y")
+
+    stamped = _stamp_attempts_with_agent([pre_labeled, unlabeled], "codex")
+
+    assert stamped[0].agent == "claude"
+    assert stamped[1].agent == "codex"
+
+
+def test_persist_attempt_result_writes_to_sqlite_and_github() -> None:
+    """Each attempt is persisted to SQLite and rendered into a GitHub comment."""
+    import sqlite3
+
+    from backend.infrastructure.persistence.console_store import SqliteConsoleStore
+
+    fake_client = FakeGitHubClient()
+    db_path = Path("/tmp/iar-test-attempt-records.db")
+    db_path.unlink(missing_ok=True)
+    store = SqliteConsoleStore(db_path)
+
+    result = AttemptResult(
+        attempt_number=1,
+        failure_type=FailureType.NO_COMMITS,
+        recovered=False,
+        detail="No commits.",
+        agent="claude",
+        started_at="2026-06-26T10:00:00",
+        finished_at="2026-06-26T10:00:05",
+        duration_seconds=5.0,
+    )
+
+    from backend.core.use_cases.agent_runner_orchestrate import _persist_attempt_result
+
+    _persist_attempt_result(
+        result=result,
+        attempt_results=[result],
+        repo_id="test-repo",
+        issue_number=42,
+        github_client=fake_client,
+        run_history_store=store,
+    )
+
+    # SQLite
+    with sqlite3.connect(str(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT repo_id, issue_number, agent, attempt_number, failure_type, "
+            "recovered, detail, duration_seconds FROM attempt_records"
+        ).fetchall()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row[0] == "test-repo"
+    assert row[1] == 42
+    assert row[2] == "claude"
+    assert row[3] == 1
+    assert row[4] == "no_commits"
+    assert row[5] == 0
+    assert row[6] == "No commits."
+    assert row[7] == 5.0
+
+    # GitHub: first attempt creates a new comment
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 1
+    assert "<!-- iar-attempt-history -->" in comment_calls[0]["body"]
+    assert "claude" in comment_calls[0]["body"]
+    assert "5.0s" in comment_calls[0]["body"]
+
+
+def test_persist_attempt_result_updates_existing_github_comment() -> None:
+    """Subsequent attempts update the existing attempt-history comment."""
+    fake_client = FakeGitHubClient()
+    # Seed an existing attempt-history comment
+    fake_client.comment_issue(42, "<!-- iar-attempt-history -->\nold body")
+    fake_client.calls.clear()
+
+    result = AttemptResult(
+        attempt_number=2,
+        failure_type=FailureType.SUCCESS,
+        recovered=True,
+        detail="Done.",
+        agent="claude",
+        started_at="",
+        finished_at="",
+        duration_seconds=3.0,
+    )
+
+    from backend.core.use_cases.agent_runner_orchestrate import _persist_attempt_result
+
+    _persist_attempt_result(
+        result=result,
+        attempt_results=[result],
+        repo_id="test-repo",
+        issue_number=42,
+        github_client=fake_client,
+        run_history_store=None,
+    )
+
+    edit_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_comment"]
+    assert len(edit_calls) == 1
+    assert "<!-- iar-attempt-history -->" in edit_calls[0]["body"]
+    assert "Done." in edit_calls[0]["body"]
+    comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
+    assert len(comment_calls) == 0
+
+
+def test_run_once_switches_agent_on_provider_capacity(monkeypatch) -> None:
+    """run_once wires the fallback chain: capacity on agent 1 switches to agent 2."""
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue(123, "Example", "", ("agent/ready", "agent/codex"))
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+    seen_agents: list[str] = []
+
+    def _fake_process_ready_issue(*, agent: str, **_kwargs: object) -> None:
+        seen_agents.append(agent)
+        if agent == "codex":
+            raise ProviderCapacityError(
+                "429 usage limit",
+                [_attempt("codex at capacity", FailureType.PROVIDER_CAPACITY)],
+            )
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("codex", "claude")))
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+    )
+
+    assert exit_code == 0
+    assert seen_agents == ["codex", "claude"]
+
+
+def test_run_once_marks_failed_with_merged_history_when_all_agents_fail(
+    monkeypatch,
+) -> None:
+    """When every fallback agent fails, the comment merges per-agent history."""
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issue = _make_ready_issue(123, "Example", "", ("agent/ready", "agent/codex"))
+    fake_client.list_ready_issues = lambda ready_label, limit: [issue]
+
+    def _fake_process_ready_issue(*, agent: str, **_kwargs: object) -> None:
+        raise MaxRetriesExceededError(
+            [_attempt(f"{agent} produced no commits", FailureType.NO_COMMITS)]
+        )
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("codex", "claude")))
+
+    exit_code = run_once(
+        repo_path=Path("."),
+        config=config,
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+    )
+
+    assert exit_code == 1
+    failed_calls = [
+        c
+        for c in fake_client.calls
+        if c["method"] == "edit_issue_labels" and "agent/failed" in c.get("add", [])
+    ]
+    assert len(failed_calls) == 1
+    failure_comment = [c for c in fake_client.calls if c["method"] == "comment_issue"][
+        -1
+    ]["body"]
+    assert "| codex |" in failure_comment
+    assert "| claude |" in failure_comment
+
+
+def test_run_once_parallel_runs_issues_concurrently(monkeypatch, tmp_path) -> None:
+    """concurrency>1 claims up to `concurrency` issues and runs them in parallel.
+
+    A barrier of width 3 only releases if all three workers reach it at once, so
+    passing proves both the raised claim limit (max(max_issues, concurrency)) and
+    real parallelism.
+    """
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issues = [_make_ready_issue(n, f"I{n}", "", ("agent/ready",)) for n in (1, 2, 3)]
+    fake_client.list_ready_issues = lambda ready_label, limit: list(issues)
+    barrier = threading.Barrier(3, timeout=5)
+    reached: list[int] = []
+
+    def _fake_process_ready_issue(*, agent: str, issue, **_kwargs: object) -> None:
+        try:
+            barrier.wait()
+            reached.append(issue.number)
+        except threading.BrokenBarrierError:  # pragma: no cover - failure path
+            pass
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+
+    exit_code = run_once(
+        repo_path=tmp_path,
+        config=AppConfig(),
+        dry_run=False,
+        agent="auto",
+        max_issues=1,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+        repo_id="testrepo",
+        concurrency=3,
+    )
+
+    assert exit_code == 0
+    assert sorted(reached) == [1, 2, 3]
+
+
+def test_run_once_parallel_aggregates_exit_code(monkeypatch, tmp_path) -> None:
+    """One failing issue makes the whole parallel pass return exit code 1."""
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issues = [_make_ready_issue(n, f"I{n}", "", ("agent/ready",)) for n in (1, 2)]
+    fake_client.list_ready_issues = lambda ready_label, limit: list(issues)
+
+    def _fake_process_ready_issue(*, agent: str, issue, **_kwargs: object) -> None:
+        if issue.number == 2:
+            raise MaxRetriesExceededError([_attempt("boom", FailureType.NO_COMMITS)])
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+
+    exit_code = run_once(
+        repo_path=tmp_path,
+        config=AppConfig(),
+        dry_run=False,
+        agent="auto",
+        max_issues=2,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+        repo_id="testrepo",
+        concurrency=2,
+    )
+
+    assert exit_code == 1
+
+
+def test_run_once_parallel_writes_per_issue_logs(monkeypatch, tmp_path) -> None:
+    """Parallel passes write one log file per Issue under logs/agent-runner/issues."""
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issues = [_make_ready_issue(n, f"I{n}", "", ("agent/ready",)) for n in (1, 2)]
+    fake_client.list_ready_issues = lambda ready_label, limit: list(issues)
+
+    def _fake_process_ready_issue(*, agent: str, issue, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+
+    run_once(
+        repo_path=tmp_path,
+        config=AppConfig(),
+        dry_run=False,
+        agent="auto",
+        max_issues=2,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+        repo_id="testrepo",
+        concurrency=2,
+    )
+
+    issue_log_dir = tmp_path / "logs" / "agent-runner" / "issues" / "testrepo"
+    assert list(issue_log_dir.glob("issue-1-*.log"))
+    assert list(issue_log_dir.glob("issue-2-*.log"))
+
+
+def test_run_once_sequential_default_writes_no_per_issue_logs(
+    monkeypatch, tmp_path
+) -> None:
+    """concurrency<=1 keeps the sequential path with no per-Issue routing/logs."""
+    from backend.core.use_cases import agent_runner_orchestrate as orchestrate
+
+    fake_client = FakeGitHubClient()
+    issues = [_make_ready_issue(n, f"I{n}", "", ("agent/ready",)) for n in (1, 2)]
+    fake_client.list_ready_issues = lambda ready_label, limit: list(issues)
+
+    def _fake_process_ready_issue(*, agent: str, issue, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(orchestrate, "_process_ready_issue", _fake_process_ready_issue)
+
+    run_once(
+        repo_path=tmp_path,
+        config=AppConfig(),
+        dry_run=False,
+        agent="auto",
+        max_issues=2,
+        github_client=fake_client,
+        process_runner=_preflight_ok_runner(),
+        repo_id="testrepo",
+        concurrency=1,
+    )
+
+    assert not (tmp_path / "logs" / "agent-runner" / "issues").exists()

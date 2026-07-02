@@ -136,7 +136,8 @@ def test_registry_start_uses_config_directory_as_spawn_cwd(tmp_path: Path) -> No
         "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
         return_value=([context], []),
     ), patch(
-        "backend.api.cli_registry.resolve_config_toml_path", return_value=config_path
+        "backend.api.cli_registry.resolve_registry_config_toml_path",
+        return_value=config_path,
     ), patch("backend.api.cli_registry.start_runner_process", new=start_mock):
         exit_code = _run_registry_start_command(parsed, MagicMock())
 
@@ -174,7 +175,8 @@ def test_registry_start_rejects_missing_repo_path(tmp_path: Path) -> None:
         "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
         return_value=([], []),
     ), patch(
-        "backend.api.cli_registry.resolve_config_toml_path", return_value=config_path
+        "backend.api.cli_registry.resolve_registry_config_toml_path",
+        return_value=config_path,
     ), patch("backend.api.cli_registry.start_runner_process", new=start_mock):
         exit_code = _run_registry_start_command(parsed, MagicMock())
 
@@ -342,7 +344,8 @@ def test_takeover_start_daemons_uses_config_directory_as_spawn_cwd(
         "backend.api.cli_takeover.resolve_repository_targets_with_diagnostics",
         return_value=([context], []),
     ), patch(
-        "backend.api.cli_takeover.resolve_config_toml_path", return_value=config_path
+        "backend.api.cli_takeover.resolve_registry_config_toml_path",
+        return_value=config_path,
     ), patch("backend.api.cli_takeover.start_runner_process", new=start_mock):
         _start_daemons_for_repo("zata-zhangtao-keda", repo_path)
 

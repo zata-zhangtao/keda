@@ -449,6 +449,38 @@ End every review with a concise delivery summary using symbols for clarity. Keep
 结论: ⚠️ 警告 -- 合并前仍有 2 项高优先级问题待解决。
 ```
 
+### Machine-Readable Verdict Block
+
+After the Chinese review report above, append a final fenced JSON block so that
+automated gates (e.g. the agent runner pre-PR review gate) can parse the
+verdict without ambiguity:
+
+```json
+{
+  "verdict": "approved" | "changes_requested",
+  "summary": "short rationale in English or Chinese",
+  "findings": [
+    {
+      "category": "requirement|code|validation|docs",
+      "severity": "critical|high|medium|low",
+      "file": "path/to/file.py",
+      "line": 42,
+      "title": "short title",
+      "description": "why this is a problem",
+      "recommendation": "how to fix"
+    }
+  ]
+}
+```
+
+Rules for the JSON block:
+
+- It must be the last fenced code block in your response.
+- If there are no unresolved findings, set `verdict` to `approved` and `findings` to `[]`.
+- If there are any unresolved findings, set `verdict` to `changes_requested`.
+- If you have already applied fixes in the worktree, set `verdict` to `approved` and
+  write `.agent-runner/commit-request.json` with a descriptive `commit_message`.
+
 If requirement context is incomplete, add an `Assumptions` section and state exactly what requirement source you relied on.
 
 ## Approval Criteria

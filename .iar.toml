@@ -11,6 +11,9 @@ id = "keda"
 enabled = true
 # 管理终端 / 日志中显示的友好名称
 display_name = "keda"
+# 可选：GitHub owner/name（``gh pr list --repo`` 使用）。
+# 缺省时 ``iar issue list`` 的 PR 列为空 + stderr 一次性 WARN。
+github_repo = "zata-zhangtao/keda"
 
 # Git 发布配置：推送 remote、目标基础分支 base_branch
 [agent_runner.git]
@@ -32,17 +35,36 @@ path_command = "iar worktree path --branch issue-{issue_number}"
 [agent_runner.runner]
 # 每次轮询每个仓库最多处理多少个 Issue
 max_issues = 1
+# 单轮内并行处理的 Issue 数量：1 为串行（默认）；>1 时同一轮并行跑多个 Issue，仅 iar daemon --concurrency 未指定时作为默认值
+max_concurrent_issues = 1
 # 默认使用的 AI agent：auto / claude / codex / kimi
 default_agent = "auto"
 # Agent 失败后的最大重试次数
 max_recovery_attempts = 5
 # 每次重试前等待的秒数
 recovery_retry_delay_seconds = 30
-# 提交前自动运行的验证命令；任一命令失败会进入 recovery
+# 跨 agent fallback 链：主 agent 失败后依次尝试本机可用 agent（如 ["claude", "kimi", "codex"]），命令不存在则自动跳过；设为空列表可关闭切换
+agent_fallback_order = [
+    "claude",
+    "kimi",
+    "codex",
+]
+# 最多切换 agent 次数（order=[a,b,c] 且此值=2 时最多尝试 3 个 agent）
+max_agent_switches = 2
+# 瞬时网络错误（socket 断开 / 5xx / 超时）的就地重试次数
+transient_retry_attempts = 2
+# 瞬时错误每次重试前等待的秒数
+transient_retry_delay_seconds = 10
+timeout_seconds = 14400
+inactivity_timeout_seconds = 1200
+# 提交前自动运行的验证命令；任一命令失败会进入 recovery。
+# 注意：这里显式拆出 pre-commit，避免 `just test` 的 quality-flag 缓存把 lint 跳过；
+# `SKIP=check-test-flag` 防止 pre-commit 在 just test 还没跑完就因标记不存在而失败。
 verification_commands = [
     "git diff --check",
-    "uv run mkdocs build",
-    "just test",
+    "SKIP=check-test-flag uv run pre-commit run --all-files --show-diff-on-failure",
+    "just test all",
+    "uv run mkdocs build --strict",
 ]
 
 # 发布前安全边界：自动合并开关、禁止提交的路径模式
@@ -73,6 +95,20 @@ parse_evidence_format_with_agent = true
 language = "zh-CN"
 # 是否要求带 iar:structured-evidence marker 的 Issue 提供 evidence.json manifest
 structured_evidence = true
+# 是否要求每个结构化证据项提供 negative_control（红→绿判别力,默认开;关掉则回退旧行为）
+require_negative_control = true
+# 是否由 keda 复跑每个结构化证据项的 command 以确认其真的通过（默认开;关掉则只信 agent 证据文件）
+reexecute_commands = true
+# keda 复跑单条命令的超时秒数（默认 300;超时判失败,命令须为自终止的检查）
+reexecute_timeout_seconds = 300
+# 命中代码树指纹(HEAD^{tree})时跳过该项 RV 命令复跑,避免 blocked-continue/换 agent 重复跑（默认开;工作区脏则不缓存、照常复跑）
+reexecute_cache_enabled = true
+# 是否启用独立 verifier agent 复验（默认关;开启后在开 PR 前换一个 agent 对抗复验,red 自动打回 builder）
+verifier_enabled = false
+# verifier 用哪个 agent（auto=自动挑一个≠builder 的）
+verifier_agent = "auto"
+# verifier agent 运行超时秒数（默认 1800）
+verifier_timeout_seconds = 1800
 
 # 实现 Agent 的 prompt 模板；默认 phase 与自定义阶段模板
 [agent_runner.prompts]
@@ -93,6 +129,8 @@ allow_same_agent = true
 max_attempts = 2
 # review agent 最长运行秒数
 timeout_seconds = 1800
+# reviewer 报出问题但未写 commit request 时，同一轮内追加提醒的最大次数
+commit_request_reminder_attempts = 1
 review_prompt_template = []
 
 # Draft PR 创建后的自动 supervisor 配置
@@ -126,7 +164,7 @@ default_agent = "auto"
 # 是否从 PRD 生成 Issue
 enabled = true
 # 生成模式：template（模板渲染）或 agent（调用 AI）
-mode = "template"
+mode = "agent"
 # 输出格式：json / markdown
 output = "json"
 # Issue 标题模板
@@ -149,7 +187,7 @@ include_diff_stat = true
 # 是否生成 Draft PR 正文
 enabled = true
 # 生成模式：template（模板渲染）或 agent（调用 AI）
-mode = "template"
+mode = "agent"
 # 输出格式：json / markdown
 output = "json"
 # PR 标题模板
@@ -213,6 +251,9 @@ default_rounds = 2
 default_synthesizer = "claude"
 # 审议会话输出目录
 default_output_dir = "logs/agent-runner/deliberations"
+continue_on_agent_error = true
+agent_failure_timeout_seconds = 300
+stale_rounds_before_hint = 3
 
 # 审议角色：架构师，关注系统设计与可维护性
 [agent_runner.deliberation.profiles.architect]

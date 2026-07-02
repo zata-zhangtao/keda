@@ -141,6 +141,7 @@ codex = "agent/codex"
 claude = "agent/claude"
 kimi = "agent/kimi"
 rework_prd = "agent/rework-prd"
+deliberate = "agent/deliberate"
 
 [agent_runner.git]
 remote = "zata"
@@ -155,9 +156,17 @@ path_command = "iar worktree path --branch issue-{issue_number}"
 default_agent = "claude"
 max_recovery_attempts = 5
 recovery_retry_delay_seconds = 30
+# Wall-clock timeout for a single agent execution attempt (initial or recovery).
+timeout_seconds = 14400
+# Inactivity timeout: kill the agent if it produces no stdout/stderr for this long.
+inactivity_timeout_seconds = 1200
+# 提交前自动运行的验证命令；任一命令失败会进入 recovery。
+# 这里显式拆出 pre-commit，避免 `just test` 的 quality-flag 缓存把 lint 跳过；
+# `SKIP=check-test-flag` 防止 pre-commit 在 just test 还没跑完就因标记不存在而失败。
 verification_commands = [
   "git diff --check",
-  "just test",
+  "SKIP=check-test-flag uv run pre-commit run --all-files --show-diff-on-failure",
+  "just test all",
   "uv run mkdocs build --strict",
 ]
 
@@ -426,12 +435,49 @@ max_context_chars = 24000
 # Whether `iar ask --yes` is allowed to skip interactive confirmation.
 allow_execute_yes = true
 
+# =============================================================================
+# Agent Runner REPL Configuration (`iar` with no subcommand)
+# =============================================================================
+# Controls the interactive REPL entrypoint. Default agent is `claude`;
+# `--agent codex|kimi` overrides it per invocation. `--agent auto` is
+# rejected here (use `iar run` for that).
+[agent_runner.repl]
+enabled = true
+default_agent = "claude"
+default_output_dir = "logs/agent-runner/repl"
+max_context_chars = 24000
+agent_timeout_seconds = 120
+# Commands the REPL executor may run without explicit confirmation.
+# Each entry is a prefix matched against the argv tail after `iar`.
+auto_confirm_commands = [
+  "labels sync --dry-run",
+  "run --dry-run",
+  "review --dry-run",
+  "ask --plan-only",
+]
+# Commands that prompt the user for confirmation before execution.
+confirm_commands = [
+  "run",
+  "daemon",
+  "review",
+  "review-daemon",
+  "issue create",
+  "recover",
+  "blocked-continue",
+  "worktree create",
+  "worktree remove",
+]
+
 [agent_runner.deliberation]
 default_rounds = 2
 default_synthesizer = "claude"
 default_output_dir = "logs/agent-runner/deliberations"
 continue_on_agent_error = true
 agent_failure_timeout_seconds = 300
+# After this many consecutive AI-asked rounds with no new user reply,
+# append a soft hint to the question-list comment suggesting the operator
+# swap `agent/deliberate` for `agent/rework-prd` to lock the scope in.
+stale_rounds_before_hint = 3
 
 [agent_runner.deliberation.profiles.architect]
 agent = "claude"
@@ -490,16 +536,21 @@ enabled = false
 path = "/Users/zata/code/keda"
 enabled = true
 display_name = "Keda Main"
+# GitHub owner/name used by `gh pr list --repo` for PR column population.
+# 缺省时 PR 列为空，并在 stderr 一次性打印 WARN。
+github_repo = "zata-zhangtao/keda"
 
 [agent_runner.repositories.zata-zhangtao-fsense]
 path = "/Users/zata/.iar/repos/zata-zhangtao/fsense"
 enabled = true
 display_name = "fsense"
+github_repo = "zata-zhangtao/fsense"
 
 [agent_runner.repositories.zata-zhangtao-freshai]
 path = "/Users/zata/.iar/repos/zata-zhangtao/freshai"
 enabled = true
 display_name = "freshai"
+github_repo = "zata-zhangtao/freshai"
 [agent_runner.console]
 # 运行历史与审计日志的 SQLite 文件路径（CLI 直跑与面板托管共用）。
 history_db_path = "~/.iar/console.db"
@@ -524,3 +575,10 @@ stop_timeout_seconds = 30
 [agent_runner.daemon]
 review_interval_seconds = 120
 run_interval_seconds = 120
+# Maximum `agent/deliberate` Issues to drive through Phase 0 per pass.
+max_deliberation_issues = 1
+
+[agent_runner.repositories.test-repo]
+path = "/tmp/iar-loop-test-77813"
+enabled = true
+display_name = "Loop Test Repo"

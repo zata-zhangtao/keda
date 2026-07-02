@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "alembic>=1.18.4",
     "boto3>=1.37.0",
+    "croniter>=3.0.0",
     "fastapi>=0.115.0",
     "langchain-core>=1.2.7",
     "pre-commit>=4.5.1",
@@ -35,6 +36,7 @@ dependencies = [
     "psycopg2-binary>=2.9.0",
     "pydantic-settings>=2.0.0",
     "python-dotenv>=1.1.0",
+    "pyyaml>=6.0.3",
     "rich>=13.0.0",
     "tomli-w>=1.0.0",
     "tomlkit>=0.15.0",
@@ -64,6 +66,7 @@ dev = [
     "pre-commit>=4.5.1",
     "pylint>=3.2.0",
     "pytest>=8.3.0",
+    "pytest-testmon>=2.1.0",
     "mkdocs>=1.6.1",
     "mkdocs-material>=9.6.0",
     "mkdocs-git-revision-date-localized-plugin>=1.4.5",
@@ -71,3 +74,6 @@ dev = [
     "pymdown-extensions>=10.14",
     "socksio>=1.0.0",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--testmon"

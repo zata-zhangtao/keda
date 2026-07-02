@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
+    IAgentTranscriptRunner,
     IContentGenerator,
     IGitHubClient,
     IProcessRunner,
@@ -55,6 +56,8 @@ def run_agent_repositories_once(
     run_history_store: IRunHistoryStore | None = None,
     run_trigger: str = "cli_run",
     max_prd_issues: int = 1,
+    transcript_runner_factory: Callable[[Path], IAgentTranscriptRunner] | None = None,
+    max_deliberation_issues: int = 1,
 ) -> int:
     """Run one polling pass across all target repositories.
 
@@ -69,6 +72,12 @@ def run_agent_repositories_once(
         run_history_store: Optional side-channel run history store.
         run_trigger: Trigger source recorded with each run record.
         max_prd_issues: Maximum rework-prd issues to process per repository.
+        transcript_runner_factory: Optional factory that returns an
+            :class:`IAgentTranscriptRunner` for a repo path. When omitted, the
+            Phase 0 deliberation queue is skipped (zero regression for callers
+            that do not assemble a runner).
+        max_deliberation_issues: Maximum ``agent/deliberate`` Issues to process
+            per Phase 0 pass.
 
     Returns:
         Exit code (0 on success, 1 if any repository failed).
@@ -85,6 +94,32 @@ def run_agent_repositories_once(
             context.display_name,
         )
         github_client = github_client_factory(context.repo_path)
+
+        # Phase 0: Asynchronous Issue-comment deliberation on Issues opted in
+        # via ``agent/deliberate``. Skipped when no transcript runner factory
+        # was injected so existing callers (tests, ad-hoc scripts) keep their
+        # previous behaviour.
+        if not dry_run and transcript_runner_factory is not None:
+            try:
+                from backend.core.use_cases.agent_runner_deliberation_issues import (
+                    process_deliberation_issues,
+                )
+
+                process_deliberation_issues(
+                    repo_path=context.repo_path,
+                    config=context.config,
+                    github_client=github_client,
+                    transcript_runner_factory=transcript_runner_factory,
+                    max_issues=max_deliberation_issues,
+                    stale_rounds_before_hint=context.config.deliberation.stale_rounds_before_hint,
+                )
+            except Exception as exc:  # noqa: BLE001 - isolate Phase 0 failures.
+                _logger.error(
+                    "Deliberation phase failed for repository '%s': %s",
+                    context.repo_id,
+                    exc,
+                )
+
         if not dry_run:
             try:
                 process_prd_rework_issues(

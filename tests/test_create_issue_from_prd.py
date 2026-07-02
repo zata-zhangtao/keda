@@ -21,6 +21,7 @@ from backend.core.use_cases.create_issue_from_prd import (
     IssueFromPrdRequest,
     build_issue_body,
     create_issue_from_prd,
+    extract_title,
 )
 from backend.infrastructure.process_runner import SubprocessRunner
 from tests.conftest import FakeContentGenerator, FakeGitHubClient, FakeProcessRunner
@@ -1018,3 +1019,26 @@ def test_create_issue_from_prd_skips_marker_when_structured_evidence_disabled(
 
     create_call = next(c for c in fake_client.calls if c["method"] == "create_issue")
     assert "iar:structured-evidence" not in create_call["body"]
+
+
+def test_extract_title_strips_prd_prefix() -> None:
+    """extract_title should remove the PRD: prefix from the first H1."""
+    assert (
+        extract_title("# PRD: Example Feature\n\nbody", "fallback") == "Example Feature"
+    )
+
+
+def test_extract_title_skips_part_a_heading() -> None:
+    """extract_title should skip Part A / Part B structural headings."""
+    prd_text = (
+        "# Part A · 人审层 (Review Layer)\n\n"
+        "## 1. Introduction\n\n"
+        "# PRD: Real Feature\n"
+    )
+    assert extract_title(prd_text, "fallback") == "Real Feature"
+
+
+def test_extract_title_falls_back_when_only_structural_headings() -> None:
+    """extract_title should fall back when no usable H1 is present."""
+    prd_text = "# Part A · 人审层 (Review Layer)\n\n# Part B · 执行器层 (Build Layer)\n"
+    assert extract_title(prd_text, "fallback") == "fallback"

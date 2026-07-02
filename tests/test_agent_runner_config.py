@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.shared.models.agent_runner import AppConfig, GitConfig, RunnerConfig
+from backend.core.shared.models.agent_runner import (
+    AppConfig,
+    GitConfig,
+    RepositoryIdentity,
+    RunnerConfig,
+)
 from backend.core.shared.models.agent_deliberation import DeliberationConfig
 from backend.engines.agent_runner.factory import (
     build_app_config_from_settings,
@@ -27,6 +32,7 @@ from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerGitSettings,
     AgentRunnerLabelSettings,
+    AgentRunnerRepositoryMetadataSettings,
     AgentRunnerRepositorySettings,
     AgentRunnerRunnerSettings,
     AgentRunnerSettings,
@@ -80,6 +86,13 @@ def isolate_agent_runner_toml(monkeypatch: pytest.MonkeyPatch) -> None:
         "_load_toml_section_data",
         load_toml_section_without_agent_repositories,
     )
+    # Registry repositories are loaded from a separate config path; keep those
+    # isolated from the developer's ~/.iar/config.toml as well.
+    monkeypatch.setattr(
+        settings_module,
+        "_load_registry_toml_section_data",
+        lambda _section_name: {},
+    )
 
 
 def test_build_app_config_from_settings_structure() -> None:
@@ -121,6 +134,69 @@ def test_merge_repository_config_inherits_unset_fields() -> None:
     merged = merge_repository_config(global_config, repo_settings)
     assert merged.runner.max_issues == 3
     assert merged.runner.default_agent == "claude"
+
+
+def test_runner_settings_escalation_ladder_defaults() -> None:
+    """Escalation-ladder settings default to a conservative fallback chain."""
+    settings = AgentRunnerRunnerSettings()
+    assert settings.agent_fallback_order == ["claude", "kimi", "codex"]
+    assert settings.max_agent_switches == 2
+    assert settings.transient_retry_attempts == 2
+    assert settings.transient_retry_delay_seconds == 10
+
+
+def test_max_concurrent_issues_default_and_factory_mapping() -> None:
+    """max_concurrent_issues defaults to 1 and maps into the domain RunnerConfig."""
+    assert AgentRunnerRunnerSettings().max_concurrent_issues == 1
+    assert RunnerConfig().max_concurrent_issues == 1
+
+    # Build the domain config from settings; mutate the nested field directly to
+    # avoid pydantic-settings sources (repo config.toml) shadowing an init kwarg.
+    settings = AgentRunnerSettings()
+    settings.runner.max_concurrent_issues = 4
+    app_config = build_app_config_from_settings(settings)
+    assert app_config.runner.max_concurrent_issues == 4
+
+
+def test_merge_repository_config_inherits_max_concurrent_issues() -> None:
+    """Repo override keeps global max_concurrent_issues when unset."""
+    global_config = AppConfig(runner=RunnerConfig(max_concurrent_issues=6))
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        runner=AgentRunnerRunnerSettings(max_issues=2),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.runner.max_concurrent_issues == 6
+
+
+def test_iar_toml_renders_max_concurrent_issues_comment() -> None:
+    """`iar init` output documents max_concurrent_issues above the field."""
+    from backend.engines.agent_runner.repository_local import (
+        _IAR_FIELD_COMMENTS,
+        settings_to_toml_string,
+    )
+    from backend.infrastructure.config.settings import AgentRunnerLocalSettings
+
+    settings = AgentRunnerLocalSettings(runner=AgentRunnerRunnerSettings())
+    rendered = settings_to_toml_string(settings)
+
+    assert "runner.max_concurrent_issues" in _IAR_FIELD_COMMENTS
+    assert "max_concurrent_issues = 1" in rendered
+    comment = _IAR_FIELD_COMMENTS["runner.max_concurrent_issues"]
+    assert any(comment in line for line in rendered.splitlines())
+
+
+def test_merge_repository_config_overrides_agent_fallback_order() -> None:
+    """Repository-level fallback order overrides global runner config."""
+    global_config = AppConfig(runner=RunnerConfig())
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        runner=AgentRunnerRunnerSettings(agent_fallback_order=["claude", "codex"]),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert list(merged.runner.agent_fallback_order) == ["claude", "codex"]
+    # Unset escalation fields inherit defaults.
+    assert merged.runner.max_agent_switches == 2
 
 
 def test_merge_repository_config_overrides_labels() -> None:
@@ -477,6 +553,44 @@ def test_merge_repository_config_overrides_generated_content() -> None:
     assert merged.generated_content.issue_from_prd.mode == "agent"
 
 
+def test_generated_content_target_defaults_to_agent_mode() -> None:
+    """Generated-content targets should default to agent mode for richer output."""
+    target = AgentRunnerGeneratedContentTargetSettings()
+    assert target.mode == "agent"
+
+
+def test_merge_repository_config_ignores_empty_template_overrides() -> None:
+    """Empty .iar.toml template/prompt placeholders must not wipe config.toml defaults."""
+    from backend.engines.agent_runner.factory import merge_repository_config
+
+    global_config = AppConfig(
+        generated_content=AgentRunnerGeneratedContentSettings(
+            draft_pr=AgentRunnerGeneratedContentTargetSettings(
+                mode="agent",
+                title_template="global title",
+                body_template="global body",
+                prompt="global prompt",
+            ),
+        )
+    )
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        generated_content=AgentRunnerGeneratedContentSettings(
+            draft_pr=AgentRunnerGeneratedContentTargetSettings(
+                mode="agent",
+                title_template="",
+                body_template="",
+                prompt="",
+            ),
+        ),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.generated_content.draft_pr.mode == "agent"
+    assert merged.generated_content.draft_pr.title_template == "global title"
+    assert merged.generated_content.draft_pr.body_template == "global body"
+    assert merged.generated_content.draft_pr.prompt == "global prompt"
+
+
 def test_require_iar_repository_initialized_accepts_valid_config(
     tmp_path: Path,
 ) -> None:
@@ -695,3 +809,132 @@ default_synthesizer = "kimi"
     # Profiles fall back to global defaults when not overridden.
     profile_ids = {p.profile_id for p in contexts[0].config.deliberation.profiles}
     assert "architect" in profile_ids
+
+
+# ---------------------------------------------------------------------------
+# github_repo schema validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "zata-zhangtao/keda",
+        "owner/repo",
+        "owner-with-dashes/repo_with_underscores",
+    ],
+)
+def test_repository_metadata_github_repo_accepts_valid_values(value: str) -> None:
+    """Valid owner/name values pass the field validator unchanged."""
+    settings = AgentRunnerRepositoryMetadataSettings(github_repo=value)
+    assert settings.github_repo == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "not-a-slash",
+        "/owner/repo",
+        "owner/repo/",
+        "owner/",
+        "/repo",
+        "host/owner/repo",
+    ],
+)
+def test_repository_metadata_github_repo_rejects_invalid_values(value: str) -> None:
+    """Invalid formats raise ValueError with the field name in the message."""
+    from pydantic import ValidationError
+
+    with pytest.raises((ValueError, ValidationError)) as exc_info:
+        AgentRunnerRepositoryMetadataSettings(github_repo=value)
+    assert "github_repo" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "not-a-slash",
+        "owner/",
+        "/repo",
+        "host/owner/repo",
+    ],
+)
+def test_repository_settings_github_repo_rejects_invalid_values(value: str) -> None:
+    """The registry-level settings share the same validation contract."""
+    from pydantic import ValidationError
+
+    with pytest.raises((ValueError, ValidationError)) as exc_info:
+        AgentRunnerRepositorySettings(path="/tmp/repo", github_repo=value)
+    assert "github_repo" in str(exc_info.value)
+
+
+def test_load_agent_runner_local_settings_propagates_github_repo(
+    tmp_path: Path,
+) -> None:
+    """The local config loader must forward ``github_repo`` to the registry model."""
+    repo_path = _init_git_repository(tmp_path, "keda")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "keda-local"
+github_repo = "zata-zhangtao/keda"
+""",
+    )
+    local_settings = settings_module.load_agent_runner_local_settings(repo_path)
+    assert local_settings is not None
+    assert local_settings.github_repo == "zata-zhangtao/keda"
+
+
+# ---------------------------------------------------------------------------
+# merge_repository_config populates AppConfig.repositories
+# ---------------------------------------------------------------------------
+
+
+def test_merge_repository_config_adds_repositories_dict_entry() -> None:
+    """merge_repository_config must materialise a RepositoryIdentity per repo."""
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        id="keda-main",
+        display_name="Keda",
+        github_repo="zata-zhangtao/keda",
+    )
+    merged = merge_repository_config(AppConfig(), repo_settings)
+    assert "keda-main" in merged.repositories
+    identity = merged.repositories["keda-main"]
+    assert isinstance(identity, RepositoryIdentity)
+    assert identity.id == "keda-main"
+    assert identity.path == "/tmp/repo"
+    assert identity.display_name == "Keda"
+    assert identity.github_repo == "zata-zhangtao/keda"
+
+
+def test_merge_repository_config_falls_back_to_path_key() -> None:
+    """When ``id`` is missing the resolved path is used as the dict key."""
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        github_repo="owner/repo",
+    )
+    merged = merge_repository_config(AppConfig(), repo_settings)
+    resolved = str(Path("/tmp/repo").resolve())
+    assert resolved in merged.repositories
+    assert merged.repositories[resolved].github_repo == "owner/repo"
+
+
+def test_merge_repository_config_preserves_unrelated_identities() -> None:
+    """Merging one repo must not disturb identities merged in earlier calls."""
+    first = AgentRunnerRepositorySettings(
+        path="/tmp/a",
+        id="alpha",
+        github_repo="owner/alpha",
+    )
+    second = AgentRunnerRepositorySettings(
+        path="/tmp/b",
+        id="beta",
+        github_repo="owner/beta",
+    )
+    after_first = merge_repository_config(AppConfig(), first)
+    after_second = merge_repository_config(after_first, second)
+    assert {rid for rid in after_second.repositories} == {"alpha", "beta"}
+    assert after_second.repositories["alpha"].github_repo == "owner/alpha"
+    assert after_second.repositories["beta"].github_repo == "owner/beta"

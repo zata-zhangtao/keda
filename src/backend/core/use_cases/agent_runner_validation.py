@@ -20,10 +20,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
+import subprocess
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+
+import yaml
 
 from backend.core.shared.interfaces.agent_runner import (
     IGitHubClient,
@@ -46,7 +52,7 @@ from backend.core.use_cases.agent_runner_evidence_format import (
     demanded_evidence_kinds as demanded_evidence_kinds,
     extract_evidence_format_markers as extract_evidence_format_markers,
 )
-from backend.core.use_cases.agent_runner_git import list_changed_paths
+from backend.core.use_cases.agent_runner_git import has_changes, list_changed_paths
 from backend.core.use_cases.agent_runner_structured_evidence import (
     EvidenceUpload,
     ValidationEvidenceError,
@@ -54,6 +60,7 @@ from backend.core.use_cases.agent_runner_structured_evidence import (
     build_structured_evidence_prompt_suffix,
     format_structured_evidence_marker,
     has_structured_evidence_marker,
+    load_evidence_manifest,
     render_structured_evidence_comment,
     validate_evidence_manifest,
 )
@@ -62,7 +69,7 @@ _logger = logging.getLogger(__name__)
 
 _VALIDATION_SECTION_TITLE = "realistic validation"
 _VALIDATION_SECTION_HEADER_RE = re.compile(
-    r"^(?:\d+\.\s+)?" + re.escape(_VALIDATION_SECTION_TITLE),
+    r"^(?:\d+(?:\.\d+)*\.?\s+)?" + re.escape(_VALIDATION_SECTION_TITLE),
     re.IGNORECASE,
 )
 _WAIVER_LINE_PATTERN = re.compile(
@@ -128,35 +135,81 @@ def _iterate_validation_section_lines(markdown_text: str) -> list[str]:
     """Return the lines inside the Realistic Validation section.
 
     接受任意级别的 Markdown 标题（PRD 用 ``###``、Issue body 用 ``##``），
-    标题文本以 ``Realistic Validation`` 开头（大小写不敏感）即进入小节，
-    遇到同级或更高级标题退出。
+    支持多级编号前缀（``7.6 Realistic Validation Plan``），标题文本以
+    ``Realistic Validation`` 开头（大小写不敏感）即进入小节，遇到同级或
+    更高级标题退出。围栏代码块（``` fenced）内的行按内容收集、不当作标题
+    解析——否则 YAML 注释行（``# ...``）会被误判为标题而提前截断小节。
     """
     section_lines: list[str] = []
     section_heading_level = 0
+    in_code_fence = False
     for line in markdown_text.splitlines():
         stripped_line = line.strip()
-        heading_match = re.match(r"^(#{1,6})\s+(.*)$", stripped_line)
-        if heading_match:
-            heading_level = len(heading_match.group(1))
-            heading_text = heading_match.group(2).strip().lower()
+        if stripped_line.startswith("```"):
+            in_code_fence = not in_code_fence
             if section_heading_level:
-                if heading_level <= section_heading_level:
-                    break
                 section_lines.append(line)
-                continue
-            if _VALIDATION_SECTION_HEADER_RE.match(heading_text):
-                section_heading_level = heading_level
             continue
+        if not in_code_fence:
+            heading_match = re.match(r"^(#{1,6})\s+(.*)$", stripped_line)
+            if heading_match:
+                heading_level = len(heading_match.group(1))
+                heading_text = heading_match.group(2).strip().lower()
+                if section_heading_level:
+                    if heading_level <= section_heading_level:
+                        break
+                    section_lines.append(line)
+                    continue
+                if _VALIDATION_SECTION_HEADER_RE.match(heading_text):
+                    section_heading_level = heading_level
+                continue
         if section_heading_level:
             section_lines.append(line)
     return section_lines
 
 
-def extract_realistic_validation_items(markdown_text: str) -> list[str]:
-    """Extract checkbox items from the Realistic Validation section.
+def _extract_rv_oracle_entries(section_lines: list[str]) -> list[dict[str, object]]:
+    """Deterministically parse the structured YAML oracle block.
 
-    勾选状态会被规范化为未勾选 ``- [ ]``，因为清单代表的是*待人工确认*
-    的验证项。
+    在 Realistic Validation 小节内定位第一个 ```yaml 围栏，``yaml.safe_load``
+    后要求是一个非空的 mapping 列表且每项含 ``id`` 与 ``behavior``。无围栏、
+    解析失败或结构不符时返回空列表，由调用方回退到旧式 checkbox 解析。
+    本函数不引入 LLM，纯确定性解析。
+    """
+    fence_open = False
+    yaml_lines: list[str] = []
+    for line in section_lines:
+        stripped_line = line.strip()
+        if stripped_line.startswith("```"):
+            if fence_open:
+                break
+            if stripped_line.lower().startswith("```yaml"):
+                fence_open = True
+            continue
+        if fence_open:
+            yaml_lines.append(line)
+    if not yaml_lines:
+        return []
+    try:
+        parsed_block = yaml.safe_load("\n".join(yaml_lines))
+    except yaml.YAMLError:
+        _logger.warning("RV oracle YAML block present but failed to parse; ignoring.")
+        return []
+    if not isinstance(parsed_block, list):
+        return []
+    oracle_entries: list[dict[str, object]] = []
+    for entry in parsed_block:
+        if isinstance(entry, dict) and entry.get("id") and entry.get("behavior"):
+            oracle_entries.append(entry)
+    return oracle_entries
+
+
+def extract_realistic_validation_items(markdown_text: str) -> list[str]:
+    """Extract validation checklist items from the Realistic Validation section.
+
+    优先解析结构化 YAML oracle 块（每项 ``id`` + ``behavior``），映射为规范化
+    复选框 ``- [ ] <id>: <behavior>``；无 oracle 块时回退解析旧式 ``- [ ]``
+    checkbox 行。勾选状态一律规范化为未勾选，因为清单代表的是*待人工确认*项。
 
     Args:
         markdown_text: PRD 全文或 Issue body。
@@ -164,8 +217,12 @@ def extract_realistic_validation_items(markdown_text: str) -> list[str]:
     Returns:
         规范化后的 Markdown 复选框行列表；无小节或无条目时为空列表。
     """
+    section_lines = _iterate_validation_section_lines(markdown_text)
+    oracle_entries = _extract_rv_oracle_entries(section_lines)
+    if oracle_entries:
+        return [f"- [ ] {entry['id']}: {entry['behavior']}" for entry in oracle_entries]
     checklist_items: list[str] = []
-    for section_line in _iterate_validation_section_lines(markdown_text):
+    for section_line in section_lines:
         stripped_line = section_line.strip()
         if stripped_line.startswith("- ["):
             checklist_items.append(re.sub(r"^- \[[ xX]\]", "- [ ]", stripped_line))
@@ -381,7 +438,10 @@ def ensure_evidence_dir_excluded(
     config: AppConfig,
     process_runner: IProcessRunner,
 ) -> None:
-    """Idempotently exclude the evidence dir via git ``info/exclude``.
+    """Idempotently exclude the evidence dir and RV cache via git ``info/exclude``.
+
+    除证据目录外,同样排除 RV 复跑缓存文件(:func:`_rv_reexec_cache_relpath`),
+    避免它让工作区显示为脏或泄漏进代码 diff。
 
     使用 ``git rev-parse --git-path info/exclude`` 解析排除文件位置
     （worktree 下指向 commondir，规则对主仓与所有 worktree 共享生效）。
@@ -413,17 +473,21 @@ def ensure_evidence_dir_excluded(
             exclude_path,
         )
         return
-    exclude_line = f"/{config.validation.evidence_dir.strip('/')}/"
+    evidence_line = f"/{config.validation.evidence_dir.strip('/')}/"
+    cache_line = f"/{_rv_reexec_cache_relpath(config)}"
+    desired_lines = [evidence_line, cache_line]
     existing_text = ""
     if exclude_path.exists():
         existing_text = exclude_path.read_text(encoding="utf-8")
-    if exclude_line in existing_text.splitlines():
+    existing_lines = existing_text.splitlines()
+    missing_lines = [line for line in desired_lines if line not in existing_lines]
+    if not missing_lines:
         return
     exclude_path.parent.mkdir(parents=True, exist_ok=True)
     appended_text = existing_text
     if appended_text and not appended_text.endswith("\n"):
         appended_text += "\n"
-    appended_text += f"{exclude_line}\n"
+    appended_text += "".join(f"{line}\n" for line in missing_lines)
     exclude_path.write_text(appended_text, encoding="utf-8")
 
 
@@ -490,12 +554,189 @@ def ensure_validation_evidence_ready(
         )
 
 
-def format_validation_evidence_failure(message: str) -> str:
-    """Build the failure section for an evidence recovery prompt."""
+def _rv_reexec_cache_relpath(config: AppConfig) -> str:
+    """Worktree-relative path of the RV re-execution cache file.
+
+    Placed beside the evidence dir but outside it, so RV scripts that wipe
+    their own ``rv-*`` evidence on each run never clear the cache.
+    """
+    evidence_dir = Path(config.validation.evidence_dir.strip("/"))
+    parent = evidence_dir.parent
+    base = parent if str(parent) not in (".", "") else Path(".iar")
+    return (base / "rv_reexec_cache.json").as_posix()
+
+
+def _rv_reexec_cache_path(worktree_path: Path, config: AppConfig) -> Path:
+    """Absolute path of the RV re-execution cache inside ``worktree_path``."""
+    return worktree_path / _rv_reexec_cache_relpath(config)
+
+
+def _clean_tree_fingerprint(
+    worktree_path: Path, process_runner: IProcessRunner
+) -> str | None:
+    """Return ``HEAD`` 的 tree SHA(工作区干净时),否则 ``None``。
+
+    tree SHA 是已提交代码的纯内容指纹(不含提交时间/作者/message)。工作区
+    一旦脏——有未提交的已跟踪改动,或非排除的 untracked 文件——返回 ``None``,
+    让调用方照常复跑而非信任过期的通过结果;v1 只对完全已提交的状态做缓存。
+    """
+    if has_changes(worktree_path, process_runner):
+        return None
+    result = process_runner.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=worktree_path,
+        check=False,
+    )
+    tree_sha = result.stdout.strip()
+    if result.return_code != 0 or not tree_sha:
+        return None
+    return tree_sha
+
+
+def _rv_reexec_cache_key(tree_fingerprint: str, item_number: int, command: str) -> str:
+    """Cache key 绑定"某命令在某代码树上、对某 item 已通过"。
+
+    键里含命令的哈希:在(gitignore 的)manifest 里改命令不会改 tree SHA,
+    但会改命令哈希 → 缓存未命中 → 照常复跑,不会用旧命令的结果蒙混。
+    """
+    command_digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
+    return f"{tree_fingerprint}|{item_number}|{command_digest}"
+
+
+def _load_rv_reexec_cache(cache_path: Path) -> dict[str, str]:
+    """Load the RV re-exec cache entries; tolerate a missing/corrupt file."""
+    if not cache_path.exists():
+        return {}
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    return entries if isinstance(entries, dict) else {}
+
+
+def _save_rv_reexec_cache(cache_path: Path, entries: dict[str, str]) -> None:
+    """Persist the RV re-exec cache entries as json."""
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(
+        json.dumps({"version": 1, "entries": entries}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def ensure_validation_commands_pass(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> None:
+    """Re-run each structured-evidence item's command and require it to pass.
+
+    keda 以自己复跑的退出码为准,而不是只信 agent 写的证据文件——这样
+    "测试通过但功能其实坏了 / agent 没真跑" 无法蒙混过关。仅对带
+    ``iar:structured-evidence`` marker、要求验证、且开启 ``reexecute_commands``
+    的 Issue 生效。命令经 ``bash -lc`` 在 worktree 内执行并带超时;非零退出
+    或超时即判失败,抛 ``ValidationEvidenceError`` 进入既有 recovery 循环。
+
+    当 ``reexecute_cache_enabled`` 开启且工作区干净时,按 ``HEAD`` 的 tree SHA
+    指纹缓存"该 item 的该命令已通过":同一份已提交代码再次进入(如
+    blocked-continue、换 agent、重新 claim)直接跳过复跑,避免重复跑 e2e。
+    工作区一旦脏(有未提交改动)即不读不写缓存、照常复跑。证据文件是否齐全
+    仍由 ``ensure_validation_evidence_ready`` 单独把关,缓存命中不绕过它。
+
+    Raises:
+        ValidationEvidenceError: 任一命令被 keda 复跑后未通过或超时。
+    """
+    if not config.validation.reexecute_commands:
+        return
+    if not validation_required(issue.body, config):
+        return
+    if not has_structured_evidence_marker(issue.body):
+        return
+
+    manifest = load_evidence_manifest(worktree_path, config)
+    timeout_seconds = config.validation.reexecute_timeout_seconds
+
+    tree_fingerprint = (
+        _clean_tree_fingerprint(worktree_path, process_runner)
+        if config.validation.reexecute_cache_enabled
+        else None
+    )
+    cache_path = _rv_reexec_cache_path(worktree_path, config)
+    cache_entries = _load_rv_reexec_cache(cache_path) if tree_fingerprint else {}
+    newly_passed: dict[str, str] = {}
+
+    for block in manifest.items:
+        cache_key = (
+            _rv_reexec_cache_key(tree_fingerprint, block.item_number, block.command)
+            if tree_fingerprint
+            else None
+        )
+        if cache_key is not None and cache_key in cache_entries:
+            _logger.info(
+                "Realistic Validation item %s: skipping re-execution; command "
+                "already passed at tree %s.",
+                block.item_number,
+                tree_fingerprint,
+            )
+            continue
+        try:
+            result = process_runner.run(
+                ["bash", "-lc", block.command],
+                cwd=worktree_path,
+                check=False,
+                capture_output=True,
+                timeout=timeout_seconds,
+                label=f"rv-reexec-{block.item_number}",
+            )
+        except subprocess.TimeoutExpired as timeout_error:
+            raise ValidationEvidenceError(
+                f"Realistic Validation item {block.item_number} timed out when keda "
+                f"re-ran its command (>{timeout_seconds}s): `{block.command}`. The "
+                "reproducible command must be a self-terminating check that probes the "
+                "real entry point and exits, not a long-running server. Set "
+                "`validation.reexecute_commands=false` to opt out."
+            ) from timeout_error
+        if result.return_code != 0:
+            raise ValidationEvidenceError(
+                f"Realistic Validation item {block.item_number} failed when keda "
+                f"re-ran its command: `{block.command}` exited {result.return_code}. "
+                "keda re-executes RV commands to confirm they actually pass — the "
+                "agent's evidence file alone is not trusted. Fix the behavior so the "
+                "command passes (or correct the command). Set "
+                "`validation.reexecute_commands=false` to opt out."
+            )
+        if cache_key is not None:
+            newly_passed[cache_key] = datetime.now(timezone.utc).isoformat()
+
+    if newly_passed:
+        cache_entries.update(newly_passed)
+        _save_rv_reexec_cache(cache_path, cache_entries)
+
+
+def format_validation_evidence_detail(message: str) -> str:
+    """Build the recorded attempt detail for a validation-evidence failure.
+
+    Keeps the specific failure ``message`` as the last line so the attempt
+    history Detail column surfaces the real reason — the table summarizer
+    (``_summarize_attempt_detail``) keeps the last informative line. The
+    generic "run it for real" instruction belongs only in the recovery prompt
+    (:func:`format_validation_evidence_failure`), never in the diagnostic
+    record, where appending it as the last line would mask the actual cause.
+    """
     return "\n".join(
         [
             "Realistic Validation evidence check failed.",
             message,
+        ]
+    )
+
+
+def format_validation_evidence_failure(message: str) -> str:
+    """Build the failure section for an evidence recovery prompt."""
+    return "\n".join(
+        [
+            format_validation_evidence_detail(message),
             "Run the validation plan for real and write the evidence files; "
             "do not fabricate evidence and do not capture secrets.",
         ]

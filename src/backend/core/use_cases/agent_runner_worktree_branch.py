@@ -11,9 +11,9 @@ from backend.core.shared.models.agent_runner import AppConfig, IssueSummary
 from backend.core.use_cases.agent_runner_commit import (
     read_commit_request,
     remove_commit_request,
-    validate_safe_changes,
 )
 from backend.core.use_cases.agent_runner_feedback import ensure_verification_passed
+from backend.core.use_cases.agent_runner_publish import validate_safe_changes
 from backend.core.use_cases.agent_runner_git import (
     get_active_rebase_target,
     get_current_branch,

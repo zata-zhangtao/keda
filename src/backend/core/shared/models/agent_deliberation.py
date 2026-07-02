@@ -35,6 +35,10 @@ class DeliberationConfig:
     default_output_dir: str = "logs/agent-runner/deliberations"
     continue_on_agent_error: bool = True
     agent_failure_timeout_seconds: int = 300
+    # After this many consecutive AI-asked rounds without a fresh user reply,
+    # the Phase 0 question-list comment appends a soft hint suggesting the
+    # operator swap labels to converge. Mirrors the pydantic settings layer.
+    stale_rounds_before_hint: int = 3
     profiles: tuple[DeliberationAgentProfile, ...] = field(
         default_factory=lambda: (
             DeliberationAgentProfile(

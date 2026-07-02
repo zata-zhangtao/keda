@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-
 ACTIVE_PRD_PATH_RE = re.compile(
     r"^tasks/([^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md$"
 )

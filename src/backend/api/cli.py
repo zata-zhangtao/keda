@@ -9,14 +9,21 @@ point and its help text stay consistent.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
-import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from backend.api.cli_console import console, error_console
+from backend.api.cli_helpers import (
+    _create_run_history_store_or_none,
+    _ensure_gh_auth_or_prompt,
+    _handle_not_initialized_error,
+    _print_worktree_cleanup_result,
+    _resolve_cli_repository_targets,
+    _resolve_default_daemon_target,
+    _resolve_run_trigger,
+)
 from backend.api.cli_init import (
     _print_workflow_config_plan,
     _run_init_command,
@@ -41,6 +48,12 @@ from backend.core.use_cases.create_issue_from_prd import (
     create_issue_from_prd,
     resolve_prd_paths,
 )
+from backend.core.use_cases.daemon_single_instance import (
+    DaemonAlreadyRunningError,
+    acquire_daemon_locks,
+    daemon_lock_dir,
+    release_daemon_locks,
+)
 from backend.core.use_cases.run_agent_daemon import run_agent_daemon
 from backend.core.use_cases.run_agent_deliberation import (
     DeliberationRequest,
@@ -48,6 +61,11 @@ from backend.core.use_cases.run_agent_deliberation import (
     run_agent_deliberation,
 )
 from backend.core.use_cases.interactive_decision import run_interactive_decision
+from backend.core.use_cases.repl_session import (
+    ReplSessionDeps,
+    ReplSessionInputs,
+    run_repl_session,
+)
 from backend.core.use_cases.run_agent_repositories_once import (
     run_agent_repositories_once,
 )
@@ -56,24 +74,30 @@ from backend.core.use_cases.review_once import review_once
 from backend.core.use_cases.sync_labels import sync_labels
 from backend.core.use_cases.worktree_cleanup import (
     WorktreeCleanupRequest,
-    WorktreeCleanupResult,
-    WorktreeCleanupStatus,
     cleanup_iar_worktrees,
 )
 from backend.core.use_cases.worktree_env import copy_missing_env_files
 from backend.core.shared.models.agent_deliberation import DeliberationSession
+from backend.core.shared.models.agent_runner import RepositoryRunContext
+from backend.api.cli_loop import (
+    run_loop_cancel_command,
+    run_loop_create_command,
+    run_loop_daemon_command,
+    run_loop_list_command,
+    run_loop_run_now_command,
+)
 from backend.engines.agent_runner.factory import (
-    create_console_store,
     create_content_generator,
     create_event_sink,
     create_github_client,
+    create_loop_clock,
+    create_loop_state_store,
     create_planner_runner,
     create_process_runner,
     create_registry_editor,
+    create_repl_command_executor,
     create_transcript_runner,
-    find_repository_match_for_path,
     get_agent_runner_settings,
-    load_fresh_agent_runner_settings,
     logger,
     resolve_issue_from_prd_target,
     resolve_repository_targets,
@@ -81,6 +105,7 @@ from backend.engines.agent_runner.factory import (
 )
 from backend.engines.agent_runner.failure_resolver import AgentFailureResolver
 from backend.engines.agent_runner.live_terminal import create_output_view
+from backend.engines.agent_runner.runner_live_view import create_runner_live_view
 from backend.engines.agent_runner.repository_local import (
     IARRepositoryNotInitializedError,
     detect_git_repository_root,
@@ -98,185 +123,122 @@ from backend.engines.agent_runner.workflow_install import (
 )
 
 if TYPE_CHECKING:
-    from backend.core.shared.interfaces.agent_runner import (
-        IGitHubClient,
-        IProcessRunner,
-    )
-    from backend.core.shared.models.agent_runner import (
-        RepositoryRunContext,
-    )
+    from backend.core.shared.interfaces.agent_runner import IGitHubClient
 
 
-def _ensure_gh_auth_or_prompt(
-    repo_path: Path, process_runner: "IProcessRunner"
-) -> None:
-    """Check gh auth status and exit with a friendly message if not authenticated."""
-    if os.environ.get("IAR_SKIP_GH_AUTH_CHECK") == "1":
-        return
-    github_client = create_github_client(repo_path, process_runner)
-    auth_status = github_client.check_auth_status()
-    if auth_status.authenticated:
-        return
-    error_console.print("[red]GitHub CLI 认证失败。[/]")
-    if auth_status.failure_reason:
-        error_console.print(f"[red]{auth_status.failure_reason}[/]")
-    error_console.print("[yellow]请运行: gh auth login -h github.com[/]")
-    raise SystemExit(1)
-
-
-def _print_worktree_cleanup_result(cleanup_result: WorktreeCleanupResult) -> None:
-    """Print a concise branch cleanup summary."""
-    if not cleanup_result.branches:
-        console.print("[green]No local iAR issue branches found.[/]")
-        return
-
-    for branch_result in cleanup_result.branches:
-        worktree_suffix = (
-            f" ({branch_result.worktree_path})" if branch_result.worktree_path else ""
-        )
-        if branch_result.status is WorktreeCleanupStatus.WOULD_DELETE:
-            console.print(
-                f"[yellow]Would delete:[/] {branch_result.branch}{worktree_suffix} - "
-                f"{branch_result.reason}"
-            )
-        elif branch_result.status is WorktreeCleanupStatus.DELETED:
-            console.print(
-                f"[green]Deleted:[/] {branch_result.branch}{worktree_suffix} - "
-                f"{branch_result.reason}"
-            )
-        elif branch_result.status is WorktreeCleanupStatus.FAILED:
-            console.print(
-                f"[red]Failed:[/] {branch_result.branch}{worktree_suffix} - "
-                f"{branch_result.reason}"
-            )
-        else:
-            console.print(
-                f"[dim]Skipped:[/] {branch_result.branch}{worktree_suffix} - "
-                f"{branch_result.reason}"
-            )
-
-    console.print(
-        "Cleanup summary: "
-        f"deleted={cleanup_result.deleted_count}, "
-        f"would_delete={cleanup_result.would_delete_count}, "
-        f"skipped={cleanup_result.skipped_count}, "
-        f"failed={cleanup_result.failed_count}"
-    )
-
-
-def _resolve_cli_repository_targets(
+def _resolve_loop_target_repository(
     *,
-    parsed: argparse.Namespace,
-    runner_settings: Any,
-    repo_id: str | None,
-    repo_override: str | None,
-) -> list["RepositoryRunContext"]:
-    """Resolve repository targets for parsed CLI selectors."""
-    return resolve_repository_targets(
-        runner_settings,
-        repo_id=repo_id,
-        repo_path_override=repo_override,
-        all_repositories=getattr(parsed, "all_repositories", False),
-    )
+    loop_repo_id: str | None,
+    loop_repo_path: str | None,
+    runner_settings,
+) -> "RepositoryRunContext | None":
+    """Resolve the repository that the loop command targets.
 
-
-@dataclasses.dataclass(frozen=True)
-class _DefaultDaemonTarget:
-    """Result of inferring a daemon target from cwd."""
-
-    repo_id: str | None
-    error: str
-
-
-def _resolve_default_daemon_target() -> _DefaultDaemonTarget:
-    """Infer the daemon target repository from the current working directory.
-
-    Returns:
-        _DefaultDaemonTarget: when ``repo_id`` is set, use that repository;
-        when ``error`` is set, fail early with the error message. This function
-        no longer falls back to ``--all``; callers must explicitly request all
-        enabled registry entries.
+    Loops may carry their own ``repo_id`` (resolved from the recipe when
+    not overridden on the CLI). When the user did not pass ``--repo-id``
+    or ``--repo``, we infer the target from the current working directory
+    the same way ``iar daemon`` does, falling back to ``None`` so the
+    per-loop ``repo_id`` is honored.
     """
-    try:
-        cwd_git_root = detect_git_repository_root(Path.cwd())
-    except ValueError:
-        return _DefaultDaemonTarget(
-            repo_id=None,
-            error=(
-                "Current directory is not a Git repository. "
-                "Run from an initialized iAR repository, or use --all to target all enabled registry entries."
-            ),
+    if loop_repo_path:
+        contexts = resolve_repository_targets(
+            runner_settings,
+            repo_path_override=loop_repo_path,
+            fallback_path=loop_repo_path,
         )
-    settings = load_fresh_agent_runner_settings()
-    match = find_repository_match_for_path(settings, cwd_git_root)
-    if match.is_unique_enabled:
-        assert match.matched_repo_id is not None  # noqa: S101
-        try:
-            require_iar_repository_initialized(cwd_git_root)
-        except IARRepositoryNotInitializedError:
-            return _DefaultDaemonTarget(
-                repo_id=None,
-                error=(
-                    f"Repository '{match.matched_repo_id}' is not initialized. "
-                    "Run 'iar init' in the repository root, or use --all to target all enabled registry entries."
-                ),
+        return contexts[0] if contexts else None
+    if loop_repo_id:
+        contexts = resolve_repository_targets(
+            runner_settings,
+            repo_id=loop_repo_id,
+        )
+        return contexts[0] if contexts else None
+    cwd_target = _resolve_default_daemon_target()
+    if cwd_target.repo_id:
+        contexts = resolve_repository_targets(
+            runner_settings,
+            repo_id=cwd_target.repo_id,
+        )
+        return contexts[0] if contexts else None
+    return None
+
+
+def _run_loop_command(parsed: argparse.Namespace, process_runner) -> int:
+    """Dispatch ``iar loop ...`` and ``iar loop-daemon`` commands."""
+    from backend.api.cli_loop import build_schedule_from_args, logger as loop_logger
+
+    runner_settings = get_agent_runner_settings()
+
+    def _state_store_factory():
+        return create_loop_state_store()
+
+    def _github_client_factory(repo_path: Path) -> "IGitHubClient":
+        return create_github_client(repo_path, process_runner)
+
+    def _content_generator_factory(repo_path: Path):
+        return create_content_generator(process_runner)
+
+    def _repo_resolver(task):
+        """Resolve the on-disk path of the repository a loop targets."""
+        explicit_repo_id = getattr(parsed, "loop_repo_id", None)
+        explicit_repo = getattr(parsed, "loop_repo", None)
+        context = _resolve_loop_target_repository(
+            loop_repo_id=explicit_repo_id or task.repo_id,
+            loop_repo_path=explicit_repo,
+            runner_settings=runner_settings,
+        )
+        if context is None:
+            raise ValueError(
+                f"Loop '{task.id}' targets repo_id {task.repo_id!r} which is "
+                "not registered. Run `iar registry list` or pass "
+                "`--repo-id` / `--repo` to target a specific repository."
             )
-        return _DefaultDaemonTarget(repo_id=match.matched_repo_id, error="")
-    if match.is_disabled:
-        assert match.disabled_repo_id is not None  # noqa: S101
-        return _DefaultDaemonTarget(
-            repo_id=None,
-            error=(
-                f"Repository '{match.disabled_repo_id}' is disabled. "
-                "Use --repo-id to target it explicitly, or enable it in config.toml."
-            ),
+        return context.repo_path
+
+    command = parsed.command
+
+    if command == "loop create":
+        return run_loop_create_command(parsed, state_store_factory=_state_store_factory)
+
+    if command == "loop list":
+        return run_loop_list_command(state_store_factory=_state_store_factory)
+
+    if command == "loop cancel":
+        return run_loop_cancel_command(parsed, state_store_factory=_state_store_factory)
+
+    # The remaining commands need clock + repo resolution. Validate the
+    # --cron/--every combination up front so the user gets a friendly
+    # error before we touch the loop state.
+    if command == "loop run":
+        try:
+            build_schedule_from_args(parsed)
+        except ValueError as exc:
+            loop_logger.error("%s", exc)
+            return 1
+        return run_loop_run_now_command(
+            parsed,
+            state_store_factory=_state_store_factory,
+            github_client_factory=_github_client_factory,
+            process_runner=process_runner,
+            clock=create_loop_clock(),
+            repo_resolver=_repo_resolver,
+            content_generator_factory=_content_generator_factory,
+            labels_config=None,
         )
-    if match.is_ambiguous:
-        candidates = ", ".join(repo_id for repo_id, _ in match.enabled_candidates)
-        return _DefaultDaemonTarget(
-            repo_id=None,
-            error=(
-                f"Current directory matches multiple enabled repositories: {candidates}. "
-                "Use --repo-id to target one, or --all to target all."
-            ),
+
+    if command == "loop-daemon":
+        return run_loop_daemon_command(
+            parsed,
+            state_store_factory=_state_store_factory,
+            github_client_factory=_github_client_factory,
+            process_runner=process_runner,
+            clock=create_loop_clock(),
+            repo_resolver=_repo_resolver,
+            content_generator_factory=_content_generator_factory,
+            labels_config=None,
         )
-    return _DefaultDaemonTarget(
-        repo_id=None,
-        error=(
-            "Current directory is not an enabled iAR registry target. "
-            "Use --repo-id to target a registered repository, or --all to target all enabled registry entries."
-        ),
-    )
 
-
-def _resolve_run_trigger(command_kind: str) -> str:
-    """解析运行记录的 trigger 来源。
-
-    管理终端托管的子进程带有 ``IAR_CONSOLE=1`` 环境标记，记为
-    ``console_*``；否则记为 ``cli_*``。
-
-    Args:
-        command_kind: ``"run"`` 或 ``"daemon"``。
-    """
-    prefix = "console" if os.environ.get("IAR_CONSOLE") == "1" else "cli"
-    return f"{prefix}_{command_kind}"
-
-
-def _create_run_history_store_or_none():
-    """创建运行历史存储；初始化失败时降级为 None（不阻断 CLI）。"""
-    try:
-        return create_console_store()
-    except Exception as exc:  # noqa: BLE001 - history is a side channel.
-        logger.warning("Run history store unavailable: %s", exc)
-        return None
-
-
-def _handle_not_initialized_error(exc: IARRepositoryNotInitializedError) -> int:
-    """Print a friendly error and suggest running `iar init`."""
-    error_console.print("[red]Repository is not initialized for iar.[/]")
-    error_console.print(f"Expected local config: {exc.config_path}", soft_wrap=True)
-    error_console.print("Run the following command from the repository root:")
-    error_console.print("  iar init")
+    loop_logger.error("Unsupported loop command: %s", command)
     return 1
 
 
@@ -385,6 +347,15 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
 
     if parsed.command == "takeover":
         return _run_takeover_command(parsed, process_runner)
+
+    if parsed.command in (
+        "loop create",
+        "loop list",
+        "loop cancel",
+        "loop run",
+        "loop-daemon",
+    ):
+        return _run_loop_command(parsed, process_runner)
 
     if parsed.command == "registry scan":
         try:
@@ -779,6 +750,10 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             if contexts:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             content_generator = create_content_generator(process_runner)
+
+            def transcript_runner_factory(repo_path: Path) -> object:
+                return create_transcript_runner(process_runner)
+
             return run_agent_repositories_once(
                 contexts=contexts,
                 dry_run=parsed.dry_run,
@@ -790,6 +765,8 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 run_history_store=_create_run_history_store_or_none(),
                 run_trigger=_resolve_run_trigger("run"),
                 max_prd_issues=1,
+                transcript_runner_factory=transcript_runner_factory,
+                max_deliberation_issues=runner_settings.daemon.max_deliberation_issues,
             )
 
         if parsed.command == "daemon":
@@ -817,22 +794,58 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 if parsed.interval is not None
                 else runner_settings.daemon.run_interval_seconds
             )
+            # Parallel execution: --concurrency overrides the toml default
+            # ([agent_runner.runner].max_concurrent_issues; 1 = sequential).
+            # A per-Issue live view (Rich on a TTY, plain otherwise) is created
+            # only when running >1 in parallel; the sequential path is unchanged.
+            daemon_concurrency = (
+                getattr(parsed, "concurrency", None)
+                or runner_settings.runner.max_concurrent_issues
+            )
+            daemon_output_view = (
+                create_runner_live_view() if daemon_concurrency > 1 else None
+            )
 
             def content_generator_factory(repo_path: Path):
                 return create_content_generator(process_runner)
 
-            run_agent_daemon(
-                contexts=contexts,
-                interval=interval,
-                agent=parsed.agent,
-                max_issues=parsed.max_issues or runner_settings.runner.max_issues,
-                process_runner=process_runner,
-                github_client_factory=github_client_factory,
-                content_generator_factory=content_generator_factory,
-                run_history_store=_create_run_history_store_or_none(),
-                run_trigger=_resolve_run_trigger("daemon"),
-                max_prd_issues=1,
+            def transcript_runner_factory(repo_path: Path) -> object:
+                return create_transcript_runner(process_runner)
+
+            # Single-instance guard: a second daemon for an already-served
+            # repository would double the queue polling and agent spawns, so
+            # refuse to start rather than pile up duplicate daemons.
+            daemon_repo_ids = [context.repo_id for context in contexts]
+            daemon_locks_dir = daemon_lock_dir(
+                runner_settings.console.process_registry_path
             )
+            try:
+                acquired_daemon_locks = acquire_daemon_locks(
+                    daemon_locks_dir, daemon_repo_ids
+                )
+            except DaemonAlreadyRunningError as already_running:
+                error_console.print(f"[red]{already_running}[/]")
+                return 1
+            try:
+                run_agent_daemon(
+                    contexts=contexts,
+                    interval=interval,
+                    agent=parsed.agent,
+                    max_issues=parsed.max_issues or runner_settings.runner.max_issues,
+                    process_runner=process_runner,
+                    github_client_factory=github_client_factory,
+                    content_generator_factory=content_generator_factory,
+                    run_history_store=_create_run_history_store_or_none(),
+                    run_trigger=_resolve_run_trigger("daemon"),
+                    max_prd_issues=1,
+                    transcript_runner_factory=transcript_runner_factory,
+                    max_deliberation_issues=runner_settings.daemon.max_deliberation_issues,
+                    concurrency=daemon_concurrency,
+                    output_view=daemon_output_view,
+                    reclaim_stale_running=runner_settings.daemon.reclaim_stale_running,
+                )
+            finally:
+                release_daemon_locks(acquired_daemon_locks)
             return 0
 
         if parsed.command == "review":
@@ -1048,6 +1061,53 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 },
             )
 
+        if parsed.command == "repl":
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
+                repo_id=repo_id,
+                repo_override=repo_override,
+            )
+            for context in contexts:
+                require_iar_repository_initialized(context.repo_path, process_runner)
+            if len(contexts) != 1:
+                logger.error(
+                    "repl requires exactly one target repository. "
+                    "Use --repo or --repo-id to specify."
+                )
+                return 1
+            context = contexts[0]
+            _ensure_gh_auth_or_prompt(context.repo_path, process_runner)
+            github_client = create_github_client(context.repo_path, process_runner)
+            agent_override = getattr(parsed, "agent", None)
+            if agent_override == "auto":
+                logger.error(
+                    "`--agent auto` is not supported by the REPL entrypoint; "
+                    "use `claude`, `codex`, or `kimi`. "
+                    "Falling back to [agent_runner.repl].default_agent."
+                )
+                agent_override = None
+            effective_agent = agent_override or context.config.repl.default_agent
+            content_generator = create_content_generator(
+                process_runner, read_only=False
+            )
+            command_executor = create_repl_command_executor(
+                process_runner=process_runner,
+                config=context.config.repl,
+            )
+            inputs = ReplSessionInputs(
+                context=context,
+                agent=effective_agent,
+                config=context.config.repl,
+            )
+            deps = ReplSessionDeps(
+                process_runner=process_runner,
+                content_generator=content_generator,
+                command_executor=command_executor,
+                github_client=github_client,
+            )
+            return run_repl_session(inputs, deps)
+
         if parsed.command == "deliberate":
             contexts = _resolve_cli_repository_targets(
                 parsed=parsed,
@@ -1170,6 +1230,127 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 repo_id=repo_id,
                 repo_override=repo_override,
             )
+
+        if parsed.command in (
+            "loop create",
+            "loop list",
+            "loop cancel",
+            "loop run",
+            "loop-daemon",
+        ):
+            return _run_loop_command(parsed, process_runner)
+            contexts = _resolve_cli_repository_targets(
+                parsed=parsed,
+                runner_settings=runner_settings,
+                repo_id=repo_id,
+                repo_override=repo_override,
+            )
+            if len(contexts) != 1:
+                logger.error(
+                    "deliberate requires exactly one target repository. "
+                    "Use --repo or --repo-id to specify."
+                )
+                return 1
+            context = contexts[0]
+            require_iar_repository_initialized(context.repo_path, process_runner)
+            deliberation_settings = context.config.deliberation
+            output_dir = parsed.output or deliberation_settings.default_output_dir
+            rounds = (
+                parsed.rounds
+                if parsed.rounds is not None
+                else deliberation_settings.default_rounds
+            )
+            synthesizer = (
+                parsed.synthesizer or deliberation_settings.default_synthesizer
+            )
+            agents = tuple(a.strip() for a in parsed.agents.split(",") if a.strip())
+            session_id = parsed.session_id or create_default_session_id()
+            output_path = Path(output_dir) / session_id
+            request = DeliberationRequest(
+                prompt=parsed.prompt,
+                agents=agents,
+                rounds=rounds,
+                synthesizer=synthesizer,
+                output_dir=str(output_path),
+                session_id=session_id,
+            )
+            deliberation_config = context.config.deliberation
+            transcript_runner = create_transcript_runner(process_runner)
+            output_path.mkdir(parents=True, exist_ok=True)
+            output_view = create_output_view()
+            event_sink = create_event_sink(output_path, output_view)
+            resolver = AgentFailureResolver()
+            result = run_agent_deliberation(
+                request=request,
+                config=deliberation_config,
+                transcript_runner=transcript_runner,
+                event_sink=event_sink,
+                target_repo_path=context.repo_path,
+                output_view=output_view,
+                resolver=resolver.resolve,
+            )
+            selected_profile_ids = tuple(
+                dict.fromkeys(
+                    profile_id
+                    for outputs in result.agent_outputs.values()
+                    for profile_id in outputs
+                )
+            )
+            profiles_by_id = {
+                profile.profile_id: profile for profile in deliberation_config.profiles
+            }
+            session_profiles = tuple(
+                profiles_by_id[profile_id]
+                for profile_id in selected_profile_ids
+                if profile_id in profiles_by_id
+            )
+            session = DeliberationSession(
+                session_id=result.session_id,
+                prompt=result.prompt,
+                profiles=session_profiles,
+                rounds=request.rounds,
+                synthesizer=request.synthesizer,
+                output_dir=output_path,
+                started_at=result.started_at,
+                finished_at=result.finished_at,
+            )
+            write_deliberation_outputs(result, session, output_path)
+            console.print(f"\n[green]Deliberation complete:[/] {output_path}")
+            if result.failed_agents:
+                for failure in result.failed_agents:
+                    logger.warning(
+                        "Deliberation agent failed: profile=%s attempted=%s "
+                        "fallback=%s reason=%s",
+                        failure.profile_id,
+                        failure.attempted_agent,
+                        failure.fallback_agent,
+                        failure.reason,
+                    )
+                    console.print(
+                        f"[yellow]Agent '{failure.profile_id}' failed "
+                        f"(attempted={failure.attempted_agent}, "
+                        f"fallback={failure.fallback_agent or 'none'}, "
+                        f"reason={failure.reason}).[/]"
+                    )
+            strict_mode = (
+                parsed.strict or not deliberation_config.continue_on_agent_error
+            )
+            all_participants_failed = len(selected_profile_ids) > 0 and all(
+                profile_id in {f.profile_id for f in result.failed_agents}
+                for profile_id in selected_profile_ids
+            )
+            synthesizer_failed = any(
+                failure.profile_id == "synthesizer" for failure in result.failed_agents
+            )
+            if strict_mode and result.failed_agents:
+                return 1
+            if all_participants_failed:
+                return 1
+            if synthesizer_failed and not any(
+                failure.profile_id != "synthesizer" for failure in result.failed_agents
+            ):
+                return 1
+            return 0
     except IARRepositoryNotInitializedError as exc:
         return _handle_not_initialized_error(exc)
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.

@@ -8,13 +8,19 @@
 # shared equivalent remain here.
 # ───────────────────────────────────────────────────────────────────────────────
 
+set allow-duplicate-recipes := true
+
 import "justfile.shared"
+
+# Default recipe (runs when you type `just`)
+default: _check-completion
+    @just --list
 
 # Reinstall the `iar` CLI tool globally via uv in editable mode
 # Usage:
 #   just reinstall-iar
 reinstall-iar:
-    uv tool install --reinstall --editable .
+    uv tool install --force --reinstall --editable .
 
 # Run the development entrypoint
 # Usage:
@@ -392,6 +398,81 @@ check-template-drift:
     echo "✅ Templates in sync."
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
+
+# Run tests after `just lint --full` (usage: just test [local|all|real])
+#   just test        - Run local tests change-aware via pytest-testmon
+#   just test all    - Run all tests (ignores .testmondata)
+#   just test real   - Run tests requiring API keys (ignores .testmondata)
+#
+# This override shadows the shared @test recipe because keda does not include
+# pytest-xdist in dev dependencies (-n auto would fail), and because all/real
+# must force a full run regardless of .testmondata state.
+@test type="local": _check-completion
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    source ./scripts/shared/hooks/quality_flag.sh
+
+    git_dir="$(quality_git_dir)"
+    flag_file="$git_dir/.last_tested_commit"
+    branch_name="$(quality_branch_name)"
+    head_hash="$(quality_head_hash)"
+    test_tree="$(quality_effective_tree working test)"
+
+    if [ "{{type}}" = "local" ] && quality_flag_matches "$flag_file" "$branch_name" "$head_hash" "$test_tree"; then
+        echo "✅ just test flag valid: $branch_name @ ${head_hash:0:8} (tree: ${test_tree:0:8}); skipping tests."
+        exit 0
+    fi
+
+    echo "🔍 Running full lint checks..."
+    if ! SKIP=check-test-flag just lint --full >/dev/null 2>&1; then
+        echo "ERROR: Lint failed. Fix lint errors before running tests."
+        echo "   Run: just lint --full"
+        exit 1
+    fi
+    lint_tree_after_lint="$(quality_effective_tree working lint)"
+    echo "✅ Lint passed. Proceeding to tests..."
+
+    # Check Alembic migration heads if Alembic is installed
+    if command -v alembic &>/dev/null; then
+        alembic_heads="$(uv run alembic heads 2>/dev/null || true)"
+        if [ -n "$alembic_heads" ]; then
+            alembic_head_count="$(printf "%s\n" "$alembic_heads" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+            if [ "$alembic_head_count" -gt 1 ]; then
+                echo "ERROR: Alembic migration graph must have exactly one head; found $alembic_head_count."
+                printf "%s\n" "$alembic_heads"
+                exit 1
+            fi
+        fi
+    fi
+
+    pytest_exit_code=0
+    if [ "{{type}}" = "all" ]; then
+        uv run pytest tests/ -v -m '' --no-testmon || pytest_exit_code=$?
+    elif [ "{{type}}" = "real" ]; then
+        uv run pytest tests/ -v -m 'real_api' --no-testmon || pytest_exit_code=$?
+        if [ "$pytest_exit_code" -eq 5 ]; then
+            echo "ℹ️  No real_api tests collected; treating as success."
+            pytest_exit_code=0
+        fi
+    else
+        # Local mode: --testmon is picked up from pyproject.toml addopts.
+        # pytest-xdist is intentionally not used; keda does not declare it.
+        uv run pytest tests/ -v || pytest_exit_code=$?
+    fi
+
+    if [ "$pytest_exit_code" -ne 0 ]; then
+        exit "$pytest_exit_code"
+    fi
+
+    # Write flag after tests pass, binding branch, HEAD and effective tree.
+    branch_name="$(quality_branch_name)"
+    head_hash="$(quality_head_hash)"
+    test_tree="$(quality_effective_tree working test)"
+    quality_write_flag "$git_dir/.last_tested_commit" "$branch_name" "$head_hash" "$test_tree"
+    quality_write_flag "$git_dir/.last_linted_commit" "$branch_name" "$head_hash" "$lint_tree_after_lint"
+    echo "✅ just test flag updated: $branch_name @ $head_hash"
+    echo "✅ just lint --full flag updated: $branch_name @ $head_hash"
 
 # Frontend helper
 # Usage:

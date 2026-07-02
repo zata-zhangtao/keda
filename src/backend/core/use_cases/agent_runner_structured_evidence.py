@@ -30,6 +30,10 @@ _STRUCTURED_EVIDENCE_MARKER_PATTERN = re.compile(
     r'language="(?P<language>[^"]+)"\s*-->'
 )
 _EVIDENCE_ITEM_FILE_PATTERN = re.compile(r"^rv-(?P<item>\d+)[-.]", re.IGNORECASE)
+_EVIDENCE_ITEM_SECTION_PATTERN = re.compile(
+    r"\[\s*Item\s+(?P<item>\d+)(?P<sub>[a-z]?)\s*\]",
+    re.IGNORECASE,
+)
 _PR_URL_PATTERN = re.compile(
     r"https?://[^/]+/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)"
 )
@@ -59,7 +63,12 @@ class StructuredEvidenceMarker:
 
 @dataclass(frozen=True)
 class EvidenceBlock:
-    """A single checklist item's structured evidence block from the manifest."""
+    """A single checklist item's structured evidence block from the manifest.
+
+    ``negative_control`` / ``expected_fail`` 承载"红→绿"判别力证据：能让该项
+    变红的命令或注入故障,以及变红时的样子。当前为可选字段（向后兼容旧
+    manifest）;门禁层按配置决定是否对高证据项强制要求。
+    """
 
     item_number: int
     item_name: str
@@ -68,6 +77,8 @@ class EvidenceBlock:
     output_summary: str
     explanation: str
     risks: str
+    negative_control: str = ""
+    expected_fail: str = ""
 
 
 @dataclass(frozen=True)
@@ -116,6 +127,8 @@ _LABELS: dict[str, dict[str, str]] = {
         "output_summary": "关键输出摘要",
         "explanation": "为什么能证明该检查点成立",
         "risks": "潜在风险 / 不适用说明",
+        "negative_control": "负控（如何让它变红）",
+        "expected_fail": "变红时的样子",
         "open_file": "打开文件",
         "image_alt": "证据图片",
         "truncated": "[内容已截断；请在证据分支打开完整文件]",
@@ -133,6 +146,8 @@ _LABELS: dict[str, dict[str, str]] = {
         "output_summary": "Key output summary",
         "explanation": "Why this satisfies the checkpoint",
         "risks": "Potential risks / not-applicable notes",
+        "negative_control": "Negative control (how it goes red)",
+        "expected_fail": "What red looks like",
         "open_file": "Open file",
         "image_alt": "Evidence image",
         "truncated": "[evidence truncated; open the file on the evidence branch]",
@@ -215,6 +230,8 @@ def _parse_evidence_block(block_data: object, item_number: int) -> EvidenceBlock
     explanation = _extract_nonempty_string(block_data, "explanation", item_number)
     risks = _extract_nonempty_string(block_data, "risks", item_number)
     evidence_files = _extract_evidence_files(block_data, item_number)
+    negative_control = _extract_optional_string(block_data, "negative_control")
+    expected_fail = _extract_optional_string(block_data, "expected_fail")
 
     return EvidenceBlock(
         item_number=item_number,
@@ -224,6 +241,8 @@ def _parse_evidence_block(block_data: object, item_number: int) -> EvidenceBlock
         output_summary=output_summary,
         explanation=explanation,
         risks=risks,
+        negative_control=negative_control,
+        expected_fail=expected_fail,
     )
 
 
@@ -238,6 +257,14 @@ def _extract_nonempty_string(
             f"`{field_name}` in evidence manifest."
         )
     return value.strip()
+
+
+def _extract_optional_string(block_data: dict[str, object], field_name: str) -> str:
+    """Extract an optional string field; return '' when absent, blank, or non-string."""
+    value = block_data.get(field_name)
+    if isinstance(value, str):
+        return value.strip()
+    return ""
 
 
 def _extract_evidence_files(
@@ -356,10 +383,68 @@ def _validate_evidence_file(
             f"in the manifest but does not exist in `{config.validation.evidence_dir}/`."
         )
 
-    return EvidenceFileInfo(
+    file_info = EvidenceFileInfo(
         file_name=file_name,
         sha256=_compute_file_sha256(file_path),
     )
+    _validate_evidence_file_content(
+        file_path=file_path,
+        expected_item_number=expected_item_number,
+        file_name=file_name,
+    )
+    return file_info
+
+
+def _validate_evidence_file_content(
+    file_path: Path,
+    expected_item_number: int,
+    file_name: str,
+) -> None:
+    """Detect cross-contamination between evidence files.
+
+    An evidence file must only contain section headers belonging to its own
+    checklist item. If a file named ``rv-1-*.txt`` also contains a section
+    header such as ``[Item 2]`` or ``[Item 2c]``, the agent most likely
+    leaked output from another item into this file (for example by using
+    shell-wide ``exec`` redirection).
+    """
+
+    try:
+        file_text = file_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+
+    found_items: set[int] = set()
+    for section_match in _EVIDENCE_ITEM_SECTION_PATTERN.finditer(file_text):
+        found_items.add(int(section_match.group("item")))
+
+    if expected_item_number not in found_items:
+        # The file does not even contain its own item marker. This can be
+        # legitimate for very short captures, so only flag when another
+        # item's marker is present.
+        if found_items:
+            other_items = sorted(found_items)
+            raise ValidationEvidenceError(
+                f"Item {expected_item_number}: evidence file `{file_name}` "
+                f"contains section header(s) for item(s) {other_items}, "
+                "but no header for its own item. Each evidence file must "
+                "contain only the output of its own Realistic Validation item."
+            )
+        return
+
+    foreign_items = sorted(
+        item_number
+        for item_number in found_items
+        if item_number != expected_item_number
+    )
+    if foreign_items:
+        raise ValidationEvidenceError(
+            f"Item {expected_item_number}: evidence file `{file_name}` "
+            f"contains section header(s) for foreign item(s) {foreign_items}. "
+            "Each evidence file must contain only the output of its own "
+            "Realistic Validation item. Avoid shell-wide stdout redirection "
+            "(e.g. `exec > >(tee ...)`) that leaks output across files."
+        )
 
 
 def validate_evidence_manifest(
@@ -444,6 +529,20 @@ def validate_evidence_manifest(
         item_reports.append(
             StructuredEvidenceItemReport(block=block, files=tuple(file_infos))
         )
+
+    if config.validation.require_negative_control:
+        missing_control = sorted(
+            block.item_number for block in manifest.items if not block.negative_control
+        )
+        if missing_control:
+            raise ValidationEvidenceError(
+                "Structured evidence manifest is missing `negative_control` "
+                "(red→green proof) for item(s): "
+                f"{', '.join(str(num) for num in missing_control)}. Each item must "
+                "show the test failing when the feature is broken (provide "
+                "`negative_control` and `expected_fail`), not only passing. Set "
+                "`validation.require_negative_control=false` to opt out."
+            )
 
     return StructuredEvidenceReport(
         language=manifest.language,
@@ -573,6 +672,18 @@ def render_structured_evidence_comment(
                 block.risks,
             ]
         )
+        if block.negative_control:
+            comment_lines.extend(
+                [
+                    "",
+                    f"**{_label(language, 'negative_control')}**",
+                    f"`{block.negative_control}`",
+                ]
+            )
+            if block.expected_fail:
+                comment_lines.append(
+                    f"- {_label(language, 'expected_fail')}: {block.expected_fail}"
+                )
 
     return "\n".join(comment_lines)
 
@@ -585,17 +696,30 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
             "按 Realistic Validation checklist item 分组。每个证据块必须包含："
             "`item_number`（序号）、`item_name`（名称）、`command`（可复现命令）、"
             "`evidence_files`（关联证据文件列表）、`output_summary`（关键输出摘要）、"
-            "`explanation`（为什么该证据能证明检查点成立）、`risks`（潜在风险或不适用说明）。"
+            "`explanation`（为什么该证据能证明检查点成立）、`risks`（潜在风险或不适用说明）、"
+            "`negative_control`（能让该项变红的命令或注入的故障）、`expected_fail`（变红时的样子）。"
+            "每个检查点都要证明'这测试会失败'：先用 negative_control 让它变红、记录 expected_fail，"
+            "再展示修复后变绿——只有绿、无法证明会红的证据视为无效。"
             'manifest 顶层必须声明 `version: 1` 和 `language: "{language}"`。'
             "所有证据文件必须命名为 `rv-<item_number>-<slug>.<ext>` 并放在 `{evidence_dir}/` 下。"
+            "重要：每个证据文件必须只包含对应 item 的输出，禁止混入其他 item 的内容；"
+            "不要用 `exec > >(tee -a ...)` 这类全局 stdout 重定向，它会让多个 item 的输出串到同一个文件里。"
         ).format(language=language, evidence_dir="{evidence_dir}")
     return (
         "Additionally, you must write a structured evidence manifest to "
         "`{evidence_dir}/evidence.json`, grouped by Realistic Validation checklist item. "
         "Each evidence block must include: `item_number`, `item_name`, `command`, "
         "`evidence_files`, `output_summary`, `explanation` (why the evidence satisfies "
-        "the checkpoint), and `risks` (potential risks or not-applicable notes). "
+        "the checkpoint), `risks` (potential risks or not-applicable notes), "
+        "`negative_control` (a command or injected fault that makes this item go RED), "
+        "and `expected_fail` (what red looks like). "
+        "Every checkpoint must prove the test can fail: use negative_control to make it "
+        "red and record expected_fail, then show it green after the fix — evidence that "
+        "is only ever green, with no way to show it failing, is not accepted. "
         'The manifest top level must declare `version: 1` and `language: "{language}"`. '
         "All evidence files must be named `rv-<item_number>-<slug>.<ext>` and placed "
-        "under `{evidence_dir}/`."
+        "under `{evidence_dir}/`. "
+        "Important: each evidence file must contain ONLY the output of its own item; "
+        "never mix output from multiple items into one file. Avoid shell-wide stdout "
+        "redirection such as `exec > >(tee -a ...)` which leaks output across files."
     ).format(language=language, evidence_dir="{evidence_dir}")

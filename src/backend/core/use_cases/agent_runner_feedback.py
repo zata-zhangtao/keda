@@ -21,6 +21,12 @@ from backend.core.use_cases.agent_runner_structured_evidence import (
 
 _MAX_RECOVERY_OUTPUT_LENGTH = 12000
 
+# Default ceiling for inlining the canonical PRD inside the implementation /
+# recovery / continuation prompts. PRDs longer than this are truncated with a
+# pointer to the full file. Exposed as a parameter so future PRDs (or repos)
+# can raise or lower the ceiling without forking this helper.
+_DEFAULT_PRD_INLINE_MAX_CHARS = 20000
+
 
 class VerificationFailedError(RuntimeError):
     """Raised when configured verification commands do not pass."""
@@ -70,14 +76,20 @@ _DEFAULT_EXECUTION_TEMPLATE = "\n".join(
         "Issue body:",
         "{issue_body}",
         "",
+        "Verification commands the runner will run before committing:",
+        "{verification_commands_summary}",
+        "",
         "Execution rules:",
         "- Read AGENTS.md and follow repository instructions.",
+        "- Check project conventions (naming, dependency direction, file encoding, "
+        "max line length, etc.) before requesting a commit.",
         "- Only modify files inside the current worktree.",
         "- Do not merge main, delete branches, push, or create PRs; "
         "the runner handles publishing.",
         "- Do not run `git add` or `git commit`; the runner exposes "
         "a restricted commit proxy.",
-        "- After finishing your changes, request a commit by writing "
+        "- After finishing your changes, run the verification commands above "
+        "locally if possible, then request a commit by writing "
         "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
         "- Do not touch production systems or real business data.",
         "- Implement the requested task with focused tests and docs updates.",
@@ -86,27 +98,90 @@ _DEFAULT_EXECUTION_TEMPLATE = "\n".join(
 )
 
 
-def _build_prd_line(issue: IssueSummary) -> str:
-    """Build the PRD reference line for a prompt template."""
-    prd_path = extract_prd_path(issue.body)
-    if prd_path:
-        prd_path_obj = Path(prd_path)
-        move_instruction = ""
-        if (
-            len(prd_path_obj.parts) >= 2
-            and prd_path_obj.parts[0] == "tasks"
-            and prd_path_obj.parts[1] == "pending"
-        ):
-            move_instruction = (
-                " If all checklist items are complete, move the PRD from "
-                "`tasks/pending/` to `tasks/archive/`."
-            )
-        return (
-            f"Also read the canonical PRD at `{prd_path}`. "
-            "Before requesting a commit, update the PRD's Acceptance Checklist "
-            f"to reflect completed work.{move_instruction}"
+def _read_prd_text(prd_path: Path) -> str | None:
+    """Return the canonical PRD file contents, or ``None`` if unreadable.
+
+    Reads with ``encoding="utf-8"`` (project rule) and swallows
+    :class:`OSError` so a transient filesystem error during prompt build does
+    not crash the runner — the caller falls back to the pointer line in that
+    case, which still tells the agent where the PRD lives.
+    """
+    try:
+        return prd_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _build_prd_closeout_instruction(prd_relative_path: str) -> str:
+    """Return the canonical "update checklist, archive if complete" footer."""
+    prd_path_obj = Path(prd_relative_path)
+    archive_clause = ""
+    if (
+        len(prd_path_obj.parts) >= 2
+        and prd_path_obj.parts[0] == "tasks"
+        and prd_path_obj.parts[1] == "pending"
+    ):
+        archive_clause = (
+            " If all Acceptance Checklist items are complete, move the PRD "
+            "from `tasks/pending/` to `tasks/archive/`."
         )
-    return "If the Issue references a PRD, read it before editing."
+    return (
+        "Before requesting a commit, update the PRD's Acceptance Checklist "
+        f"to reflect completed work.{archive_clause}"
+    )
+
+
+def _build_prd_context_block(
+    issue: IssueSummary,
+    worktree_path: Path,
+    *,
+    max_chars: int = _DEFAULT_PRD_INLINE_MAX_CHARS,
+) -> str:
+    """Render the PRD reference block for implementation/recovery/continuation prompts.
+
+    When the Issue references a canonical PRD and the file exists inside
+    ``worktree_path``, the full PRD text is inlined (up to ``max_chars``)
+    so the agent runs with the complete specification in context instead of
+    needing a separate read pass. When the file is missing or exceeds the
+    ceiling, a pointer line is returned so the agent still knows where the
+    PRD lives.
+
+    Args:
+        issue: The Issue being processed.
+        worktree_path: Repository worktree the agent will operate in.
+        max_chars: Maximum number of characters of PRD body to inline before
+            falling back to a pointer line with the full path.
+    """
+    prd_relative_path = extract_prd_path(issue.body)
+    if not prd_relative_path:
+        return "If the Issue references a PRD, read it before editing."
+
+    closeout_instruction = _build_prd_closeout_instruction(prd_relative_path)
+    prd_path = worktree_path / prd_relative_path
+    prd_text = _read_prd_text(prd_path)
+    if prd_text is None:
+        return (
+            f"Also read the canonical PRD at `{prd_relative_path}`. "
+            f"{closeout_instruction}"
+        )
+
+    if len(prd_text) <= max_chars:
+        inline_section = prd_text.rstrip()
+    else:
+        truncation_note = (
+            f"[PRD body truncated to {max_chars} chars; "
+            f"read the full canonical PRD at `{prd_relative_path}` for the "
+            "remaining context.]"
+        )
+        inline_section = prd_text[:max_chars].rstrip() + "\n\n" + truncation_note
+
+    return (
+        f"The canonical PRD is inlined below from `{prd_relative_path}`. "
+        f"{closeout_instruction}\n\n"
+        "--- BEGIN PRD ---\n"
+        f"{inline_section}\n"
+        "--- END PRD ---"
+    )
 
 
 def build_prompt(
@@ -116,6 +191,7 @@ def build_prompt(
     phase: str = "execution",
     *,
     validation_line: str = "",
+    verification_commands_summary: str = "",
 ) -> str:
     """Build the prompt sent to the local AI agent from a template.
 
@@ -126,9 +202,11 @@ def build_prompt(
         phase: 模板阶段名。
         validation_line: Realistic Validation 强制执行指令；不要求证据的
             Issue 传空字符串。仅当模板含 ``{validation_line}`` 占位符时生效。
+        verification_commands_summary: 当前 runner 会执行的 verification
+            命令列表说明；传给 agent 让它提前了解交付门禁。
     """
     template = prompt_config.phases.get(phase, _DEFAULT_EXECUTION_TEMPLATE)
-    prd_line = _build_prd_line(issue)
+    prd_line = _build_prd_context_block(issue, worktree_path)
     return template.format(
         issue_number=issue.number,
         issue_title=issue.title,
@@ -137,6 +215,7 @@ def build_prompt(
         issue_body=issue.body,
         prd_line=prd_line,
         validation_line=validation_line,
+        verification_commands_summary=verification_commands_summary,
     )
 
 
@@ -373,12 +452,27 @@ def assert_prd_archived_for_publish(
         )
 
 
-def format_prd_delivery_failure(message: str) -> str:
-    """Build the failure section for a PRD delivery recovery prompt."""
+def format_prd_delivery_detail(message: str) -> str:
+    """Build the recorded attempt detail for a PRD delivery failure.
+
+    Keeps the specific failure ``message`` as the last line so the attempt
+    history Detail column surfaces the real reason. The generic "update the
+    PRD" instruction belongs only in the recovery prompt
+    (:func:`format_prd_delivery_failure`), never in the diagnostic record.
+    """
     return "\n".join(
         [
             "PRD delivery check failed.",
             message,
+        ]
+    )
+
+
+def format_prd_delivery_failure(message: str) -> str:
+    """Build the failure section for a PRD delivery recovery prompt."""
+    return "\n".join(
+        [
+            format_prd_delivery_detail(message),
             "Update the canonical PRD: ensure all Acceptance Checklist items are checked, "
             "and move the PRD from tasks/pending/ to tasks/archive/ if complete.",
         ]
@@ -391,6 +485,67 @@ def ensure_verification_passed(verification_results: list[CommandResult]) -> Non
         raise VerificationFailedError(verification_results)
 
 
+def build_fix_prompt(
+    issue: IssueSummary,
+    worktree_path: Path,
+    *,
+    verification_results: list[CommandResult],
+    verification_commands_summary: str = "",
+) -> str:
+    """Build a focused prompt for the Fix Agent layer.
+
+    The Fix Agent only repairs the current verification failure. It must not
+    modify evidence files, PRD checklists, or ``.agent-runner/commit-request.json``
+    unless those files are directly part of the failing verification output.
+
+    Args:
+        issue: The Issue being processed.
+        worktree_path: Agent worktree path.
+        verification_results: The failed verification results to repair.
+        verification_commands_summary: Full list of verification commands the
+            runner runs, so the Fix Agent knows the complete delivery gate.
+
+    Returns:
+        Prompt text for the Fix Agent.
+    """
+    failed_results = failed_verification_results(verification_results)
+    failure_text = (
+        "\n\n".join(format_result_for_recovery(result) for result in failed_results)
+        if failed_results
+        else "Verification failed without a captured failing command."
+    )
+    commands_section = ""
+    if verification_commands_summary:
+        commands_section = (
+            "The runner will re-run the following verification commands after your "
+            f"fix (in order; the first failure stops the chain):\n{verification_commands_summary}"
+        )
+    return "\n".join(
+        [
+            f"Fix the verification failure for GitHub Issue #{issue.number}: {issue.title}",
+            "",
+            f"Issue URL: {issue.url}",
+            f"Worktree: {worktree_path}",
+            "",
+            "The runner detected the following verification failure:",
+            failure_text,
+            "",
+            commands_section,
+            "Fix rules:",
+            "- Only modify files inside the current worktree.",
+            "- Only fix the code or tests that caused the verification failure above.",
+            "- Before requesting a commit, re-check project conventions "
+            "(naming, dependency direction, file encoding, max line length, etc.).",
+            "- Do not update evidence files, PRD Acceptance Checklists, or commit requests.",
+            "- Do not switch branches, merge main, push, or create PRs.",
+            "- Do not run `git add` or `git commit`; the runner handles commits.",
+            "- After fixing the failure, write or update "
+            "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
+            "- Finish with a concise summary of the fix.",
+        ]
+    )
+
+
 def build_recovery_prompt(
     issue: IssueSummary,
     worktree_path: Path,
@@ -398,13 +553,16 @@ def build_recovery_prompt(
     recovery_attempt: int,
     max_recovery_attempts: int,
     failure_summary: str,
+    verification_results: list[CommandResult] | None = None,
 ) -> str:
     """Build a prompt that asks the agent to repair a failed attempt."""
     prd_path = extract_prd_path(issue.body)
     if prd_path:
+        prd_closeout = _build_prd_closeout_instruction(prd_path)
+        prd_context_block = _build_prd_context_block(issue, worktree_path)
         prd_line = (
-            f"Also re-check the canonical PRD at `{prd_path}` if it affects the fix. "
-            "Ensure the Acceptance Checklist is updated and the PRD is archived if complete."
+            "Re-check the canonical PRD below; update the Acceptance Checklist "
+            f"to reflect the recovery work. {prd_closeout}\n\n{prd_context_block}"
         )
     else:
         prd_line = "If the Issue references a PRD, re-check it if it affects the fix."
@@ -419,6 +577,19 @@ def build_recovery_prompt(
             "Fix the manifest and the referenced evidence files before requesting a commit."
         )
 
+    verification_section = ""
+    if verification_results:
+        failed_results = failed_verification_results(verification_results)
+        if failed_results:
+            formatted_failures = "\n\n".join(
+                format_result_for_recovery(result) for result in failed_results
+            )
+            verification_section = (
+                "The runner detected the following verification failures "
+                "(commands are run in order; the first failure stops the chain):\n\n"
+                f"{formatted_failures}"
+            )
+
     return "\n".join(
         [
             f"Repair GitHub Issue #{issue.number}: {issue.title}",
@@ -431,10 +602,13 @@ def build_recovery_prompt(
             "The runner could not finish the previous attempt:",
             failure_summary,
             "",
+            verification_section,
             structured_evidence_line,
             "Recovery rules:",
             "- Inspect the current worktree and fix the failure.",
             "- Only modify files inside the current worktree.",
+            "- Before requesting a commit, re-check project conventions "
+            "(naming, dependency direction, file encoding, max line length, etc.).",
             "- Do not switch branches, merge main, push, or create PRs.",
             "- Do not run `git add` or `git commit`; the runner handles commits.",
             "- After fixing the issue, write or update "
@@ -447,23 +621,46 @@ def build_recovery_prompt(
 def build_progress_continuation_prompt(
     issue: IssueSummary,
     worktree_path: Path,
+    *,
+    failure_summary: str = "",
+    verification_results: list[CommandResult] | None = None,
 ) -> str:
     """构造"在已提交进度上继续"的 prompt，用于跨 claim 续作。
 
     当上一次 claim 把部分进度提交成 checkpoint（或正常提交）后，下一次 claim
     不应从零开始。本 prompt 告知 agent 工作树已有既有提交，要先检视现状再补齐
-    剩余工作，避免重复劳动或回退已完成内容。
+    剩余工作，避免重复劳动或回退已完成内容。同时附带上一次失败的 verification
+    上下文，让续作 agent 直接针对未通过的检查继续修复。
     """
     prd_path = extract_prd_path(issue.body)
     if prd_path:
+        prd_closeout = _build_prd_closeout_instruction(prd_path)
+        prd_context_block = _build_prd_context_block(issue, worktree_path)
         prd_line = (
-            f"Read the canonical PRD at `{prd_path}` and its Acceptance Checklist "
-            "to see which items are already done and which remain. Update the "
-            "checklist as you complete items, and move the PRD from "
-            "`tasks/pending/` to `tasks/archive/` once every item is checked."
+            "The canonical PRD is inlined below. Use it and its Acceptance "
+            f"Checklist to see which items are already done. {prd_closeout}\n\n"
+            f"{prd_context_block}"
         )
     else:
         prd_line = "If the Issue references a PRD, read it to see the remaining work."
+
+    failure_section = ""
+    if failure_summary:
+        failure_section = "The previous attempt failed with:\n" f"{failure_summary}\n"
+
+    verification_section = ""
+    if verification_results:
+        failed_results = failed_verification_results(verification_results)
+        if failed_results:
+            formatted_failures = "\n\n".join(
+                format_result_for_recovery(result) for result in failed_results
+            )
+            verification_section = (
+                "The previous attempt failed the following verification checks "
+                "(commands are run in order; the first failure stops the chain):\n\n"
+                f"{formatted_failures}\n"
+            )
+
     return "\n".join(
         [
             f"Continue GitHub Issue #{issue.number}: {issue.title}",
@@ -477,8 +674,12 @@ def build_progress_continuation_prompt(
             "and the PRD Acceptance Checklist), then implement only what remains.",
             prd_line,
             "",
+            failure_section,
+            verification_section,
             "Execution rules:",
             "- Only modify files inside the current worktree.",
+            "- Before requesting a commit, re-check project conventions "
+            "(naming, dependency direction, file encoding, max line length, etc.).",
             "- Do not merge main, switch branches, push, or create PRs; "
             "the runner handles publishing.",
             "- Do not run `git add` or `git commit`; after finishing your changes, "

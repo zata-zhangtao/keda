@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote_plus
 
-from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -113,6 +120,28 @@ def resolve_config_toml_path() -> Path:
     return _find_config_toml() or (_PROJECT_ROOT_PATH / "config.toml")
 
 
+def resolve_registry_config_toml_path() -> Path:
+    """解析仓库 registry 使用的全局 config.toml 路径。
+
+    Registry 记录的是 IAR 托管的所有仓库，必须是全局共享的，不能因为
+    用户在某个项目目录内执行命令就写入该项目的 config.toml。
+
+    解析顺序：
+    1. ``IAR_CONFIG`` 环境变量（如果显式设置），用于测试或高级用户覆盖。
+    2. ``~/.iar/config.toml``（首次调用时从源码根目录 seed 默认配置）。
+    3. keda 源码根目录 ``config.toml`` 作为最后 fallback。
+    """
+    env_config = os.environ.get("IAR_CONFIG")
+    if env_config:
+        env_path = Path(env_config).expanduser()
+        if env_path.is_file() or env_path.parent.exists():
+            return env_path
+    global_config = _ensure_global_config_toml()
+    if global_config is not None:
+        return global_config
+    return _PROJECT_ROOT_PATH / "config.toml"
+
+
 def resolve_project_root_path() -> Path:
     """返回 keda 项目源码根目录（托管进程的默认 cwd）。"""
     return _PROJECT_ROOT_PATH
@@ -132,6 +161,28 @@ def _load_toml_section_data(section_name: str) -> dict[str, Any]:
         return {}
     try:
         with open(toml_path, "rb") as toml_file:
+            toml_data: dict[str, Any] = tomllib.load(toml_file)
+        return toml_data.get(section_name, {})
+    except Exception:
+        return {}
+
+
+def _load_registry_toml_section_data(section_name: str) -> dict[str, Any]:
+    """从 registry 专用的 config.toml 加载指定 section。
+
+    Registry 与通用配置解耦：仓库列表必须全局共享，因此优先读取
+    ``IAR_CONFIG`` 或 ``~/.iar/config.toml``；仅当全局 registry 不存在时
+    fallback 到当前生效的 config.toml（兼容 legacy 项目级 registry）。
+
+    Args:
+        section_name: TOML section 名称。
+
+    Returns:
+        section 内容字典，文件不存在或 section 不存在时返回空 dict。
+    """
+    registry_path = resolve_registry_config_toml_path()
+    try:
+        with open(registry_path, "rb") as toml_file:
             toml_data: dict[str, Any] = tomllib.load(toml_file)
         return toml_data.get(section_name, {})
     except Exception:
@@ -175,6 +226,27 @@ def _env_toml_init_sources(
         toml_source,
         init_settings,
     )
+
+
+class _RegistryRepositoriesSource(PydanticBaseSettingsSource):
+    """从 registry 专用 config.toml 读取 ``[agent_runner.repositories]`` 的源。"""
+
+    def __init__(self, settings_cls: type[BaseSettings]) -> None:
+        super().__init__(settings_cls)
+        agent_runner_data = _load_registry_toml_section_data("agent_runner")
+        self._repositories: dict[str, Any] = agent_runner_data.get("repositories", {})
+
+    def get_field_value(
+        self,
+        field: Any,  # noqa: ARG002
+        field_name: str,
+    ) -> tuple[Any, str, bool]:
+        if field_name == "repositories":
+            return self._repositories, field_name, False
+        return None, field_name, False  # type: ignore[return-value]
+
+    def __call__(self) -> dict[str, Any]:
+        return {"repositories": self._repositories} if self._repositories else {}
 
 
 class DatabaseSettings(BaseSettings):
@@ -358,6 +430,7 @@ class AgentRunnerLabelSettings(BaseModel):
     claude: str = "agent/claude"
     kimi: str = "agent/kimi"
     rework_prd: str = "agent/rework-prd"
+    deliberate: str = "agent/deliberate"
 
     @property
     def agent_labels(self) -> dict[str, str]:
@@ -396,13 +469,32 @@ class AgentRunnerRunnerSettings(BaseModel):
     """Local runner behavior."""
 
     max_issues: int = 1
+    # Maximum Issues processed in parallel within one daemon pass. 1 keeps the
+    # sequential path (zero regression); >1 enables thread-pool parallelism.
+    max_concurrent_issues: int = 1
     default_agent: str = "auto"
     max_recovery_attempts: int = 5
     recovery_retry_delay_seconds: int = 30
+    # Cross-agent fallback chain. The runner tries the primary agent first, then
+    # falls back to the next locally available agent when recovery is exhausted
+    # or the provider is capacity-limited. Commands that are not installed on
+    # this machine are automatically skipped. Set to [] to disable switching.
+    agent_fallback_order: list[str] = Field(
+        default_factory=lambda: ["claude", "kimi", "codex"]
+    )
+    # Maximum number of agent switches before the Issue is marked failed.
+    # With order [a, b, c] and max_agent_switches=2, up to 3 agents are tried.
+    max_agent_switches: int = 2
+    # In-place retries for transient network/transport errors (Level 1).
+    transient_retry_attempts: int = 2
+    transient_retry_delay_seconds: int = 10
+    timeout_seconds: int = 14400
+    fix_timeout_seconds: int | None = None
+    recovery_timeout_seconds: int | None = None
+    inactivity_timeout_seconds: int = 1200
     verification_commands: list[str] = Field(
         default_factory=lambda: [
             "git diff --check",
-            "uv run mkdocs build",
         ]
     )
 
@@ -431,6 +523,13 @@ class AgentRunnerValidationSettings(BaseModel):
     parse_evidence_format_with_agent: bool = True
     language: str = "zh-CN"
     structured_evidence: bool = True
+    require_negative_control: bool = True
+    reexecute_commands: bool = True
+    reexecute_timeout_seconds: int = 300
+    reexecute_cache_enabled: bool = True
+    verifier_enabled: bool = False
+    verifier_agent: str = "auto"
+    verifier_timeout_seconds: int = 1800
 
 
 class AgentRunnerConsoleSettings(BaseModel):
@@ -448,6 +547,8 @@ class AgentRunnerDaemonSettings(BaseModel):
 
     review_interval_seconds: int = 120
     run_interval_seconds: int = 120
+    max_deliberation_issues: int = 1
+    reclaim_stale_running: bool = True
 
 
 class AgentRunnerPromptSettings(BaseModel):
@@ -534,6 +635,52 @@ class AgentRunnerInteractiveDecisionSettings(BaseModel):
     allow_execute_yes: bool = True  # Allow --yes to skip confirmation.
 
 
+class AgentRunnerReplSettings(BaseModel):
+    """Interactive REPL (`iar` with no subcommand) configuration.
+
+    The REPL entrypoint lets the user chat with a configured agent and
+    grants the agent the ability to request execution of whitelisted IAR
+    subcommands via ``<<IAR_EXEC>> ... <<END_IAR_EXEC>>`` markers. This
+    settings block isolates the REPL's risk surface (default agent,
+    command allow/confirm lists, audit directory) from the ``iar ask``
+    decision planner.
+    """
+
+    enabled: bool = True
+    default_agent: str = "claude"
+    default_output_dir: str = "logs/agent-runner/repl"
+    max_context_chars: int = 24000
+    agent_timeout_seconds: int = 120
+    # Commands that the executor may run without explicit confirmation.
+    # Each entry is a *prefix* matched against the argv tail (everything
+    # after ``iar``), so ``"labels sync --dry-run"`` auto-confirms only
+    # that exact form. Anything not listed here is either matched against
+    # ``confirm_commands`` (which prompts) or rejected outright.
+    auto_confirm_commands: list[str] = Field(
+        default_factory=lambda: [
+            "labels sync --dry-run",
+            "run --dry-run",
+            "review --dry-run",
+            "ask --plan-only",
+        ]
+    )
+    # Commands whose execution prompts the user for confirmation. Matched
+    # with the same prefix rules as ``auto_confirm_commands``.
+    confirm_commands: list[str] = Field(
+        default_factory=lambda: [
+            "run",
+            "daemon",
+            "review",
+            "review-daemon",
+            "issue create",
+            "recover",
+            "blocked-continue",
+            "worktree create",
+            "worktree remove",
+        ]
+    )
+
+
 class AgentRunnerDeliberationSettings(BaseModel):
     """Multi-agent deliberation configuration."""
 
@@ -542,6 +689,7 @@ class AgentRunnerDeliberationSettings(BaseModel):
     default_output_dir: str = "logs/agent-runner/deliberations"
     continue_on_agent_error: bool = True
     agent_failure_timeout_seconds: int = 300
+    stale_rounds_before_hint: int = 3
     profiles: dict[str, AgentRunnerDeliberationProfileSettings] = Field(
         default_factory=lambda: {
             "architect": AgentRunnerDeliberationProfileSettings(
@@ -581,7 +729,7 @@ class AgentRunnerGeneratedContentTargetSettings(BaseModel):
     enabled: bool = True
     # 仅接受 template / agent；非法值（如手误 "agnet"）在配置加载期直接报错，
     # 而不是静默退回 fallback。
-    mode: Literal["template", "agent"] = "template"
+    mode: Literal["template", "agent"] = "agent"
     output: str = "json"
     title_template: str | list[str] = ""
     body_template: str | list[str] = ""
@@ -627,6 +775,37 @@ class AgentRunnerRepositoryMetadataSettings(BaseModel):
     id: str | None = None
     enabled: bool = True
     display_name: str | None = None
+    # Optional ``owner/name`` string passed to ``gh pr list --repo`` so the
+    # PR column on ``iar issue list`` is populated. Omitting it is allowed
+    # — the PR column then stays empty with a one-shot stderr warning.
+    github_repo: str | None = None
+
+    @field_validator("github_repo")
+    @classmethod
+    def _validate_github_repo_format(cls, value: str | None) -> str | None:
+        """Reject malformed ``github_repo`` values at config load time.
+
+        Format: ``owner/name`` with non-empty owner / name and no leading
+        or trailing slash. ``None`` and empty string are accepted (the
+        field is optional).
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                "Invalid github_repo: must be a non-empty 'owner/name' "
+                "string or null."
+            )
+        if "/" not in value or value.startswith("/") or value.endswith("/"):
+            raise ValueError(
+                f"Invalid github_repo {value!r}; expected 'owner/name' format."
+            )
+        owner_part, _, name_part = value.partition("/")
+        if not owner_part or not name_part or "/" in name_part:
+            raise ValueError(
+                f"Invalid github_repo {value!r}; expected 'owner/name' format."
+            )
+        return value
 
 
 class _AgentRunnerRepositoryOverrideSettings(BaseModel):
@@ -644,6 +823,7 @@ class _AgentRunnerRepositoryOverrideSettings(BaseModel):
     generated_content: AgentRunnerGeneratedContentSettings | None = None
     interactive_decision: AgentRunnerInteractiveDecisionSettings | None = None
     deliberation: AgentRunnerDeliberationSettings | None = None
+    repl: AgentRunnerReplSettings | None = None
 
 
 class AgentRunnerRepositorySettings(_AgentRunnerRepositoryOverrideSettings):
@@ -653,6 +833,33 @@ class AgentRunnerRepositorySettings(_AgentRunnerRepositoryOverrideSettings):
     id: str | None = None
     enabled: bool = True
     display_name: str | None = None
+    # Optional ``owner/name`` string passed to ``gh pr list --repo``.
+    # Mirrors the same field on ``AgentRunnerRepositoryMetadataSettings``;
+    # the local-config loader propagates the value at merge time. See
+    # the field validator on the metadata class for the format contract.
+    github_repo: str | None = None
+
+    @field_validator("github_repo")
+    @classmethod
+    def _validate_github_repo_format(cls, value: str | None) -> str | None:
+        """Mirror the metadata-level validation for registry entries."""
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                "Invalid github_repo: must be a non-empty 'owner/name' "
+                "string or null."
+            )
+        if "/" not in value or value.startswith("/") or value.endswith("/"):
+            raise ValueError(
+                f"Invalid github_repo {value!r}; expected 'owner/name' format."
+            )
+        owner_part, _, name_part = value.partition("/")
+        if not owner_part or not name_part or "/" in name_part:
+            raise ValueError(
+                f"Invalid github_repo {value!r}; expected 'owner/name' format."
+            )
+        return value
 
 
 class AgentRunnerLocalSettings(_AgentRunnerRepositoryOverrideSettings):
@@ -710,6 +917,7 @@ def load_agent_runner_local_settings(
         id=repository_metadata.id,
         enabled=repository_metadata.enabled,
         display_name=repository_metadata.display_name,
+        github_repo=repository_metadata.github_repo,
         labels=local_settings.labels,
         git=local_settings.git,
         worktree=local_settings.worktree,
@@ -722,6 +930,7 @@ def load_agent_runner_local_settings(
         generated_content=local_settings.generated_content,
         interactive_decision=local_settings.interactive_decision,
         deliberation=local_settings.deliberation,
+        repl=local_settings.repl,
     )
 
 
@@ -764,6 +973,7 @@ class AgentRunnerSettings(BaseSettings):
     interactive_decision: AgentRunnerInteractiveDecisionSettings = Field(
         default_factory=AgentRunnerInteractiveDecisionSettings
     )
+    repl: AgentRunnerReplSettings = Field(default_factory=AgentRunnerReplSettings)
     repositories: dict[str, AgentRunnerRepositorySettings] = Field(default_factory=dict)
 
     @classmethod
@@ -775,8 +985,12 @@ class AgentRunnerSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return _env_toml_init_sources(
-            settings_cls, "agent_runner", env_settings, init_settings
+        toml_source = _TomlSectionSource(settings_cls, "agent_runner")
+        return (
+            env_settings,
+            _RegistryRepositoriesSource(settings_cls),
+            toml_source,
+            init_settings,
         )
 
 
@@ -937,6 +1151,7 @@ __all__ = [
     "AgentRunnerGitSettings",
     "AgentRunnerLabelSettings",
     "AgentRunnerPromptSettings",
+    "AgentRunnerReplSettings",
     "AgentRunnerRepositorySettings",
     "AgentRunnerRunnerSettings",
     "AgentRunnerSafetySettings",

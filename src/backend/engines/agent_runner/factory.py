@@ -21,7 +21,10 @@ from backend.core.shared.models.agent_deliberation import (
     DeliberationConfig,
     DeliberationEvent,
 )
-from backend.core.shared.models.agent_decision import InteractiveDecisionConfig
+from backend.core.shared.models.agent_decision import (
+    InteractiveDecisionConfig,
+    ReplConfig,
+)
 from backend.core.shared.models.agent_runner import (
     AppConfig,
     CommandResult,
@@ -32,6 +35,7 @@ from backend.core.shared.models.agent_runner import (
     PostPrSupervisorConfig,
     PrePrReviewConfig,
     PromptConfig,
+    RepositoryIdentity,
     RepositoryRunContext,
     RunnerConfig,
     SafetyConfig,
@@ -53,21 +57,27 @@ from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerLabelSettings,
     AgentRunnerPromptSettings,
+    AgentRunnerReplSettings,
     AgentRunnerRepositorySettings,
     AgentRunnerSettings,
     IAR_REPOSITORY_CONFIG_FILENAME,
     config,
     load_agent_runner_local_settings,
-    resolve_config_toml_path,
     resolve_project_root_path,
+    resolve_registry_config_toml_path,
 )
 from backend.infrastructure.console.process_supervisor import (
     PidfileProcessSupervisor,
 )
 from backend.infrastructure.github_client import GitHubCliClient
 from backend.infrastructure.persistence.console_store import SqliteConsoleStore
+from backend.engines.agent_runner.persistence.loop_state_json import (
+    JsonLoopStateStore,
+    resolve_loop_state_path,
+)
 from backend.infrastructure.logging.logger import logger
 from backend.infrastructure.process_runner import SubprocessRunner
+from backend.engines.agent_runner.scheduler.loop_clock import SystemClock
 from backend.engines.agent_runner.deliberation_outputs import (
     write_deliberation_outputs,
 )
@@ -78,6 +88,8 @@ __all__ = [
     "create_content_generator",
     "create_event_sink",
     "create_github_client",
+    "create_loop_clock",
+    "create_loop_state_store",
     "create_process_runner",
     "create_transcript_runner",
     "create_planner_runner",
@@ -92,6 +104,7 @@ __all__ = [
     "write_deliberation_outputs",
     "create_event_sink",
     "create_roadmap_store",
+    "create_repl_command_executor",
 ]
 
 
@@ -151,7 +164,21 @@ def _build_deliberation_config(
         default_output_dir=deliberation_settings.default_output_dir,
         continue_on_agent_error=deliberation_settings.continue_on_agent_error,
         agent_failure_timeout_seconds=deliberation_settings.agent_failure_timeout_seconds,
+        stale_rounds_before_hint=deliberation_settings.stale_rounds_before_hint,
         profiles=profiles,
+    )
+
+
+def _build_repl_config(repl_settings: AgentRunnerReplSettings) -> ReplConfig:
+    """Convert pydantic REPL settings to frozen core config."""
+    return ReplConfig(
+        enabled=repl_settings.enabled,
+        default_agent=repl_settings.default_agent,
+        default_output_dir=repl_settings.default_output_dir,
+        max_context_chars=repl_settings.max_context_chars,
+        agent_timeout_seconds=repl_settings.agent_timeout_seconds,
+        auto_confirm_commands=tuple(repl_settings.auto_confirm_commands),
+        confirm_commands=tuple(repl_settings.confirm_commands),
     )
 
 
@@ -173,6 +200,7 @@ def build_app_config_from_settings(
         agent_runner_settings.generated_content
     )
     interactive_decision = agent_runner_settings.interactive_decision
+    repl = _build_repl_config(agent_runner_settings.repl)
     deliberation = _build_deliberation_config(agent_runner_settings.deliberation)
 
     return AppConfig(
@@ -188,6 +216,7 @@ def build_app_config_from_settings(
             validation_passed=label_settings.validation_passed,
             group_prefix=label_settings.group_prefix,
             rework_prd=label_settings.rework_prd,
+            deliberate=label_settings.deliberate,
             agent_labels=label_settings.agent_labels,
         ),
         git=GitConfig(
@@ -202,9 +231,18 @@ def build_app_config_from_settings(
         ),
         runner=RunnerConfig(
             max_issues=runner_settings.max_issues,
+            max_concurrent_issues=runner_settings.max_concurrent_issues,
             default_agent=runner_settings.default_agent,
             max_recovery_attempts=runner_settings.max_recovery_attempts,
             recovery_retry_delay_seconds=runner_settings.recovery_retry_delay_seconds,
+            agent_fallback_order=tuple(runner_settings.agent_fallback_order),
+            max_agent_switches=runner_settings.max_agent_switches,
+            transient_retry_attempts=runner_settings.transient_retry_attempts,
+            transient_retry_delay_seconds=runner_settings.transient_retry_delay_seconds,
+            timeout_seconds=runner_settings.timeout_seconds,
+            fix_timeout_seconds=runner_settings.fix_timeout_seconds,
+            recovery_timeout_seconds=runner_settings.recovery_timeout_seconds,
+            inactivity_timeout_seconds=runner_settings.inactivity_timeout_seconds,
             verification_commands=tuple(runner_settings.verification_commands),
         ),
         safety=SafetyConfig(
@@ -219,6 +257,13 @@ def build_app_config_from_settings(
             parse_evidence_format_with_agent=validation_settings.parse_evidence_format_with_agent,
             language=validation_settings.language,
             structured_evidence=validation_settings.structured_evidence,
+            require_negative_control=validation_settings.require_negative_control,
+            reexecute_commands=validation_settings.reexecute_commands,
+            reexecute_timeout_seconds=validation_settings.reexecute_timeout_seconds,
+            reexecute_cache_enabled=validation_settings.reexecute_cache_enabled,
+            verifier_enabled=validation_settings.verifier_enabled,
+            verifier_agent=validation_settings.verifier_agent,
+            verifier_timeout_seconds=validation_settings.verifier_timeout_seconds,
         ),
         prompts=PromptConfig(
             default_phase=prompt_settings.default_phase,
@@ -254,6 +299,7 @@ def build_app_config_from_settings(
             max_context_chars=interactive_decision.max_context_chars,
             allow_execute_yes=interactive_decision.allow_execute_yes,
         ),
+        repl=repl,
         deliberation=deliberation,
     )
 
@@ -383,6 +429,7 @@ def _merge_label_config(
         ),
         group_prefix=override_data.get("group_prefix", base_config.group_prefix),
         rework_prd=override_data.get("rework_prd", base_config.rework_prd),
+        deliberate=override_data.get("deliberate", base_config.deliberate),
         agent_labels=agent_labels,
     )
 
@@ -403,6 +450,22 @@ def _merge_prompt_config(
     )
 
 
+def _drop_empty_template_overrides(
+    override_data: dict[str, object],
+) -> dict[str, object]:
+    """Drop empty string template/prompt overrides so base config defaults survive.
+
+    ``.iar.toml`` often materializes ``title_template = ""``, ``body_template = ""``
+    and ``prompt = ""`` as placeholders. Without this filter, those empty strings
+    would wipe out meaningful defaults from ``config.toml``.
+    """
+    filtered = dict(override_data)
+    for key in ("title_template", "body_template", "prompt"):
+        if filtered.get(key) == "":
+            del filtered[key]
+    return filtered
+
+
 def _merge_generated_content_target_config(
     base_config: GeneratedContentTargetConfig,
     override: AgentRunnerGeneratedContentTargetSettings | None,
@@ -410,7 +473,7 @@ def _merge_generated_content_target_config(
     """Merge repository-specific generated-content target overrides."""
     if override is None:
         return base_config
-    override_data = _pydantic_override_dict(override)
+    override_data = _drop_empty_template_overrides(_pydantic_override_dict(override))
     return GeneratedContentTargetConfig(
         enabled=override_data.get("enabled", base_config.enabled),
         mode=override_data.get("mode", base_config.mode),
@@ -496,18 +559,34 @@ def _merge_deliberation_config(
         agent_failure_timeout_seconds=override_data.get(
             "agent_failure_timeout_seconds", base_config.agent_failure_timeout_seconds
         ),
+        stale_rounds_before_hint=override_data.get(
+            "stale_rounds_before_hint", base_config.stale_rounds_before_hint
+        ),
         profiles=tuple(profiles.values()),
     )
 
 
 def merge_repository_config(
-    global_config: AppConfig, repo_settings: AgentRunnerRepositorySettings
+    global_config: AppConfig,
+    repo_settings: AgentRunnerRepositorySettings,
+    *,
+    repo_key: str | None = None,
+    skip_identity: bool = False,
 ) -> AppConfig:
     """Merge repository-specific overrides into a global ``AppConfig``.
 
     Args:
         global_config: The global application configuration.
         repo_settings: Repository-specific override settings.
+        repo_key: Optional explicit key for the ``repositories`` dict
+            view. Defaults to ``repo_settings.id`` (if set) or the
+            resolved path; the caller is expected to pass the registry
+            key (``settings.repositories[<key>]``) for registry paths
+            so that ``_repo_label_for`` can look up the identity via
+            ``context.repo_id``.
+        skip_identity: When ``True`` the caller's identity view is left
+            untouched. Used for local ``.iar.toml`` overrides whose
+            ``github_repo`` should not clobber the registry value.
 
     Returns:
         A new ``AppConfig`` with per-repository overrides applied.
@@ -536,6 +615,14 @@ def merge_repository_config(
     deliberation = _merge_deliberation_config(
         global_config.deliberation, repo_settings.deliberation
     )
+    repl = _merge_optional_model(global_config.repl, repo_settings.repl)
+    repositories = (
+        global_config.repositories
+        if skip_identity
+        else _merge_repositories_dict(
+            global_config.repositories, repo_settings, key_override=repo_key
+        )
+    )
     return AppConfig(
         labels=labels,
         git=git,
@@ -548,8 +635,55 @@ def merge_repository_config(
         post_pr_supervisor=post_pr_supervisor,
         generated_content=generated_content,
         interactive_decision=interactive_decision,
+        repl=repl,
         deliberation=deliberation,
+        repositories=repositories,
     )
+
+
+def _repository_identity_key(repo_settings: AgentRunnerRepositorySettings) -> str:
+    """Choose the dict key for a repository under ``AppConfig.repositories``.
+
+    The registry key (when present) takes precedence so that
+    ``iar issue list --repo-id foo`` and ``--all-registered`` produce the
+    same identity lookup; ad-hoc single-repo flows that only set ``path``
+    fall back to the resolved path string.
+    """
+    if repo_settings.id:
+        return repo_settings.id
+    return str(Path(repo_settings.path).resolve())
+
+
+def _merge_repositories_dict(
+    base: dict[str, RepositoryIdentity],
+    repo_settings: AgentRunnerRepositorySettings,
+    *,
+    key_override: str | None = None,
+) -> dict[str, RepositoryIdentity]:
+    """Merge a Pydantic repository entry into the ``repositories`` dict view.
+
+    The base dict is left untouched; a new dict is returned with the
+    identity for ``repo_settings`` (converted at the engines/ boundary
+    so core/ never sees the Pydantic type) keyed by ``key_override``
+    when supplied, otherwise by ``id`` when set, else by resolved path.
+
+    ``key_override`` lets the caller force the registry key
+    (e.g. ``"keda-main"``) so that ``_repo_label_for`` can look up
+    the identity by ``context.repo_id``.
+    """
+    if key_override is not None:
+        key = key_override
+    else:
+        key = _repository_identity_key(repo_settings)
+    identity = RepositoryIdentity(
+        id=repo_settings.id,
+        path=str(repo_settings.path),
+        display_name=repo_settings.display_name,
+        github_repo=repo_settings.github_repo,
+    )
+    merged = dict(base)
+    merged[key] = identity
+    return merged
 
 
 @dataclasses.dataclass(frozen=True)
@@ -690,6 +824,7 @@ def resolve_repository_targets(
                 tuple(repository_settings),
                 fallback_repo_id=repo_id,
                 prefer_settings_id=False,
+                registry_key=repo_id,
             )
         ]
 
@@ -712,6 +847,7 @@ def resolve_repository_targets(
                     tuple(repository_settings),
                     fallback_repo_id=rid,
                     prefer_settings_id=False,
+                    registry_key=rid,
                 )
             )
         return contexts
@@ -781,6 +917,7 @@ def resolve_repository_targets_with_diagnostics(
                     tuple(repository_settings),
                     fallback_repo_id=rid,
                     prefer_settings_id=False,
+                    registry_key=rid,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - isolate broken registry entries.
@@ -847,14 +984,34 @@ def _build_merged_repository_context(
     *,
     fallback_repo_id: str,
     prefer_settings_id: bool,
+    registry_key: str | None = None,
 ) -> RepositoryRunContext:
     effective_config = global_config
     effective_repo_id = fallback_repo_id
     effective_display_name = fallback_repo_id
     effective_repo_path = Path(".").resolve()
 
-    for repo_settings in repository_settings:
-        effective_config = merge_repository_config(effective_config, repo_settings)
+    for index, repo_settings in enumerate(repository_settings):
+        # The first settings entry is the registry entry whose dict key
+        # is the caller-supplied ``registry_key`` (typically the
+        # ``AgentRunnerSettings.repositories`` key). For ad-hoc cwd
+        # paths the caller passes no ``registry_key``; we still want
+        # the identity view to be populated using the local entry's
+        # own ``id``/path-derived key.
+        if index == 0:
+            repo_key = registry_key
+            skip_identity = False
+        else:
+            # Subsequent entries (local .iar.toml overrides) merge
+            # sub-config fields but do not touch the identity view.
+            repo_key = None
+            skip_identity = True
+        effective_config = merge_repository_config(
+            effective_config,
+            repo_settings,
+            repo_key=repo_key,
+            skip_identity=skip_identity,
+        )
         effective_repo_path = Path(repo_settings.path).resolve()
         if prefer_settings_id and repo_settings.id:
             effective_repo_id = repo_settings.id
@@ -875,8 +1032,14 @@ class SubprocessContentGenerator(IContentGenerator):
     Implements ``IContentGenerator`` via duck typing.
     """
 
-    def __init__(self, process_runner: SubprocessRunner) -> None:
+    def __init__(
+        self,
+        process_runner: SubprocessRunner,
+        *,
+        read_only: bool = True,
+    ) -> None:
         self._process_runner = process_runner
+        self._read_only = read_only
 
     def generate(
         self,
@@ -886,27 +1049,65 @@ class SubprocessContentGenerator(IContentGenerator):
         cwd: Path,
         timeout: int | None = None,
     ) -> CommandResult:
-        """Run a read-only content generator and return its output."""
-        command = _build_content_generation_command(agent_name, prompt, cwd)
+        """Run a content generator and return its output.
+
+        When the instance was constructed with ``read_only=True`` (the
+        default) the agent runs in its read-only sandbox. The REPL
+        entrypoint constructs the generator with ``read_only=False`` so
+        the agent can mutate files inside the user's confirmation model.
+        """
+        command = _build_content_generation_command(
+            agent_name, prompt, cwd, read_only=self._read_only
+        )
         return self._process_runner.run(
             command, cwd=cwd, capture_output=True, timeout=timeout, check=False
         )
 
 
 def _build_content_generation_command(
-    agent_name: str, prompt: str, cwd: Path
+    agent_name: str,
+    prompt: str,
+    cwd: Path,
+    *,
+    read_only: bool = True,
 ) -> list[str]:
+    """Build the agent command for content generation / REPL use.
+
+    Args:
+        agent_name: ``claude`` / ``codex`` / ``kimi`` (or any value that
+            should fall back to ``claude``).
+        prompt: Full prompt text passed to the agent.
+        cwd: Working directory for the agent subprocess.
+        read_only: When ``True`` (default), ``codex`` is invoked with
+            ``--sandbox read-only --ask-for-approval never`` so it cannot
+            modify the filesystem. When ``False`` (used by the REPL
+            entrypoint), the sandbox flag is dropped so the agent is free
+            to write files within the user's confirmation model. ``claude``
+            and ``kimi`` commands are unaffected by this flag because they
+            already have a single canonical invocation shape.
+
+    Returns:
+        Command argv ready to be handed to a process runner.
+    """
     # codex / kimi 需显式指定；其余（"claude"、已解析的 "auto"、或任何未识别值）
     # 一律构造 claude 命令，绝不静默落到 codex。
     if agent_name == "codex":
+        if read_only:
+            return [
+                "codex",
+                "--cd",
+                str(cwd),
+                "--sandbox",
+                "read-only",
+                "--ask-for-approval",
+                "never",
+                "exec",
+                prompt,
+            ]
         return [
             "codex",
             "--cd",
             str(cwd),
-            "--sandbox",
-            "read-only",
-            "--ask-for-approval",
-            "never",
             "exec",
             prompt,
         ]
@@ -918,6 +1119,17 @@ def _build_content_generation_command(
         "-p",
         prompt,
     ]
+
+
+def _build_repl_command(agent_name: str, prompt: str, cwd: Path) -> list[str]:
+    """Build the agent command used by the ``iar`` REPL entrypoint.
+
+    Delegates to :func:`_build_content_generation_command` with
+    ``read_only=False`` so that REPL-managed sessions do not run inside
+    ``codex``'s read-only sandbox. The REPL's own command executor
+    provides the safety boundary for arbitrary IAR subcommands.
+    """
+    return _build_content_generation_command(agent_name, prompt, cwd, read_only=False)
 
 
 class SafePlannerContentGenerator(IContentGenerator):
@@ -973,9 +1185,13 @@ def create_planner_runner(
 
 def create_content_generator(
     process_runner: SubprocessRunner | None = None,
+    *,
+    read_only: bool = True,
 ) -> SubprocessContentGenerator:
     """Create a content generator instance."""
-    return SubprocessContentGenerator(process_runner or SubprocessRunner())
+    return SubprocessContentGenerator(
+        process_runner or SubprocessRunner(), read_only=read_only
+    )
 
 
 def resolve_issue_from_prd_target(
@@ -1036,8 +1252,13 @@ def create_process_supervisor() -> IRunnerProcessSupervisor:
 
 
 def create_registry_editor() -> IRepositoryRegistryEditor:
-    """创建仓库 registry（config.toml）的受限写回编辑器。"""
-    return TomlRegistryEditor(resolve_config_toml_path())
+    """创建仓库 registry 的受限写回编辑器。
+
+    Registry 是全局共享的，必须固定写入 ``~/.iar/config.toml``，而不是
+    当前工作目录下搜索到的某个项目级 config.toml。这避免了在目标
+    仓库内执行 ``iar init`` 时意外污染该仓库的应用配置。
+    """
+    return TomlRegistryEditor(resolve_registry_config_toml_path())
 
 
 def resolve_console_spawn_cwd() -> Path:
@@ -1108,3 +1329,43 @@ def create_github_client(
 ) -> GitHubCliClient:
     """Create a new GitHub CLI client instance."""
     return GitHubCliClient(repo_path, process_runner)
+
+
+def create_repl_command_executor(
+    process_runner: SubprocessRunner | None = None,
+    config: ReplConfig | None = None,
+):
+    """Create a :class:`ReplCommandExecutor` for the REPL entrypoint.
+
+    Imports the executor lazily to avoid a hard dependency from this
+    module's import time. ``config`` defaults to the merged global
+    ReplConfig (``config.agent_runner.repl`` translated via
+    ``build_app_config``).
+    """
+    from backend.engines.agent_runner.repl_command_executor import (
+        ReplCommandExecutor,
+    )
+
+    if config is None:
+        config = build_app_config().repl
+    return ReplCommandExecutor(
+        process_runner=process_runner or SubprocessRunner(), config=config
+    )
+
+
+def create_loop_state_store(state_path: Path | None = None) -> JsonLoopStateStore:
+    """Create a JSON-backed loop state store.
+
+    Args:
+        state_path: Optional override for the on-disk JSON path. Defaults
+            to ``~/.iar/loop-state.json``.
+
+    Returns:
+        A :class:`JsonLoopStateStore` instance.
+    """
+    return JsonLoopStateStore(state_path or resolve_loop_state_path())
+
+
+def create_loop_clock() -> SystemClock:
+    """Create the production wall-clock implementation for the loop daemon."""
+    return SystemClock()

@@ -19,8 +19,10 @@ import json
 import logging
 import shlex
 import subprocess
+import threading
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import (
@@ -44,8 +46,10 @@ from backend.core.use_cases.agent_runner_commit import (
 )
 from backend.core.use_cases.agent_runner_failure import (
     AgentRunnerAttemptError,
+    AgentUnavailableError,
     ForbiddenBlockedError,
     MaxRetriesExceededError,
+    ProviderCapacityError,
     PublishFailureError,
     UnrecoverableError,
     classify_failure,
@@ -57,10 +61,12 @@ from backend.core.use_cases.agent_runner_failure import (
     format_publish_failure_comment,
     format_recovery_failure_summary,
     is_recoverable_commit_request_error,
+    is_transient_failure,
 )
 from backend.core.use_cases.agent_runner_feedback import (
     PrdDeliveryError,
     VerificationFailedError,
+    build_fix_prompt,
     build_progress_continuation_prompt,
     build_prompt,
     build_recovery_prompt,
@@ -68,6 +74,7 @@ from backend.core.use_cases.agent_runner_feedback import (
     ensure_verification_passed,
     extract_prd_path,
     failed_verification_results,
+    format_prd_delivery_detail,
     format_prd_delivery_failure,
     format_result_for_recovery,
     format_verification_failure,
@@ -94,7 +101,9 @@ from backend.core.use_cases.agent_runner_validation import (
     ValidationEvidenceError,
     build_validation_prompt_line,
     ensure_evidence_dir_excluded,
+    ensure_validation_commands_pass,
     ensure_validation_evidence_ready,
+    format_validation_evidence_detail,
     format_validation_evidence_failure,
 )
 from backend.core.use_cases.agent_runner_worktree_branch import (
@@ -103,16 +112,18 @@ from backend.core.use_cases.agent_runner_worktree_branch import (
 )
 from backend.core.use_cases.worktree_env import copy_missing_env_files
 from backend.core.use_cases.worktree_frontend import (
+    ensure_frontend_node_modules,
     exclude_frontend_node_modules_from_git,
-    link_frontend_node_modules,
 )
 
 _logger = logging.getLogger(__name__)
 
 __all__ = [
     "AgentRunnerAttemptError",
+    "AgentUnavailableError",
     "MaxRetriesExceededError",
     "PrdDeliveryError",
+    "ProviderCapacityError",
     "PublishFailureError",
     "EmptyCommitRequestError",
     "UnrecoverableError",
@@ -120,6 +131,7 @@ __all__ = [
     "_ensure_worktree_branch",
     "_reconcile_worktree_with_remote_branch",
     "build_blocked_continuation_prompt",
+    "build_fix_prompt",
     "build_progress_continuation_prompt",
     "build_prompt",
     "build_recovery_prompt",
@@ -152,10 +164,13 @@ __all__ = [
     "list_changed_paths",
     "list_git_remotes",
     "publish_changes",
+    "resolve_agent_fallback_order",
     "resolve_prd_archive_path",
     "run_agent",
     "run_agent_until_committed",
     "run_agent_with_prompt",
+    "run_agent_with_prompt_resilient",
+    "run_fix_agent",
     "run_once",
     "run_preflight_checks",
     "run_verification",
@@ -212,6 +227,44 @@ def choose_agent(issue: IssueSummary, config: AppConfig, override_agent: str) ->
     )
 
 
+def resolve_agent_fallback_order(
+    issue: IssueSummary,
+    config: AppConfig,
+    override_agent: str,
+) -> list[str]:
+    """Return the ordered list of agents to try for an Issue.
+
+    The first entry is the primary agent resolved by :func:`choose_agent`.
+    Subsequent entries come from ``config.runner.agent_fallback_order`` with the
+    primary agent and duplicates removed, preserving configured order. When no
+    fallback order is configured the list contains only the primary agent, so
+    the escalation ladder behaves exactly like single-agent runs.
+
+    Args:
+        issue: Issue being processed.
+        config: Agent Runner configuration.
+        override_agent: The ``--agent`` override (``"auto"`` routes by label).
+
+    Returns:
+        Ordered, de-duplicated agent names to attempt.
+    """
+    primary_agent = choose_agent(issue, config, override_agent)
+    fallback_order = [primary_agent]
+    for candidate_agent in config.runner.agent_fallback_order:
+        normalized_agent = candidate_agent.strip()
+        if normalized_agent and normalized_agent not in fallback_order:
+            fallback_order.append(normalized_agent)
+    return fallback_order
+
+
+# Serializes the shared-repository git mutation in worktree creation across
+# parallel Issue workers (``iar daemon --concurrency``). ``git worktree add``
+# writes the main repo's ``.git/worktrees`` and refs, which can race when
+# several issues are set up at once. Uncontended (no overhead) in the default
+# sequential path. The long agent run happens after this lock is released.
+_SHARED_GIT_LOCK = threading.Lock()
+
+
 def create_or_reuse_worktree(
     repo_path: Path,
     issue: IssueSummary,
@@ -242,30 +295,33 @@ def create_or_reuse_worktree(
     install). Reused worktrees are healed the same way; existing files and
     ``node_modules`` are not touched.
     """
-    create_result = process_runner.run(
-        format_command(
-            config.worktree.create_command,
-            issue_number=issue.number,
-            base_branch=config.worktree.base_branch,
-        ),
-        cwd=repo_path,
-        check=False,
-    )
-    if create_result.return_code != 0:
-        reuse_result = process_runner.run(
+    # Hold the shared-git lock only for the worktree-add writes; the agent run
+    # (the long pole) happens later in the caller, outside this lock.
+    with _SHARED_GIT_LOCK:
+        create_result = process_runner.run(
             format_command(
-                config.worktree.reuse_command,
+                config.worktree.create_command,
                 issue_number=issue.number,
+                base_branch=config.worktree.base_branch,
             ),
             cwd=repo_path,
             check=False,
         )
-    else:
-        reuse_result = None
-    path_result = process_runner.run(
-        format_command(config.worktree.path_command, issue_number=issue.number),
-        cwd=repo_path,
-    )
+        if create_result.return_code != 0:
+            reuse_result = process_runner.run(
+                format_command(
+                    config.worktree.reuse_command,
+                    issue_number=issue.number,
+                ),
+                cwd=repo_path,
+                check=False,
+            )
+        else:
+            reuse_result = None
+        path_result = process_runner.run(
+            format_command(config.worktree.path_command, issue_number=issue.number),
+            cwd=repo_path,
+        )
     # path_command runs with cwd=repo_path, so a relative output must be
     # anchored there too — bare resolve() would anchor it to the daemon
     # process cwd instead.
@@ -293,19 +349,27 @@ def create_or_reuse_worktree(
             worktree_path,
             ", ".join(str(env_path) for env_path in copied_env_paths),
         )
-    # node_modules is gitignored, so `git worktree add` never materializes it;
-    # symlink each frontend project's deps from the main checkout so worktree
-    # builds (vite, etc.) work without a per-worktree install. Reused worktrees
-    # are healed the same way; existing node_modules are left untouched.
-    linked_frontend_paths = link_frontend_node_modules(repo_path, worktree_path)
+    # node_modules is gitignored, so `git worktree add` never materializes it.
+    # Install deps directly in the worktree when a lockfile is present; this is
+    # the only form guaranteed to work with every frontend toolchain (including
+    # Next.js/Turbopack). If no lockfile exists or the install fails, fall back
+    # to symlinking from the main checkout. Reused worktrees are healed the same
+    # way; existing node_modules are left untouched.
+    installed_frontend_paths, linked_frontend_paths = ensure_frontend_node_modules(
+        repo_path, worktree_path, process_runner
+    )
     if linked_frontend_paths:
         exclude_frontend_node_modules_from_git(
             worktree_path, linked_frontend_paths, process_runner
         )
+    handled_frontend_paths = installed_frontend_paths + linked_frontend_paths
+    if handled_frontend_paths:
         _logger.info(
-            "Linked node_modules for %d frontend project(s) into worktree %s: %s",
-            len(linked_frontend_paths),
+            "Prepared node_modules for %d frontend project(s) in worktree %s: "
+            "installed=%s, linked=%s",
+            len(handled_frontend_paths),
             worktree_path,
+            ", ".join(str(frontend_path) for frontend_path in installed_frontend_paths),
             ", ".join(str(frontend_path) for frontend_path in linked_frontend_paths),
         )
     expected_branch = f"issue-{issue.number}"
@@ -388,12 +452,25 @@ def build_blocked_continuation_prompt(
     return "\n".join(lines)
 
 
+def _build_verification_commands_summary(
+    config: AppConfig,
+) -> str:
+    """Return a human-readable list of configured verification commands."""
+    commands = config.runner.verification_commands
+    if not commands:
+        return "No verification commands configured."
+    return "\n".join(f"- `{command}`" for command in commands)
+
+
 def run_agent(
     agent_name: str,
     issue: IssueSummary,
     worktree_path: Path,
     config: AppConfig,
     process_runner: IProcessRunner,
+    *,
+    timeout_seconds: int | None = None,
+    inactivity_timeout_seconds: int | None = None,
 ) -> CommandResult:
     """Run Codex or Claude Code in non-interactive mode."""
     prompt = build_prompt(
@@ -402,9 +479,63 @@ def run_agent(
         config.prompts,
         phase="execution",
         validation_line=build_validation_prompt_line(issue, config),
+        verification_commands_summary=_build_verification_commands_summary(config),
     )
-    return run_agent_with_prompt(
-        agent_name, prompt, worktree_path, process_runner, issue=issue
+    return run_agent_with_prompt_resilient(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        issue=issue,
+        transient_retry_attempts=config.runner.transient_retry_attempts,
+        transient_retry_delay_seconds=config.runner.transient_retry_delay_seconds,
+        timeout_seconds=timeout_seconds,
+        inactivity_timeout_seconds=inactivity_timeout_seconds,
+    )
+
+
+def run_fix_agent(
+    agent_name: str,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    verification_results: list[CommandResult],
+) -> CommandResult:
+    """Run a focused Fix Agent for simple local verification failures.
+
+    The Fix Agent prompt only contains the current verification failure and
+    constraints; it does not ask the agent to update PRD checklists, evidence,
+    or other global deliverables.
+
+    Args:
+        agent_name: Agent to invoke.
+        issue: Current Issue.
+        worktree_path: Agent worktree path.
+        config: Agent Runner configuration.
+        process_runner: Command executor.
+        verification_results: Failed verification results to repair.
+
+    Returns:
+        The Fix Agent command result.
+    """
+    prompt = build_fix_prompt(
+        issue,
+        worktree_path,
+        verification_results=verification_results,
+        verification_commands_summary=_build_verification_commands_summary(config),
+    )
+    fix_timeout = config.runner.fix_timeout_seconds or config.runner.timeout_seconds
+    return run_agent_with_prompt_resilient(
+        agent_name,
+        prompt,
+        worktree_path,
+        process_runner,
+        issue=issue,
+        transient_retry_attempts=config.runner.transient_retry_attempts,
+        transient_retry_delay_seconds=config.runner.transient_retry_delay_seconds,
+        timeout_seconds=fix_timeout,
+        inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
     )
 
 
@@ -416,6 +547,7 @@ def run_agent_with_prompt(
     *,
     capture_output: bool = False,
     timeout_seconds: int | None = None,
+    inactivity_timeout_seconds: int | None = None,
     issue: IssueSummary | None = None,
 ) -> CommandResult:
     """Run Codex or Claude Code with a prepared prompt."""
@@ -431,13 +563,16 @@ def run_agent_with_prompt(
     else:
         command = _build_codex_command(prompt, worktree_path)
     label = f"Issue #{issue.number}: {issue.url}" if issue is not None else None
-    result = process_runner.run(
-        command,
-        cwd=worktree_path,
-        capture_output=capture_output,
-        timeout=timeout_seconds,
-        label=label,
-    )
+    run_kwargs: dict[str, object] = {
+        "command": command,
+        "cwd": worktree_path,
+        "capture_output": capture_output,
+        "timeout": timeout_seconds,
+        "label": label,
+    }
+    if inactivity_timeout_seconds is not None:
+        run_kwargs["inactivity_timeout"] = inactivity_timeout_seconds
+    result = process_runner.run(**run_kwargs)
     if issue is not None:
         _logger.info(
             "Agent finished for Issue #%d: %s (exit_code=%d)",
@@ -446,6 +581,85 @@ def run_agent_with_prompt(
             result.return_code,
         )
     return result
+
+
+def run_agent_with_prompt_resilient(
+    agent_name: str,
+    prompt: str,
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+    *,
+    capture_output: bool = False,
+    timeout_seconds: int | None = None,
+    inactivity_timeout_seconds: int | None = None,
+    issue: IssueSummary | None = None,
+    transient_retry_attempts: int = 2,
+    transient_retry_delay_seconds: int = 10,
+) -> CommandResult:
+    """Run an agent, retrying transient network/transport failures in place.
+
+    Level 1 of the escalation ladder. Only :func:`is_transient_failure` errors
+    (dropped sockets, connection resets, gateway timeouts, 5xx) are retried with
+    the same agent, because re-issuing the request usually succeeds. A missing
+    agent CLI is surfaced as :class:`AgentUnavailableError` so the orchestration
+    layer can skip to the next agent; every other error propagates unchanged so
+    the recovery loop or the cross-agent fallback can handle it.
+
+    Args:
+        agent_name: Agent to invoke (claude / codex / kimi).
+        prompt: Prepared prompt text.
+        worktree_path: Worktree the agent runs in.
+        process_runner: Command executor.
+        capture_output: Whether to capture stdout/stderr.
+        timeout_seconds: Optional per-invocation timeout.
+        inactivity_timeout_seconds: Optional no-output timeout.
+        issue: Optional Issue for logging context.
+        transient_retry_attempts: Extra retries granted to transient failures.
+        transient_retry_delay_seconds: Backoff between transient retries.
+
+    Returns:
+        The successful :class:`CommandResult`.
+
+    Raises:
+        AgentUnavailableError: The agent CLI could not be launched.
+        Exception: The original error when it is not transient or retries are
+            exhausted.
+    """
+    max_retries = max(0, transient_retry_attempts)
+    issue_number = issue.number if issue is not None else 0
+    for retry_index in range(max_retries + 1):
+        try:
+            return run_agent_with_prompt(
+                agent_name,
+                prompt,
+                worktree_path,
+                process_runner,
+                capture_output=capture_output,
+                timeout_seconds=timeout_seconds,
+                inactivity_timeout_seconds=inactivity_timeout_seconds,
+                issue=issue,
+            )
+        except FileNotFoundError as exc:
+            raise AgentUnavailableError(agent_name) from exc
+        except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            if retry_index >= max_retries or not is_transient_failure(exc):
+                raise
+            _logger.warning(
+                "Transient error from agent '%s' for Issue #%d; "
+                "retrying (%d/%d): %s",
+                agent_name,
+                issue_number,
+                retry_index + 1,
+                max_retries,
+                exc,
+            )
+            wait_before_recovery_attempt(
+                issue_number,
+                recovery_attempt=retry_index + 1,
+                max_recovery_attempts=max_retries,
+                delay_seconds=transient_retry_delay_seconds,
+            )
+    raise RuntimeError("unreachable: resilient agent retry loop exited")
 
 
 def extract_agent_response_text(result: CommandResult) -> str:
@@ -552,6 +766,49 @@ def wait_before_recovery_attempt(
     time.sleep(delay_seconds)
 
 
+def _make_attempt_result(
+    *,
+    attempt_number: int,
+    failure_type: FailureType,
+    recovered: bool,
+    detail: str,
+    agent: str,
+    started_mono: float,
+    started_iso: str,
+) -> AttemptResult:
+    """Build an ``AttemptResult`` with wall-clock timing filled in now."""
+    finished_mono = time.monotonic()
+    finished_iso = datetime.now(timezone.utc).isoformat()
+    return AttemptResult(
+        attempt_number=attempt_number,
+        failure_type=failure_type,
+        recovered=recovered,
+        detail=detail,
+        agent=agent,
+        started_at=started_iso,
+        finished_at=finished_iso,
+        duration_seconds=round(finished_mono - started_mono, 3),
+    )
+
+
+def _append_attempt_and_notify(
+    attempt_results: list[AttemptResult],
+    result: AttemptResult,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None] | None,
+) -> None:
+    """Append a result and notify the incremental persistence callback."""
+    attempt_results.append(result)
+    if on_attempt_recorded is not None:
+        try:
+            on_attempt_recorded(result, list(attempt_results))
+        except Exception:  # noqa: BLE001 - persistence side-channel must not break runs
+            _logger.warning(
+                "Attempt persistence callback failed for attempt %d; continuing.",
+                result.attempt_number,
+                exc_info=True,
+            )
+
+
 def run_agent_until_committed(
     *,
     selected_agent: str,
@@ -562,6 +819,8 @@ def run_agent_until_committed(
     before_sha: str,
     expected_branch: str,
     prompt_override: str | None = None,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None]
+    | None = None,
 ) -> AgentCommitResult:
     """Run the agent, recover failed verification, and return final checks.
 
@@ -607,20 +866,37 @@ def run_agent_until_committed(
                 delay_seconds=recovery_retry_delay_seconds,
             )
 
+        attempt_started_mono = time.monotonic()
+        attempt_started_iso = datetime.now(timezone.utc).isoformat()
+
         # Phase 1: 运行 agent 或 recovery prompt
         try:
             if attempt_index == 0:
                 if prompt_override is not None:
-                    run_agent_with_prompt(
+                    run_agent_with_prompt_resilient(
                         selected_agent,
                         prompt_override,
                         worktree_path,
                         process_runner,
                         issue=issue,
+                        transient_retry_attempts=(
+                            config.runner.transient_retry_attempts
+                        ),
+                        transient_retry_delay_seconds=(
+                            config.runner.transient_retry_delay_seconds
+                        ),
+                        timeout_seconds=config.runner.timeout_seconds,
+                        inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                     )
                 else:
                     run_agent(
-                        selected_agent, issue, worktree_path, config, process_runner
+                        selected_agent,
+                        issue,
+                        worktree_path,
+                        config,
+                        process_runner,
+                        timeout_seconds=config.runner.timeout_seconds,
+                        inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                     )
             else:
                 recovery_prompt = build_recovery_prompt(
@@ -629,15 +905,35 @@ def run_agent_until_committed(
                     recovery_attempt=attempt_index,
                     max_recovery_attempts=max_recovery_attempts,
                     failure_summary=recovery_failure_summary,
+                    verification_results=final_verification_results,
                 )
-                run_agent_with_prompt(
+                recovery_timeout = (
+                    config.runner.recovery_timeout_seconds
+                    or config.runner.timeout_seconds
+                )
+                run_agent_with_prompt_resilient(
                     selected_agent,
                     recovery_prompt,
                     worktree_path,
                     process_runner,
                     issue=issue,
+                    transient_retry_attempts=config.runner.transient_retry_attempts,
+                    transient_retry_delay_seconds=(
+                        config.runner.transient_retry_delay_seconds
+                    ),
+                    timeout_seconds=recovery_timeout,
+                    inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                 )
-        except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+        except AgentUnavailableError:
+            # The agent CLI could not be launched; let the cross-agent fallback
+            # skip to the next candidate instead of burning recovery attempts.
+            raise
+        except (
+            RuntimeError,
+            OSError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             failure_type = classify_failure(
                 before_sha=before_sha,
                 after_sha=before_sha,
@@ -645,19 +941,29 @@ def run_agent_until_committed(
                 agent_result=CommandResult(("",), 0, "", ""),
                 verification_results=[],
                 exc=exc,
+                detect_provider_errors=True,
             )
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
                     detail=format_agent_execution_failure(exc),
-                )
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             if failure_type == FailureType.UNRECOVERABLE:
                 raise UnrecoverableError(str(exc), attempt_results) from exc
             if failure_type == FailureType.FORBIDDEN_BLOCKED:
                 raise ForbiddenBlockedError(str(exc), attempt_results) from exc
+            if failure_type == FailureType.PROVIDER_CAPACITY:
+                # The same provider will keep failing until its window resets;
+                # escalate so the fallback chain can switch to another agent.
+                raise ProviderCapacityError(str(exc), attempt_results) from exc
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_agent_execution_failure(exc)
@@ -685,8 +991,9 @@ def run_agent_until_committed(
                 verification_results=exc.verification_results,
                 exc=None,
             )
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
@@ -694,7 +1001,11 @@ def run_agent_until_committed(
                         "Verification before staging failed.",
                         exc.verification_results,
                     ),
-                )
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
@@ -724,13 +1035,18 @@ def run_agent_until_committed(
                 verification_results=verification_results,
                 exc=exc,
             )
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
-                    detail=format_prd_delivery_failure(str(exc)),
-                )
+                    detail=format_prd_delivery_detail(str(exc)),
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
@@ -747,6 +1063,17 @@ def run_agent_until_committed(
         # Phase 3.5: Realistic Validation 证据门禁（要求验证且无豁免时）
         try:
             ensure_validation_evidence_ready(issue, worktree_path, config)
+            ensure_validation_commands_pass(
+                issue, worktree_path, config, process_runner
+            )
+            # Phase 3.6: independent verifier (pre-PR; red -> this same recovery
+            # loop auto-repairs, bounded; escalates to a human only on exhaustion).
+            # Local import breaks the run_agent_once <-> run_verifier_agent cycle.
+            from backend.core.use_cases.run_verifier_agent import run_verifier_gate
+
+            run_verifier_gate(
+                issue, worktree_path, config, process_runner, selected_agent
+            )
         except ValidationEvidenceError as exc:
             after_sha = get_head_sha(worktree_path, process_runner)
             failure_type = classify_failure(
@@ -757,13 +1084,18 @@ def run_agent_until_committed(
                 verification_results=verification_results,
                 exc=exc,
             )
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=failure_type,
                     recovered=False,
-                    detail=format_validation_evidence_failure(str(exc)),
-                )
+                    detail=format_validation_evidence_detail(str(exc)),
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
@@ -793,42 +1125,90 @@ def run_agent_until_committed(
                     expected_branch=expected_branch,
                 )
             except VerificationFailedError as exc:
-                # staging 后验证失败：unstage 并进入 recovery，让 agent 修复
+                # staging 后验证失败：runner autofix 已在 commit_requested_changes
+                # 内部尝试过。先 unstage，再交给 Fix Agent 处理简单局部失败。
                 unstage_changes(worktree_path, process_runner)
-                after_sha = get_head_sha(worktree_path, process_runner)
-                failure_type = classify_failure(
-                    before_sha=before_sha,
-                    after_sha=after_sha,
-                    has_uncommitted=False,
-                    agent_result=CommandResult(("",), 0, "", ""),
-                    verification_results=exc.verification_results,
-                    exc=None,
-                )
-                attempt_results.append(
-                    AttemptResult(
-                        attempt_number=attempt_index + 1,
-                        failure_type=failure_type,
-                        recovered=False,
-                        detail=format_recovery_failure_summary(
-                            "Verification after runner staged changes with git add -A failed.",
-                            exc.verification_results,
-                        ),
+                fix_succeeded = False
+                try:
+                    fix_agent_result = run_fix_agent(
+                        selected_agent,
+                        issue,
+                        worktree_path,
+                        config,
+                        process_runner,
+                        verification_results=exc.verification_results,
                     )
-                )
-                if attempt_index >= max_recovery_attempts:
-                    raise MaxRetriesExceededError(attempt_results) from exc
-                recovery_failure_summary = format_recovery_failure_summary(
-                    "Verification after runner staged changes with git add -A failed.",
-                    exc.verification_results,
-                )
-                _logger.warning(
-                    "Staged verification failed for Issue #%d; "
-                    "asking agent to recover (%d/%d).",
-                    issue.number,
-                    attempt_index + 1,
-                    max_recovery_attempts,
-                )
-                continue
+                    if fix_agent_result.return_code != 0:
+                        raise RuntimeError(
+                            f"Fix Agent exited with code {fix_agent_result.return_code}"
+                        )
+                    post_fix_verification = run_verification(
+                        worktree_path, config, process_runner
+                    )
+                    if failed_verification_results(post_fix_verification):
+                        raise VerificationFailedError(post_fix_verification)
+                    final_verification_results = commit_requested_changes(
+                        issue,
+                        worktree_path,
+                        config,
+                        process_runner,
+                        expected_branch=expected_branch,
+                    )
+                    fix_succeeded = True
+                except (
+                    RuntimeError,
+                    subprocess.CalledProcessError,
+                    VerificationFailedError,
+                ) as fix_exc:
+                    _logger.warning(
+                        "Fix Agent failed for Issue #%d: %s",
+                        issue.number,
+                        fix_exc,
+                    )
+                if fix_succeeded:
+                    # Fix Agent repaired the failure and the runner committed it.
+                    # Fall through to Phase 5 to record success.
+                    pass
+                else:
+                    after_sha = get_head_sha(worktree_path, process_runner)
+                    failure_type = classify_failure(
+                        before_sha=before_sha,
+                        after_sha=after_sha,
+                        has_uncommitted=False,
+                        agent_result=CommandResult(("",), 0, "", ""),
+                        verification_results=exc.verification_results,
+                        exc=None,
+                    )
+                    _append_attempt_and_notify(
+                        attempt_results,
+                        _make_attempt_result(
+                            attempt_number=attempt_index + 1,
+                            failure_type=failure_type,
+                            recovered=False,
+                            detail=format_recovery_failure_summary(
+                                "Verification after runner staged changes with git add -A failed.",
+                                exc.verification_results,
+                            ),
+                            agent=selected_agent,
+                            started_mono=attempt_started_mono,
+                            started_iso=attempt_started_iso,
+                        ),
+                        on_attempt_recorded,
+                    )
+                    if attempt_index >= max_recovery_attempts:
+                        raise MaxRetriesExceededError(attempt_results) from exc
+                    recovery_failure_summary = format_recovery_failure_summary(
+                        "Verification after runner staged changes with git add -A failed.",
+                        exc.verification_results,
+                    )
+                    _logger.warning(
+                        "Staged verification failed for Issue #%d; "
+                        "asking agent to recover (%d/%d).",
+                        issue.number,
+                        attempt_index + 1,
+                        max_recovery_attempts,
+                    )
+                    continue
             except (RuntimeError, subprocess.CalledProcessError) as exc:
                 after_sha = get_head_sha(worktree_path, process_runner)
                 # 对于不可恢复的 commit 错误（如分支切换、无 commit request），
@@ -846,13 +1226,18 @@ def run_agent_until_committed(
                         verification_results=final_verification_results,
                         exc=exc,
                     )
-                    attempt_results.append(
-                        AttemptResult(
+                    _append_attempt_and_notify(
+                        attempt_results,
+                        _make_attempt_result(
                             attempt_number=attempt_index + 1,
                             failure_type=failure_type,
                             recovered=False,
                             detail=str(exc),
-                        )
+                            agent=selected_agent,
+                            started_mono=attempt_started_mono,
+                            started_iso=attempt_started_iso,
+                        ),
+                        on_attempt_recorded,
                     )
                     if failure_type == FailureType.UNRECOVERABLE:
                         raise UnrecoverableError(str(exc), attempt_results) from exc
@@ -869,13 +1254,18 @@ def run_agent_until_committed(
                     verification_results=final_verification_results,
                     exc=None,
                 )
-                attempt_results.append(
-                    AttemptResult(
+                _append_attempt_and_notify(
+                    attempt_results,
+                    _make_attempt_result(
                         attempt_number=attempt_index + 1,
                         failure_type=failure_type,
                         recovered=False,
                         detail=f"The runner could not process the commit request.\n{exc}",
-                    )
+                        agent=selected_agent,
+                        started_mono=attempt_started_mono,
+                        started_iso=attempt_started_iso,
+                    ),
+                    on_attempt_recorded,
                 )
                 if attempt_index >= max_recovery_attempts:
                     raise MaxRetriesExceededError(attempt_results) from exc
@@ -898,13 +1288,18 @@ def run_agent_until_committed(
         # Phase 5: 检查 agent 是否实际产生了 commit
         after_sha = get_head_sha(worktree_path, process_runner)
         if before_sha != after_sha:
-            attempt_results.append(
-                AttemptResult(
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
                     attempt_number=attempt_index + 1,
                     failure_type=FailureType.SUCCESS,
                     recovered=attempt_index > 0,
                     detail="Agent produced commits and passed verification.",
-                )
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             )
             return AgentCommitResult(final_verification_results, attempt_results)
 
@@ -918,13 +1313,18 @@ def run_agent_until_committed(
             verification_results=verification_results,
             exc=None,
         )
-        attempt_results.append(
-            AttemptResult(
+        _append_attempt_and_notify(
+            attempt_results,
+            _make_attempt_result(
                 attempt_number=attempt_index + 1,
                 failure_type=failure_type,
                 recovered=False,
                 detail="Agent produced no git commits.",
-            )
+                agent=selected_agent,
+                started_mono=attempt_started_mono,
+                started_iso=attempt_started_iso,
+            ),
+            on_attempt_recorded,
         )
         if attempt_index >= max_recovery_attempts:
             raise MaxRetriesExceededError(attempt_results)

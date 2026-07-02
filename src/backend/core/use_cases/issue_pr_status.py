@@ -18,6 +18,7 @@ Architecture:
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,12 @@ from backend.core.shared.models.agent_runner import (
 )
 
 _logger = logging.getLogger(__name__)
+
+# Tracks repositories that have already produced a "missing github_repo"
+# warning during this process, so the stderr message is emitted at most
+# once per repo per command invocation (matching the PRD's
+# per-repo-not-per-issue requirement).
+_warned_missing_github_repo: set[str] = set()
 
 # Default number of issues to fetch per repository when ``--limit`` is
 # not specified. Aligned with the PRD's ``--limit`` default of 100.
@@ -205,18 +212,43 @@ def _validate_request(request: IssueListRequest) -> str:
 def _repo_label_for(context) -> str | None:
     """Return the ``owner/name`` style label for a resolved context.
 
-    For a registered multi-repo scan we use the ``repo_id``; for an
-    ad-hoc single-repo scan we keep the label so the GitHub client
-    still knows which repo to query. Callers decide whether to display
-    the label as a column (always None in single-repo mode).
+    The label is sourced exclusively from
+    ``context.config.repositories[context.repo_id].github_repo`` — the
+    identity populated by ``merge_repository_config`` from the
+    user-configured ``github_repo`` field. Returns ``None`` when the
+    identity is missing or the field is unset, which causes
+    ``_build_issue_with_pulls`` to leave the PR column empty.
     """
     repo_id = getattr(context, "repo_id", None)
-    repo_path = getattr(context, "repo_path", None)
-    if repo_path is None:
+    config = getattr(context, "config", None)
+    if repo_id is None or config is None:
         return None
-    if repo_id and repo_id != "ad-hoc":
-        return str(repo_id)
-    return str(repo_path)
+    repositories = getattr(config, "repositories", None) or {}
+    identity = repositories.get(repo_id)
+    if identity is None:
+        return None
+    github_repo = getattr(identity, "github_repo", None)
+    if not github_repo:
+        return None
+    return github_repo
+
+
+def _warn_missing_github_repo(repo_id: str) -> None:
+    """Emit a one-shot stderr warning when ``github_repo`` is unconfigured.
+
+    Guarded by a module-level set so the message appears at most once
+    per repo per process, satisfying the PRD's per-repo-not-per-issue
+    requirement.
+    """
+    if repo_id in _warned_missing_github_repo:
+        return
+    _warned_missing_github_repo.add(repo_id)
+    print(
+        f"[WARN] Repository '{repo_id}' has no github_repo configured; "
+        'PR column will be empty. Set github_repo = "owner/name" in '
+        "[agent_runner.repositories.<id>] or .iar.toml.",
+        file=sys.stderr,
+    )
 
 
 def _is_single_repo_mode(contexts: list) -> bool:
@@ -272,6 +304,9 @@ def _process_one_repo(
 ) -> _RepoOutcome:
     """Fetch issues + linked PRs for one repo, isolating failures."""
     repo_label = _repo_label_for(context)
+    if repo_label is None:
+        repo_id = getattr(context, "repo_id", "<unknown>")
+        _warn_missing_github_repo(repo_id)
     try:
         github_client = github_client_factory(context.repo_path)
         issues = github_client.list_issues_by_label(

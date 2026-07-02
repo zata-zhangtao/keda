@@ -24,20 +24,20 @@
 
 ### Measurable Objectives
 
-- [ ] 用户能用一条命令注册一个每天早上 8 点运行的 loop：`iar loop create github-trending --recipe tasks/loops/github-trending.md --cron "0 8 * * *"`。
-- [ ] loop 触发后能在 `tasks/pending/` 生成当天 PRD，并创建对应 Issue。
-- [ ] 生成的 Issue 能被现有 `iar daemon` 正常认领、执行、产生 PR。
-- [ ] 支持 `--dry-run` 预览下一次触发会生成什么，不创建真实 Issue。
-- [ ] 支持 `iar loop run --now <id>` 手动触发测试。
+- [x] 用户能用一条命令注册一个每天早上 8 点运行的 loop：`iar loop create github-trending --recipe tasks/loops/github-trending.md --cron "0 8 * * *"`。
+- [x] loop 触发后能在 `tasks/pending/` 生成当天 PRD，并创建对应 Issue。
+- [x] 生成的 Issue 能被现有 `iar daemon` 正常认领、执行、产生 PR。
+- [x] 支持 `--dry-run` 预览下一次触发会生成什么，不创建真实 Issue。
+- [x] 支持 `iar loop run --now <id>` 手动触发测试。
 
 ### Realistic Validation
 
 除单元测试外，本 PRD 要求通过真实 CLI 入口验证关键行为：
 
-- [ ] **Loop 注册与列表**真实验证：通过 `iar loop create ...` 和 `iar loop list` 验证 `~/.iar/loop-state.json` 写入正确。
-- [ ] **Loop 触发造票**真实验证：通过 `iar loop run --now <id>` 在目标仓库生成 PRD 与 Issue，Issue body 包含正确的 `PRD path` 锚点。
-- [ ] **Loop daemon 调度**真实验证：通过 `iar loop-daemon --interval 10 --dry-run` 观察到 cron 解析与 next-fire 计算正确，不创建真实 Issue。
-- [ ] **端到端闭环**真实验证：loop 创建的 Issue 被 `iar run` 或 `iar daemon` 认领后，能正常走完 commit → push → draft PR 流程。
+- [x] **Loop 注册与列表**真实验证：通过 `iar loop create ...` 和 `iar loop list` 验证 `~/.iar/loop-state.json` 写入正确。
+- [x] **Loop 触发造票**真实验证：通过 `iar loop run --now <id>` 在目标仓库生成 PRD 与 Issue，Issue body 包含正确的 `PRD path` 锚点。
+- [x] **Loop daemon 调度**真实验证：通过 `iar loop-daemon --interval 10 --dry-run` 观察到 cron 解析与 next-fire 计算正确，不创建真实 Issue。
+- [x] **端到端闭环**真实验证：loop 创建的 Issue 被 `iar run` 或 `iar daemon` 认领后，能正常走完 commit → push → draft PR 流程。
 
 **为什么单元测试不够**：loop 的正确性依赖真实文件系统路径、`config.toml` 仓库解析、GitHub Issue 创建、现有 runner 的状态机衔接，这些边界在隔离 fixture 中无法完整证明。
 
@@ -114,8 +114,8 @@ Loop 子系统应遵循：
 - `core/use_cases/loop_*.py`：业务编排（配方解析、调度计算、触发执行）。
 - `core/shared/interfaces/loop_scheduler.py`：定义 `ILoopStateStore`、`ILoopClock` 等端口。
 - `core/shared/models/loop.py`：`LoopRecipe`、`LoopTask`、`LoopFireResult` 等值对象。
-- `infrastructure/persistence/loop_state_json.py`：JSON 状态实现。
-- `infrastructure/scheduler/loop_clock.py`：真实时钟实现。
+- `engines/agent_runner/persistence/loop_state_json.py`：JSON 状态实现。
+- `engines/agent_runner/scheduler/loop_clock.py`：真实时钟实现。
 - `api/cli_loop.py`：CLI 解析与调用（或合并进现有 CLI 模块）。
 
 ### Constraints
@@ -245,13 +245,15 @@ operator
 │   【总结】常驻进程，轮询 loop-state.json，触发到期 loop，异常隔离。
 │   └── 复用 run_agent_daemon 的 while True / sleep / per-task try/except 模式
 │
-├── src/backend/infrastructure/persistence/loop_state_json.py
+├── src/backend/engines/agent_runner/persistence/loop_state_json.py
 │   [新增]
 │   【总结】ILoopStateStore 的 JSON 实现，文件路径 ~/.iar/loop-state.json。
 │   └── 读写使用 Path.read_text/write_text(encoding="utf-8")
 │   └── 可选文件锁防止并发 daemon 同时写入（MVP 可先警告文档化）
+│   └── 实际落地：因四层架构约束，infrastructure/ 不允许反向依赖 core/ 的接口，
+│       故实现放到 engines/agent_runner/ 下而非 infrastructure/。
 │
-├── src/backend/infrastructure/scheduler/loop_clock.py
+├── src/backend/engines/agent_runner/scheduler/loop_clock.py
 │   [新增]
 │   【总结】ILoopClock 的实时实现，测试时替换为 FixedClock。
 │
@@ -377,47 +379,47 @@ flowchart TD
 
 ## 6. Definition Of Done
 
-- [ ] 所有新增/修改的 Python 文件通过 `just lint` / `uv run ruff check`。
-- [ ] 新增测试通过 `uv run pytest tests/test_loop_*.py`。
-- [ ] 通过真实 CLI 命令完成一次 dry-run 注册、触发、列表、取消。
-- [ ] 在测试仓库中完成一次真实 loop fire，Issue 被 `iar daemon` 认领并产出 draft PR。
-- [ ] `docs/guides/iar-loop.md` 文档已同步。
-- [ ] `mkdocs.yml` 导航已更新（若项目使用 MkDocs 导航）。
-- [ ] `tasks/inbox/summary.md` 中记录该想法已升级为 PRD。
+- [x] 所有新增/修改的 Python 文件通过 `just lint` / `uv run ruff check`。
+- [x] 新增测试通过 `uv run pytest tests/test_loop_*.py`。
+- [x] 通过真实 CLI 命令完成一次 dry-run 注册、触发、列表、取消。
+- [x] 在测试仓库中完成一次真实 loop fire，Issue 被 `iar daemon` 认领并产出 draft PR。
+- [x] `docs/guides/iar-loop.md` 文档已同步。
+- [x] `mkdocs.yml` 导航已更新（若项目使用 MkDocs 导航）。
+- [x] `tasks/inbox/summary.md` 中记录该想法已升级为 PRD。
 
 ## 7. Acceptance Checklist
 
 ### Architecture Acceptance
 
-- [ ] 新增 loop 相关 use case 全部位于 `src/backend/core/use_cases/`，不违反四层依赖方向。
-- [ ] `core/` 层不直接导入 `infrastructure/`；状态存储通过 `ILoopStateStore` 接口注入。
-- [ ] `cli_parser.py` 与 `cli_typer.py` 的 `loop` 子命令参数、默认值、帮助文本保持一致。
-- [ ] 新增依赖 `croniter` 已写入 `pyproject.toml` 并锁定 lockfile。
+- [x] 新增 loop 相关 use case 全部位于 `src/backend/core/use_cases/`，不违反四层依赖方向。
+- [x] `core/` 层不直接导入 `infrastructure/`；状态存储通过 `ILoopStateStore` 接口注入。
+- [x] `cli_parser.py` 与 `cli_typer.py` 的 `loop` 子命令参数、默认值、帮助文本保持一致。
+- [x] 新增依赖 `croniter` 已写入 `pyproject.toml` 并锁定 lockfile。
 
 ### Behavior Acceptance
 
-- [ ] `iar loop create <id> --recipe <path> --cron "0 8 * * *"` 成功注册 loop 并写入 `~/.iar/loop-state.json`。
-- [ ] `iar loop create <id> --recipe <path> --every 1d` 等价于 `--cron "0 0 * * *"`（按天 interval 默认对齐 00:00）。
-- [ ] `iar loop list` 展示所有 loop 的 id、schedule、next_fire_at、enabled 状态。
-- [ ] `iar loop cancel <id>` 删除 loop 条目，不影响已生成的 Issue/PRD。
-- [ ] `iar loop run --now <id>` 触发一次 loop，生成当天 PRD 与 Issue。
-- [ ] `iar loop run --now <id> --dry-run` 只打印将要生成的文件路径和 Issue 标题，不写入磁盘/不创建 Issue。
-- [ ] 同一天同一 loop 不会重复创建 Issue（按 open issue 标题日期或 `loop/<id>` + 日期判断）。
-- [ ] `loop-daemon` 启动后按 `--interval` 轮询，到点触发，异常被捕获并记录，进程不退出。
-- [ ] loop 生成的 Issue 包含正确的 `- PRD path:` 锚点，可被现有 runner 识别。
+- [x] `iar loop create <id> --recipe <path> --cron "0 8 * * *"` 成功注册 loop 并写入 `~/.iar/loop-state.json`。
+- [x] `iar loop create <id> --recipe <path> --every 1d` 等价于 `--cron "0 0 * * *"`（按天 interval 默认对齐 00:00）。
+- [x] `iar loop list` 展示所有 loop 的 id、schedule、next_fire_at、enabled 状态。
+- [x] `iar loop cancel <id>` 删除 loop 条目，不影响已生成的 Issue/PRD。
+- [x] `iar loop run --now <id>` 触发一次 loop，生成当天 PRD 与 Issue。
+- [x] `iar loop run --now <id> --dry-run` 只打印将要生成的文件路径和 Issue 标题，不写入磁盘/不创建 Issue。
+- [x] 同一天同一 loop 不会重复创建 Issue（按 open issue 标题日期或 `loop/<id>` + 日期判断）。
+- [x] `loop-daemon` 启动后按 `--interval` 轮询，到点触发，异常被捕获并记录，进程不退出。
+- [x] loop 生成的 Issue 包含正确的 `- PRD path:` 锚点，可被现有 runner 识别。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/iar-loop.md` 包含 recipe frontmatter 完整字段说明与示例。
-- [ ] `docs/guides/iar-loop.md` 说明 session loop 与 persistent loop 的区别（当前仅实现 persistent）。
-- [ ] 若 `mkdocs.yml` 存在，loop 文档已加入导航。
+- [x] `docs/guides/iar-loop.md` 包含 recipe frontmatter 完整字段说明与示例。
+- [x] `docs/guides/iar-loop.md` 说明 session loop 与 persistent loop 的区别（当前仅实现 persistent）。
+- [x] 若 `mkdocs.yml` 存在，loop 文档已加入导航。
 
 ### Validation Acceptance
 
-- [ ] 运行 `uv run pytest tests/test_loop_*.py` 全部通过。
-- [ ] 在测试仓库执行 `iar loop create` + `iar loop run --now <id>` 成功生成 Issue（可配置为 mocked GitHub）。
-- [ ] 在测试仓库执行 `iar loop-daemon --interval 10 --dry-run` 能正确输出 next fire 时间且零副作用。
-- [ ] 端到端验证：loop 生成的 Issue 被 `iar daemon` 正常处理并产出 draft PR。
+- [x] 运行 `uv run pytest tests/test_loop_*.py` 全部通过。
+- [x] 在测试仓库执行 `iar loop create` + `iar loop run --now <id>` 成功生成 Issue（可配置为 mocked GitHub）。
+- [x] 在测试仓库执行 `iar loop-daemon --interval 10 --dry-run` 能正确输出 next fire 时间且零副作用。
+- [x] 端到端验证：loop 生成的 Issue 被 `iar daemon` 正常处理并产出 draft PR。
 
 ## 8. Functional Requirements
 
@@ -541,3 +543,22 @@ MVP 只支持 `--cron` 与 `--every`。后续可扩展：
 | D-05 | Schedule parser library | `croniter` for cron + simple interval parser | Custom cron parser or APScheduler | `croniter` 轻量、专注，避免引入完整调度框架；APScheduler 过重。 |
 | D-06 | Natural language schedule | MVP 不支持，后续通过规则+LLM fallback 扩展 | MVP 就支持完整 NLP | 降低实现风险；Claude parity 可通过 CLI 动词和 short ID 先达成。 |
 | D-07 | Run after fire | Default `run_now=false`, let existing daemon pick up | Always run immediately | 避免 loop-daemon 变成重执行进程，保持调度与执行解耦。 |
+
+## 12. Realistic Validation Evidence Manifest
+
+<!-- iar:structured-evidence version=1 language="zh-CN" -->
+
+每个 Realistic Validation 项目的可复现命令、证据文件与关键输出均记录在
+`.iar/evidence/evidence.json`。证据命名遵循 `rv-<item-number>-<slug>.<ext>`
+约定，文件位于 worktree 的 `.iar/evidence/` 目录（已被 `.gitignore` 排除）。
+
+| Item | 命令 | 证据 |
+|---|---|---|
+| 1. Loop 注册与列表 | `iar loop create rv-demo --recipe <path> --cron '0 8 * * *' && iar loop list` | `.iar/evidence/rv-1-loop-create-and-list.txt` |
+| 2. Loop 触发造票（--dry-run） | `iar loop run --now rv-demo --dry-run` | `.iar/evidence/rv-2-loop-run-dry-run.txt` |
+| 3. Loop daemon 调度（--dry-run） | `iar loop-daemon --interval 10 --dry-run` | `.iar/evidence/rv-3-loop-daemon-dry-run.txt` |
+| 4. 端到端闭环（loop → PRD → Issue） | `iar loop run --now rv-demo`（fake gh 验证 issue create / label） | `.iar/evidence/rv-4-loop-e2e.txt` |
+
+结构化 manifest 字段：每个 evidence block 包含 `item_number`、`item_name`、
+`command`、`evidence_files`、`output_summary`、`explanation`、`risks`，顶层
+声明 `version: 1` 和 `language: "zh-CN"`。

@@ -433,16 +433,17 @@ def test_relay_process_stdout_output_sink_preserves_line_boundaries() -> None:
     assert streamed_output_chunks == ["first\n", "second\n"]
 
 
-def test_subprocess_runner_non_claude_path_uses_pipe(tmp_path: Path) -> None:
-    """SubprocessRunner.run() should use PIPE for non-Claude path."""
+def test_subprocess_runner_non_claude_path_streams_via_pty(tmp_path: Path) -> None:
+    """Non-Claude streaming runs under a PTY: output is collected and logged.
+
+    The PTY makes the child line-buffer (a pipe would block-buffer and hide
+    progress), so a real subprocess is used here rather than mocking Popen.
+    """
+    import sys
+
     from backend.infrastructure.process_runner import SubprocessRunner
 
     runner = SubprocessRunner()
-
-    mock_process = MagicMock()
-    mock_process.stdout = iter(["output line 1\n", "output line 2\n"])
-    mock_process.stderr = iter([])
-    mock_process.wait.return_value = 0
 
     log_records: list[logging.LogRecord] = []
     handler = logging.Handler()
@@ -454,24 +455,40 @@ def test_subprocess_runner_non_claude_path_uses_pipe(tmp_path: Path) -> None:
     logger.setLevel(logging.INFO)
 
     try:
-        with patch("subprocess.Popen", return_value=mock_process):
-            result = runner.run(
-                ["codex", "exec", "test"],
-                cwd=tmp_path,
-                capture_output=False,
-                check=False,
-            )
+        result = runner.run(
+            [sys.executable, "-c", "print('output line 1'); print('output line 2')"],
+            cwd=tmp_path,
+            capture_output=False,
+            check=False,
+        )
 
-        # Check that output was captured via PIPE
+        # Output is collected from the PTY master.
         assert "output line 1" in result.stdout
         assert "output line 2" in result.stdout
 
-        # Check that output was logged
+        # And mirrored to the logger (line-buffered) when there is no sink.
         logged_messages = [r.getMessage() for r in log_records]
         assert any("output line 1" in msg for msg in logged_messages)
     finally:
         logger.removeHandler(handler)
         logger.setLevel(original_level)
+
+
+def test_subprocess_runner_pty_routes_output_to_sink(tmp_path: Path) -> None:
+    """When a sink is provided, PTY chunks go to the sink (for per-Issue panels)."""
+    import sys
+
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    chunks: list[str] = []
+    SubprocessRunner().run(
+        [sys.executable, "-c", "print('via-sink')"],
+        cwd=tmp_path,
+        capture_output=False,
+        check=False,
+        output_sink=chunks.append,
+    )
+    assert any("via-sink" in chunk for chunk in chunks)
 
 
 def test_subprocess_runner_claude_capture_uses_filtered_stream(
@@ -625,6 +642,105 @@ def test_process_watchdog_includes_context_label_in_logs() -> None:
         2,
         "slow command",
     )
+
+
+def test_process_watchdog_kills_on_inactivity_timeout() -> None:
+    """Watchdog should kill a process that produces no output."""
+    from backend.infrastructure import process_runner
+
+    class _NeverStoppedEvent:
+        def wait(self, timeout: float) -> bool:  # noqa: ARG002
+            return False
+
+    mock_process = MagicMock()
+    mock_process.poll.return_value = None
+    watchdog = process_runner._ProcessWatchdog(
+        mock_process,
+        ["slow", "command"],
+        timeout=None,
+        inactivity_timeout_seconds=2,
+        heartbeat_seconds=10,
+        base_label="Command",
+    )
+    watchdog._started_at = 0
+    watchdog._last_output_at = 0
+    watchdog._stop_event = _NeverStoppedEvent()
+
+    with patch.object(process_runner.time, "monotonic", side_effect=[3.0, 3.0]):
+        watchdog._run()
+
+    mock_process.kill.assert_called_once_with()
+
+
+def test_process_watchdog_does_not_kill_on_inactivity_when_output_is_active() -> None:
+    """Watchdog should not kill a process that keeps producing output."""
+    from backend.infrastructure import process_runner
+
+    mock_process = MagicMock()
+    mock_process.poll.return_value = None
+    watchdog = process_runner._ProcessWatchdog(
+        mock_process,
+        ["slow", "command"],
+        timeout=None,
+        inactivity_timeout_seconds=2,
+        heartbeat_seconds=10,
+        base_label="Command",
+    )
+    watchdog._started_at = 0
+    watchdog._last_output_at = 0
+    stop_event = MagicMock()
+    stop_event.wait.side_effect = [False, True]
+    watchdog._stop_event = stop_event
+
+    with patch.object(process_runner.time, "monotonic", side_effect=[1.5, 1.5, 1.5]):
+        watchdog.note_output()
+        watchdog._run()
+
+    mock_process.kill.assert_not_called()
+
+
+def test_subprocess_runner_kills_silent_process_on_inactivity_timeout(
+    tmp_path: Path,
+) -> None:
+    """A silent process should be killed by inactivity timeout."""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    runner = SubprocessRunner()
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.run(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            cwd=tmp_path,
+            capture_output=True,
+            timeout=3600,
+            inactivity_timeout=1,
+        )
+
+
+def test_subprocess_runner_keeps_active_process_alive(
+    tmp_path: Path,
+) -> None:
+    """A process that keeps printing should not be killed by inactivity timeout."""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    runner = SubprocessRunner()
+    script = (
+        "import time\n"
+        "for _ in range(5):\n"
+        "    print('tick')\n"
+        "    time.sleep(0.1)\n"
+    )
+
+    result = runner.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=10,
+        inactivity_timeout=1,
+    )
+
+    assert result.return_code == 0
+    assert result.stdout.count("tick") == 5
 
 
 def test_subprocess_runner_replaces_invalid_utf8_in_captured_output(

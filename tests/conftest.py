@@ -5,7 +5,7 @@ from __future__ import annotations
 import shlex
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from backend.core.shared.interfaces.agent_runner import (
     IContentGenerator,
@@ -39,6 +39,8 @@ class FakeGitHubClient(IGitHubClient):
         self._issue_url = issue_url
         self.calls: list[dict] = []
         self._issue_comments: dict[int, list[str]] = {}
+        self._issue_comment_entries: dict[int, list[tuple[int, str]]] = {}
+        self._next_comment_id = 1
         self._issue_bodies: dict[int, str] = {}
         self._pr_comments: dict[int, list[str]] = {}
         self._pr_contexts: dict[str, object | None] = {}
@@ -97,6 +99,11 @@ class FakeGitHubClient(IGitHubClient):
             {"method": "comment_issue", "issue_number": issue_number, "body": body}
         )
         self._issue_comments.setdefault(issue_number, []).append(body)
+        comment_id = self._next_comment_id
+        self._next_comment_id += 1
+        self._issue_comment_entries.setdefault(issue_number, []).append(
+            (comment_id, body)
+        )
 
     def edit_issue_body(self, issue_number: int, body: str) -> None:
         self.calls.append(
@@ -167,6 +174,25 @@ class FakeGitHubClient(IGitHubClient):
             {"method": "list_issue_comments", "issue_number": issue_number}
         )
         return list(self._issue_comments.get(issue_number, []))
+
+    def list_issue_comment_entries(self, issue_number: int) -> list[tuple[int, str]]:
+        self.calls.append(
+            {
+                "method": "list_issue_comment_entries",
+                "issue_number": issue_number,
+            }
+        )
+        return list(self._issue_comment_entries.get(issue_number, []))
+
+    def edit_issue_comment(self, comment_id: int, body: str) -> None:
+        self.calls.append(
+            {"method": "edit_issue_comment", "comment_id": comment_id, "body": body}
+        )
+        for entries in self._issue_comment_entries.values():
+            for index, (existing_id, _) in enumerate(entries):
+                if existing_id == comment_id:
+                    entries[index] = (comment_id, body)
+                    return
 
     def list_pr_comments(self, pr_number: int) -> list[str]:
         self.calls.append({"method": "list_pr_comments", "pr_number": pr_number})
@@ -274,8 +300,12 @@ class FakeProcessRunner(IProcessRunner):
     ) -> None:
         self.responses = responses or {}
         self.calls: list[list[str]] = []
+        self.raw_calls: list[list[str]] = []
         self.input_texts: list[str | None] = []
         self.labels: list[str | None] = []
+        self.timeouts: list[int | None] = []
+        self.inactivity_timeouts: list[int | None] = []
+        self.output_sinks: list[Callable[[str], None] | None] = []
 
     def run(
         self,
@@ -284,16 +314,19 @@ class FakeProcessRunner(IProcessRunner):
         cwd: Path,
         check: bool = True,
         timeout: int | None = None,
+        inactivity_timeout: int | None = None,
         capture_output: bool = True,
         input_text: str | None = None,
         label: str | None = None,
+        output_sink: Callable[[str], None] | None = None,
     ) -> CommandResult:
         command_list = list(command)
         # When the runner wraps verification commands in ``bash -lc``,
         # unwrap transparently so test assertions can keep matching the
         # inner command tuple (e.g. ``("just", "lint")``). The recorded
         # call shape stays stable for any test that asserts on
-        # ``fake_runner.calls``.
+        # ``fake_runner.calls``; ``raw_calls`` preserves the original
+        # (wrapped) shape for tests that assert the wrapping itself.
         if (
             len(command_list) == 3
             and command_list[0] == "bash"
@@ -308,8 +341,12 @@ class FakeProcessRunner(IProcessRunner):
         else:
             recorded_call = command_list
         self.calls.append(recorded_call)
+        self.raw_calls.append(command_list)
         self.input_texts.append(input_text)
         self.labels.append(label)
+        self.timeouts.append(timeout)
+        self.inactivity_timeouts.append(inactivity_timeout)
+        self.output_sinks.append(output_sink)
         key = tuple(command)
         if key in self.responses:
             result = self.responses[key]
