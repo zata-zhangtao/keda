@@ -724,12 +724,16 @@ class AgentRunnerDeliberationSettings(BaseModel):
 
 
 class AgentRunnerGeneratedContentTargetSettings(BaseModel):
-    """Generated-content target configuration supporting TOML string-list syntax."""
+    """生成内容目标配置，支持 TOML 字符串列表语法。
+
+    用于 ``issue_from_prd``、``draft_pr``、``prd_from_issue`` 三类生成目标，
+    分别控制 Issue、PR、PRD 的标题/正文生成方式。
+    """
 
     enabled: bool = True
     # 仅接受 template / agent；非法值（如手误 "agnet"）在配置加载期直接报错，
-    # 而不是静默退回 fallback。
-    mode: Literal["template", "agent"] = "agent"
+    # 而不是静默退回 fallback。默认 template 避免未配置时调用 AI 超时。
+    mode: Literal["template", "agent"] = "template"
     output: str = "json"
     title_template: str | list[str] = ""
     body_template: str | list[str] = ""
@@ -741,7 +745,11 @@ class AgentRunnerGeneratedContentTargetSettings(BaseModel):
 
     @model_validator(mode="after")
     def _join_list_templates(self) -> "AgentRunnerGeneratedContentTargetSettings":
-        """Convert list[str] template values to joined strings."""
+        """将 list[str] 类型的模板字段合并为单个字符串。
+
+        TOML 中多行模板通常以字符串列表书写，便于版本控制审阅；
+        加载后需要拼接成完整模板字符串供 ``str.format()`` 渲染。
+        """
         for field_name in ("title_template", "body_template", "prompt"):
             value = getattr(self, field_name)
             if isinstance(value, list):
@@ -750,7 +758,11 @@ class AgentRunnerGeneratedContentTargetSettings(BaseModel):
 
 
 class AgentRunnerGeneratedContentSettings(BaseModel):
-    """Generated-content configuration for Issues and PRs."""
+    """GitHub Issue 与 PR 的生成内容全局配置。
+
+    聚合三类生成目标（Issue、PR、PRD）的共享参数，如是否启用、
+    失败回退策略、最大输入长度以及默认 agent。
+    """
 
     enabled: bool = True
     fallback: str = "template"

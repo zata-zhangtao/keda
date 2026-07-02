@@ -81,28 +81,36 @@ else
             # thinking/tool calls in real time. The trailing `|| true`
             # swallows non-zero exits so a truncated stream doesn't
             # surface as a recipe failure.
-            claude --dangerously-skip-permissions --print --verbose --output-format stream-json --include-partial-messages < <(printf '%s' "$prompt_text") 2>&1 | \
+            # NOTE: Do not redirect stderr (2>&1) into jq. Claude Code may
+            # emit status/warning lines (e.g. connector notices) on stderr
+            # before the JSON stream starts, which breaks jq parsing.
+            claude --dangerously-skip-permissions --print --verbose --output-format stream-json --include-partial-messages < <(printf '%s' "$prompt_text") | \
                 jq --unbuffered -r '
-                    # Stateful: track per-block type and input byte count across the stream.
+                    # Stateful: track per-block type, input byte count, and thinking text across the stream.
                     # content_block_start ships an empty `input: {}`; the real parameters
                     # arrive via `input_json_delta` fragments, then content_block_stop closes
                     # the line — so we open on start, stream on deltas, close on stop.
+                    # Thinking deltas are accumulated per block and emitted once on stop so
+                    # the live stream does not print one token per line.
                     foreach (inputs) as $evt (
-                        {index_types: {}, index_chars: {}};
+                        {index_types: {}, index_chars: {}, index_thinking: {}};
 
                         if $evt.type == "stream_event" and $evt.event.type == "content_block_start" then
                             .index_types[($evt.event.index | tostring)] = $evt.event.content_block.type
                             | (if $evt.event.content_block.type == "tool_use" then .index_chars[($evt.event.index | tostring)] = 0 else . end)
+                            | (if $evt.event.content_block.type == "thinking" then .index_thinking[($evt.event.index | tostring)] = "" else . end)
                         elif $evt.type == "stream_event" and $evt.event.type == "content_block_delta" and $evt.event.delta.type == "input_json_delta" then
                             .index_chars[($evt.event.index | tostring)] = (.index_chars[($evt.event.index | tostring)] // 0) + ($evt.event.delta.partial_json | length)
+                        elif $evt.type == "stream_event" and $evt.event.type == "content_block_delta" and $evt.event.delta.type == "thinking_delta" then
+                            .index_thinking[($evt.event.index | tostring)] = (.index_thinking[($evt.event.index | tostring)] // "") + $evt.event.delta.thinking
                         else
                             .
                         end;
 
                         if $evt.type == "stream_event" and $evt.event.type == "content_block_start" and $evt.event.content_block.type == "tool_use" then
                             "\n🔧 \($evt.event.content_block.name)("
-                        elif $evt.type == "stream_event" and $evt.event.type == "content_block_delta" and $evt.event.delta.type == "thinking_delta" then
-                            "💭 \($evt.event.delta.thinking)\n"
+                        elif $evt.type == "stream_event" and $evt.event.type == "content_block_stop" and .index_types[($evt.event.index | tostring)] == "thinking" then
+                            "\n💭 \(.index_thinking[($evt.event.index | tostring)])\n"
                         elif $evt.type == "stream_event" and $evt.event.type == "content_block_delta" and $evt.event.delta.type == "input_json_delta" then
                             if (.index_chars[($evt.event.index | tostring)] // 0) <= 120 then
                                 $evt.event.delta.partial_json

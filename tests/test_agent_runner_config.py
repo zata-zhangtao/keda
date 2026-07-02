@@ -553,10 +553,10 @@ def test_merge_repository_config_overrides_generated_content() -> None:
     assert merged.generated_content.issue_from_prd.mode == "agent"
 
 
-def test_generated_content_target_defaults_to_agent_mode() -> None:
-    """Generated-content targets should default to agent mode for richer output."""
+def test_generated_content_target_defaults_to_template_mode() -> None:
+    """Generated-content targets should default to template mode for reliability."""
     target = AgentRunnerGeneratedContentTargetSettings()
-    assert target.mode == "agent"
+    assert target.mode == "template"
 
 
 def test_merge_repository_config_ignores_empty_template_overrides() -> None:
