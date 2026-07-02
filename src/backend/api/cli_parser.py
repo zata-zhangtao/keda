@@ -69,6 +69,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip bundled skill copy (equivalent to --copy-skills=false).",
     )
+    init_parser.add_argument(
+        "--no-update-gitignore",
+        action="store_true",
+        help=(
+            "Do not add IAR runtime patterns (.iar/, .agent-runner/, "
+            ".iar-worktrees/) to .gitignore. Default: managed by iar init."
+        ),
+    )
 
     labels_parser = subparsers.add_parser("labels", help="Manage GitHub labels.")
     labels_subparsers = labels_parser.add_subparsers(

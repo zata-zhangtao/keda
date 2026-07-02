@@ -11,6 +11,14 @@ from typing import Any
 
 import tomli_w
 
+from backend.engines.agent_runner.repository_gitignore import (  # noqa: F401
+    GITIGNORE_BLOCK_FOOTER,
+    GITIGNORE_BLOCK_HEADER,
+    GitignoreSyncOptions,
+    GitignoreSyncResult,
+    IAR_GITIGNORE_SECTIONS,
+    ensure_gitignore_entries,
+)
 from backend.infrastructure.config.settings import (
     AgentRunnerDeliberationSettings,
     AgentRunnerGeneratedContentSettings,

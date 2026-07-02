@@ -54,12 +54,13 @@ src/<module>/api/ -> src/<module>/core/ -> src/<module>/engines/ -> src/<module>
 
 ## Frontend Boundary
 
-仓库包含一个 Web 前端，是后端四层之外的 Web 客户端，通过 HTTP 或 WebSocket 调用 `src/backend/api/`：
+仓库包含两个独立前端，都是后端四层之外的 Web 客户端，通过 HTTP 或 WebSocket 调用 `src/backend/api/`：
 
 | App | Path | Stack | 定位 |
 |---|---|---|---|
-| Web 前端 | `frontend/` | Vite + React + TypeScript (npm) | 用户可见的 Web 界面 |
+| 管理平台前端 | `frontend-admin/` | Vite + React + TypeScript (pnpm) | 内部管理后台 |
+| 前台官网 | `frontend-public/` | Next.js + TypeScript (pnpm) | 对外公开站点 |
 
-它不受后端四层依赖规则约束，遵循 `frontend/` 目录下的前端约定（见 `frontend/README.md`，若存在）。
+它们不受后端四层依赖规则约束，遵循各自目录下的前端约定（见各自 `README.md`）。
 
 **"边界外" 指架构层次不同，不等于规划时可以忽略。** 任何带用户可见界面的功能，PRD 与实现都必须把对应前端 app 当作一等公民规划：组件、路由/页面、状态、调用 `src/backend/api/` 的客户端代码与类型同步。纯后端任务需显式声明 `No frontend impact`，而不是默默省略前端。

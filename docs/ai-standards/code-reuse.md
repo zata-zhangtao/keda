@@ -7,9 +7,10 @@
 新增或修改功能前，先搜索现有实现：
 
 - Python 优先用 `rg` 搜索 `src/backend/core/`、`src/backend/api/`、`src/backend/engines/`
-- 前端优先搜索 `frontend/src/lib/`、`frontend/src/components/`、`frontend/src/auth/`、`frontend/src/pages/`
+- 前端优先搜索 `frontend-admin/src/lib/`、`frontend-admin/src/api/`、`frontend-admin/src/features/`、`frontend-public/lib/`、`frontend-public/components/`
 - 业务规则优先复用 `src/backend/core/`
-- 前端纯工具、格式化、API 客户端优先复用 `frontend/src/lib/`
+- 管理平台前端纯工具、格式化、API 客户端优先复用 `frontend-admin/src/lib/` 或 `frontend-admin/src/api/`
+- 前台官网纯工具与 API 客户端优先复用 `frontend-public/lib/`
 
 禁止复制粘贴已有代码后微调。发现逻辑重复率明显超过 50% 时，优先直接调用已有函数；如果调用方向不合适，先提取公共业务规则或纯转换函数，再由调用方复用。
 
@@ -91,7 +92,7 @@ cost_values = fetch_costs("2026-01-01", "2026-01-31", True)
 - `jscpd`：跨 Python / TypeScript / JavaScript 的复制粘贴级重复检测
 - `pylint duplicate-code`：Python 结构级重复检测，只启用 `duplicate-code`
 
-这些 hook 使用候选文件和比较语料分离的策略：候选文件来自当前变更，`jscpd` 比较 `src/backend/` 与 `frontend/`，`pylint duplicate-code` 比较 `src/backend/`。`src/backend/core/` 与 `frontend/src/lib/` 必须始终作为优先复用目录参与判断。历史重复不会因为全量 lint 被一次性阻断，但新增或修改文件触达重复时必须修复。
+这些 hook 使用候选文件和比较语料分离的策略：候选文件来自当前变更，`jscpd` 比较 `src/backend/`、`frontend-admin/` 与 `frontend-public/`，`pylint duplicate-code` 比较 `src/backend/`。`src/backend/core/`、`frontend-admin/src/lib/`、`frontend-admin/src/api/` 和 `frontend-public/lib/` 必须始终作为优先复用目录参与判断。历史重复不会因为全量 lint 被一次性阻断，但新增或修改文件触达重复时必须修复。
 
 ## AI 编码自检清单
 

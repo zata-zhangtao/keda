@@ -4,6 +4,6 @@ applyTo: "tests/playwright-e2e/**/*.ts,tests/playwright-e2e/**/*.tsx,tests/playw
 
 `tests/playwright-e2e/` is a standalone TypeScript/Node package. Follow `tests/playwright-e2e/README.md` for adaptation and runtime details.
 
-Use `npm` for dependency management and test execution in this subtree, not `uv`.
+Use `pnpm` for dependency management and test execution in this subtree, not `npm` or `uv`.
 
 Follow TypeScript and Playwright community conventions here. Do not force Python SSA naming rules or Python docstring rules onto this package.

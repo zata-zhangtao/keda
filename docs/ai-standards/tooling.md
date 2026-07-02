@@ -18,12 +18,12 @@
 | Command | Purpose |
 |---|---|
 | `just sync` | 同步开发依赖 |
-| `just run` | 运行主应用（后端 + 前端）；若前端 `node_modules` 缺失会自动运行 `npm install` |
-| `just run backend_port=8010 frontend_port=5178` | 使用指定端口运行主应用，并保存为当前 Git worktree 的默认端口 |
-| `just run frontend` | 只启动前端（Vite，默认端口 5173） |
-| `just frontend dev` | 在 `frontend/` 运行 `npm run dev` |
+| `just run` | 运行主应用（后端 + 管理平台前端 + 前台官网）；若前端 `node_modules` 缺失会自动运行 `pnpm install` |
+| `just run backend_port=8010 frontend_port=5178 frontend_public_port=3001` | 使用指定端口运行主应用，并保存为当前 Git worktree 的默认端口 |
+| `just run frontend-public` | 只启动前台官网（Next.js，默认端口 3000） |
+| `just frontend-public dev` | 在 `frontend-public/` 运行 `pnpm dev` |
 | `just down` | 按当前 Git worktree 保存的端口停止本地开发服务 |
-| `just copy <new-dir>` | 派生新项目；随机分配两个互不重叠的端口（后端 8000-8999、前端 5180-5999）避免多副本端口冲突 |
+| `just copy <new-dir>` | 派生新项目；随机分配三个互不重叠的端口（后端 8000-8999、管理平台前端 5180-5999、前台官网 3010-3999）避免多副本端口冲突 |
 | `just test` | 运行本地测试 |
 | `uv run mkdocs build` | 验证文档站点 |
 | `just docs-serve` | 本地预览文档 |
@@ -47,15 +47,15 @@
 
 `just run` 会通过 `git rev-parse --git-path vanta-run.env` 定位 Git 本地状态文件。该文件不进入版本控制；在主 worktree 中位于 `.git/vanta-run.env`，在 linked worktree 中位于对应 `.git/worktrees/<name>/vanta-run.env`。
 
-- 未传端口且状态文件不存在时，默认使用后端 `8000`、前端 `5173`。
-- 传入 `backend_port`、`frontend_port` 时，会保存本次端口配置。
+- 未传端口且状态文件不存在时，默认使用后端 `8000`、管理平台前端 `5173`、前台官网 `3000`。
+- 传入 `backend_port`、`frontend_port` 或 `frontend_public_port` 时，会保存本次端口配置。
 - 后续 `just run` 和 `just down` 会复用保存的端口。
 - 前端 Vite 使用 `strictPort`，端口被占用时直接失败，避免自动漂移后 `just down` 停错端口。
-- `just copy <name>` 派生新项目时，会从两个互不重叠的区间随机分配端口（后端 `8000-8999`、前端 `5180-5999`），并写入 destination justfile 的 `run`/`down` 默认值以及 `.git/vanta-run.env`，让首次 `just run` 就走随机端口；所选端口会打印到 stdout。`just sync-template` 不会覆盖已随机化的 justfile，因此派生项目可以长期保留自己的端口。
+- `just copy <name>` 派生新项目时，会从三个互不重叠的区间随机分配端口（后端 `8000-8999`、管理平台前端 `5180-5999`、前台官网 `3010-3999`），并写入 destination justfile 的 `run`/`down` 默认值以及 `.git/vanta-run.env`，让首次 `just run` 就走随机端口；所选端口会打印到 stdout。`just sync-template` 不会覆盖已随机化的 justfile，因此派生项目可以长期保留自己的端口。
 
 ## Automatic Frontend Dependency Install
 
-`just run`（以及 `just run frontend`）在启动前端服务前会检查 `frontend/` 目录是否存在 `node_modules/`。若缺失且系统已安装 `npm`，则自动运行 `npm install` 安装依赖；若 `npm` 未安装，会给出明确提示并退出。这样新克隆仓库或清理依赖后首次运行无需手动执行安装步骤。
+`just run`（以及 `just run frontend`、`just run frontend-public`）在启动前端服务前会检查对应目录是否存在 `node_modules/`。若缺失且系统已安装 `pnpm`，则自动运行 `pnpm install` 安装依赖；若 `pnpm` 未安装，会给出明确提示并退出。这样新克隆仓库或清理依赖后首次运行无需手动执行安装步骤。
 
 ## Docker Local Run
 
@@ -140,7 +140,7 @@ uv run pre-commit run --show-diff-on-failure
 - `jscpd`：跨 Python / TypeScript / JavaScript 的复制粘贴检测，版本由 `.pre-commit-config.yaml` 的 `additional_dependencies` 固定
 - `pylint duplicate-code`：Python 结构级重复检测，版本由 `pyproject.toml` 与 `uv.lock` 固定
 
-重复检测区分"候选文件"和"比较语料"：候选文件来自当前变更；`jscpd` 比较 `src/backend/` 与 `frontend/`，`pylint duplicate-code` 比较 `src/backend/`。这样可以阻断新增重复，同时避免历史重复让干净工作区的 `just lint` 永久失败。
+重复检测区分"候选文件"和"比较语料"：候选文件来自当前变更；`jscpd` 比较 `src/backend/`、`frontend/` 与 `frontend-public/`，`pylint duplicate-code` 比较 `src/backend/`。这样可以阻断新增重复，同时避免历史重复让干净工作区的 `just lint` 永久失败。
 
 常用调试命令：
 

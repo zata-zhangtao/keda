@@ -52,19 +52,33 @@
 flowchart TD
     Browser["浏览器 / 用户"] --> FE
 
-    subgraph FE["前端层 frontend/"]
+    subgraph FE["前端层"]
         direction TB
-        FE_PAGES["src/pages/\nLoginPage · DashboardPage"]
-        FE_COMPONENTS["src/components/\nAppSidebar · SiteHeader · shadcn/ui"]
-        FE_AUTH["src/auth/\nSessionProvider · RequireSession"]
-        FE_LIB["src/lib/\nutils · api client"]
-        FE_PAGES --> FE_COMPONENTS
-        FE_PAGES --> FE_AUTH
-        FE_AUTH --> FE_LIB
-        FE_COMPONENTS --> FE_LIB
+        subgraph FE_ADMIN["frontend-admin/ 管理平台"]
+            FE_ADMIN_PAGES["src/pages/\nLoginPage · DashboardPage"]
+            FE_ADMIN_LAYOUT["src/components/\nAppSidebar · SiteHeader · shadcn/ui"]
+            FE_ADMIN_AUTH["src/auth/\nSessionProvider · RequireSession"]
+            FE_ADMIN_API["src/api/\nclient · auth"]
+            FE_ADMIN_PAGES --> FE_ADMIN_LAYOUT
+            FE_ADMIN_PAGES --> FE_ADMIN_AUTH
+            FE_ADMIN_AUTH --> FE_ADMIN_API
+            FE_ADMIN_LAYOUT --> FE_ADMIN_API
+        end
+
+        subgraph FE_PUBLIC["frontend-public/ 前台官网"]
+            FE_PUBLIC_MARKETING["app/(marketing)/\nHome · Pricing · Features"]
+            FE_PUBLIC_APP["app/(app)/\nDashboard · Settings"]
+            FE_PUBLIC_AUTH["lib/auth.tsx"]
+            FE_PUBLIC_API["lib/api.ts"]
+            FE_PUBLIC_MARKETING --> FE_PUBLIC_AUTH
+            FE_PUBLIC_APP --> FE_PUBLIC_AUTH
+            FE_PUBLIC_APP --> FE_PUBLIC_API
+            FE_PUBLIC_AUTH --> FE_PUBLIC_API
+        end
     end
 
-    FE_LIB -->|"HTTP /api/*"| Apps
+    FE_ADMIN_API -->|"HTTP /api/*\n(nginx 反代)"| Apps
+    FE_PUBLIC_API -->|"HTTP /api/*\n(直接调用)"| Apps
 
     subgraph Backend["Python 后端"]
         direction TB
@@ -112,20 +126,30 @@ flowchart TD
 
 本仓库包含两个独立前端项目，分别服务不同场景：
 
-### Web 前端 `frontend/`
+### 管理平台 `frontend-admin/`
 
 | 层 | 路径 | 职责 |
 |---|---|---|
 | 页面层 | `src/pages/` | 路由级页面组件（登录、Dashboard） |
 | 布局层 | `src/components/` | Sidebar、Header、shadcn/ui 基础组件 |
 | 认证层 | `src/auth/` | SessionProvider 上下文、RequireSession 路由守卫 |
-| API/工具层 | `src/lib/` | API 客户端封装、通用工具，与后端唯一通信入口 |
+| API 层 | `src/api/` | API 客户端封装、会话缓存，与后端唯一通信入口 |
+
+### 前台官网 `frontend-public/`
+
+| 层 | 路径 | 职责 |
+|---|---|---|
+| 营销页面 | `app/(marketing)/` | 首页、功能、定价、FAQ 等落地页 |
+| 应用页面 | `app/(app)/` | 登录后的 Dashboard、Settings、Tasks、Projects |
+| 认证层 | `lib/auth.tsx` | 会话状态、受保护布局 |
+| API 层 | `lib/api.ts` | axios/fetch 封装、环境基址、错误处理 |
 
 前端与后端之间**仅通过 `/api/*` HTTP 接口通信**：
 
-- `frontend/` 开发时由 Vite 代理转发，生产时由 Nginx `/api/*` 反代到后端。
+- `frontend-admin/` 开发时由 Vite 代理转发，生产时由 Nginx `/api/*` 反代到后端。
+- `frontend-public/` 开发时直接请求 `http://localhost:8000`，生产时通过 `API_BASE_URL` 指向后端。
 
-前端与后端无任何代码直接依赖。
+两侧无任何代码直接依赖。
 
 ## 为什么前端不属于四层
 
@@ -139,10 +163,10 @@ src/backend/api/ → src/backend/core/ → src/backend/engines/ → src/backend/
 
 这里的 `src/backend/api/` 指后端请求接入层，不等于浏览器前端。
 
-- `frontend/` 是系统边界外的 Web 客户端。
-- 它负责路由、页面渲染、会话状态和接口调用。
-- 它通过 HTTP 或 WebSocket 调用 `src/backend/api/` 暴露的后端入口。
-- 它不参与后端内部的依赖传递，因此不应被硬塞进四层中的任意一层。
+- `frontend-admin/` 与 `frontend-public/` 都是系统边界外的 Web 客户端。
+- 它们负责路由、页面渲染、会话状态和接口调用。
+- 它们通过 HTTP 或 WebSocket 调用 `src/backend/api/` 暴露的后端入口。
+- 它们不参与后端内部的依赖传递，因此不应被硬塞进四层中的任意一层。
 
 如果需要讨论前端自身的模块拆分，应使用单独的前端内部架构文档，而不是混入后端四层依赖规则。详见 [`frontend-architecture.md`](frontend-architecture.md)。
 
@@ -166,7 +190,7 @@ src/backend/api/ → src/backend/core/ → src/backend/engines/ → src/backend/
 | 会话存储 | Redis，key 前缀 `public:session:` | Redis，key 前缀 `admin:session:` |
 | 鉴权依赖 | `get_current_public_user` | `get_current_admin_user` |
 | 主要 API | 业务 `agents/workflows/sessions/tools`（`owner_id = public_user.id`） | `/admin/users` 管理 public 用户 |
-| 前端 | `frontend/` | `frontend/` |
+| 前端 | `frontend-public` | `frontend-admin` |
 
 ### 隔离保证
 

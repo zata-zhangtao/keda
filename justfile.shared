@@ -1138,7 +1138,7 @@ sync-template flags="":
     echo "✅ just lint --full flag updated: $branch_name @ $head_hash"
 
 
-# Run Playwright e2e tests (requires: just e2e-install first)
+# Run Playwright e2e tests using pnpm (requires: just e2e-install first)
 # Usage:
 #   just e2e            # all tests (excluding visual regression)
 #   just e2e smoke      # smoke tests only
@@ -1149,10 +1149,10 @@ e2e type="":
     set -euo pipefail
     cd "{{justfile_directory()}}/tests/playwright-e2e"
     case "{{type}}" in
-        smoke)   npm run test:smoke ;;
-        no-auth) npm run test:no-auth ;;
-        report)  npm run report ;;
-        "")      npm test ;;
+        smoke)   pnpm run test:smoke ;;
+        no-auth) pnpm run test:no-auth ;;
+        report)  pnpm run report ;;
+        "")      pnpm test ;;
         *)
             echo "ERROR: Unknown type: {{type}}"
             echo "Usage: just e2e [smoke|no-auth|report]"
@@ -1160,9 +1160,9 @@ e2e type="":
             ;;
     esac
 
-# Install e2e dependencies and Playwright browsers (run once before first just e2e)
+# Install e2e dependencies and Playwright browsers using pnpm (run once before first just e2e)
 e2e-install:
-    cd "{{justfile_directory()}}/tests/playwright-e2e" && npm install && npx playwright install chromium
+    cd "{{justfile_directory()}}/tests/playwright-e2e" && pnpm install && pnpm exec playwright install chromium
 
 # Pack all gitignored .env* files into a password-protected encrypted zip.
 # Output: ./<project_name>.zip  (one fixed file per project root)

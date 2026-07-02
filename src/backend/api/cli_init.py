@@ -22,8 +22,14 @@ from backend.engines.agent_runner.init_flow import (
     format_skill_copy_summary,
 )
 from backend.engines.agent_runner.repository_local import (
+    GITIGNORE_BLOCK_FOOTER,
+    GITIGNORE_BLOCK_HEADER,
+    IAR_GITIGNORE_SECTIONS,
+    GitignoreSyncOptions,
+    GitignoreSyncResult,
     RepositoryInitOptions,
     RepositoryInitResult,
+    ensure_gitignore_entries,
     initialize_repository_local_config,
 )
 from backend.engines.agent_runner.takeover import upsert_repository
@@ -53,12 +59,21 @@ def _run_init_command(
         logger.error("iar init failed: %s", exc)
         return 1
     _print_verification_commands_review_hint(init_result)
+    update_gitignore = not getattr(parsed, "no_update_gitignore", False)
+    gitignore_result = ensure_gitignore_entries(
+        GitignoreSyncOptions(
+            repo_root_path=init_result.repo_root_path,
+            dry_run=parsed.dry_run,
+            skip=not update_gitignore,
+        )
+    )
     if parsed.dry_run:
         print(init_result.config_text, end="")
         console.print(
             f"[cyan]{format_skill_copy_plan(init_result.repo_root_path)}[/]",
             markup=False,
         )
+        _print_gitignore_plan(gitignore_result)
         return 0
     if init_result.wrote_file:
         console.print(f"[green]Wrote IAR local config:[/] {init_result.config_path}")
@@ -66,6 +81,7 @@ def _run_init_command(
         console.print(
             f"[dim]IAR local config already up to date:[/] {init_result.config_path}"
         )
+    _print_gitignore_summary(gitignore_result)
     if init_result.repo_id:
         try:
             registry_result = upsert_repository(
@@ -124,6 +140,121 @@ def _run_init_command(
     except Exception as exc:  # noqa: BLE001
         error_console.print(f"[yellow]Label sync failed:[/] {exc}")
     return 0
+
+
+def _print_gitignore_plan(result: GitignoreSyncResult) -> None:
+    """Print the ``.gitignore`` plan in dry-run mode.
+
+    Args:
+        result: ``ensure_gitignore_entries`` 的 dry-run 结果。
+    """
+    if result.skipped:
+        console.print(
+            f"[cyan]Would skip .gitignore update (--no-update-gitignore):[/] "
+            f"{result.gitignore_path}",
+            markup=False,
+        )
+        _print_info_exclude_hint_if_needed(result)
+        return
+    if result.block_inserted:
+        joined = ", ".join(result.entries_added)
+        console.print(
+            f"[cyan]Would add IAR patterns to .gitignore:[/] {joined}",
+            markup=False,
+        )
+        for line in _format_block_preview():
+            console.print(f"  [cyan]+ {line}[/]", markup=False)
+    elif result.block_updated:
+        joined_added = ", ".join(result.entries_added) or "(none)"
+        joined_skipped = ", ".join(result.entries_skipped_external) or "(none)"
+        console.print(
+            f"[cyan]Would update IAR .gitignore block:[/] "
+            f"added={joined_added}; skipped_external={joined_skipped}",
+            markup=False,
+        )
+    elif not result.entries_added and not result.entries_skipped_external:
+        console.print(
+            f"[cyan]Would leave .gitignore unchanged (no IAR patterns needed):[/] "
+            f"{result.gitignore_path}",
+            markup=False,
+        )
+    else:
+        joined_skipped = ", ".join(result.entries_skipped_external) or "(none)"
+        console.print(
+            f"[cyan]Would leave .gitignore block unchanged:[/] "
+            f"skipped_external={joined_skipped}",
+            markup=False,
+        )
+    _print_info_exclude_hint_if_needed(result)
+
+
+def _print_gitignore_summary(result: GitignoreSyncResult) -> None:
+    """Print the ``.gitignore`` sync summary in non-dry-run mode.
+
+    Args:
+        result: ``ensure_gitignore_entries`` 的执行结果。
+    """
+    if result.skipped:
+        console.print(
+            f"[dim]Skipped .gitignore update (--no-update-gitignore):[/] "
+            f"{result.gitignore_path}"
+        )
+        _print_info_exclude_hint_if_needed(result)
+        return
+    if result.block_inserted:
+        joined = ", ".join(result.entries_added)
+        console.print(
+            f"[green]Updated .gitignore with IAR patterns:[/] {joined} "
+            f"-> {result.gitignore_path}"
+        )
+    elif result.block_updated:
+        joined_added = ", ".join(result.entries_added) or "(none)"
+        joined_skipped = ", ".join(result.entries_skipped_external) or "(none)"
+        console.print(
+            f"[yellow]Updated IAR .gitignore block:[/] "
+            f"added={joined_added}; skipped_external={joined_skipped} "
+            f"-> {result.gitignore_path}"
+        )
+    elif result.entries_added or result.entries_skipped_external:
+        joined_skipped = ", ".join(result.entries_skipped_external) or "(none)"
+        console.print(
+            f"[dim]IAR .gitignore block already up to date:[/] "
+            f"skipped_external={joined_skipped} -> {result.gitignore_path}"
+        )
+    else:
+        console.print(
+            f"[dim]IAR .gitignore block already up to date:[/] {result.gitignore_path}"
+        )
+    _print_info_exclude_hint_if_needed(result)
+
+
+def _print_info_exclude_hint_if_needed(result: GitignoreSyncResult) -> None:
+    """当 ``.git/info/exclude`` 含历史 iar 条目时,提示用户清理。"""
+    if not result.info_exclude_hint:
+        return
+    error_console.print(
+        "[yellow]Hint:[/] .git/info/exclude contains legacy iar entries "
+        "(e.g. /.iar/evidence/, /.iar-worktrees/) that are now covered by "
+        "the managed .gitignore block. You may delete them manually.",
+        markup=False,
+    )
+
+
+def _format_block_preview() -> list[str]:
+    """Return the would-be-written iar block as a list of display lines.
+
+    Used by dry-run output to show the user exactly what will be appended.
+    """
+    lines = [GITIGNORE_BLOCK_HEADER]
+    first = True
+    for comment, patterns in IAR_GITIGNORE_SECTIONS:
+        if not first:
+            lines.append("")
+        first = False
+        lines.append(comment)
+        lines.extend(patterns)
+    lines.append(GITIGNORE_BLOCK_FOOTER)
+    return lines
 
 
 def _print_verification_commands_review_hint(

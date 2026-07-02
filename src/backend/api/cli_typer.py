@@ -291,6 +291,16 @@ def init_command(
             help="Skip bundled skill copy (equivalent to --no-copy-skills).",
         ),
     ] = False,
+    no_update_gitignore: Annotated[
+        bool,
+        typer.Option(
+            "--no-update-gitignore",
+            help=(
+                "Do not add IAR runtime patterns (.iar/, .agent-runner/, "
+                ".iar-worktrees/) to .gitignore. Default: managed by iar init."
+            ),
+        ),
+    ] = False,
 ) -> int:
     """Create repository-local .iar.toml config."""
     selector_options = _typer_selector_options(
@@ -307,6 +317,7 @@ def init_command(
         base_branch=base_branch,
         copy_skills=copy_skills,
         skip_skills=skip_skills,
+        no_update_gitignore=no_update_gitignore,
     )
 
 

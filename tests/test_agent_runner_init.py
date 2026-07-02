@@ -9,10 +9,14 @@ import pytest
 
 from backend.api.cli import main
 from backend.engines.agent_runner.repository_local import (
+    GITIGNORE_BLOCK_FOOTER,
+    GITIGNORE_BLOCK_HEADER,
+    GitignoreSyncOptions,
     RepositoryInitOptions,
     _detect_default_remote,
     build_repository_local_config_text,
     detect_verification_commands,
+    ensure_gitignore_entries,
     initialize_repository_local_config,
 )
 
@@ -609,3 +613,282 @@ def test_iar_init_does_not_pollute_target_repo_config_toml(
     global_config_text = global_config_path.read_text(encoding="utf-8")
     assert "[agent_runner.repositories.target]" in global_config_text
     assert f'path = "{repo_path}"' in global_config_text
+
+
+# ---------------------------------------------------------------------------
+# .gitignore sync
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_gitignore_inserts_block_when_missing(tmp_path: Path) -> None:
+    """Fresh repo (no .gitignore) should get a managed block with all entries."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+
+    result = ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path))
+
+    gitignore_path = repo_path / ".gitignore"
+    text = gitignore_path.read_text(encoding="utf-8")
+    assert result.block_inserted is True
+    assert result.block_updated is False
+    assert result.entries_added == (".iar/", ".agent-runner/", ".iar-worktrees/")
+    assert result.entries_skipped_external == ()
+    assert GITIGNORE_BLOCK_HEADER in text
+    assert GITIGNORE_BLOCK_FOOTER in text
+    assert ".iar/" in text
+    assert ".agent-runner/" in text
+    assert ".iar-worktrees/" in text
+
+
+def test_ensure_gitignore_skips_patterns_already_outside_block(
+    tmp_path: Path,
+) -> None:
+    """Patterns already declared outside the block must not be duplicated."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+    gitignore = repo_path / ".gitignore"
+    gitignore.write_text(
+        "# project rules\nfoo/\n.agent-runner/\n",
+        encoding="utf-8",
+    )
+
+    result = ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path))
+
+    text = gitignore.read_text(encoding="utf-8")
+    assert result.block_inserted is True
+    assert result.entries_added == (".iar/", ".iar-worktrees/")
+    assert ".agent-runner/" in result.entries_skipped_external
+    # Project rules must be preserved verbatim above the block.
+    assert text.startswith("# project rules\nfoo/\n.agent-runner/\n")
+    # The block must be appended after a blank line.
+    assert GITIGNORE_BLOCK_HEADER in text
+    # .agent-runner/ must appear exactly once in the file (in the project
+    # section, not duplicated inside the block).
+    assert text.count(".agent-runner/") == 1
+
+
+def test_ensure_gitignore_is_idempotent_with_existing_block(tmp_path: Path) -> None:
+    """Re-running on a repo with the same block must not modify .gitignore."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+
+    ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path))
+    initial = (repo_path / ".gitignore").read_text(encoding="utf-8")
+
+    result = ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path))
+
+    after = (repo_path / ".gitignore").read_text(encoding="utf-8")
+    assert result.block_inserted is False
+    assert result.block_updated is False
+    assert after == initial
+
+
+def test_ensure_gitignore_updates_block_when_patterns_missing(
+    tmp_path: Path,
+) -> None:
+    """Existing block missing a pattern should be updated in place."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+    gitignore = repo_path / ".gitignore"
+    # Minimal block with only one pattern; the others should be added.
+    gitignore.write_text(
+        f"{GITIGNORE_BLOCK_HEADER}\n.iar/\n{GITIGNORE_BLOCK_FOOTER}\n",
+        encoding="utf-8",
+    )
+
+    result = ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path))
+
+    text = gitignore.read_text(encoding="utf-8")
+    assert result.block_inserted is False
+    assert result.block_updated is True
+    assert ".agent-runner/" in result.entries_added
+    assert ".iar-worktrees/" in result.entries_added
+    assert ".agent-runner/" in text
+    assert ".iar-worktrees/" in text
+    # Header / footer order must be preserved.
+    assert text.index(GITIGNORE_BLOCK_HEADER) < text.index(GITIGNORE_BLOCK_FOOTER)
+
+
+def test_ensure_gitignore_does_not_insert_empty_block_when_all_external(
+    tmp_path: Path,
+) -> None:
+    """If every pattern already lives outside the block, do not insert anything."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+    gitignore = repo_path / ".gitignore"
+    gitignore.write_text(
+        ".iar/\n.agent-runner/\n.iar-worktrees/\n",
+        encoding="utf-8",
+    )
+
+    result = ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path))
+
+    text = gitignore.read_text(encoding="utf-8")
+    assert result.block_inserted is False
+    assert result.block_updated is False
+    assert result.entries_added == ()
+    assert set(result.entries_skipped_external) == {
+        ".iar/",
+        ".agent-runner/",
+        ".iar-worktrees/",
+    }
+    assert GITIGNORE_BLOCK_HEADER not in text
+
+
+def test_ensure_gitignore_skips_when_opted_out(tmp_path: Path) -> None:
+    """``skip=True`` must not touch .gitignore (or even create it)."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+
+    result = ensure_gitignore_entries(
+        GitignoreSyncOptions(repo_root_path=repo_path, skip=True)
+    )
+
+    assert result.skipped is True
+    assert result.block_inserted is False
+    assert result.block_updated is False
+    assert not (repo_path / ".gitignore").exists()
+
+
+def test_ensure_gitignore_dry_run_does_not_write(tmp_path: Path) -> None:
+    """``dry_run=True`` reports the would-be plan but does not write .gitignore."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+
+    result = ensure_gitignore_entries(
+        GitignoreSyncOptions(repo_root_path=repo_path, dry_run=True)
+    )
+
+    assert result.dry_run is True
+    assert result.block_inserted is True
+    assert not (repo_path / ".gitignore").exists()
+
+
+def test_ensure_gitignore_refuses_to_touch_corrupted_block(tmp_path: Path) -> None:
+    """A block missing its footer is treated as corrupted and left untouched."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+    gitignore = repo_path / ".gitignore"
+    # Header present, footer missing — must be a no-op so we don't lose data.
+    initial = f"{GITIGNORE_BLOCK_HEADER}\n.iar/\n"
+    gitignore.write_text(initial, encoding="utf-8")
+
+    result = ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path))
+
+    assert result.block_inserted is False
+    assert result.block_updated is False
+    assert gitignore.read_text(encoding="utf-8") == initial
+
+
+def test_ensure_gitignore_hints_legacy_info_exclude(tmp_path: Path) -> None:
+    """Legacy ``.git/info/exclude`` entries should surface as a hint to the user."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+    info_dir = repo_path / ".git" / "info"
+    info_dir.mkdir(parents=True)
+    (info_dir / "exclude").write_text("/.iar/evidence/\n", encoding="utf-8")
+
+    result = ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path))
+
+    assert result.info_exclude_hint is True
+
+
+def test_ensure_gitignore_preserves_postlude_text(tmp_path: Path) -> None:
+    """Block replacement must keep trailing content byte-for-byte."""
+    repo_path = tmp_path / "target"
+    repo_path.mkdir()
+    gitignore = repo_path / ".gitignore"
+    initial = (
+        f"{GITIGNORE_BLOCK_HEADER}\n"
+        f".iar/\n"
+        f"{GITIGNORE_BLOCK_FOOTER}\n"
+        "\n"
+        "# trailing section\n"
+        "bar/\n"
+    )
+    gitignore.write_text(initial, encoding="utf-8")
+
+    ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path))
+
+    text = gitignore.read_text(encoding="utf-8")
+    # Trailing content (after the iar block) must be preserved verbatim.
+    assert text.endswith("\n# trailing section\nbar/\n")
+
+
+def test_iar_init_writes_gitignore_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``iar init`` should add the iar .gitignore block on a fresh repo."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    monkeypatch.chdir(repo_path)
+    monkeypatch.setenv("IAR_CONFIG", str(_create_isolated_config(tmp_path)))
+
+    assert main(["init"]) == 0
+
+    gitignore_text = (repo_path / ".gitignore").read_text(encoding="utf-8")
+    assert GITIGNORE_BLOCK_HEADER in gitignore_text
+    assert GITIGNORE_BLOCK_FOOTER in gitignore_text
+    assert ".iar/" in gitignore_text
+    assert ".agent-runner/" in gitignore_text
+    assert ".iar-worktrees/" in gitignore_text
+
+
+def test_iar_init_no_update_gitignore_skips_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--no-update-gitignore`` should not create .gitignore."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    monkeypatch.chdir(repo_path)
+    monkeypatch.setenv("IAR_CONFIG", str(_create_isolated_config(tmp_path)))
+
+    assert main(["init", "--no-update-gitignore"]) == 0
+    assert not (repo_path / ".gitignore").exists()
+
+
+def test_iar_init_dry_run_does_not_write_gitignore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--dry-run`` must not touch .gitignore even when the block would be added."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    monkeypatch.chdir(repo_path)
+    monkeypatch.setenv("IAR_CONFIG", str(_create_isolated_config(tmp_path)))
+
+    assert main(["init", "--dry-run"]) == 0
+    assert not (repo_path / ".gitignore").exists()
+
+
+def test_iar_init_dry_run_emits_gitignore_block_lines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The dry-run plan should print the managed block header and entries."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    monkeypatch.chdir(repo_path)
+    monkeypatch.setenv("IAR_CONFIG", str(_create_isolated_config(tmp_path)))
+
+    assert main(["init", "--dry-run"]) == 0
+
+    out = capsys.readouterr().out
+    assert GITIGNORE_BLOCK_HEADER in out
+    assert ".iar/" in out
+    assert ".agent-runner/" in out
+    assert ".iar-worktrees/" in out
+    assert GITIGNORE_BLOCK_FOOTER in out
+
+
+def test_iar_init_idempotent_does_not_rewrite_gitignore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Running ``iar init`` twice must not change .gitignore after the first write."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    monkeypatch.chdir(repo_path)
+    monkeypatch.setenv("IAR_CONFIG", str(_create_isolated_config(tmp_path)))
+
+    assert main(["init"]) == 0
+    first = (repo_path / ".gitignore").read_text(encoding="utf-8")
+
+    assert main(["init"]) == 0
+    second = (repo_path / ".gitignore").read_text(encoding="utf-8")
+
+    assert first == second
