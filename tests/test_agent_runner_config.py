@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from backend.core.shared.models.agent_runner import AppConfig, GitConfig, RunnerConfig
+from backend.core.shared.models.agent_runner import (
+    AppConfig,
+    GitConfig,
+    RepositoryIdentity,
+    RunnerConfig,
+)
 from backend.core.shared.models.agent_deliberation import DeliberationConfig
 from backend.engines.agent_runner.factory import (
     build_app_config_from_settings,
@@ -27,6 +32,7 @@ from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerGitSettings,
     AgentRunnerLabelSettings,
+    AgentRunnerRepositoryMetadataSettings,
     AgentRunnerRepositorySettings,
     AgentRunnerRunnerSettings,
     AgentRunnerSettings,
@@ -803,3 +809,132 @@ default_synthesizer = "kimi"
     # Profiles fall back to global defaults when not overridden.
     profile_ids = {p.profile_id for p in contexts[0].config.deliberation.profiles}
     assert "architect" in profile_ids
+
+
+# ---------------------------------------------------------------------------
+# github_repo schema validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "zata-zhangtao/keda",
+        "owner/repo",
+        "owner-with-dashes/repo_with_underscores",
+    ],
+)
+def test_repository_metadata_github_repo_accepts_valid_values(value: str) -> None:
+    """Valid owner/name values pass the field validator unchanged."""
+    settings = AgentRunnerRepositoryMetadataSettings(github_repo=value)
+    assert settings.github_repo == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "not-a-slash",
+        "/owner/repo",
+        "owner/repo/",
+        "owner/",
+        "/repo",
+        "host/owner/repo",
+    ],
+)
+def test_repository_metadata_github_repo_rejects_invalid_values(value: str) -> None:
+    """Invalid formats raise ValueError with the field name in the message."""
+    from pydantic import ValidationError
+
+    with pytest.raises((ValueError, ValidationError)) as exc_info:
+        AgentRunnerRepositoryMetadataSettings(github_repo=value)
+    assert "github_repo" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "not-a-slash",
+        "owner/",
+        "/repo",
+        "host/owner/repo",
+    ],
+)
+def test_repository_settings_github_repo_rejects_invalid_values(value: str) -> None:
+    """The registry-level settings share the same validation contract."""
+    from pydantic import ValidationError
+
+    with pytest.raises((ValueError, ValidationError)) as exc_info:
+        AgentRunnerRepositorySettings(path="/tmp/repo", github_repo=value)
+    assert "github_repo" in str(exc_info.value)
+
+
+def test_load_agent_runner_local_settings_propagates_github_repo(
+    tmp_path: Path,
+) -> None:
+    """The local config loader must forward ``github_repo`` to the registry model."""
+    repo_path = _init_git_repository(tmp_path, "keda")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "keda-local"
+github_repo = "zata-zhangtao/keda"
+""",
+    )
+    local_settings = settings_module.load_agent_runner_local_settings(repo_path)
+    assert local_settings is not None
+    assert local_settings.github_repo == "zata-zhangtao/keda"
+
+
+# ---------------------------------------------------------------------------
+# merge_repository_config populates AppConfig.repositories
+# ---------------------------------------------------------------------------
+
+
+def test_merge_repository_config_adds_repositories_dict_entry() -> None:
+    """merge_repository_config must materialise a RepositoryIdentity per repo."""
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        id="keda-main",
+        display_name="Keda",
+        github_repo="zata-zhangtao/keda",
+    )
+    merged = merge_repository_config(AppConfig(), repo_settings)
+    assert "keda-main" in merged.repositories
+    identity = merged.repositories["keda-main"]
+    assert isinstance(identity, RepositoryIdentity)
+    assert identity.id == "keda-main"
+    assert identity.path == "/tmp/repo"
+    assert identity.display_name == "Keda"
+    assert identity.github_repo == "zata-zhangtao/keda"
+
+
+def test_merge_repository_config_falls_back_to_path_key() -> None:
+    """When ``id`` is missing the resolved path is used as the dict key."""
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        github_repo="owner/repo",
+    )
+    merged = merge_repository_config(AppConfig(), repo_settings)
+    resolved = str(Path("/tmp/repo").resolve())
+    assert resolved in merged.repositories
+    assert merged.repositories[resolved].github_repo == "owner/repo"
+
+
+def test_merge_repository_config_preserves_unrelated_identities() -> None:
+    """Merging one repo must not disturb identities merged in earlier calls."""
+    first = AgentRunnerRepositorySettings(
+        path="/tmp/a",
+        id="alpha",
+        github_repo="owner/alpha",
+    )
+    second = AgentRunnerRepositorySettings(
+        path="/tmp/b",
+        id="beta",
+        github_repo="owner/beta",
+    )
+    after_first = merge_repository_config(AppConfig(), first)
+    after_second = merge_repository_config(after_first, second)
+    assert {rid for rid in after_second.repositories} == {"alpha", "beta"}
+    assert after_second.repositories["alpha"].github_repo == "owner/alpha"
+    assert after_second.repositories["beta"].github_repo == "owner/beta"

@@ -444,9 +444,41 @@ class GeneratedPrContent:
 
 
 @dataclass(frozen=True)
+class RepositoryIdentity:
+    """Per-context view of a repository's identity (core/ dataclass).
+
+    The ``engines`` layer materialises this from the Pydantic
+    ``AgentRunnerRepositorySettings`` during ``merge_repository_config``
+    so that ``core/`` use cases can look up the GitHub owner/repo label
+    without depending on ``infrastructure/`` Pydantic types.
+
+    Attributes:
+        id: Optional iar-internal identifier (e.g. ``"keda-main"``). Falls
+            back to ``path`` when the registry entry did not set one.
+        path: Resolved absolute path to the repository working tree.
+        display_name: Human-readable label used by status surfaces.
+        github_repo: Optional ``owner/name`` string consumed by
+            ``gh pr list --repo``. ``None`` means the PR column should
+            remain empty with a one-shot stderr warning.
+    """
+
+    id: str | None
+    path: str
+    display_name: str | None
+    github_repo: str | None = None
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Application configuration."""
 
+    # ``repositories`` is the merged per-context view of repository identity
+    # (keyed by repo_id or path). It is **not** the same field as
+    # ``AgentRunnerSettings.repositories`` (the load-time registry); that
+    # field is Pydantic and lives in ``infrastructure/``. Keeping
+    # ``RepositoryIdentity`` as a frozen dataclass in ``core/`` avoids
+    # ``core/`` -> ``infrastructure/`` reverse dependency.
+    repositories: dict[str, RepositoryIdentity] = field(default_factory=dict)
     labels: LabelConfig = LabelConfig()
     git: GitConfig = GitConfig()
     worktree: WorktreeConfig = WorktreeConfig()

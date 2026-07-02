@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote_plus
 
-from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -768,6 +775,37 @@ class AgentRunnerRepositoryMetadataSettings(BaseModel):
     id: str | None = None
     enabled: bool = True
     display_name: str | None = None
+    # Optional ``owner/name`` string passed to ``gh pr list --repo`` so the
+    # PR column on ``iar issue list`` is populated. Omitting it is allowed
+    # — the PR column then stays empty with a one-shot stderr warning.
+    github_repo: str | None = None
+
+    @field_validator("github_repo")
+    @classmethod
+    def _validate_github_repo_format(cls, value: str | None) -> str | None:
+        """Reject malformed ``github_repo`` values at config load time.
+
+        Format: ``owner/name`` with non-empty owner / name and no leading
+        or trailing slash. ``None`` and empty string are accepted (the
+        field is optional).
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                "Invalid github_repo: must be a non-empty 'owner/name' "
+                "string or null."
+            )
+        if "/" not in value or value.startswith("/") or value.endswith("/"):
+            raise ValueError(
+                f"Invalid github_repo {value!r}; expected 'owner/name' format."
+            )
+        owner_part, _, name_part = value.partition("/")
+        if not owner_part or not name_part or "/" in name_part:
+            raise ValueError(
+                f"Invalid github_repo {value!r}; expected 'owner/name' format."
+            )
+        return value
 
 
 class _AgentRunnerRepositoryOverrideSettings(BaseModel):
@@ -795,6 +833,33 @@ class AgentRunnerRepositorySettings(_AgentRunnerRepositoryOverrideSettings):
     id: str | None = None
     enabled: bool = True
     display_name: str | None = None
+    # Optional ``owner/name`` string passed to ``gh pr list --repo``.
+    # Mirrors the same field on ``AgentRunnerRepositoryMetadataSettings``;
+    # the local-config loader propagates the value at merge time. See
+    # the field validator on the metadata class for the format contract.
+    github_repo: str | None = None
+
+    @field_validator("github_repo")
+    @classmethod
+    def _validate_github_repo_format(cls, value: str | None) -> str | None:
+        """Mirror the metadata-level validation for registry entries."""
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                "Invalid github_repo: must be a non-empty 'owner/name' "
+                "string or null."
+            )
+        if "/" not in value or value.startswith("/") or value.endswith("/"):
+            raise ValueError(
+                f"Invalid github_repo {value!r}; expected 'owner/name' format."
+            )
+        owner_part, _, name_part = value.partition("/")
+        if not owner_part or not name_part or "/" in name_part:
+            raise ValueError(
+                f"Invalid github_repo {value!r}; expected 'owner/name' format."
+            )
+        return value
 
 
 class AgentRunnerLocalSettings(_AgentRunnerRepositoryOverrideSettings):
@@ -852,6 +917,7 @@ def load_agent_runner_local_settings(
         id=repository_metadata.id,
         enabled=repository_metadata.enabled,
         display_name=repository_metadata.display_name,
+        github_repo=repository_metadata.github_repo,
         labels=local_settings.labels,
         git=local_settings.git,
         worktree=local_settings.worktree,

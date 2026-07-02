@@ -35,6 +35,7 @@ from backend.core.shared.models.agent_runner import (
     PostPrSupervisorConfig,
     PrePrReviewConfig,
     PromptConfig,
+    RepositoryIdentity,
     RepositoryRunContext,
     RunnerConfig,
     SafetyConfig,
@@ -566,13 +567,26 @@ def _merge_deliberation_config(
 
 
 def merge_repository_config(
-    global_config: AppConfig, repo_settings: AgentRunnerRepositorySettings
+    global_config: AppConfig,
+    repo_settings: AgentRunnerRepositorySettings,
+    *,
+    repo_key: str | None = None,
+    skip_identity: bool = False,
 ) -> AppConfig:
     """Merge repository-specific overrides into a global ``AppConfig``.
 
     Args:
         global_config: The global application configuration.
         repo_settings: Repository-specific override settings.
+        repo_key: Optional explicit key for the ``repositories`` dict
+            view. Defaults to ``repo_settings.id`` (if set) or the
+            resolved path; the caller is expected to pass the registry
+            key (``settings.repositories[<key>]``) for registry paths
+            so that ``_repo_label_for`` can look up the identity via
+            ``context.repo_id``.
+        skip_identity: When ``True`` the caller's identity view is left
+            untouched. Used for local ``.iar.toml`` overrides whose
+            ``github_repo`` should not clobber the registry value.
 
     Returns:
         A new ``AppConfig`` with per-repository overrides applied.
@@ -602,6 +616,13 @@ def merge_repository_config(
         global_config.deliberation, repo_settings.deliberation
     )
     repl = _merge_optional_model(global_config.repl, repo_settings.repl)
+    repositories = (
+        global_config.repositories
+        if skip_identity
+        else _merge_repositories_dict(
+            global_config.repositories, repo_settings, key_override=repo_key
+        )
+    )
     return AppConfig(
         labels=labels,
         git=git,
@@ -616,7 +637,53 @@ def merge_repository_config(
         interactive_decision=interactive_decision,
         repl=repl,
         deliberation=deliberation,
+        repositories=repositories,
     )
+
+
+def _repository_identity_key(repo_settings: AgentRunnerRepositorySettings) -> str:
+    """Choose the dict key for a repository under ``AppConfig.repositories``.
+
+    The registry key (when present) takes precedence so that
+    ``iar issue list --repo-id foo`` and ``--all-registered`` produce the
+    same identity lookup; ad-hoc single-repo flows that only set ``path``
+    fall back to the resolved path string.
+    """
+    if repo_settings.id:
+        return repo_settings.id
+    return str(Path(repo_settings.path).resolve())
+
+
+def _merge_repositories_dict(
+    base: dict[str, RepositoryIdentity],
+    repo_settings: AgentRunnerRepositorySettings,
+    *,
+    key_override: str | None = None,
+) -> dict[str, RepositoryIdentity]:
+    """Merge a Pydantic repository entry into the ``repositories`` dict view.
+
+    The base dict is left untouched; a new dict is returned with the
+    identity for ``repo_settings`` (converted at the engines/ boundary
+    so core/ never sees the Pydantic type) keyed by ``key_override``
+    when supplied, otherwise by ``id`` when set, else by resolved path.
+
+    ``key_override`` lets the caller force the registry key
+    (e.g. ``"keda-main"``) so that ``_repo_label_for`` can look up
+    the identity by ``context.repo_id``.
+    """
+    if key_override is not None:
+        key = key_override
+    else:
+        key = _repository_identity_key(repo_settings)
+    identity = RepositoryIdentity(
+        id=repo_settings.id,
+        path=str(repo_settings.path),
+        display_name=repo_settings.display_name,
+        github_repo=repo_settings.github_repo,
+    )
+    merged = dict(base)
+    merged[key] = identity
+    return merged
 
 
 @dataclasses.dataclass(frozen=True)
@@ -757,6 +824,7 @@ def resolve_repository_targets(
                 tuple(repository_settings),
                 fallback_repo_id=repo_id,
                 prefer_settings_id=False,
+                registry_key=repo_id,
             )
         ]
 
@@ -779,6 +847,7 @@ def resolve_repository_targets(
                     tuple(repository_settings),
                     fallback_repo_id=rid,
                     prefer_settings_id=False,
+                    registry_key=rid,
                 )
             )
         return contexts
@@ -848,6 +917,7 @@ def resolve_repository_targets_with_diagnostics(
                     tuple(repository_settings),
                     fallback_repo_id=rid,
                     prefer_settings_id=False,
+                    registry_key=rid,
                 )
             )
         except Exception as exc:  # noqa: BLE001 - isolate broken registry entries.
@@ -914,14 +984,34 @@ def _build_merged_repository_context(
     *,
     fallback_repo_id: str,
     prefer_settings_id: bool,
+    registry_key: str | None = None,
 ) -> RepositoryRunContext:
     effective_config = global_config
     effective_repo_id = fallback_repo_id
     effective_display_name = fallback_repo_id
     effective_repo_path = Path(".").resolve()
 
-    for repo_settings in repository_settings:
-        effective_config = merge_repository_config(effective_config, repo_settings)
+    for index, repo_settings in enumerate(repository_settings):
+        # The first settings entry is the registry entry whose dict key
+        # is the caller-supplied ``registry_key`` (typically the
+        # ``AgentRunnerSettings.repositories`` key). For ad-hoc cwd
+        # paths the caller passes no ``registry_key``; we still want
+        # the identity view to be populated using the local entry's
+        # own ``id``/path-derived key.
+        if index == 0:
+            repo_key = registry_key
+            skip_identity = False
+        else:
+            # Subsequent entries (local .iar.toml overrides) merge
+            # sub-config fields but do not touch the identity view.
+            repo_key = None
+            skip_identity = True
+        effective_config = merge_repository_config(
+            effective_config,
+            repo_settings,
+            repo_key=repo_key,
+            skip_identity=skip_identity,
+        )
         effective_repo_path = Path(repo_settings.path).resolve()
         if prefer_settings_id and repo_settings.id:
             effective_repo_id = repo_settings.id

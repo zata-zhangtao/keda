@@ -11,6 +11,9 @@ id = "keda"
 enabled = true
 # 管理终端 / 日志中显示的友好名称
 display_name = "keda"
+# 可选：GitHub owner/name（``gh pr list --repo`` 使用）。
+# 缺省时 ``iar issue list`` 的 PR 列为空 + stderr 一次性 WARN。
+github_repo = "zata-zhangtao/keda"
 
 # Git 发布配置：推送 remote、目标基础分支 base_branch
 [agent_runner.git]
