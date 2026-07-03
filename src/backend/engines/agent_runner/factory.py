@@ -32,6 +32,7 @@ from backend.core.shared.models.agent_runner import (
     GeneratedContentTargetConfig,
     GitConfig,
     LabelConfig,
+    MemoryConfig,
     PostPrSupervisorConfig,
     PrePrReviewConfig,
     PromptConfig,
@@ -56,6 +57,7 @@ from backend.infrastructure.config.settings import (
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerLabelSettings,
+    AgentRunnerMemorySettings,
     AgentRunnerPromptSettings,
     AgentRunnerReplSettings,
     AgentRunnerRepositorySettings,
@@ -165,6 +167,23 @@ def _build_deliberation_config(
     )
 
 
+def _build_memory_config(
+    memory_settings: AgentRunnerMemorySettings,
+) -> MemoryConfig:
+    """Convert pydantic memory settings to frozen core config."""
+    return MemoryConfig(
+        enabled=memory_settings.enabled,
+        base_dir=memory_settings.base_dir,
+        skill_drafts_dir=memory_settings.skill_drafts_dir,
+        promoted_skills_dirs=tuple(memory_settings.promoted_skills_dirs),
+        top_k_skills=memory_settings.top_k_skills,
+        top_k_facts=memory_settings.top_k_facts,
+        auto_promote=memory_settings.auto_promote,
+        auto_promote_threshold=memory_settings.auto_promote_threshold,
+        auto_promote_min_success_rate=(memory_settings.auto_promote_min_success_rate),
+    )
+
+
 def _build_repl_config(repl_settings: AgentRunnerReplSettings) -> ReplConfig:
     """Convert pydantic REPL settings to frozen core config."""
     return ReplConfig(
@@ -186,6 +205,7 @@ def build_app_config_from_settings(
     git_settings = agent_runner_settings.git
     worktree_settings = agent_runner_settings.worktree
     runner_settings = agent_runner_settings.runner
+    memory_settings = agent_runner_settings.memory
     safety_settings = agent_runner_settings.safety
     validation_settings = agent_runner_settings.validation
     prompt_settings = agent_runner_settings.prompts
@@ -242,6 +262,7 @@ def build_app_config_from_settings(
             verification_commands=tuple(runner_settings.verification_commands),
             pre_commit_verification_command=runner_settings.pre_commit_verification_command,
         ),
+        memory=_build_memory_config(memory_settings),
         safety=SafetyConfig(
             auto_merge=safety_settings.auto_merge,
             forbidden_path_patterns=tuple(safety_settings.forbidden_path_patterns),
@@ -574,6 +595,7 @@ def merge_repository_config(
     git = _merge_optional_model(global_config.git, repo_settings.git)
     worktree = _merge_optional_model(global_config.worktree, repo_settings.worktree)
     runner = _merge_optional_model(global_config.runner, repo_settings.runner)
+    memory = _merge_optional_model(global_config.memory, repo_settings.memory)
     safety = _merge_optional_model(global_config.safety, repo_settings.safety)
     validation = _merge_optional_model(global_config.validation, repo_settings.validation)
     prompts = _merge_prompt_config(global_config.prompts, repo_settings.prompts)
@@ -603,6 +625,7 @@ def merge_repository_config(
         git=git,
         worktree=worktree,
         runner=runner,
+        memory=memory,
         safety=safety,
         validation=validation,
         prompts=prompts,
