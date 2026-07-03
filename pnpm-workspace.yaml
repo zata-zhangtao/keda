@@ -1,0 +1,16 @@
+packages:
+  - frontend-admin
+  - frontend-public
+
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
+
+# pnpm 10+ 默认禁止依赖的构建脚本；下列包的 postinstall 需要显式放行。
+# - esbuild: Vite 的原生二进制（frontend-admin 构建）
+# - sharp: Next.js 图像优化（frontend-public）
+# - unrs-resolver: eslint-plugin-jsdoc 的原生解析器（frontend-public lint）
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - unrs-resolver
