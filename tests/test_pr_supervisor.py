@@ -35,9 +35,7 @@ from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
 def test_parse_supervisor_action_approve() -> None:
     """Parser should extract approve action from JSON."""
-    text = (
-        '```json\n{"action": "approve_for_human_review", "summary": "looks good"}\n```'
-    )
+    text = '```json\n{"action": "approve_for_human_review", "summary": "looks good"}\n```'
     result = parse_supervisor_action(text)
     assert result.action == "approve_for_human_review"
     assert result.summary == "looks good"
@@ -148,9 +146,7 @@ def test_supervisor_action_gate_allows_approval_for_validation_sign_off_only() -
         base_sha="def456",
         mergeable=True,
         checks_state="FAILURE",
-        checks_summary=(
-            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
-        ),
+        checks_summary=("Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",),
     )
 
     gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
@@ -198,9 +194,7 @@ def test_supervisor_action_gate_rewrites_human_input_for_sign_off_only() -> None
         base_sha="def456",
         mergeable=True,
         checks_state="FAILURE",
-        checks_summary=(
-            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
-        ),
+        checks_summary=("Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",),
     )
 
     gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
@@ -249,9 +243,7 @@ def test_supervisor_action_gate_rebases_human_input_when_not_mergeable() -> None
         base_sha="def456",
         mergeable=False,
         checks_state="FAILURE",
-        checks_summary=(
-            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
-        ),
+        checks_summary=("Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",),
     )
 
     gated_result = guard_supervisor_action_for_pr_state(action_result, pr_context)
@@ -439,9 +431,7 @@ def test_build_supervisor_prompt_explains_sign_off_gate() -> None:
         head_sha="abc123",
         base_sha="def456",
         checks_state="FAILURE",
-        checks_summary=(
-            "Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",
-        ),
+        checks_summary=("Realistic Validation sign-off (status=COMPLETED, conclusion=FAILURE)",),
     )
     prompt = build_supervisor_prompt(
         issue=issue,
@@ -780,9 +770,7 @@ def test_run_post_pr_supervisor_cycle_parses_action() -> None:
                 return CommandResult(
                     command=tuple(command),
                     return_code=0,
-                    stdout=(
-                        '{"action": "approve_for_human_review", ' '"summary": "LGTM"}'
-                    )
+                    stdout=('{"action": "approve_for_human_review", ' '"summary": "LGTM"}')
                     if capture_output
                     else "",
                     stderr="",
@@ -827,9 +815,7 @@ class _CrashingAgentRunner(FakeProcessRunner):
         *,
         crash_count: int,
         crash_stdout: str = "API Error: 400 Invalid request Error",
-        success_stdout: str = (
-            '{"action": "approve_for_human_review", "summary": "LGTM"}'
-        ),
+        success_stdout: str = ('{"action": "approve_for_human_review", "summary": "LGTM"}'),
     ) -> None:
         super().__init__()
         self.crash_count = crash_count
@@ -837,9 +823,7 @@ class _CrashingAgentRunner(FakeProcessRunner):
         self.success_stdout = success_stdout
         self.agent_attempts = 0
 
-    def run(
-        self, command, *, cwd, check=True, timeout=None, capture_output=True, label=None
-    ):
+    def run(self, command, *, cwd, check=True, timeout=None, capture_output=True, label=None):
         if tuple(command)[:1] == ("codex",):
             self.calls.append(list(command))
             self.agent_attempts += 1
@@ -978,9 +962,7 @@ def test_run_post_pr_supervisor_cycle_uses_decision_from_crashed_agent() -> None
     fake_client = FakeGitHubClient()
     fake_runner = _CrashingAgentRunner(
         crash_count=10,
-        crash_stdout=(
-            '```json\n{"action": "wait_for_checks", "summary": "checks pending"}\n```'
-        ),
+        crash_stdout=('```json\n{"action": "wait_for_checks", "summary": "checks pending"}\n```'),
     )
 
     result = run_post_pr_supervisor_cycle(
@@ -1200,9 +1182,7 @@ def test_execute_rebase_conflict_exhaustion(tmp_path: Path) -> None:
         )
     commands = [tuple(c) for c in fake_runner.calls]
     assert ("git", "rebase", "--abort") in commands
-    assert (
-        commands.count(("git", "-c", "core.editor=true", "rebase", "--continue")) == 2
-    )
+    assert commands.count(("git", "-c", "core.editor=true", "rebase", "--continue")) == 2
 
 
 def test_execute_rebase_conflict_agent_no_commit_request(tmp_path: Path) -> None:
@@ -1331,8 +1311,7 @@ def test_dirty_worktree_before_supervisor_stash_fails_blocked(tmp_path: Path) ->
     blocked_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.blocked in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.blocked in c.get("add", [])
     ]
     assert len(blocked_calls) == 1
     assert config.labels.supervising in blocked_calls[0]["remove"]
@@ -1417,8 +1396,7 @@ def test_dirty_worktree_before_supervisor_auto_stash_and_approve(
     review_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.review in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.review in c.get("add", [])
     ]
     assert len(review_calls) == 1
     assert config.labels.supervising in review_calls[0]["remove"]
@@ -1513,8 +1491,7 @@ def test_dirty_worktree_after_approve_blocks_review(tmp_path: Path) -> None:
     blocked_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.blocked in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.blocked in c.get("add", [])
     ]
     assert len(blocked_calls) == 1
     assert config.labels.supervising in blocked_calls[0]["remove"]
@@ -1656,9 +1633,7 @@ def test_execute_rebase_allows_detached_head_when_active_rebase_target_matches(
             ):
                 self.calls.append(list(command))
                 self.input_texts.append(input_text)
-                head_name_path = (
-                    self._worktree_path / ".git" / "rebase-merge" / "head-name"
-                )
+                head_name_path = self._worktree_path / ".git" / "rebase-merge" / "head-name"
                 return CommandResult(command_tuple, 0, str(head_name_path) + "\n", "")
 
             return super().run(
@@ -1816,9 +1791,7 @@ def test_execute_rebase_rejects_mismatched_active_rebase_target(
             ):
                 self.calls.append(list(command))
                 self.input_texts.append(input_text)
-                head_name_path = (
-                    self._worktree_path / ".git" / "rebase-merge" / "head-name"
-                )
+                head_name_path = self._worktree_path / ".git" / "rebase-merge" / "head-name"
                 return CommandResult(command_tuple, 0, str(head_name_path) + "\n", "")
 
             return super().run(
@@ -1951,9 +1924,7 @@ def test_execute_rebase_rejects_unknown_active_rebase_target(
             ):
                 self.calls.append(list(command))
                 self.input_texts.append(input_text)
-                nonexistent_path = (
-                    self._worktree_path / ".git" / "rebase-merge" / "head-name"
-                )
+                nonexistent_path = self._worktree_path / ".git" / "rebase-merge" / "head-name"
                 return CommandResult(command_tuple, 0, str(nonexistent_path) + "\n", "")
 
             if command_tuple == (
@@ -1964,9 +1935,7 @@ def test_execute_rebase_rejects_unknown_active_rebase_target(
             ):
                 self.calls.append(list(command))
                 self.input_texts.append(input_text)
-                nonexistent_path = (
-                    self._worktree_path / ".git" / "rebase-apply" / "head-name"
-                )
+                nonexistent_path = self._worktree_path / ".git" / "rebase-apply" / "head-name"
                 return CommandResult(command_tuple, 0, str(nonexistent_path) + "\n", "")
 
             return super().run(
@@ -2349,12 +2318,7 @@ def test_execute_rebase_real_git_conflict_allows_detached_head(
             # while a rebase is in progress, because Git aborts the active
             # rebase on some versions/platforms when the upstream is invalid.
             # Return a synthetic conflict so the conflict recovery loop runs.
-            if (
-                len(cmd) >= 3
-                and cmd[0] == "git"
-                and cmd[1] == "rebase"
-                and cmd[2] == "origin/main"
-            ):
+            if len(cmd) >= 3 and cmd[0] == "git" and cmd[1] == "rebase" and cmd[2] == "origin/main":
                 return CommandResult(
                     tuple(cmd),
                     1,

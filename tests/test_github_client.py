@@ -510,9 +510,7 @@ def test_edit_issue_body_writes_via_file(tmp_path: Path) -> None:
             if "--body-file" in command:
                 body_file_path = Path(command[command.index("--body-file") + 1])
                 self.captured_body = body_file_path.read_text(encoding="utf-8")
-            return CommandResult(
-                command=tuple(command), return_code=0, stdout="", stderr=""
-            )
+            return CommandResult(command=tuple(command), return_code=0, stdout="", stderr="")
 
     runner = CapturingRunner()
     github_client = GitHubCliClient(tmp_path, runner)
@@ -568,9 +566,7 @@ def test_create_issue_retries_on_transient_tls_timeout(tmp_path: Path) -> None:
     github_client = GitHubCliClient(tmp_path, runner)
 
     with patch("backend.infrastructure.github_client.time.sleep") as mock_sleep:
-        issue_url = github_client.create_issue(
-            title="title", body="body", labels=["type/feature"]
-        )
+        issue_url = github_client.create_issue(title="title", body="body", labels=["type/feature"])
 
     assert issue_url == "https://github.com/org/repo/issues/42"
     assert runner.attempts == 2

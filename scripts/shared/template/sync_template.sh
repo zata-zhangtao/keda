@@ -176,11 +176,11 @@ PYEOF
         done <<< "$config_output"
 
         if $configured_skip; then
-            PROJECT_SKIP_PATHS=("${loaded_skip_paths[@]}")
+            PROJECT_SKIP_PATHS=("${loaded_skip_paths[@]:-}")
             PROJECT_SKIP_PATH_COUNT=$loaded_skip_path_count
         fi
         if $configured_include; then
-            PROJECT_INCLUDE_PATHS=("${loaded_include_paths[@]}")
+            PROJECT_INCLUDE_PATHS=("${loaded_include_paths[@]:-}")
             PROJECT_INCLUDE_PATH_COUNT=$loaded_include_path_count
         fi
     fi
@@ -269,6 +269,13 @@ _is_always_skipped() {
         .git/*|.venv/*|.uv-cache/*|__pycache__/*|logs/*|site/*) return 0 ;;
         .pytest_cache/*|.ruff_cache/*|prompt/*|skills/*) return 0 ;;
         .claude/*) return 0 ;;
+        # Playwright E2E runtime artifacts and installed dependencies.
+        # Infrastructure files (configs, package.json, README) are upstream-owned;
+        # project-specific specs are skipped via project_skip_paths.
+        tests/playwright-e2e/.auth/*) return 0 ;;
+        tests/playwright-e2e/node_modules/*) return 0 ;;
+        tests/playwright-e2e/playwright-report/*) return 0 ;;
+        tests/playwright-e2e/test-results/*) return 0 ;;
     esac
     case "$p" in
         *.pyc|*.egg-info|.env|.env.*) return 0 ;;
@@ -318,6 +325,25 @@ _is_upstream_owned() {
         # hooks must live directly under hooks/ and must not be placed in
         # hooks/shared/.
         hooks/shared/*) return 0 ;;
+        # Pre-commit configuration is maintained by the template. Hook scripts
+        # auto-detect project conventions (e.g. alembic filename separator) so
+        # the config can stay generic and syncable.
+        .pre-commit-config.yaml) return 0 ;;
+        # Shared Playwright E2E infrastructure. Project-specific specs live in
+        # tests/playwright-e2e/tests/ and are skipped via project_skip_paths.
+        tests/playwright-e2e/fixtures/*) return 0 ;;
+        tests/playwright-e2e/page-objects/*) return 0 ;;
+        tests/playwright-e2e/scripts/*) return 0 ;;
+        tests/playwright-e2e/support/*) return 0 ;;
+        tests/playwright-e2e/*.config.ts) return 0 ;;
+        tests/playwright-e2e/package.json) return 0 ;;
+        tests/playwright-e2e/pnpm-lock.yaml) return 0 ;;
+        tests/playwright-e2e/tsconfig.json) return 0 ;;
+        tests/playwright-e2e/.env.e2e.example) return 0 ;;
+        tests/playwright-e2e/.eslintrc.cjs) return 0 ;;
+        tests/playwright-e2e/.gitignore) return 0 ;;
+        tests/playwright-e2e/README.md) return 0 ;;
+        tests/playwright-e2e/demo/*) return 0 ;;
     esac
     return 1
 }
@@ -756,8 +782,10 @@ if ! $LOCAL_SKILLS_MODE; then
                 continue
             fi
         else
-            # --all mode: skip only if explicitly in project_skip_paths
-            if _is_project_skipped_by_default "$rel_path"; then
+            # --all mode: skip project-owned paths in project_skip_paths, but
+            # always surface upstream-owned files (e.g. E2E infrastructure under
+            # tests/playwright-e2e/) so they can be kept in lockstep.
+            if _is_project_skipped_by_default "$rel_path" && ! _is_upstream_owned "$rel_path"; then
                 continue
             fi
         fi

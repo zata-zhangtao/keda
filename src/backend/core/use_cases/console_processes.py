@@ -79,9 +79,7 @@ def build_runner_argv(
         return (*command_prefix, "review", *selector)
     if kind is RunnerProcessKind.BLOCKED_CONTINUE:
         if issue_number is None or issue_number <= 0:
-            raise ConsoleProcessError(
-                "blocked_continue requires a positive issue_number."
-            )
+            raise ConsoleProcessError("blocked_continue requires a positive issue_number.")
         return (
             *command_prefix,
             "blocked-continue",
@@ -98,9 +96,7 @@ def _resolve_enabled_context(
     for context in contexts:
         if context.repo_id == repo_id:
             return context
-    raise ConsoleProcessError(
-        f"Repository '{repo_id}' is not an enabled registry target."
-    )
+    raise ConsoleProcessError(f"Repository '{repo_id}' is not an enabled registry target.")
 
 
 def start_runner_process(
@@ -133,11 +129,7 @@ def start_runner_process(
     _resolve_enabled_context(repo_id, contexts)
     if kind in PERSISTENT_PROCESS_KINDS:
         for record in supervisor.list_processes():
-            if (
-                record.repo_id == repo_id
-                and record.kind == kind
-                and record.status == "running"
-            ):
+            if record.repo_id == repo_id and record.kind == kind and record.status == "running":
                 raise ConsoleProcessError(
                     f"A running {kind.value} process already exists for "
                     f"repository '{repo_id}' (process {record.process_id})."

@@ -73,9 +73,7 @@ def is_pid_alive(pid: int) -> bool:
     return True
 
 
-def _latest_claim(
-    issue_number: int, github_client: IGitHubClient
-) -> tuple[str, int] | None:
+def _latest_claim(issue_number: int, github_client: IGitHubClient) -> tuple[str, int] | None:
     """Return the most recent ``(host, pid)`` claim marker for an Issue."""
     for comment_body in reversed(github_client.list_issue_comments(issue_number)):
         parsed = parse_claim_marker(comment_body)
@@ -146,9 +144,7 @@ def _reclaim_one(
     issue_before = github_client.get_issue(issue_number)
     if config.labels.running not in issue_before.labels:
         return False
-    transition_issue_workflow_state(
-        github_client, issue_number, config, config.labels.ready
-    )
+    transition_issue_workflow_state(github_client, issue_number, config, config.labels.ready)
     issue_after = github_client.get_issue(issue_number)
     if config.labels.ready not in issue_after.labels:
         return False

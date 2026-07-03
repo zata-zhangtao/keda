@@ -143,9 +143,7 @@ def build_review_packet(
         cwd=worktree_path,
         check=False,
     )
-    diff_text = (
-        diff_result.stdout if diff_result.return_code == 0 else "(diff unavailable)"
-    )
+    diff_text = diff_result.stdout if diff_result.return_code == 0 else "(diff unavailable)"
 
     status_result = process_runner.run(
         ["git", "status", "--short"],
@@ -515,9 +513,7 @@ def build_pre_pr_review_result_comment(
         sections.append("")
         sections.append("### Findings")
         sections.append("")
-        sections.append(
-            "| Severity | Category | File | Line | Title | Recommendation |"
-        )
+        sections.append("| Severity | Category | File | Line | Title | Recommendation |")
         sections.append("|---|---|---|---|---|---|")
         for finding in findings:
             sections.append(
@@ -551,9 +547,7 @@ def _build_commit_request_reminder_prompt(
     """
     finding_lines: list[str] = []
     for finding in findings:
-        location = (
-            f"{finding.file}:{finding.line}" if finding.file else "unknown location"
-        )
+        location = f"{finding.file}:{finding.line}" if finding.file else "unknown location"
         finding_lines.append(
             f"- [{location}] {finding.severity}: {finding.title}\n"
             f"  {finding.description}\n"
@@ -679,9 +673,7 @@ def run_pre_pr_review(
                     timeout_seconds=timeout_seconds,
                     issue=issue,
                     transient_retry_attempts=(config.runner.transient_retry_attempts),
-                    transient_retry_delay_seconds=(
-                        config.runner.transient_retry_delay_seconds
-                    ),
+                    transient_retry_delay_seconds=(config.runner.transient_retry_delay_seconds),
                 )
             except (subprocess.CalledProcessError, OSError) as exc:
                 # Transient blips are already retried inside the resilient
@@ -689,9 +681,7 @@ def run_pre_pr_review(
                 # the same reviewer agent, so escalate to let the cross-agent
                 # fallback switch agents instead of failing the Issue.
                 if is_provider_capacity_failure(exc):
-                    raise ProviderCapacityError(
-                        format_agent_execution_failure(exc), []
-                    ) from exc
+                    raise ProviderCapacityError(format_agent_execution_failure(exc), []) from exc
                 raise
             reviewer_text = extract_agent_response_text(review_result)
             stdout_decision = parse_reviewer_decision(reviewer_text)
@@ -699,9 +689,7 @@ def run_pre_pr_review(
             # Check if reviewer requested changes via commit request
             request_path = worktree_path / _COMMIT_REQUEST_RELATIVE_PATH
             commit_request_decision = (
-                _read_commit_request_decision(request_path)
-                if request_path.is_file()
-                else None
+                _read_commit_request_decision(request_path) if request_path.is_file() else None
             )
             reviewer_decision = _merge_reviewer_decisions(
                 stdout_decision,
@@ -747,8 +735,7 @@ def run_pre_pr_review(
 
         elapsed_seconds = time.monotonic() - attempt_started_at
         _logger.info(
-            "Pre-PR review cycle %d/%d for Issue #%d: reviewer exited "
-            "with code %d after %.1fs.",
+            "Pre-PR review cycle %d/%d for Issue #%d: reviewer exited " "with code %d after %.1fs.",
             cycle,
             max_attempts,
             issue.number,
@@ -791,13 +778,9 @@ def run_pre_pr_review(
                 # changes_requested 后在最后一轮必然硬失败。
                 if reviewer_decision.verdict == "approved":
                     cycle_verdict = "approved"
-                    action_summary = (
-                        "reviewer approved and runner committed follow-up patch"
-                    )
+                    action_summary = "reviewer approved and runner committed follow-up patch"
                 else:
-                    action_summary = (
-                        "reviewer patched and runner committed follow-up changes"
-                    )
+                    action_summary = "reviewer patched and runner committed follow-up changes"
                 last_failure_summary = action_summary
                 last_cycle_applied_patch = True
                 _logger.info(
@@ -819,9 +802,7 @@ def run_pre_pr_review(
                 if reviewer_decision.verdict == "approved":
                     action_summary = "reviewer approved with an empty commit request"
                 else:
-                    action_summary = (
-                        "reviewer requested changes but produced no committable diff"
-                    )
+                    action_summary = "reviewer requested changes but produced no committable diff"
                 last_failure_summary = action_summary
                 _logger.info(
                     "Pre-PR review cycle %d/%d for Issue #%d: empty commit "
@@ -835,8 +816,7 @@ def run_pre_pr_review(
                 action_summary = f"reviewer patch failed to commit: {exc}"
                 last_failure_summary = action_summary
                 _logger.exception(
-                    "Pre-PR review cycle %d/%d for Issue #%d: reviewer "
-                    "commit request failed.",
+                    "Pre-PR review cycle %d/%d for Issue #%d: reviewer " "commit request failed.",
                     cycle,
                     max_attempts,
                     issue.number,
@@ -864,13 +844,9 @@ def run_pre_pr_review(
                 action_summary = "reviewer approved without changes"
             elif reviewer_decision.parseable:
                 if reviewer_decision.has_findings:
-                    action_summary = (
-                        "reviewer reported findings but produced no commit request"
-                    )
+                    action_summary = "reviewer reported findings but produced no commit request"
                 else:
-                    action_summary = (
-                        "reviewer requested changes without a commit request"
-                    )
+                    action_summary = "reviewer requested changes without a commit request"
             else:
                 action_summary = "reviewer returned no parseable verdict"
             last_failure_summary = action_summary
@@ -948,9 +924,7 @@ def run_pre_pr_review(
                 reviewer=reviewer_agent,
                 head_before=head_sha_before,
                 head_after=current_head,
-                verification_passed=all(
-                    r.return_code == 0 for r in current_verification
-                ),
+                verification_passed=all(r.return_code == 0 for r in current_verification),
                 findings_high=final_decision.findings_high,
                 findings_medium=final_decision.findings_medium,
                 findings_low=final_decision.findings_low,
@@ -974,6 +948,5 @@ def run_pre_pr_review(
         last_failure_summary,
     )
     raise RuntimeError(
-        "Pre-PR review did not approve after "
-        f"{max_attempts} attempt(s): {last_failure_summary}"
+        "Pre-PR review did not approve after " f"{max_attempts} attempt(s): {last_failure_summary}"
     )

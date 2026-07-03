@@ -64,9 +64,7 @@ _RETRYABLE_GH_ERROR_PATTERNS = (
 )
 
 
-def sanitize_github_body(
-    body: str, *, max_length: int = _MAX_GITHUB_BODY_LENGTH
-) -> str:
+def sanitize_github_body(body: str, *, max_length: int = _MAX_GITHUB_BODY_LENGTH) -> str:
     """Strip request-breaking control characters and bound the body length.
 
     GitHub returns a generic ``400 Bad Request`` page for POST bodies that
@@ -294,9 +292,7 @@ def _parse_pr_summary(raw_pr: dict[str, object]) -> PullRequestSummary:
     is_draft = bool(raw_pr.get("isDraft", False))
     return PullRequestSummary(
         number=int(raw_pr.get("number", 0)),
-        state=_normalise_pr_state(
-            raw_pr.get("state"), is_draft=is_draft, merged_at=merged_at
-        ),
+        state=_normalise_pr_state(raw_pr.get("state"), is_draft=is_draft, merged_at=merged_at),
         url=str(raw_pr.get("url", "")),
         is_draft=is_draft,
         merged=bool(merged_at),
@@ -335,9 +331,7 @@ class GitHubCliClient:
     ``backend.core.shared.interfaces.agent_runner`` via duck typing.
     """
 
-    def __init__(
-        self, repo_path: Path, process_runner: SubprocessRunner | None = None
-    ) -> None:
+    def __init__(self, repo_path: Path, process_runner: SubprocessRunner | None = None) -> None:
         """Create the client.
 
         Args:
@@ -350,9 +344,7 @@ class GitHubCliClient:
     def _is_retryable_gh_error(self, exc: subprocess.CalledProcessError) -> bool:
         """Return True when a failed ``gh`` call looks like a transient network error."""
         combined_output = (exc.stdout or "") + "\n" + (exc.stderr or "")
-        return any(
-            pattern.search(combined_output) for pattern in _RETRYABLE_GH_ERROR_PATTERNS
-        )
+        return any(pattern.search(combined_output) for pattern in _RETRYABLE_GH_ERROR_PATTERNS)
 
     def _run_with_retry(
         self,
@@ -384,15 +376,10 @@ class GitHubCliClient:
                 )
             except subprocess.CalledProcessError as exc:
                 last_exc = exc
-                if (
-                    not check
-                    or attempt >= _MAX_GH_RETRIES
-                    or not self._is_retryable_gh_error(exc)
-                ):
+                if not check or attempt >= _MAX_GH_RETRIES or not self._is_retryable_gh_error(exc):
                     raise
                 _logger.warning(
-                    "GitHub CLI transient error (attempt %d/%d), "
-                    "retrying in %.1fs: %s",
+                    "GitHub CLI transient error (attempt %d/%d), " "retrying in %.1fs: %s",
                     attempt,
                     _MAX_GH_RETRIES,
                     _GH_RETRY_DELAY_SECONDS,
@@ -523,9 +510,7 @@ class GitHubCliClient:
             "validation/pending": labels.validation_pending,
             "validation/passed": labels.validation_passed,
         }
-        configured_names.update(
-            {f"agent/{k}": v for k, v in labels.agent_labels.items()}
-        )
+        configured_names.update({f"agent/{k}": v for k, v in labels.agent_labels.items()})
         for label_name, color, description in label_specs:
             effective_name = configured_names.get(label_name, label_name)
             self._run_with_retry(
@@ -639,9 +624,7 @@ class GitHubCliClient:
                 cwd=self.repo_path,
             )
 
-    def list_rework_prd_issues(
-        self, rework_prd_label: str, limit: int
-    ) -> list[IssueSummary]:
+    def list_rework_prd_issues(self, rework_prd_label: str, limit: int) -> list[IssueSummary]:
         """List open Issues with the rework-prd label."""
         result = self._run_with_retry(
             [
@@ -717,9 +700,7 @@ class GitHubCliClient:
             result = self._run_with_retry(command, cwd=self.repo_path)
         return result.stdout.strip().splitlines()[-1]
 
-    def create_draft_pr(
-        self, *, title: str, body: str, base_branch: str, cwd: Path
-    ) -> str:
+    def create_draft_pr(self, *, title: str, body: str, base_branch: str, cwd: Path) -> str:
         """Create a draft pull request from the current branch."""
         with tempfile.TemporaryDirectory(prefix="iar-pr-") as temp_dir:
             body_path = self._write_body_file(temp_dir, "pr.md", body)
@@ -740,9 +721,7 @@ class GitHubCliClient:
             )
         return result.stdout.strip().splitlines()[-1]
 
-    def list_review_candidate_issues(
-        self, labels: Sequence[str], limit: int
-    ) -> list[IssueSummary]:
+    def list_review_candidate_issues(self, labels: Sequence[str], limit: int) -> list[IssueSummary]:
         """List open Issues with any of the given labels."""
         seen_numbers: set[int] = set()
         candidates: list[IssueSummary] = []
@@ -909,9 +888,7 @@ class GitHubCliClient:
             check=False,
         )
         if result.return_code != 0:
-            raise RuntimeError(
-                f"Unable to determine repository owner/name: {result.stderr}"
-            )
+            raise RuntimeError(f"Unable to determine repository owner/name: {result.stderr}")
         raw_data = json.loads(result.stdout or "{}")
         owner_repo = raw_data.get("nameWithOwner")
         if not owner_repo:

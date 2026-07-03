@@ -117,13 +117,7 @@ def per_issue_log_path(log_base: Path, repo_id: str, issue_number: int) -> Path:
     Layout: ``<log_base>/agent-runner/issues/<repo_id>/issue-<n>-<ts>.log``.
     """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return (
-        log_base
-        / "agent-runner"
-        / "issues"
-        / repo_id
-        / f"issue-{issue_number}-{timestamp}.log"
-    )
+    return log_base / "agent-runner" / "issues" / repo_id / f"issue-{issue_number}-{timestamp}.log"
 
 
 @contextmanager
@@ -157,9 +151,7 @@ def issue_output_routing(
         output_view.append(issue_number, chunk)
 
     handler = logging.StreamHandler(stream=writer)
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     handler.addFilter(_ThreadLogFilter(threading.get_ident()))
     backend_logger = logging.getLogger(_BACKEND_LOGGER_NAME)
     backend_logger.addHandler(handler)

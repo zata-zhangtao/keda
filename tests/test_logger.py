@@ -54,9 +54,7 @@ def test_logger_file_handler_uses_daily_filename(tmp_path: Path) -> None:
             root.removeHandler(handler)
         try:
             Logger().get_logger()
-            file_handlers = [
-                h for h in root.handlers if isinstance(h, logging.FileHandler)
-            ]
+            file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
             assert file_handlers, "FileHandler is not configured."
             today = datetime.now().strftime("%Y-%m-%d")
             assert f"app-{today}.log" in file_handlers[0].baseFilename

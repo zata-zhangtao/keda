@@ -191,9 +191,7 @@ def _build_block_text(
         body_lines.append(comment)
         body_lines.extend(kept)
     block_text = (
-        f"{GITIGNORE_BLOCK_HEADER}\n"
-        + "\n".join(body_lines)
-        + f"\n{GITIGNORE_BLOCK_FOOTER}\n"
+        f"{GITIGNORE_BLOCK_HEADER}\n" + "\n".join(body_lines) + f"\n{GITIGNORE_BLOCK_FOOTER}\n"
     )
     return block_text, tuple(added), tuple(skipped)
 
@@ -272,8 +270,7 @@ def ensure_gitignore_entries(
         existing_text
         and existing_block is None
         and (
-            GITIGNORE_BLOCK_HEADER in existing_text
-            and GITIGNORE_BLOCK_FOOTER not in existing_text
+            GITIGNORE_BLOCK_HEADER in existing_text and GITIGNORE_BLOCK_FOOTER not in existing_text
         )
     ):
         # 块被破坏,不动文件,让用户自己处理。
@@ -289,9 +286,7 @@ def ensure_gitignore_entries(
         )
 
     external_patterns = _patterns_outside_block(existing_text)
-    new_block_text, entries_added, entries_skipped_external = _build_block_text(
-        external_patterns
-    )
+    new_block_text, entries_added, entries_skipped_external = _build_block_text(external_patterns)
     existing_block_patterns = _block_patterns(existing_block)
     new_block_patterns = set(entries_added)
 

@@ -66,9 +66,7 @@ def _ensure_worktree_branch(
                 f"'{rebase_target}', but Issue #{issue.number} expects "
                 f"'{expected_branch}'. Manual reconciliation is required."
             )
-        _recover_from_active_rebase(
-            worktree_path, rebase_target, issue, config, process_runner
-        )
+        _recover_from_active_rebase(worktree_path, rebase_target, issue, config, process_runner)
         return
     if has_rebase_metadata(worktree_path, process_runner):
         raise RuntimeError(
@@ -112,11 +110,7 @@ def _recover_from_active_rebase(
             cwd=worktree_path,
             check=False,
         )
-        return [
-            line.strip()
-            for line in diff_names_result.stdout.splitlines()
-            if line.strip()
-        ]
+        return [line.strip() for line in diff_names_result.stdout.splitlines() if line.strip()]
 
     if not _conflicted_files() and _try_continue_rebase():
         return
@@ -145,9 +139,7 @@ def _recover_from_active_rebase(
 
         agent_name = choose_agent(issue, config, "auto")
         try:
-            run_agent_with_prompt(
-                agent_name, prompt, worktree_path, process_runner, issue=issue
-            )
+            run_agent_with_prompt(agent_name, prompt, worktree_path, process_runner, issue=issue)
         except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
             _logger.warning(
                 "Agent conflict resolution attempt %d/%d failed for Issue #%d: %s",
@@ -207,9 +199,7 @@ def _attach_branch_to_detached_head(
         process_runner.run(["git", "checkout", expected_branch], cwd=worktree_path)
         return
 
-    branch_is_ancestor = _is_ancestor(
-        worktree_path, branch_sha, detached_sha, process_runner
-    )
+    branch_is_ancestor = _is_ancestor(worktree_path, branch_sha, detached_sha, process_runner)
     if branch_is_ancestor:
         process_runner.run(
             ["git", "checkout", "-B", expected_branch, detached_sha],
@@ -305,9 +295,7 @@ def _reconcile_worktree_with_remote_branch(
     if local_sha == remote_sha:
         return
 
-    local_is_ancestor = _is_ancestor(
-        worktree_path, local_sha, remote_ref, process_runner
-    )
+    local_is_ancestor = _is_ancestor(worktree_path, local_sha, remote_ref, process_runner)
     remote_is_ancestor = _is_ancestor(worktree_path, remote_sha, "HEAD", process_runner)
 
     if local_is_ancestor:

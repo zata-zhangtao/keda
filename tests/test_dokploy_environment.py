@@ -101,9 +101,7 @@ def _parse_all_service_env_keys(compose_file_path: Path) -> dict[str, set[str]]:
     is_environment_block = False
 
     for raw_compose_line in compose_file_path.read_text(encoding="utf-8").splitlines():
-        if raw_compose_line.startswith("  ") and not raw_compose_line.startswith(
-            "    "
-        ):
+        if raw_compose_line.startswith("  ") and not raw_compose_line.startswith("    "):
             current_service = raw_compose_line.strip().removesuffix(":")
             is_environment_block = False
             continue
@@ -136,14 +134,10 @@ def _parse_all_service_env_keys(compose_file_path: Path) -> dict[str, set[str]]:
 def test_active_dokploy_template_keys_are_used_in_compose() -> None:
     """Every active .env.dokploy variable must appear in at least one compose service."""
     template_active: set[str] = _parse_active_env_keys(DOKPLOY_ENV_TEMPLATE_PATH)
-    service_envs: dict[str, set[str]] = _parse_all_service_env_keys(
-        DOKPLOY_COMPOSE_PATH
-    )
+    service_envs: dict[str, set[str]] = _parse_all_service_env_keys(DOKPLOY_COMPOSE_PATH)
     all_compose_env_keys: set[str] = set().union(*service_envs.values())
 
-    unused_keys: list[str] = sorted(
-        template_active - all_compose_env_keys - SPECIAL_LABEL_KEYS
-    )
+    unused_keys: list[str] = sorted(template_active - all_compose_env_keys - SPECIAL_LABEL_KEYS)
 
     assert not unused_keys, (
         "Active .env.dokploy variables must be used by at least one compose service: "
@@ -154,17 +148,12 @@ def test_active_dokploy_template_keys_are_used_in_compose() -> None:
 def test_compose_service_env_keys_are_documented_in_dokploy_template() -> None:
     """Every compose service env key must be active in .env.dokploy (or hardcoded)."""
     template_active: set[str] = _parse_active_env_keys(DOKPLOY_ENV_TEMPLATE_PATH)
-    service_envs: dict[str, set[str]] = _parse_all_service_env_keys(
-        DOKPLOY_COMPOSE_PATH
-    )
+    service_envs: dict[str, set[str]] = _parse_all_service_env_keys(DOKPLOY_COMPOSE_PATH)
 
     for service_name, env_keys in service_envs.items():
-        undocumented: list[str] = sorted(
-            env_keys - template_active - HARDCODED_ENV_KEYS
-        )
+        undocumented: list[str] = sorted(env_keys - template_active - HARDCODED_ENV_KEYS)
         assert not undocumented, (
-            f"Service '{service_name}' env keys must be active in .env.dokploy: "
-            f"{undocumented}"
+            f"Service '{service_name}' env keys must be active in .env.dokploy: " f"{undocumented}"
         )
 
 
@@ -187,9 +176,7 @@ def test_local_compose_service_env_keys_are_documented_in_example() -> None:
     service_envs: dict[str, set[str]] = _parse_all_service_env_keys(LOCAL_COMPOSE_PATH)
 
     for service_name, env_keys in service_envs.items():
-        undocumented: list[str] = sorted(
-            env_keys - template_active - HARDCODED_ENV_KEYS
-        )
+        undocumented: list[str] = sorted(env_keys - template_active - HARDCODED_ENV_KEYS)
         assert not undocumented, (
             f"Local service '{service_name}' env keys must be active in .env.example: "
             f"{undocumented}"

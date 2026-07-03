@@ -93,9 +93,7 @@ class RichRunnerLiveView(IRunnerLiveView):
 
     def _build_renderable(self) -> object:
         """Build the width-adaptive renderable for all Issue panels."""
-        return render_panel_grid(
-            self._console, list(self._panels.values()), self._make_panel
-        )
+        return render_panel_grid(self._console, list(self._panels.values()), self._make_panel)
 
     def append(self, issue_number: int, chunk: str) -> None:
         """Append output to the corresponding Issue panel."""

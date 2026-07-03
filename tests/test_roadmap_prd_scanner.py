@@ -124,9 +124,7 @@ def test_parses_delivery_dependencies(tmp_path: Path) -> None:
         "# PRD: Upstream\n\n## Acceptance Checklist\n- [ ] a\n",
     )
     prds = scan_roadmap_prds(tmp_path)
-    prd = next(
-        p for p in prds if p.prd_path == "tasks/pending/P1-FEAT-20260101-deps.md"
-    )
+    prd = next(p for p in prds if p.prd_path == "tasks/pending/P1-FEAT-20260101-deps.md")
     kinds = {dep.kind for dep in prd.delivery_dependencies}
     assert RoadmapDependencyKind.ISSUE in kinds
     assert RoadmapDependencyKind.PRD in kinds
@@ -147,8 +145,7 @@ def test_unresolved_prd_dependency_is_marked(tmp_path: Path) -> None:
     prds = scan_roadmap_prds(tmp_path)
     assert len(prds) == 1
     assert all(
-        dep.kind is RoadmapDependencyKind.UNRESOLVED
-        for dep in prds[0].delivery_dependencies
+        dep.kind is RoadmapDependencyKind.UNRESOLVED for dep in prds[0].delivery_dependencies
     )
 
 

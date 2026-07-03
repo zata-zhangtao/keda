@@ -22,9 +22,7 @@ from backend.infrastructure.config.settings import config
 
 def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Derive preview deployment environment variables."
-    )
+    parser = argparse.ArgumentParser(description="Derive preview deployment environment variables.")
     parser.add_argument(
         "--pr",
         type=int,

@@ -40,9 +40,7 @@ IDEAS_FILE_NAME = "ideas.md"
 SUMMARY_FILE_NAME = "summary.md"
 DRAFTS_DIR_NAME = "prd-drafts"
 
-_IDEA_HEADER_RE = re.compile(
-    r"^##\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})(?:\s+·\s+(?P<tag>.+?))?\s*$"
-)
+_IDEA_HEADER_RE = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})(?:\s+·\s+(?P<tag>.+?))?\s*$")
 
 _SUMMARY_HEADER = (
     "# Idea Inbox — AI 总结\n\n"
@@ -135,9 +133,7 @@ def _format_idea_block(
         IdeaInboxSource.FEISHU: "feishu",
         IdeaInboxSource.MANUAL: "manual",
     }[source]
-    header = (
-        f"## {occurred_at} · {source_label}" f" · {author or 'anonymous'} ({entry_id})"
-    )
+    header = f"## {occurred_at} · {source_label}" f" · {author or 'anonymous'} ({entry_id})"
     quoted_lines = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
     # 块前留一个空行，确保相邻 ## 段落之间有视觉间距。
     return f"\n{header}\n\n{quoted_lines}\n"
@@ -284,9 +280,7 @@ def append_idea(
     else:
         new_content = body_block
     _atomic_write_text(ideas_path, new_content)
-    _logger.info(
-        "Appended idea %s for repo %s (source=%s)", entry_id, repo_path.name, source
-    )
+    _logger.info("Appended idea %s for repo %s (source=%s)", entry_id, repo_path.name, source)
     return AppendIdeaResult(
         entry=IdeaEntry(
             entry_id=entry_id,
@@ -348,9 +342,7 @@ def refresh_idea_summary(
     ideas_path = _abs_ideas_path(repo_path)
     ideas_text = _read_text(ideas_path)
     entries = _parse_idea_entries(ideas_text)
-    final_text = _format_summary_text(
-        entries=entries, source_label=source_label, body=summary_text
-    )
+    final_text = _format_summary_text(entries=entries, source_label=source_label, body=summary_text)
     _atomic_write_text(summary_path, final_text)
     return RefreshSummaryResult(
         summary_path=str(summary_path.relative_to(repo_path)),
@@ -394,9 +386,7 @@ def _parse_draft_header(text: str) -> PrdDraftMetadata | None:
     match = _DRAFT_HEADER_RE.search(text)
     if not match:
         return None
-    idea_refs = tuple(
-        ref.strip() for ref in match.group("idea_refs").split(",") if ref.strip()
-    )
+    idea_refs = tuple(ref.strip() for ref in match.group("idea_refs").split(",") if ref.strip())
     return PrdDraftMetadata(
         draft_id=match.group("draft_id").strip(),
         status=PrdDraftStatus(match.group("status").strip()),
@@ -406,9 +396,7 @@ def _parse_draft_header(text: str) -> PrdDraftMetadata | None:
         prd_type=match.group("prd_type").strip(),
         created_at=match.group("created_at").strip(),
         approved_pending_path=(
-            match.group("approved_path").strip()
-            if match.group("approved_path")
-            else None
+            match.group("approved_path").strip() if match.group("approved_path") else None
         ),
     )
 

@@ -80,9 +80,7 @@ class ClashProxyManager:
             >>> print(f"Found {len(proxies)} proxies")
         """
         try:
-            resp = requests.get(
-                f"{self.api_url}/proxies", headers=self.headers, timeout=10
-            )
+            resp = requests.get(f"{self.api_url}/proxies", headers=self.headers, timeout=10)
             resp.raise_for_status()
 
             proxies_data = resp.json()["proxies"]
@@ -96,9 +94,7 @@ class ClashProxyManager:
                         if safe_name:
                             logger.info(f"  - {safe_name}")
                         else:
-                            logger.info(
-                                f"  - [包含特殊字符的组名] ({len(group_name)} chars)"
-                            )
+                            logger.info(f"  - [包含特殊字符的组名] ({len(group_name)} chars)")
 
             if self.group_name not in proxies_data:
                 logger.warning(
@@ -117,9 +113,7 @@ class ClashProxyManager:
                         f"Found {len(self.proxies_list)} proxies in group '{self.group_name}'"
                     )
                 except UnicodeEncodeError:
-                    safe_name = self.group_name.encode("ascii", "ignore").decode(
-                        "ascii"
-                    )
+                    safe_name = self.group_name.encode("ascii", "ignore").decode("ascii")
                     logger.info(
                         f"Found {len(self.proxies_list)} proxies in group '{safe_name or 'proxy-group'}'"
                     )
@@ -132,9 +126,7 @@ class ClashProxyManager:
             logger.error(f"Failed to get proxies: {e}")
             return []
 
-    def switch_proxy(
-        self, proxy_name: Optional[str] = None, max_attempts: int = 5
-    ) -> bool:
+    def switch_proxy(self, proxy_name: Optional[str] = None, max_attempts: int = 5) -> bool:
         """切换到指定的代理节点，如果不指定则随机选择
 
         如果切换后的代理不可用，会继续尝试其他代理。
@@ -169,17 +161,13 @@ class ClashProxyManager:
             try:
                 # 选择代理
                 if proxy_name is None or attempts > 0:
-                    available_proxies = [
-                        p for p in self.proxies_list if p not in tried_proxies
-                    ]
+                    available_proxies = [p for p in self.proxies_list if p not in tried_proxies]
                     if not available_proxies:
                         break
                     new_proxy = random.choice(available_proxies)
                 else:
                     if proxy_name not in self.proxies_list:
-                        logger.error(
-                            f"Proxy '{proxy_name}' not found in available proxies"
-                        )
+                        logger.error(f"Proxy '{proxy_name}' not found in available proxies")
                         return False
                     new_proxy = proxy_name
 
@@ -208,9 +196,7 @@ class ClashProxyManager:
                         logger.info(f"Successfully switched to proxy: {new_proxy}")
                     except UnicodeEncodeError:
                         safe_name = new_proxy.encode("ascii", "ignore").decode("ascii")
-                        logger.info(
-                            f"Successfully switched to proxy: {safe_name or 'proxy-node'}"
-                        )
+                        logger.info(f"Successfully switched to proxy: {safe_name or 'proxy-node'}")
                     time.sleep(2)
 
                     if self.test_connection():
@@ -287,9 +273,7 @@ class ClashProxyManager:
         try:
             resp = requests.get(test_url, proxies=self.proxy_config, timeout=10)
             resp.raise_for_status()
-            logger.info(
-                f"Proxy test successful. IP: {resp.json().get('origin', 'unknown')}"
-            )
+            logger.info(f"Proxy test successful. IP: {resp.json().get('origin', 'unknown')}")
             return True
         except Exception as e:
             logger.error(f"Proxy test failed: {e}")
@@ -399,9 +383,7 @@ class HttpProxyManager:
             >>> if not manager.is_configured():
             >>>     print("Please configure proxy settings")
         """
-        return bool(
-            self.proxy_config and self.username and self.password and self.tunnel
-        )
+        return bool(self.proxy_config and self.username and self.password and self.tunnel)
 
 
 def create_clash_proxy_manager(

@@ -14,6 +14,9 @@ from backend.core.shared.models.agent_runner import (
     ValidationConfig,
 )
 from backend.core.use_cases.agent_runner_structured_evidence import (
+    ArtifactSpec,
+    EvidenceBlock,
+    EvidenceManifest,
     EvidenceUpload,
     ValidationEvidenceError,
     build_structured_evidence_prompt_suffix,
@@ -173,9 +176,7 @@ def test_load_evidence_manifest_accepts_rv_prefixed_item_number(
     assert result.items[0].item_number == 1
 
 
-def test_build_structured_evidence_prompt_suffix_warns_against_exec_redirection() -> (
-    None
-):
+def test_build_structured_evidence_prompt_suffix_warns_against_exec_redirection() -> None:
     """The prompt explicitly discourages shell exec redirection that leaks output."""
     zh_suffix = build_structured_evidence_prompt_suffix("zh-CN")
     en_suffix = build_structured_evidence_prompt_suffix("en-US")
@@ -447,3 +448,201 @@ def test_render_structured_evidence_comment_sorts_items(tmp_path: Path) -> None:
     rv1_index = comment.index("### RV-1")
     rv2_index = comment.index("### RV-2")
     assert rv1_index < rv2_index
+
+
+# ---------------------------------------------------------------------------
+# FR-11a: expected_artifacts parsing + hard-layer validation
+# ---------------------------------------------------------------------------
+
+
+def _write_manifest_with_artifacts(
+    evidence_dir: Path, expected_artifacts: list[dict] | None
+) -> None:
+    """Write a single-item manifest whose evidence block has expected_artifacts."""
+    item: dict = {
+        "item_number": 1,
+        "item_name": "UI login screenshot",
+        "command": "playwright test login.spec.ts",
+        "evidence_files": ["rv-1-login.png"],
+        "output_summary": "login succeeds",
+        "explanation": "screenshot captured",
+        "risks": "none",
+        "negative_control": "hide login form",
+        "expected_fail": "blank screenshot",
+    }
+    if expected_artifacts is not None:
+        item["expected_artifacts"] = expected_artifacts
+    manifest = {"version": 1, "language": "en-US", "items": [item]}
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / "evidence.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+class _FakeProcessRunnerForArtifacts:
+    """Process runner with controllable ``file --mime-type`` / ``ffprobe`` output."""
+
+    def __init__(self, mime: str = "image/png", duration: str = "5.0") -> None:
+        self._mime = mime
+        self._duration = duration
+        self.calls: list[tuple[str, ...]] = []
+
+    def run(
+        self,
+        command,
+        *,
+        cwd=None,
+        check=True,
+        timeout=None,
+        inactivity_timeout=None,
+        capture_output=True,
+        input_text=None,
+        label=None,
+        output_sink=None,
+    ) -> object:
+        from backend.core.shared.models.agent_runner import CommandResult
+
+        self.calls.append(tuple(command))
+        if command[:2] == ("file", "--mime-type"):
+            return CommandResult(tuple(command), 0, self._mime + "\n", "")
+        if command[:1] == ("ffprobe",):
+            return CommandResult(tuple(command), 0, self._duration + "\n", "")
+        return CommandResult(tuple(command), 0, "", "")
+
+
+def test_validate_evidence_artifact_rejects_zero_byte(tmp_path: Path) -> None:
+    """Hard layer: 0-byte file is rejected (catches blank screenshots)."""
+    from backend.core.use_cases.agent_runner_structured_evidence import (
+        validate_evidence_artifact,
+    )
+
+    (tmp_path / "screenshot.png").write_bytes(b"")
+    spec = ArtifactSpec(path="screenshot.png", mime="image/png")
+    with pytest.raises(ValidationEvidenceError) as exc:
+        validate_evidence_artifact(tmp_path, spec, _FakeProcessRunnerForArtifacts())
+    assert "0-byte" in str(exc.value)
+
+
+def test_validate_evidence_artifact_rejects_size_below_min(tmp_path: Path) -> None:
+    """Hard layer: file smaller than min_size is rejected."""
+    from backend.core.use_cases.agent_runner_structured_evidence import (
+        validate_evidence_artifact,
+    )
+
+    (tmp_path / "screenshot.png").write_bytes(b"x" * 100)
+    spec = ArtifactSpec(path="screenshot.png", mime="image/png", min_size=50000)
+    with pytest.raises(ValidationEvidenceError) as exc:
+        validate_evidence_artifact(tmp_path, spec, _FakeProcessRunnerForArtifacts())
+    assert "100 bytes" in str(exc.value)
+    assert "50000" in str(exc.value)
+
+
+def test_validate_evidence_artifact_rejects_mime_mismatch(tmp_path: Path) -> None:
+    """Hard layer: actual mime ≠ declared mime is rejected."""
+    from backend.core.use_cases.agent_runner_structured_evidence import (
+        validate_evidence_artifact,
+    )
+
+    (tmp_path / "screenshot.png").write_bytes(b"x" * 100)
+    spec = ArtifactSpec(path="screenshot.png", mime="image/png")
+    runner = _FakeProcessRunnerForArtifacts(mime="text/plain")
+    with pytest.raises(ValidationEvidenceError) as exc:
+        validate_evidence_artifact(tmp_path, spec, runner)
+    assert "image/png" in str(exc.value)
+    assert "text/plain" in str(exc.value)
+
+
+def test_validate_evidence_artifact_rejects_stale_mtime(tmp_path: Path) -> None:
+    """Hard layer: mtime before `since` is rejected (stale-artifact guard)."""
+    from datetime import datetime, timedelta, timezone
+
+    from backend.core.use_cases.agent_runner_structured_evidence import (
+        validate_evidence_artifact,
+    )
+
+    artifact = tmp_path / "screenshot.png"
+    artifact.write_bytes(b"x" * 100)
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    spec = ArtifactSpec(path="screenshot.png", mime="image/png")
+    with pytest.raises(ValidationEvidenceError) as exc:
+        validate_evidence_artifact(tmp_path, spec, _FakeProcessRunnerForArtifacts(), since=future)
+    assert "stale" in str(exc.value).lower() or "mtime" in str(exc.value).lower()
+
+
+def test_validate_evidence_artifact_rejects_short_duration(tmp_path: Path) -> None:
+    """Hard layer: video shorter than min_duration is rejected."""
+    from backend.core.use_cases.agent_runner_structured_evidence import (
+        validate_evidence_artifact,
+    )
+
+    (tmp_path / "flow.webm").write_bytes(b"x" * 200)
+    spec = ArtifactSpec(path="flow.webm", mime="video/webm", min_duration_seconds=3.0)
+    runner = _FakeProcessRunnerForArtifacts(mime="video/webm", duration="1.5")
+    with pytest.raises(ValidationEvidenceError) as exc:
+        validate_evidence_artifact(tmp_path, spec, runner)
+    assert "1.5" in str(exc.value)
+    assert "3.0" in str(exc.value)
+
+
+def test_validate_evidence_artifact_passes_when_all_hard_checks_pass(
+    tmp_path: Path,
+) -> None:
+    """Happy path: existing non-empty file + matching mime + size/duration pass."""
+    from backend.core.use_cases.agent_runner_structured_evidence import (
+        validate_evidence_artifact,
+    )
+
+    (tmp_path / "shot.png").write_bytes(b"x" * 60000)
+    spec = ArtifactSpec(path="shot.png", mime="image/png", min_size=50000, key_claim="Welcome")
+    validate_evidence_artifact(tmp_path, spec, _FakeProcessRunnerForArtifacts())
+
+
+def test_validate_evidence_artifacts_opt_out_disables_check(tmp_path: Path) -> None:
+    """config.validation.artifact_health_enabled=False → no checks."""
+    from backend.core.use_cases.agent_runner_structured_evidence import (
+        validate_evidence_artifacts,
+    )
+
+    manifest = EvidenceManifest(
+        version=1,
+        language="en-US",
+        items=(
+            EvidenceBlock(
+                item_number=1,
+                item_name="x",
+                command="c",
+                evidence_files=("rv-1.png",),
+                output_summary="s",
+                explanation="e",
+                risks="r",
+                negative_control="nc",
+                expected_fail="ef",
+                expected_artifacts=(ArtifactSpec(path="missing.png", mime="image/png"),),
+            ),
+        ),
+    )
+    config = AppConfig(validation=ValidationConfig(artifact_health_enabled=False))
+    # Should NOT raise even though missing.png does not exist.
+    validate_evidence_artifacts(manifest, tmp_path, config, _FakeProcessRunnerForArtifacts())
+
+
+def test_validate_evidence_manifest_parses_expected_artifacts(tmp_path: Path) -> None:
+    """Manifest with expected_artifacts parses into ArtifactSpec objects."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    _write_manifest_with_artifacts(
+        evidence_dir,
+        [
+            {
+                "path": "rv-1-login.png",
+                "mime": "image/png",
+                "min_size": 50000,
+                "key_claim": "Welcome, Alice",
+            }
+        ],
+    )
+    manifest = load_evidence_manifest(tmp_path, AppConfig())
+    assert len(manifest.items) == 1
+    specs = manifest.items[0].expected_artifacts
+    assert len(specs) == 1
+    assert specs[0].path == "rv-1-login.png"
+    assert specs[0].mime == "image/png"
+    assert specs[0].min_size == 50000
+    assert specs[0].key_claim == "Welcome, Alice"

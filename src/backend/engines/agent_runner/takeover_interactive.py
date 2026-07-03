@@ -88,9 +88,7 @@ def select_repositories_interactive(
                     f"repositor{'y' if len(selected) == 1 else 'ies'}.[/]"
                 )
                 return selected
-            console.print(
-                "[yellow]No repositories selected. Please select at least one.[/]"
-            )
+            console.print("[yellow]No repositories selected. Please select at least one.[/]")
             console.print()
             console.input("Press Enter to continue...")
             continue

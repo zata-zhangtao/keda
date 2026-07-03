@@ -272,9 +272,7 @@ def start_roadmap_prd(encoded_path: str, request: StartPrdRequest) -> dict:
             prd_path=prd_path,
             repo_id=request.repo_id,
             contexts=contexts,
-            github_client=create_github_client(
-                _resolve_context(request.repo_id).repo_path
-            ),
+            github_client=create_github_client(_resolve_context(request.repo_id).repo_path),
             supervisor=create_process_supervisor(),
             store=store,
             runner_command=settings.console.runner_command,

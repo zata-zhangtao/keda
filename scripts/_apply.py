@@ -35,9 +35,7 @@ def print_next_steps_header(args: argparse.Namespace, app_dir: str) -> None:
             "preview stacks attach to the `traefik` network"
         )
     else:
-        print(
-            "  - Traefik running as container `preview-traefik` on the `traefik` network"
-        )
+        print("  - Traefik running as container `preview-traefik` on the `traefik` network")
         print(f"  - Cert mode:    {args.cert_mode}")
     print(f"  - App dir:      {app_dir}")
     print()
@@ -67,16 +65,10 @@ def print_secrets_instructions(args: argparse.Namespace) -> None:
             f"     ⚠  Delete the local private key after upload: rm {shlex.quote(deploy_key_path)}"
         )
     elif args.key:
-        print(
-            f"     gh secret set SERVER_SSH_KEY     --env preview < {shlex.quote(args.key)}"
-        )
-    print(
-        '     gh secret set REGISTRY_USERNAME  --env preview --body "<your gh username>"'
-    )
+        print(f"     gh secret set SERVER_SSH_KEY     --env preview < {shlex.quote(args.key)}")
+    print('     gh secret set REGISTRY_USERNAME  --env preview --body "<your gh username>"')
     print('     gh secret set REGISTRY_PASSWORD  --env preview --body "<ghp_...>"')
-    print(
-        '     gh secret set POSTGRES_PASSWORD  --env preview --body "<strong random>"'
-    )
+    print('     gh secret set POSTGRES_PASSWORD  --env preview --body "<strong random>"')
     print()
 
 
@@ -103,18 +95,14 @@ def print_post_apply(args: argparse.Namespace, email: str | None) -> None:
     # --skip-traefik the user's own Traefik (or upstream) owns cert issuance.
     if not args.skip_traefik and args.cert_mode == "acme-http01":
         print()
-        print(
-            "⚠  Cert mode reminder: Let's Encrypt limits ~50 certs/registered-domain/week."
-        )
+        print("⚠  Cert mode reminder: Let's Encrypt limits ~50 certs/registered-domain/week.")
         print("   If you expect more active PRs, plan a DNS-01 wildcard switch.")
         if not email:
             print()
             print(
                 "ℹ  No ACME email is registered (you omitted --email and no existing config was found)."
             )
-            print(
-                "   LE will still issue certs, but you won't get expiry notifications."
-            )
+            print("   LE will still issue certs, but you won't get expiry notifications.")
             print("   Re-run with --email <you@example.com> to enable them.")
     print()
 
@@ -177,9 +165,7 @@ def apply_secrets(args: argparse.Namespace) -> bool:
         print("ERROR: gh CLI not installed (https://cli.github.com/).", file=sys.stderr)
         return False
     if not _gh_auth_ok():
-        print(
-            "ERROR: gh not authenticated. Run `gh auth login` first.", file=sys.stderr
-        )
+        print("ERROR: gh not authenticated. Run `gh auth login` first.", file=sys.stderr)
         return False
 
     repo = _gh_repo_slug()
@@ -198,9 +184,7 @@ def apply_secrets(args: argparse.Namespace) -> bool:
         text=True,
     )
     if env_check.returncode != 0:
-        if not _confirm(
-            f"  `preview` env does not exist in {repo}. Create it?", default_yes=True
-        ):
+        if not _confirm(f"  `preview` env does not exist in {repo}. Create it?", default_yes=True):
             return False
         create = subprocess.run(
             [

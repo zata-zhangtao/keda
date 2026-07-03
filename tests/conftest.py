@@ -33,9 +33,7 @@ _ensure_project_root_on_path()
 class FakeGitHubClient(IGitHubClient):
     """In-memory GitHub client for tests."""
 
-    def __init__(
-        self, issue_url: str = "https://github.com/example/repo/issues/42"
-    ) -> None:
+    def __init__(self, issue_url: str = "https://github.com/example/repo/issues/42") -> None:
         self._issue_url = issue_url
         self.calls: list[dict] = []
         self._issue_comments: dict[int, list[str]] = {}
@@ -63,9 +61,7 @@ class FakeGitHubClient(IGitHubClient):
         )
         return []
 
-    def list_rework_prd_issues(
-        self, rework_prd_label: str, limit: int
-    ) -> list[IssueSummary]:
+    def list_rework_prd_issues(self, rework_prd_label: str, limit: int) -> list[IssueSummary]:
         self.calls.append(
             {
                 "method": "list_rework_prd_issues",
@@ -95,29 +91,21 @@ class FakeGitHubClient(IGitHubClient):
         self._issue_labels[issue_number] = tuple(current)
 
     def comment_issue(self, issue_number: int, body: str) -> None:
-        self.calls.append(
-            {"method": "comment_issue", "issue_number": issue_number, "body": body}
-        )
+        self.calls.append({"method": "comment_issue", "issue_number": issue_number, "body": body})
         self._issue_comments.setdefault(issue_number, []).append(body)
         comment_id = self._next_comment_id
         self._next_comment_id += 1
-        self._issue_comment_entries.setdefault(issue_number, []).append(
-            (comment_id, body)
-        )
+        self._issue_comment_entries.setdefault(issue_number, []).append((comment_id, body))
 
     def edit_issue_body(self, issue_number: int, body: str) -> None:
-        self.calls.append(
-            {"method": "edit_issue_body", "issue_number": issue_number, "body": body}
-        )
+        self.calls.append({"method": "edit_issue_body", "issue_number": issue_number, "body": body})
         self._issue_bodies[issue_number] = body
 
     def get_issue_body(self, issue_number: int) -> str | None:
         return self._issue_bodies.get(issue_number)
 
     def comment_pr(self, pr_number: int, body: str) -> None:
-        self.calls.append(
-            {"method": "comment_pr", "pr_number": pr_number, "body": body}
-        )
+        self.calls.append({"method": "comment_pr", "pr_number": pr_number, "body": body})
         self._pr_comments.setdefault(pr_number, []).append(body)
 
     def update_pull_request_body(self, pr_number: int, body: str) -> None:
@@ -140,9 +128,7 @@ class FakeGitHubClient(IGitHubClient):
         )
         return self._issue_url
 
-    def create_draft_pr(
-        self, *, title: str, body: str, base_branch: str, cwd: Path
-    ) -> str:
+    def create_draft_pr(self, *, title: str, body: str, base_branch: str, cwd: Path) -> str:
         self.calls.append(
             {
                 "method": "create_draft_pr",
@@ -153,9 +139,7 @@ class FakeGitHubClient(IGitHubClient):
         )
         return "https://github.com/example/repo/pull/1"
 
-    def list_review_candidate_issues(
-        self, labels: Sequence[str], limit: int
-    ) -> list[IssueSummary]:
+    def list_review_candidate_issues(self, labels: Sequence[str], limit: int) -> list[IssueSummary]:
         self.calls.append(
             {
                 "method": "list_review_candidate_issues",
@@ -170,9 +154,7 @@ class FakeGitHubClient(IGitHubClient):
         return self._pr_contexts.get(branch)
 
     def list_issue_comments(self, issue_number: int) -> list[str]:
-        self.calls.append(
-            {"method": "list_issue_comments", "issue_number": issue_number}
-        )
+        self.calls.append({"method": "list_issue_comments", "issue_number": issue_number})
         return list(self._issue_comments.get(issue_number, []))
 
     def list_issue_comment_entries(self, issue_number: int) -> list[tuple[int, str]]:
@@ -185,9 +167,7 @@ class FakeGitHubClient(IGitHubClient):
         return list(self._issue_comment_entries.get(issue_number, []))
 
     def edit_issue_comment(self, comment_id: int, body: str) -> None:
-        self.calls.append(
-            {"method": "edit_issue_comment", "comment_id": comment_id, "body": body}
-        )
+        self.calls.append({"method": "edit_issue_comment", "comment_id": comment_id, "body": body})
         for entries in self._issue_comment_entries.values():
             for index, (existing_id, _) in enumerate(entries):
                 if existing_id == comment_id:
@@ -218,11 +198,7 @@ class FakeGitHubClient(IGitHubClient):
 
     def get_issue(self, issue_number: int) -> IssueSummary:
         self.calls.append({"method": "get_issue", "issue_number": issue_number})
-        title = (
-            self._issue_title
-            if self._issue_title is not None
-            else f"Issue #{issue_number}"
-        )
+        title = self._issue_title if self._issue_title is not None else f"Issue #{issue_number}"
         return IssueSummary(
             number=issue_number,
             title=title,
@@ -295,9 +271,7 @@ class FakeContentGenerator(IContentGenerator):
 class FakeProcessRunner(IProcessRunner):
     """In-memory process runner for tests."""
 
-    def __init__(
-        self, responses: dict[tuple[str, ...], CommandResult] | None = None
-    ) -> None:
+    def __init__(self, responses: dict[tuple[str, ...], CommandResult] | None = None) -> None:
         self.responses = responses or {}
         self.calls: list[list[str]] = []
         self.raw_calls: list[list[str]] = []
@@ -327,11 +301,7 @@ class FakeProcessRunner(IProcessRunner):
         # call shape stays stable for any test that asserts on
         # ``fake_runner.calls``; ``raw_calls`` preserves the original
         # (wrapped) shape for tests that assert the wrapping itself.
-        if (
-            len(command_list) == 3
-            and command_list[0] == "bash"
-            and command_list[1] == "-lc"
-        ):
+        if len(command_list) == 3 and command_list[0] == "bash" and command_list[1] == "-lc":
             inner_command_text = command_list[2]
             try:
                 inner_tokens = shlex.split(inner_command_text)
@@ -379,6 +349,4 @@ class FakeProcessRunner(IProcessRunner):
                         stderr="",
                     )
                 return result
-        return CommandResult(
-            command=tuple(command), return_code=0, stdout="", stderr=""
-        )
+        return CommandResult(command=tuple(command), return_code=0, stdout="", stderr="")

@@ -110,10 +110,7 @@ def test_run_verification_shell_expands_command_substitution(tmp_path: Path) -> 
     scripts_dir.mkdir()
     probe_script = scripts_dir / "probe.sh"
     probe_script_body = (
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        'echo "count=$#"\n'
-        'echo "first=$1"\n'
+        "#!/usr/bin/env bash\n" "set -euo pipefail\n" 'echo "count=$#"\n' 'echo "first=$1"\n'
     )
     probe_script.write_text(probe_script_body, encoding="utf-8")
     probe_script.chmod(0o755)

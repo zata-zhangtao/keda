@@ -23,9 +23,7 @@ from backend.core.use_cases.create_prd_from_issue import (
 from tests.conftest import FakeGitHubClient
 
 
-def _make_issue(
-    number: int, title: str, body: str, labels: tuple[str, ...] = ()
-) -> IssueSummary:
+def _make_issue(number: int, title: str, body: str, labels: tuple[str, ...] = ()) -> IssueSummary:
     return IssueSummary(
         number=number,
         title=title,
@@ -138,9 +136,7 @@ def test_create_prd_from_issue_new_prd(tmp_path: Path) -> None:
     """New issue should create a PRD file and update issue body/labels."""
     pending_dir = tmp_path / "tasks" / "pending"
     pending_dir.mkdir(parents=True)
-    issue = _make_issue(
-        4, "Generate PRD", "Need a feature.", labels=("agent/rework-prd",)
-    )
+    issue = _make_issue(4, "Generate PRD", "Need a feature.", labels=("agent/rework-prd",))
     fake_client = FakeGitHubClient()
     fake_client.set_rework_prd_issues([issue])
     request = CreatePrdFromIssueRequest(

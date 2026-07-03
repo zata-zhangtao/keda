@@ -12,9 +12,7 @@ import argparse
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     """Allow global options before or after the effective subcommand."""
-    parser.add_argument(
-        "--repo", default=argparse.SUPPRESS, help="Target repository path."
-    )
+    parser.add_argument("--repo", default=argparse.SUPPRESS, help="Target repository path.")
     parser.add_argument(
         "--repo-id", default=argparse.SUPPRESS, help="Target configured repository ID."
     )
@@ -39,18 +37,14 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser."""
     parser = argparse.ArgumentParser(prog="iar")
     parser.add_argument("--repo", default=None, help="Target repository path.")
-    parser.add_argument(
-        "--repo-id", default=None, help="Target configured repository ID."
-    )
+    parser.add_argument("--repo-id", default=None, help="Target configured repository ID.")
     parser.add_argument(
         "--config",
         help="Deprecated: config is loaded from config.toml and env vars.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    init_parser = subparsers.add_parser(
-        "init", help="Create repository-local .iar.toml config."
-    )
+    init_parser = subparsers.add_parser("init", help="Create repository-local .iar.toml config.")
     init_parser.add_argument("--dry-run", action="store_true")
     init_parser.add_argument("--force", action="store_true")
     init_parser.add_argument("--id", dest="repository_id")
@@ -79,18 +73,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     labels_parser = subparsers.add_parser("labels", help="Manage GitHub labels.")
-    labels_subparsers = labels_parser.add_subparsers(
-        dest="labels_command", required=True
-    )
+    labels_subparsers = labels_parser.add_subparsers(dest="labels_command", required=True)
     labels_sync_parser = labels_subparsers.add_parser(
         "sync", help="Sync standard labels to the repository."
     )
     add_common_options(labels_sync_parser)
     add_all_repositories_option(labels_sync_parser)
 
-    issue_parser = subparsers.add_parser(
-        "issue", help="Create and manage GitHub Issues."
-    )
+    issue_parser = subparsers.add_parser("issue", help="Create and manage GitHub Issues.")
     issue_subparsers = issue_parser.add_subparsers(dest="issue_command", required=True)
     issue_create_parser = issue_subparsers.add_parser(
         "create", help="Create GitHub Issues from one or more PRD files."
@@ -192,9 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--dry-run", action="store_true")
-    run_parser.add_argument(
-        "--agent", choices=("auto", "codex", "claude", "kimi"), default="auto"
-    )
+    run_parser.add_argument("--agent", choices=("auto", "codex", "claude", "kimi"), default="auto")
     run_parser.add_argument("--max-issues", type=int)
     add_common_options(run_parser)
     add_all_repositories_option(run_parser)
@@ -367,9 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     deliberate_parser = subparsers.add_parser(
         "deliberate", help="Run a multi-agent deliberation session."
     )
-    deliberate_parser.add_argument(
-        "prompt", help="The requirement or question to deliberate."
-    )
+    deliberate_parser.add_argument("prompt", help="The requirement or question to deliberate.")
     deliberate_parser.add_argument(
         "--agents",
         default="architect,skeptic,implementer",
@@ -378,9 +364,7 @@ def build_parser() -> argparse.ArgumentParser:
     deliberate_parser.add_argument(
         "--rounds", type=int, default=None, help="Number of discussion rounds."
     )
-    deliberate_parser.add_argument(
-        "--synthesizer", default=None, help="Agent to run synthesis."
-    )
+    deliberate_parser.add_argument("--synthesizer", default=None, help="Agent to run synthesis.")
     deliberate_parser.add_argument(
         "--output",
         default=None,
@@ -400,24 +384,18 @@ def build_parser() -> argparse.ArgumentParser:
         "worktree",
         help="Manage iAR-owned Git worktrees for the current repository.",
     )
-    worktree_subparsers = worktree_parser.add_subparsers(
-        dest="worktree_command", required=True
-    )
+    worktree_subparsers = worktree_parser.add_subparsers(dest="worktree_command", required=True)
     worktree_create_parser = worktree_subparsers.add_parser(
         "create", help="Create a worktree at .iar-worktrees/<branch>."
     )
-    worktree_create_parser.add_argument(
-        "--branch", required=True, help="Branch name to create."
-    )
+    worktree_create_parser.add_argument("--branch", required=True, help="Branch name to create.")
     worktree_create_parser.add_argument(
         "--base-branch", required=True, help="Existing branch to fork from."
     )
     worktree_path_parser = worktree_subparsers.add_parser(
         "path", help="Print the absolute worktree path for a branch."
     )
-    worktree_path_parser.add_argument(
-        "--branch", required=True, help="Branch name to resolve."
-    )
+    worktree_path_parser.add_argument("--branch", required=True, help="Branch name to resolve.")
     worktree_remove_parser = worktree_subparsers.add_parser(
         "remove", help="Remove a worktree and prune Git metadata."
     )
@@ -447,9 +425,7 @@ def build_parser() -> argparse.ArgumentParser:
     registry_parser = subparsers.add_parser(
         "registry", help="Manage the repository registry in config.toml."
     )
-    registry_subparsers = registry_parser.add_subparsers(
-        dest="registry_command", required=True
-    )
+    registry_subparsers = registry_parser.add_subparsers(dest="registry_command", required=True)
     registry_scan_parser = registry_subparsers.add_parser(
         "scan", help="Discover IAR-initialized git repositories under a path."
     )
@@ -524,9 +500,7 @@ def build_parser() -> argparse.ArgumentParser:
         "start",
         help="Start daemon and review-daemon for registered repositories.",
     )
-    registry_start_group = registry_start_parser.add_mutually_exclusive_group(
-        required=True
-    )
+    registry_start_group = registry_start_parser.add_mutually_exclusive_group(required=True)
     registry_start_group.add_argument(
         "--repo-id",
         help="Registry identifier of the repository to start daemons for.",
@@ -546,9 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
         "stop",
         help="Stop daemon and review-daemon for registered repositories.",
     )
-    registry_stop_group = registry_stop_parser.add_mutually_exclusive_group(
-        required=True
-    )
+    registry_stop_group = registry_stop_parser.add_mutually_exclusive_group(required=True)
     registry_stop_group.add_argument(
         "--repo-id",
         help="Registry identifier of the repository to stop daemons for.",
@@ -568,17 +540,13 @@ def build_parser() -> argparse.ArgumentParser:
         "workflow",
         help="Install and manage bundled workflow templates.",
     )
-    workflow_subparsers = workflow_parser.add_subparsers(
-        dest="workflow_command", required=True
-    )
+    workflow_subparsers = workflow_parser.add_subparsers(dest="workflow_command", required=True)
     workflow_install_parser = workflow_subparsers.add_parser(
         "install",
         help="Install a bundled workflow template into the current repository.",
     )
     workflow_install_parser.set_defaults(command="workflow install")
-    workflow_install_parser.add_argument(
-        "name", help="Workflow template name (e.g. 'preview')."
-    )
+    workflow_install_parser.add_argument("name", help="Workflow template name (e.g. 'preview').")
     workflow_install_parser.add_argument(
         "--force",
         action="store_true",

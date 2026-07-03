@@ -85,9 +85,7 @@ def test_daily_trend_groups_by_day_and_outcome(tmp_path: Path) -> None:
     """Trend aggregation should bucket by day with per-outcome counts."""
     store = SqliteConsoleStore(tmp_path / "console.db")
     today_prefix = __import__("datetime").datetime.now().strftime("%Y-%m-%d")
-    store.append_run(
-        _make_run_record(issue_number=1, started_at=f"{today_prefix}T08:00:00+00:00")
-    )
+    store.append_run(_make_run_record(issue_number=1, started_at=f"{today_prefix}T08:00:00+00:00"))
     store.append_run(
         _make_run_record(
             issue_number=2,
@@ -184,9 +182,7 @@ def test_schema_migration_from_version_1(tmp_path: Path) -> None:
     assert version >= 2
     tables = {
         row[0]
-        for row in raw.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        for row in raw.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     assert "roadmap_queue" in tables
     assert "roadmap_settings" in tables

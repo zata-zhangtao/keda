@@ -314,9 +314,7 @@ class IGitHubClient(ABC):
         ...
 
     @abstractmethod
-    def list_rework_prd_issues(
-        self, rework_prd_label: str, limit: int
-    ) -> list[IssueSummary]:
+    def list_rework_prd_issues(self, rework_prd_label: str, limit: int) -> list[IssueSummary]:
         """列出带有 rework-prd 标签的开放 Issue。
 
         Args:
@@ -408,9 +406,7 @@ class IGitHubClient(ABC):
         ...
 
     @abstractmethod
-    def list_review_candidate_issues(
-        self, labels: Sequence[str], limit: int
-    ) -> list[IssueSummary]:
+    def list_review_candidate_issues(self, labels: Sequence[str], limit: int) -> list[IssueSummary]:
         """列出带有给定任一标签的开放 Issue。
 
         与 ``list_ready_issues`` 的区别在于支持多个候选标签：只要

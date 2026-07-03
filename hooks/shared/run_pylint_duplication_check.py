@@ -66,26 +66,18 @@ def _referenced_paths_from_message(message_text: str) -> list[Path]:
     return referenced_paths
 
 
-def _issue_touches_candidate(
-    issue_entry: dict[str, object], candidate_paths: set[Path]
-) -> bool:
+def _issue_touches_candidate(issue_entry: dict[str, object], candidate_paths: set[Path]) -> bool:
     """Return whether a pylint JSON issue references any candidate file."""
 
-    referenced_paths = _referenced_paths_from_message(
-        str(issue_entry.get("message", ""))
-    )
+    referenced_paths = _referenced_paths_from_message(str(issue_entry.get("message", "")))
     if referenced_paths:
-        return any(
-            referenced_path in candidate_paths for referenced_path in referenced_paths
-        )
+        return any(referenced_path in candidate_paths for referenced_path in referenced_paths)
 
     raw_issue_path = issue_entry.get("path")
     if isinstance(raw_issue_path, str):
         referenced_paths.append(Path(raw_issue_path))
 
-    return any(
-        referenced_path in candidate_paths for referenced_path in referenced_paths
-    )
+    return any(referenced_path in candidate_paths for referenced_path in referenced_paths)
 
 
 def _format_issue_message(issue_entry: dict[str, object]) -> str:

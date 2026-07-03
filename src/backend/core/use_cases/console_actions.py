@@ -90,15 +90,11 @@ def _audit(
     )
 
 
-def _find_context(
-    repo_id: str, contexts: Sequence[RepositoryRunContext]
-) -> RepositoryRunContext:
+def _find_context(repo_id: str, contexts: Sequence[RepositoryRunContext]) -> RepositoryRunContext:
     for context in contexts:
         if context.repo_id == repo_id:
             return context
-    raise ConsoleActionError(
-        f"Repository '{repo_id}' is not an enabled registry target."
-    )
+    raise ConsoleActionError(f"Repository '{repo_id}' is not an enabled registry target.")
 
 
 def execute_repository_action(
@@ -189,9 +185,7 @@ def _execute_retry_failed(
             f"Issue #{issue_number} does not carry label '{failed_label}'; "
             "retry_failed only applies to failed Issues."
         )
-    github_client.edit_issue_labels(
-        issue_number, add=[ready_label], remove=[failed_label]
-    )
+    github_client.edit_issue_labels(issue_number, add=[ready_label], remove=[failed_label])
     return f"Issue #{issue_number}: '{failed_label}' -> '{ready_label}'."
 
 
@@ -209,8 +203,7 @@ def execute_issue_action(
 ) -> ConsoleActionResult:
     """执行一个 Issue 级动作（retry_failed / blocked_continue）。"""
     params_json = (
-        f'{{"action": "{action}", "repo_id": "{repo_id}", '
-        f'"issue_number": {issue_number}}}'
+        f'{{"action": "{action}", "repo_id": "{repo_id}", ' f'"issue_number": {issue_number}}}'
     )
 
     def _reject(detail: str) -> ConsoleActionError:

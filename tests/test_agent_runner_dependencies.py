@@ -204,16 +204,10 @@ class TestFormatDependencyMarker:
         assert format_dependency_marker() == ""
 
     def test_issues_only(self) -> None:
-        assert (
-            format_dependency_marker(issue_numbers=(42,))
-            == "<!-- iar:depends-on #42 -->"
-        )
+        assert format_dependency_marker(issue_numbers=(42,)) == "<!-- iar:depends-on #42 -->"
 
     def test_groups_only(self) -> None:
-        assert (
-            format_dependency_marker(groups=("g1",))
-            == "<!-- iar:depends-on group:g1 -->"
-        )
+        assert format_dependency_marker(groups=("g1",)) == "<!-- iar:depends-on group:g1 -->"
 
     def test_mixed(self) -> None:
         assert (
@@ -269,9 +263,7 @@ class FakeGitHubClientForDeps:
     def list_issues_by_label(
         self, label: str, limit: int, state: str = "all"
     ) -> list[IssueSummary]:
-        self.calls.append(
-            {"method": "list_issues_by_label", "label": label, "limit": limit}
-        )
+        self.calls.append({"method": "list_issues_by_label", "label": label, "limit": limit})
         return self.group_issues.get(label, [])
 
 
@@ -323,9 +315,7 @@ class TestEvaluateDependencies:
     def test_group_dependency_all_closed(self) -> None:
         client = FakeGitHubClientForDeps()
         client.group_issues["task-group/g1"] = [
-            IssueSummary(
-                number=1, title="A", url="", body="", labels=(), state="CLOSED"
-            ),
+            IssueSummary(number=1, title="A", url="", body="", labels=(), state="CLOSED"),
         ]
         decl = DependencyDeclaration(groups=("g1",))
         verdict = evaluate_dependencies(decl, client, LabelConfig())
@@ -426,9 +416,7 @@ class TestWaitingSideEffects:
             blockers=(DependencyBlocker("issue", "42", "OPEN"),),
         )
         # Force hash to match by setting up same comment
-        client._issue_comments[1] = [
-            f"first\n{format_dependency_wait_marker(verdict.blockers)}"
-        ]
+        client._issue_comments[1] = [f"first\n{format_dependency_wait_marker(verdict.blockers)}"]
         mark_dependency_waiting(
             issue=issue,
             verdict=verdict,

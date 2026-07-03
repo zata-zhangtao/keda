@@ -38,9 +38,7 @@ class RunnerProcessKind(str, Enum):
 
 
 #: 常驻类进程：同一 (repo_id, kind) 同时只允许一个 running 实例。
-PERSISTENT_PROCESS_KINDS = frozenset(
-    {RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON}
-)
+PERSISTENT_PROCESS_KINDS = frozenset({RunnerProcessKind.DAEMON, RunnerProcessKind.REVIEW_DAEMON})
 
 
 @dataclass(frozen=True)
@@ -198,9 +196,7 @@ class IRunnerProcessSupervisor(ABC):
         ...
 
     @abstractmethod
-    def read_log(
-        self, process_id: str, *, offset: int, max_bytes: int
-    ) -> ProcessLogChunk:
+    def read_log(self, process_id: str, *, offset: int, max_bytes: int) -> ProcessLogChunk:
         """从指定偏移量续读进程日志。
 
         Args:
@@ -236,9 +232,7 @@ class IRunHistoryStore(ABC):
         ...
 
     @abstractmethod
-    def list_recent_runs(
-        self, *, repo_id: str | None = None, limit: int = 100
-    ) -> list[RunRecord]:
+    def list_recent_runs(self, *, repo_id: str | None = None, limit: int = 100) -> list[RunRecord]:
         """倒序列出最近的运行记录。"""
         ...
 
@@ -248,9 +242,7 @@ class IRunHistoryStore(ABC):
         ...
 
     @abstractmethod
-    def daily_run_trend(
-        self, *, repo_id: str | None, days: int
-    ) -> list[DailyRunTrendEntry]:
+    def daily_run_trend(self, *, repo_id: str | None, days: int) -> list[DailyRunTrendEntry]:
         """按天聚合最近 ``days`` 天的运行结果。"""
         ...
 
@@ -289,9 +281,7 @@ class IRepositoryRegistryEditor(ABC):
         ...
 
     @abstractmethod
-    def add_repository(
-        self, *, repo_id: str, path: str, display_name: str | None
-    ) -> None:
+    def add_repository(self, *, repo_id: str, path: str, display_name: str | None) -> None:
         """新增一个仓库条目（enabled 默认 true）。
 
         Raises:

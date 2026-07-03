@@ -12,6 +12,9 @@
 #   --interactive     — drops --print / stream-json / jq; the AI tool
 #     starts a REPL with the prompt as the first user message and stays
 #     open so the caller can keep chatting (Ctrl+C / /exit to leave).
+#     For kimi this also resumes the previous session for the current
+#     working directory, so consecutive `just ai check` calls share
+#     context; if no prior session exists, kimi starts a fresh one.
 #
 # Why both modes live in one script: the four `just ai *` recipes share
 # the same ai_tool defaulting, prompt echo, and kimi / claude / fallback
@@ -62,7 +65,10 @@ if [ "$mode" = "interactive" ]; then
             # kimi requires the --prompt flag. Pass the prompt through an
             # environment variable so multi-line text survives the
             # bash -c quoting round-trip unchanged.
-            KIMI_PROMPT="$prompt_text" "${SHELL:-bash}" -i -c 'kimi --prompt "$KIMI_PROMPT"' || true
+            # Use --continue to resume the previous session for the current
+            # working directory; kimi falls back to a fresh session if none
+            # exists, so first-time callers are not broken.
+            KIMI_PROMPT="$prompt_text" "${SHELL:-bash}" -i -c 'kimi --continue --prompt "$KIMI_PROMPT"' || true
             ;;
         *)
             # Unknown tools: pass the prompt as a positional argument

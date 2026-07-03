@@ -9,7 +9,7 @@
 
 
 # uv add --dev pre-commit        # 添加 pre-commit 为开发依赖
-# uv run pre-commit install --hook-type pre-commit --hook-type pre-push  # 初始化 pre-commit 与 pre-push 钩子
+# uv run pre-commit install      # 初始化 pre-commit 钩子
 # uv run pre-commit run --all-files  # 对所有文件执行预提交检测
 
 
@@ -36,9 +36,9 @@ repos:
   # 2. Python 代码质量 (Ruff - 现代化的极速选择)
   # ==========================================
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.8
+    rev: v0.7.4
     hooks:
-      # Linter: 检查逻辑错误、未使用的 import 等
+      # Linter: 检查逻辑错误、未使用的 import、docstring 等
       - id: ruff
         args: [ --fix ]            # 尝试自动修复简单问题 (如删除未使用的引用)
 
@@ -52,48 +52,64 @@ repos:
     hooks:
       - id: check-prd-acceptance-checklist
         name: Check PRD acceptance checklist
-        entry: uv run python hooks/check_prd_acceptance_checklist.py
+        entry: uv run python hooks/shared/check_prd_acceptance_checklist.py
         language: system
         files: ^tasks/(?:archive/)?(?:[^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md$
       - id: check-guidelines-consistency
         name: Check guidelines consistency
-        entry: uv run python hooks/check_guidelines_consistency.py
+        entry: uv run python hooks/shared/check_guidelines_consistency.py
         language: system
         files: ^(AGENTS\.md|CLAUDE\.md|\.cursor/commands/cursor\.md)$
         pass_filenames: false
       - id: archive-tasks
         name: Archive task markdown files
-        entry: uv run python hooks/archive_tasks.py
+        entry: uv run python hooks/shared/archive_tasks.py
         language: system
         pass_filenames: false
         stages: [pre-commit]
         always_run: true
       - id: check-architecture
         name: Check architecture layer dependencies
-        entry: uv run python hooks/check_architecture.py
+        entry: uv run python hooks/shared/check_architecture.py
         language: system
         files: ^(src/[^/]+/(api|core|engines|infrastructure))/.*\.py$
         pass_filenames: false
+      - id: check-sqlalchemy-model-comments
+        name: Check SQLAlchemy model comments
+        entry: uv run python hooks/shared/check_sqlalchemy_model_comments.py
+        language: system
+        files: ^src/backend/infrastructure/persistence/models/.*\.py$
+        pass_filenames: true
+      - id: check-schema-conventions
+        name: Check database schema conventions
+        entry: uv run python hooks/shared/check_schema_conventions.py
+        language: system
+        files: ^alembic/versions/.*\.py$
+        pass_filenames: true
       - id: check-max-file-lines
         name: Check max file lines (non-empty)
-        entry: uv run python hooks/check_max_file_lines.py --max-lines 1000 --warn-only
+        entry: uv run python hooks/shared/check_max_file_lines.py --max-lines 1000 --warn-only
         language: system
         files: \.py$
         pass_filenames: true
+      # 两个重复检测 wrapper 每次调用都做一次全量语料扫描，
+      # 必须 require_serial 禁止 pre-commit 按 CPU 分片并行，否则 --all-files 会同时跑 N 份相同的全量扫描
       - id: jscpd
         name: Check copy-paste duplication
-        entry: uv run python hooks/run_jscpd_duplication_check.py
+        entry: uv run python hooks/shared/run_jscpd_duplication_check.py
         language: node
         additional_dependencies: [jscpd@4.1.1]
-        files: ^(src/[^/]+|frontend)/.*\.(py|js|jsx|ts|tsx)$
+        files: ^(src/[^/]+|frontend-admin|frontend-public)/.*\.(py|js|jsx|ts|tsx)$
         pass_filenames: true
+        require_serial: true
         stages: [manual]
       - id: pylint-duplicate-code
         name: Check Python duplicate code
-        entry: uv run python hooks/run_pylint_duplication_check.py
+        entry: uv run python hooks/shared/run_pylint_duplication_check.py
         language: system
         files: ^src/[^/]+/.*\.py$
         pass_filenames: true
+        require_serial: true
         stages: [manual]
       - id: check-test-flag
         name: Check just test flag
@@ -102,10 +118,3 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-      - id: check-prd-archive-pre-push
-        name: Check PRD archive before push
-        entry: uv run python hooks/check_prd_archive_pre_push.py
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]

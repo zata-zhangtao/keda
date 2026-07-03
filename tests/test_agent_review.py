@@ -148,9 +148,7 @@ def test_parse_event_marker_with_new_fields() -> None:
 
 def test_parse_event_marker_backward_compatible() -> None:
     """Old markers without new fields should parse without error."""
-    comment = (
-        "<!-- iar:event version=1 phase=post_pr_supervisor cycle=1 head=abc123 -->"
-    )
+    comment = "<!-- iar:event version=1 phase=post_pr_supervisor cycle=1 head=abc123 -->"
     from backend.core.shared.models.agent_runner import ReviewEventMarker
 
     marker = parse_latest_event_marker([comment])
@@ -212,34 +210,25 @@ def test_context_changed_wide_detects_all_dimensions() -> None:
 
     # head_sha changed
     assert (
-        _context_changed_wide(
-            pr_context, replace(marker, head_sha="different"), "def456", 2, 1
-        )
+        _context_changed_wide(pr_context, replace(marker, head_sha="different"), "def456", 2, 1)
         is True
     )
 
     # base_sha changed
     assert (
-        _context_changed_wide(
-            pr_context, replace(marker, base_sha="different"), "def456", 2, 1
-        )
+        _context_changed_wide(pr_context, replace(marker, base_sha="different"), "def456", 2, 1)
         is True
     )
 
     # checks_state changed
     assert (
-        _context_changed_wide(
-            pr_context, replace(marker, checks_state="FAILURE"), "def456", 2, 1
-        )
+        _context_changed_wide(pr_context, replace(marker, checks_state="FAILURE"), "def456", 2, 1)
         is True
     )
 
     # mergeable changed
     assert (
-        _context_changed_wide(
-            pr_context, replace(marker, mergeable=False), "def456", 2, 1
-        )
-        is True
+        _context_changed_wide(pr_context, replace(marker, mergeable=False), "def456", 2, 1) is True
     )
 
     # issue_comments_count changed
@@ -729,9 +718,7 @@ class _PatchingReviewRunner(FakeProcessRunner):
         )
         self._verdict = verdict
 
-    def run(
-        self, command, *, cwd, check=True, timeout=None, capture_output=True, label=None
-    ):
+    def run(self, command, *, cwd, check=True, timeout=None, capture_output=True, label=None):
         command_tuple = tuple(command)
         if command_tuple[:1] == ("codex",):
             self.calls.append(list(command))
@@ -792,10 +779,7 @@ def test_run_pre_pr_review_approved_with_patch_converges(tmp_path: Path) -> None
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     assert len(comment_calls) == 1
     assert "Verdict: approved" in comment_calls[0]["body"]
-    assert (
-        "reviewer approved and runner committed follow-up patch"
-        in comment_calls[0]["body"]
-    )
+    assert "reviewer approved and runner committed follow-up patch" in comment_calls[0]["body"]
 
 
 def test_run_pre_pr_review_patched_soft_fail_reports_last_cycle_summary(
@@ -832,10 +816,7 @@ def test_run_pre_pr_review_patched_soft_fail_reports_last_cycle_summary(
     assert final_sha == "after-sha"
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     assert len(comment_calls) == 1
-    assert (
-        "reviewer patched and runner committed follow-up changes"
-        in (comment_calls[0]["body"])
-    )
+    assert "reviewer patched and runner committed follow-up changes" in (comment_calls[0]["body"])
 
 
 def test_run_pre_pr_review_empty_commit_request_with_approval_converges(
@@ -1138,10 +1119,7 @@ def test_run_pre_pr_review_rejects_changes_requested_without_commit_request(
                 return CommandResult(
                     command=command_tuple,
                     return_code=0,
-                    stdout=(
-                        '{"verdict": "changes_requested", '
-                        '"summary": "missing tests"}'
-                    ),
+                    stdout=('{"verdict": "changes_requested", ' '"summary": "missing tests"}'),
                     stderr="",
                 )
             return super().run(
@@ -1170,10 +1148,7 @@ def test_run_pre_pr_review_rejects_changes_requested_without_commit_request(
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     assert len(comment_calls) == 1
     assert "Verdict: changes requested" in comment_calls[0]["body"]
-    assert (
-        "reviewer requested changes without a commit request"
-        in comment_calls[0]["body"]
-    )
+    assert "reviewer requested changes without a commit request" in comment_calls[0]["body"]
 
 
 def test_run_pre_pr_review_passes_configured_timeout(tmp_path: Path) -> None:
@@ -1431,10 +1406,7 @@ def test_run_pre_pr_review_reminds_reviewer_then_commits(
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     assert len(comment_calls) == 1
     assert "Verdict: approved" in comment_calls[0]["body"]
-    assert (
-        "reviewer approved and runner committed follow-up patch"
-        in comment_calls[0]["body"]
-    )
+    assert "reviewer approved and runner committed follow-up patch" in comment_calls[0]["body"]
 
 
 def test_run_pre_pr_review_zero_reminder_attempts_fails_fast(
@@ -1507,10 +1479,7 @@ def test_run_pre_pr_review_zero_reminder_attempts_fails_fast(
     assert len(codex_calls) == 1
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     assert len(comment_calls) == 1
-    assert (
-        "reviewer reported findings but produced no commit request"
-        in comment_calls[0]["body"]
-    )
+    assert "reviewer reported findings but produced no commit request" in comment_calls[0]["body"]
 
 
 def test_run_pre_pr_review_last_cycle_final_patch_is_accepted(
@@ -1601,10 +1570,7 @@ def test_run_pre_pr_review_last_cycle_final_patch_is_accepted(
     assert final_sha == "after-sha"
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
     assert len(comment_calls) == 1
-    assert (
-        "reviewer patched and runner committed follow-up changes"
-        in (comment_calls[0]["body"])
-    )
+    assert "reviewer patched and runner committed follow-up changes" in (comment_calls[0]["body"])
 
 
 # ---------------------------------------------------------------------------
@@ -1616,9 +1582,7 @@ def _socket_command_error(command: list[str]) -> CommandFailedError:
     return CommandFailedError(
         1,
         command,
-        output=(
-            "[agent error] API Error: The socket connection was closed " "unexpectedly."
-        ),
+        output=("[agent error] API Error: The socket connection was closed " "unexpectedly."),
         stderr="",
     )
 
@@ -1670,9 +1634,7 @@ def test_run_pre_pr_review_retries_transient_reviewer_error(tmp_path: Path) -> N
     fake_runner = _TransientThenApproveRunner()
     config = AppConfig(
         pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1),
-        runner=RunnerConfig(
-            transient_retry_attempts=2, transient_retry_delay_seconds=0
-        ),
+        runner=RunnerConfig(transient_retry_attempts=2, transient_retry_delay_seconds=0),
     )
     worktree_path = tmp_path / "issue-1"
     worktree_path.mkdir()
@@ -1732,9 +1694,7 @@ def test_run_pre_pr_review_escalates_provider_capacity(tmp_path: Path) -> None:
     fake_runner = _CapacityRunner()
     config = AppConfig(
         pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=1),
-        runner=RunnerConfig(
-            transient_retry_attempts=2, transient_retry_delay_seconds=0
-        ),
+        runner=RunnerConfig(transient_retry_attempts=2, transient_retry_delay_seconds=0),
     )
     worktree_path = tmp_path / "issue-1"
     worktree_path.mkdir()

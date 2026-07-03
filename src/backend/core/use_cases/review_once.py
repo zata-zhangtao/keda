@@ -58,15 +58,9 @@ def _context_changed_wide(
         return True
     if base_sha_remote and last_marker.base_sha != base_sha_remote:
         return True
-    if (
-        last_marker.checks_state is not None
-        and last_marker.checks_state != pr_context.checks_state
-    ):
+    if last_marker.checks_state is not None and last_marker.checks_state != pr_context.checks_state:
         return True
-    if (
-        last_marker.mergeable is not None
-        and last_marker.mergeable != pr_context.mergeable
-    ):
+    if last_marker.mergeable is not None and last_marker.mergeable != pr_context.mergeable:
         return True
     if (
         last_marker.issue_comments_count is not None
@@ -137,9 +131,7 @@ def _process_review_candidate(
     # Find the linked PR context
     pr_branch = _extract_pr_branch_from_comments(comments)
     if pr_branch is None:
-        _logger.warning(
-            "Issue #%d has no identifiable PR branch; skipping.", issue.number
-        )
+        _logger.warning("Issue #%d has no identifiable PR branch; skipping.", issue.number)
         return "skipped_no_pr_branch"
 
     pr_context = github_client.get_pull_request_context(pr_branch)
@@ -166,9 +158,7 @@ def _process_review_candidate(
     if pr_number_match:
         pr_comments = github_client.list_pr_comments(int(pr_number_match.group(1)))
 
-    base_sha_remote = github_client.get_remote_base_sha(
-        config.git.remote, config.git.base_branch
-    )
+    base_sha_remote = github_client.get_remote_base_sha(config.git.remote, config.git.base_branch)
 
     if not _context_changed_wide(
         pr_context,
@@ -246,9 +236,7 @@ def _process_review_candidate(
                 github_client, issue.number, config, config.labels.blocked
             )
             return "blocked_dirty_read_only_supervisor"
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.review
-        )
+        transition_issue_workflow_state(github_client, issue.number, config, config.labels.review)
         return "approved_for_human_review"
 
     if action_result.action == "wait_for_checks":
@@ -265,17 +253,13 @@ def _process_review_candidate(
     if action_result.action in ("request_human_input",):
         if stashed:
             pop_worktree_stash(worktree_path, process_runner)
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.blocked
-        )
+        transition_issue_workflow_state(github_client, issue.number, config, config.labels.blocked)
         return "blocked_human_input"
 
     if action_result.action == "mark_failed":
         if stashed:
             pop_worktree_stash(worktree_path, process_runner)
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.failed
-        )
+        transition_issue_workflow_state(github_client, issue.number, config, config.labels.failed)
         return "marked_failed"
 
     if action_result.action in (
@@ -294,17 +278,13 @@ def _process_review_candidate(
                 head_sha=head_sha,
             ),
         )
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.running
-        )
+        transition_issue_workflow_state(github_client, issue.number, config, config.labels.running)
         return f"queued_{action_result.action}"
 
     # Unknown action: block
     if stashed:
         pop_worktree_stash(worktree_path, process_runner)
-    transition_issue_workflow_state(
-        github_client, issue.number, config, config.labels.blocked
-    )
+    transition_issue_workflow_state(github_client, issue.number, config, config.labels.blocked)
     return "blocked_unknown_action"
 
 

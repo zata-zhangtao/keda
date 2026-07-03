@@ -39,9 +39,7 @@ class _InMemoryRegistryEditor(IRepositoryRegistryEditor):
     def list_repositories(self) -> list[RegistryRepositoryEntry]:
         return list(self._entries)
 
-    def add_repository(
-        self, *, repo_id: str, path: str, display_name: str | None
-    ) -> None:
+    def add_repository(self, *, repo_id: str, path: str, display_name: str | None) -> None:
         if any(entry.repo_id == repo_id for entry in self._entries):
             raise ValueError(f"Repository '{repo_id}' already exists in the registry.")
         self._entries.append(
@@ -171,9 +169,7 @@ def test_list_github_repositories_with_owner() -> None:
             ): _gh_list_response([{"nameWithOwner": "myorg/repo"}]),
         }
     )
-    candidates = list_github_repositories(
-        owner="myorg", limit=50, process_runner=runner
-    )
+    candidates = list_github_repositories(owner="myorg", limit=50, process_runner=runner)
     assert len(candidates) == 1
     assert candidates[0].full_name == "myorg/repo"
 
@@ -321,9 +317,7 @@ def test_execute_takeover_dry_run(tmp_path: Path) -> None:
     clone_root = tmp_path / "repos"
     editor = _InMemoryRegistryEditor()
     runner = FakeProcessRunner()
-    options = build_takeover_options(
-        clone_root=str(clone_root), start_daemons=False, dry_run=True
-    )
+    options = build_takeover_options(clone_root=str(clone_root), start_daemons=False, dry_run=True)
     candidate = GitHubRepositoryCandidate(
         owner="owner",
         name="repo-a",
@@ -379,9 +373,7 @@ def test_execute_takeover_clones_inits_registers(tmp_path: Path) -> None:
     repo_path = _prepare_cloned_repo(clone_root, "owner/repo-a")
     editor = _InMemoryRegistryEditor()
     runner = _fake_git_runner(repo_path)
-    options = build_takeover_options(
-        clone_root=str(clone_root), start_daemons=False, dry_run=False
-    )
+    options = build_takeover_options(clone_root=str(clone_root), start_daemons=False, dry_run=False)
     candidate = GitHubRepositoryCandidate(
         owner="owner",
         name="repo-a",
@@ -411,9 +403,7 @@ def test_execute_takeover_starts_daemons(tmp_path: Path) -> None:
     repo_path = _prepare_cloned_repo(clone_root, "owner/repo-a")
     editor = _InMemoryRegistryEditor()
     runner = _fake_git_runner(repo_path)
-    options = build_takeover_options(
-        clone_root=str(clone_root), start_daemons=True, dry_run=False
-    )
+    options = build_takeover_options(clone_root=str(clone_root), start_daemons=True, dry_run=False)
     candidate = GitHubRepositoryCandidate(
         owner="owner",
         name="repo-a",
@@ -511,9 +501,7 @@ def test_execute_takeover_progress_callback(tmp_path: Path) -> None:
     repo_path = _prepare_cloned_repo(clone_root, "owner/repo-a")
     editor = _InMemoryRegistryEditor()
     runner = _fake_git_runner(repo_path)
-    options = build_takeover_options(
-        clone_root=str(clone_root), start_daemons=True, dry_run=False
-    )
+    options = build_takeover_options(clone_root=str(clone_root), start_daemons=True, dry_run=False)
     candidate = _candidate("owner/repo-a")
     progress: list[tuple[str, str]] = []
 
@@ -552,9 +540,7 @@ def test_execute_takeover_initializes_with_origin_remote(
     repo_path = _prepare_cloned_repo(clone_root, "owner/repo-a")
     editor = _InMemoryRegistryEditor()
     runner = _fake_git_runner(repo_path)
-    options = build_takeover_options(
-        clone_root=str(clone_root), start_daemons=False, dry_run=False
-    )
+    options = build_takeover_options(clone_root=str(clone_root), start_daemons=False, dry_run=False)
     candidate = _candidate("owner/repo-a")
     captured_options: RepositoryInitOptions | None = None
 

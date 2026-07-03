@@ -1,0 +1,3 @@
+# Demo recordings are generated artifacts; do not commit.
+*.webm
+*.mp4

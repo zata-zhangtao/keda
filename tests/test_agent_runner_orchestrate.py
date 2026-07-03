@@ -42,9 +42,7 @@ from backend.infrastructure.process_runner import SubprocessRunner
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
 
-def _make_ready_issue(
-    number: int, title: str, body: str, labels: tuple[str, ...]
-) -> IssueSummary:
+def _make_ready_issue(number: int, title: str, body: str, labels: tuple[str, ...]) -> IssueSummary:
     return IssueSummary(
         number=number,
         title=title,
@@ -61,9 +59,7 @@ def _make_blocked_issue(number: int) -> IssueSummary:
 def test_mark_issue_failed_comment_includes_recovery_guidance() -> None:
     """The failure comment posted to GitHub must tell the operator how to recover."""
     fake_client = FakeGitHubClient()
-    issue = _make_ready_issue(
-        53, "Issue #53", "PRD path: `tasks/example.md`", ("agent/running",)
-    )
+    issue = _make_ready_issue(53, "Issue #53", "PRD path: `tasks/example.md`", ("agent/running",))
 
     _mark_issue_failed(
         issue=issue,
@@ -80,9 +76,7 @@ def test_mark_issue_failed_comment_includes_recovery_guidance() -> None:
     body = comment_calls[0]["body"]
     assert "## Agent Runner Failed" in body
     assert "### How To Recover" in body
-    assert (
-        "gh issue edit 53 --add-label agent/ready --remove-label agent/failed" in body
-    )
+    assert "gh issue edit 53 --add-label agent/ready --remove-label agent/failed" in body
 
 
 def test_mark_issue_failed_falls_back_to_minimal_comment_on_rejection() -> None:
@@ -105,9 +99,7 @@ def test_mark_issue_failed_falls_back_to_minimal_comment_on_rejection() -> None:
             super().comment_issue(issue_number, body)
 
     fake_client = _FirstCommentFailsClient()
-    issue = _make_ready_issue(
-        84, "Issue #84", "PRD path: `tasks/example.md`", ("agent/running",)
-    )
+    issue = _make_ready_issue(84, "Issue #84", "PRD path: `tasks/example.md`", ("agent/running",))
 
     _mark_issue_failed(
         issue=issue,
@@ -123,18 +115,14 @@ def test_mark_issue_failed_falls_back_to_minimal_comment_on_rejection() -> None:
     body = posted[0]["body"]
     assert "## Agent Runner Failed" in body
     assert "Failed after 6 attempts." in body
-    assert (
-        "gh issue edit 84 --add-label agent/ready --remove-label agent/failed" in body
-    )
+    assert "gh issue edit 84 --add-label agent/ready --remove-label agent/failed" in body
     # The Issue is still transitioned to the failed state.
 
 
 def test_mark_issue_failed_transition_failure_recovery_guidance() -> None:
     """A failed workflow transition to supervising should retry that transition."""
     fake_client = FakeGitHubClient()
-    issue = _make_ready_issue(
-        104, "Issue #104", "PRD path: `tasks/example.md`", ("agent/running",)
-    )
+    issue = _make_ready_issue(104, "Issue #104", "PRD path: `tasks/example.md`", ("agent/running",))
     exc = subprocess.CalledProcessError(
         returncode=1,
         cmd=[
@@ -161,10 +149,7 @@ def test_mark_issue_failed_transition_failure_recovery_guidance() -> None:
     body = comment_calls[0]["body"]
     assert "## Agent Runner Failed" in body
     assert "### How To Recover" in body
-    assert (
-        "gh issue edit 104 --add-label agent/supervising --remove-label agent/failed"
-        in body
-    )
+    assert "gh issue edit 104 --add-label agent/supervising --remove-label agent/failed" in body
     assert "finished its work" in body
     assert "agent/ready" not in body
     label_calls = [c for c in fake_client.calls if c["method"] == "edit_issue_labels"]
@@ -369,9 +354,7 @@ def test_guard_blocked_issue_has_resolution_skips_without_marker() -> None:
 def test_run_once_dry_run_lists_blocked_resolution() -> None:
     """Dry run should list a blocked issue with a resolution marker."""
     fake_client = FakeGitHubClient()
-    fake_client.list_review_candidate_issues = lambda labels, limit: [
-        _make_blocked_issue(5)
-    ]
+    fake_client.list_review_candidate_issues = lambda labels, limit: [_make_blocked_issue(5)]
     marker = format_event_marker(
         phase="blocked_resolution_requested", cycle=1, blocked_paths=(".env.example",)
     )
@@ -434,9 +417,7 @@ def test_worktree_needs_rebase_recovery_detects_rebase_and_detached(
     from backend.core.use_cases import agent_runner_worktree_probe as probe
 
     issue = _make_ready_issue(85, "Issue #85", "", ("agent/running",))
-    monkeypatch.setattr(
-        probe, "_find_worktree_path_for_issue", lambda *a, **k: tmp_path
-    )
+    monkeypatch.setattr(probe, "_find_worktree_path_for_issue", lambda *a, **k: tmp_path)
 
     def _probe() -> bool:
         return orchestrate._worktree_needs_rebase_recovery(
@@ -501,9 +482,7 @@ def test_run_once_routes_mid_rebase_running_issue_to_recovery(
     import backend.core.use_cases.agent_runner_orchestrate as orchestrate
 
     running_label = AppConfig().labels.running
-    running_issue = _make_ready_issue(
-        85, "Issue #85", "PRD path: `tasks/x.md`", (running_label,)
-    )
+    running_issue = _make_ready_issue(85, "Issue #85", "PRD path: `tasks/x.md`", (running_label,))
     fake_client = FakeGitHubClient()
     fake_client.list_ready_issues = lambda ready_label, limit: []
     fake_client.list_review_candidate_issues = (
@@ -515,12 +494,8 @@ def test_run_once_routes_mid_rebase_running_issue_to_recovery(
         "_has_existing_local_commit_ready_for_publish",
         lambda **_kwargs: False,
     )
-    monkeypatch.setattr(
-        orchestrate, "_worktree_needs_rebase_recovery", lambda **_kwargs: True
-    )
-    caplog.set_level(
-        logging.INFO, logger="backend.core.use_cases.agent_runner_orchestrate"
-    )
+    monkeypatch.setattr(orchestrate, "_worktree_needs_rebase_recovery", lambda **_kwargs: True)
+    caplog.set_level(logging.INFO, logger="backend.core.use_cases.agent_runner_orchestrate")
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -545,9 +520,7 @@ def test_run_once_skips_running_issue_without_recoverable_state(
     import backend.core.use_cases.agent_runner_orchestrate as orchestrate
 
     running_label = AppConfig().labels.running
-    running_issue = _make_ready_issue(
-        85, "Issue #85", "PRD path: `tasks/x.md`", (running_label,)
-    )
+    running_issue = _make_ready_issue(85, "Issue #85", "PRD path: `tasks/x.md`", (running_label,))
     fake_client = FakeGitHubClient()
     fake_client.list_ready_issues = lambda ready_label, limit: []
     fake_client.list_review_candidate_issues = (
@@ -559,12 +532,8 @@ def test_run_once_skips_running_issue_without_recoverable_state(
         "_has_existing_local_commit_ready_for_publish",
         lambda **_kwargs: False,
     )
-    monkeypatch.setattr(
-        orchestrate, "_worktree_needs_rebase_recovery", lambda **_kwargs: False
-    )
-    caplog.set_level(
-        logging.INFO, logger="backend.core.use_cases.agent_runner_orchestrate"
-    )
+    monkeypatch.setattr(orchestrate, "_worktree_needs_rebase_recovery", lambda **_kwargs: False)
+    caplog.set_level(logging.INFO, logger="backend.core.use_cases.agent_runner_orchestrate")
 
     exit_code = run_once(
         repo_path=Path("."),
@@ -596,9 +565,7 @@ def test_running_publish_recovery_holds_worktree_lock_around_heal(
     issue = _make_ready_issue(85, "Issue #85", "", (AppConfig().labels.running,))
 
     monkeypatch.setattr(orchestrate, "choose_agent", lambda *a, **k: "claude")
-    monkeypatch.setattr(
-        orchestrate, "_find_worktree_path_for_issue", lambda *a, **k: tmp_path
-    )
+    monkeypatch.setattr(orchestrate, "_find_worktree_path_for_issue", lambda *a, **k: tmp_path)
     monkeypatch.setattr(
         orchestrate,
         "_acquire_blocked_claim_lock",
@@ -614,9 +581,7 @@ def test_running_publish_recovery_holds_worktree_lock_around_heal(
         "_ensure_worktree_branch",
         lambda *a, **k: events.append("heal"),
     )
-    monkeypatch.setattr(
-        orchestrate, "_reuse_existing_local_commit", lambda *a, **k: object()
-    )
+    monkeypatch.setattr(orchestrate, "_reuse_existing_local_commit", lambda *a, **k: object())
     monkeypatch.setattr(
         orchestrate,
         "_finish_existing_commit_publication",
@@ -702,9 +667,7 @@ def test_process_prd_rework_issues_lands_pr_in_worktree(tmp_path: Path) -> None:
     worktree_path.parent.mkdir(parents=True)
     _git(["worktree", "add", "-b", "issue-87", str(worktree_path), "main"], repo_path)
 
-    issue = _make_ready_issue(
-        87, "Generate PRD", "Need a feature.", ("agent/rework-prd",)
-    )
+    issue = _make_ready_issue(87, "Generate PRD", "Need a feature.", ("agent/rework-prd",))
     fake_client = FakeGitHubClient()
     fake_client.set_rework_prd_issues([issue])
 
@@ -881,9 +844,7 @@ def test_fallback_switches_on_max_retries_exhausted() -> None:
     config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
     process_for_agent, calls = _agent_outcomes(
         {
-            "claude": MaxRetriesExceededError(
-                [_attempt("no commits", FailureType.NO_COMMITS)]
-            ),
+            "claude": MaxRetriesExceededError([_attempt("no commits", FailureType.NO_COMMITS)]),
             "codex": None,
         }
     )
@@ -963,9 +924,7 @@ def test_fallback_respects_max_agent_switches() -> None:
     )
     process_for_agent, calls = _agent_outcomes(
         {
-            "claude": MaxRetriesExceededError(
-                [_attempt("claude failed", FailureType.NO_COMMITS)]
-            ),
+            "claude": MaxRetriesExceededError([_attempt("claude failed", FailureType.NO_COMMITS)]),
             "codex": MaxRetriesExceededError(
                 [_attempt("codex failed", FailureType.VERIFICATION_FAILED)]
             ),
@@ -990,9 +949,7 @@ def test_fallback_merges_attempt_history_with_agent_labels() -> None:
     config = AppConfig(runner=RunnerConfig(agent_fallback_order=("claude", "codex")))
     process_for_agent, _calls = _agent_outcomes(
         {
-            "claude": MaxRetriesExceededError(
-                [_attempt("claude failed", FailureType.NO_COMMITS)]
-            ),
+            "claude": MaxRetriesExceededError([_attempt("claude failed", FailureType.NO_COMMITS)]),
             "codex": ProviderCapacityError(
                 "codex at capacity",
                 [_attempt("codex capacity", FailureType.PROVIDER_CAPACITY)],
@@ -1015,11 +972,7 @@ def test_fallback_merges_attempt_history_with_agent_labels() -> None:
 def test_fallback_single_agent_reraises_with_agent_stamp() -> None:
     """With fallback disabled, the single agent's failure is stamped."""
     process_for_agent, calls = _agent_outcomes(
-        {
-            "codex": MaxRetriesExceededError(
-                [_attempt("no commits", FailureType.NO_COMMITS)]
-            )
-        }
+        {"codex": MaxRetriesExceededError([_attempt("no commits", FailureType.NO_COMMITS)])}
     )
 
     with pytest.raises(MaxRetriesExceededError) as exc_info:
@@ -1209,9 +1162,7 @@ def test_run_once_marks_failed_with_merged_history_when_all_agents_fail(
         if c["method"] == "edit_issue_labels" and "agent/failed" in c.get("add", [])
     ]
     assert len(failed_calls) == 1
-    failure_comment = [c for c in fake_client.calls if c["method"] == "comment_issue"][
-        -1
-    ]["body"]
+    failure_comment = [c for c in fake_client.calls if c["method"] == "comment_issue"][-1]["body"]
     assert "| codex |" in failure_comment
     assert "| claude |" in failure_comment
 
@@ -1315,9 +1266,7 @@ def test_run_once_parallel_writes_per_issue_logs(monkeypatch, tmp_path) -> None:
     assert list(issue_log_dir.glob("issue-2-*.log"))
 
 
-def test_run_once_sequential_default_writes_no_per_issue_logs(
-    monkeypatch, tmp_path
-) -> None:
+def test_run_once_sequential_default_writes_no_per_issue_logs(monkeypatch, tmp_path) -> None:
     """concurrency<=1 keeps the sequential path with no per-Issue routing/logs."""
     from backend.core.use_cases import agent_runner_orchestrate as orchestrate
 

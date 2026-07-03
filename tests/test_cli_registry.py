@@ -86,11 +86,11 @@ def test_registry_list_skips_non_running_records() -> None:
         nonlocal captured_table
         captured_table = value
 
-    with patch(
-        "backend.api.cli_registry.create_registry_editor", return_value=editor
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor", return_value=supervisor
-    ), patch("backend.api.cli_registry.console.print", side_effect=_capture_print):
+    with (
+        patch("backend.api.cli_registry.create_registry_editor", return_value=editor),
+        patch("backend.api.cli_registry.create_process_supervisor", return_value=supervisor),
+        patch("backend.api.cli_registry.console.print", side_effect=_capture_print),
+    ):
         exit_code = _run_registry_list_command(MagicMock())
 
     assert exit_code == 0
@@ -129,16 +129,22 @@ def test_registry_start_uses_config_directory_as_spawn_cwd(tmp_path: Path) -> No
         no_review_daemon=True,
     )
 
-    with patch(
-        "backend.api.cli_registry.load_fresh_agent_runner_settings",
-        return_value=settings,
-    ), patch("backend.api.cli_registry.create_process_supervisor"), patch(
-        "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
-        return_value=([context], []),
-    ), patch(
-        "backend.api.cli_registry.resolve_registry_config_toml_path",
-        return_value=config_path,
-    ), patch("backend.api.cli_registry.start_runner_process", new=start_mock):
+    with (
+        patch(
+            "backend.api.cli_registry.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
+        patch("backend.api.cli_registry.create_process_supervisor"),
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
+            return_value=([context], []),
+        ),
+        patch(
+            "backend.api.cli_registry.resolve_registry_config_toml_path",
+            return_value=config_path,
+        ),
+        patch("backend.api.cli_registry.start_runner_process", new=start_mock),
+    ):
         exit_code = _run_registry_start_command(parsed, MagicMock())
 
     assert exit_code == 0
@@ -168,16 +174,22 @@ def test_registry_start_rejects_missing_repo_path(tmp_path: Path) -> None:
         no_review_daemon=True,
     )
 
-    with patch(
-        "backend.api.cli_registry.load_fresh_agent_runner_settings",
-        return_value=settings,
-    ), patch("backend.api.cli_registry.create_process_supervisor"), patch(
-        "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
-        return_value=([], []),
-    ), patch(
-        "backend.api.cli_registry.resolve_registry_config_toml_path",
-        return_value=config_path,
-    ), patch("backend.api.cli_registry.start_runner_process", new=start_mock):
+    with (
+        patch(
+            "backend.api.cli_registry.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
+        patch("backend.api.cli_registry.create_process_supervisor"),
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
+            return_value=([], []),
+        ),
+        patch(
+            "backend.api.cli_registry.resolve_registry_config_toml_path",
+            return_value=config_path,
+        ),
+        patch("backend.api.cli_registry.start_runner_process", new=start_mock),
+    ):
         exit_code = _run_registry_start_command(parsed, MagicMock())
 
     assert exit_code == 1
@@ -212,11 +224,11 @@ def test_registry_list_includes_running_records() -> None:
         nonlocal captured_table
         captured_table = value
 
-    with patch(
-        "backend.api.cli_registry.create_registry_editor", return_value=editor
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor", return_value=supervisor
-    ), patch("backend.api.cli_registry.console.print", side_effect=_capture_print):
+    with (
+        patch("backend.api.cli_registry.create_registry_editor", return_value=editor),
+        patch("backend.api.cli_registry.create_process_supervisor", return_value=supervisor),
+        patch("backend.api.cli_registry.console.print", side_effect=_capture_print),
+    ):
         exit_code = _run_registry_list_command(MagicMock())
 
     assert exit_code == 0
@@ -253,11 +265,11 @@ def test_registry_list_shows_unmanaged_running() -> None:
         nonlocal captured_table
         captured_table = value
 
-    with patch(
-        "backend.api.cli_registry.create_registry_editor", return_value=editor
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor", return_value=supervisor
-    ), patch("backend.api.cli_registry.console.print", side_effect=_capture_print):
+    with (
+        patch("backend.api.cli_registry.create_registry_editor", return_value=editor),
+        patch("backend.api.cli_registry.create_process_supervisor", return_value=supervisor),
+        patch("backend.api.cli_registry.console.print", side_effect=_capture_print),
+    ):
         exit_code = _run_registry_list_command(MagicMock())
 
     assert exit_code == 0
@@ -303,11 +315,11 @@ def test_registry_list_prefers_managed_over_unmanaged() -> None:
         nonlocal captured_table
         captured_table = value
 
-    with patch(
-        "backend.api.cli_registry.create_registry_editor", return_value=editor
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor", return_value=supervisor
-    ), patch("backend.api.cli_registry.console.print", side_effect=_capture_print):
+    with (
+        patch("backend.api.cli_registry.create_registry_editor", return_value=editor),
+        patch("backend.api.cli_registry.create_process_supervisor", return_value=supervisor),
+        patch("backend.api.cli_registry.console.print", side_effect=_capture_print),
+    ):
         exit_code = _run_registry_list_command(MagicMock())
 
     assert exit_code == 0
@@ -337,16 +349,22 @@ def test_takeover_start_daemons_uses_config_directory_as_spawn_cwd(
     start_mock = MagicMock()
     start_mock.return_value = MagicMock(process_id="proc456")
 
-    with patch(
-        "backend.api.cli_takeover.load_fresh_agent_runner_settings",
-        return_value=settings,
-    ), patch("backend.api.cli_takeover.create_process_supervisor"), patch(
-        "backend.api.cli_takeover.resolve_repository_targets_with_diagnostics",
-        return_value=([context], []),
-    ), patch(
-        "backend.api.cli_takeover.resolve_registry_config_toml_path",
-        return_value=config_path,
-    ), patch("backend.api.cli_takeover.start_runner_process", new=start_mock):
+    with (
+        patch(
+            "backend.api.cli_takeover.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
+        patch("backend.api.cli_takeover.create_process_supervisor"),
+        patch(
+            "backend.api.cli_takeover.resolve_repository_targets_with_diagnostics",
+            return_value=([context], []),
+        ),
+        patch(
+            "backend.api.cli_takeover.resolve_registry_config_toml_path",
+            return_value=config_path,
+        ),
+        patch("backend.api.cli_takeover.start_runner_process", new=start_mock),
+    ):
         _start_daemons_for_repo("zata-zhangtao-keda", repo_path)
 
     assert start_mock.call_count == 2
@@ -412,9 +430,7 @@ def test_logs_command_prints_tail_lines(tmp_path: Path, capsys) -> None:
     tail_mock = MagicMock(
         side_effect=[
             ProcessLogChunk(
-                content=log_file.read_text(encoding="utf-8")[
-                    -min(log_size, 64 * 1024) :
-                ],
+                content=log_file.read_text(encoding="utf-8")[-min(log_size, 64 * 1024) :],
                 next_offset=log_size,
                 eof=False,
             )
@@ -428,13 +444,17 @@ def test_logs_command_prints_tail_lines(tmp_path: Path, capsys) -> None:
         repo_id="fixture-repo",
     )
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=supervisor,
-    ), patch("backend.api.cli_registry.tail_runner_log", new=tail_mock):
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=supervisor,
+        ),
+        patch("backend.api.cli_registry.tail_runner_log", new=tail_mock),
+    ):
         exit_code = _run_logs_command(
             parsed=parsed,
             process_runner=MagicMock(),
@@ -471,16 +491,18 @@ def test_logs_command_fallback_when_no_records(tmp_path: Path) -> None:
         printable = args[0] if args else kwargs.get("__rich_object__", "")
         printed_chunks.append(str(printable))
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=supervisor,
-    ), patch("backend.api.cli_registry.tail_runner_log") as tail_mock, patch(
-        "backend.api.cli_registry.datetime"
-    ) as datetime_mock, patch(
-        "backend.api.cli_registry.console.print", side_effect=_capture_console_print
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=supervisor,
+        ),
+        patch("backend.api.cli_registry.tail_runner_log") as tail_mock,
+        patch("backend.api.cli_registry.datetime") as datetime_mock,
+        patch("backend.api.cli_registry.console.print", side_effect=_capture_console_print),
     ):
         datetime_mock.now.return_value.strftime.return_value = "2026-06-24"
         exit_code = _run_logs_command(
@@ -527,16 +549,18 @@ def test_logs_command_fallback_when_log_file_missing(tmp_path: Path) -> None:
         printable = args[0] if args else kwargs.get("__rich_object__", "")
         printed_chunks.append(str(printable))
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=supervisor,
-    ), patch("backend.api.cli_registry.tail_runner_log") as tail_mock, patch(
-        "backend.api.cli_registry.datetime"
-    ) as datetime_mock, patch(
-        "backend.api.cli_registry.console.print", side_effect=_capture_console_print
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=supervisor,
+        ),
+        patch("backend.api.cli_registry.tail_runner_log") as tail_mock,
+        patch("backend.api.cli_registry.datetime") as datetime_mock,
+        patch("backend.api.cli_registry.console.print", side_effect=_capture_console_print),
     ):
         datetime_mock.now.return_value.strftime.return_value = "2026-06-24"
         exit_code = _run_logs_command(
@@ -573,9 +597,7 @@ def test_logs_command_follows_new_content_then_sigint(tmp_path: Path, capsys) ->
 
     chunks = [
         ProcessLogChunk(content="initial-tail\n", next_offset=initial_size, eof=False),
-        ProcessLogChunk(
-            content="appended-line\n", next_offset=initial_size + 14, eof=False
-        ),
+        ProcessLogChunk(content="appended-line\n", next_offset=initial_size + 14, eof=False),
     ]
     tail_mock = MagicMock(side_effect=chunks)
 
@@ -600,14 +622,17 @@ def test_logs_command_follows_new_content_then_sigint(tmp_path: Path, capsys) ->
         repo_id="follow-repo",
     )
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=supervisor,
-    ), patch("backend.api.cli_registry.tail_runner_log", new=tail_mock), patch(
-        "backend.api.cli_registry.time.sleep", side_effect=_fake_sleep
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=supervisor,
+        ),
+        patch("backend.api.cli_registry.tail_runner_log", new=tail_mock),
+        patch("backend.api.cli_registry.time.sleep", side_effect=_fake_sleep),
     ):
         exit_code = _run_logs_command(
             parsed=parsed,
@@ -654,18 +679,22 @@ def test_logs_command_kind_review_daemon(tmp_path: Path, capsys) -> None:
         repo_id="mixed-repo",
     )
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=supervisor,
-    ), patch(
-        "backend.api.cli_registry.tail_runner_log",
-        return_value=ProcessLogChunk(
-            content="line 0002: daemon step 2\nline 0003: daemon step 3\n",
-            next_offset=log_file.stat().st_size,
-            eof=False,
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.tail_runner_log",
+            return_value=ProcessLogChunk(
+                content="line 0002: daemon step 2\nline 0003: daemon step 3\n",
+                next_offset=log_file.stat().st_size,
+                eof=False,
+            ),
         ),
     ):
         exit_code = _run_logs_command(
@@ -704,18 +733,22 @@ def test_logs_command_omitted_lines_uses_default(tmp_path: Path, capsys) -> None
         repo_id="default-repo",
     )
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=supervisor,
-    ), patch(
-        "backend.api.cli_registry.tail_runner_log",
-        return_value=ProcessLogChunk(
-            content=log_file.read_text(encoding="utf-8"),
-            next_offset=log_file.stat().st_size,
-            eof=False,
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.tail_runner_log",
+            return_value=ProcessLogChunk(
+                content=log_file.read_text(encoding="utf-8"),
+                next_offset=log_file.stat().st_size,
+                eof=False,
+            ),
         ),
     ):
         exit_code = _run_logs_command(
@@ -771,16 +804,21 @@ def test_daemon_status_table_includes_log_path_column(tmp_path: Path) -> None:
         nonlocal captured_table
         captured_table = value
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=supervisor,
-    ), patch(
-        "backend.api.cli_registry.create_registry_editor",
-        return_value=editor,
-    ), patch("backend.api.cli_registry.console.print", side_effect=_capture_print):
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.create_registry_editor",
+            return_value=editor,
+        ),
+        patch("backend.api.cli_registry.console.print", side_effect=_capture_print),
+    ):
         exit_code = _run_daemon_status_command(
             parsed=parsed,
             process_runner=MagicMock(),

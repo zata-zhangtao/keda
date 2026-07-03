@@ -30,9 +30,7 @@ def _mark_issue_failed(
         exc: 捕获的异常对象
     """
     try:
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.failed
-        )
+        transition_issue_workflow_state(github_client, issue.number, config, config.labels.failed)
     except Exception as label_exc:  # noqa: BLE001 - preserve original failure.
         _logger.error(
             "Failed to mark Issue #%d as %s: %s",
@@ -58,9 +56,7 @@ def _mark_issue_failed(
             failure_category=exc.failure_category,
         )
     elif attempt_results is not None:
-        comment_body = format_failure_comment(
-            exc, attempt_results, issue_number=issue.number
-        )
+        comment_body = format_failure_comment(exc, attempt_results, issue_number=issue.number)
     else:
         comment_body = format_failure_comment(exc, issue_number=issue.number)
     try:
@@ -108,9 +104,7 @@ def _mark_issue_blocked(
     )
 
     try:
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.blocked
-        )
+        transition_issue_workflow_state(github_client, issue.number, config, config.labels.blocked)
     except Exception as label_exc:  # noqa: BLE001 - preserve original failure.
         _logger.error(
             "Failed to mark Issue #%d as %s: %s",

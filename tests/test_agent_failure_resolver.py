@@ -12,9 +12,7 @@ from backend.core.shared.models.agent_deliberation import (
 from backend.engines.agent_runner.failure_resolver import AgentFailureResolver
 
 
-def _make_profile(
-    agent: str = "kimi", profile_id: str = "skeptic"
-) -> DeliberationAgentProfile:
+def _make_profile(agent: str = "kimi", profile_id: str = "skeptic") -> DeliberationAgentProfile:
     """Build a profile for failure resolver tests."""
     return DeliberationAgentProfile(
         profile_id=profile_id,
@@ -50,9 +48,7 @@ def _make_config(
                 behavior_prompt="be an implementer",
             ),
         )
-    return DeliberationConfig(
-        profiles=profiles, agent_failure_timeout_seconds=timeout_seconds
-    )
+    return DeliberationConfig(profiles=profiles, agent_failure_timeout_seconds=timeout_seconds)
 
 
 def test_resolve_non_tty_selects_first_available_fallback() -> None:

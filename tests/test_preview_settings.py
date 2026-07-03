@@ -17,9 +17,7 @@ from backend.infrastructure.config.settings import PreviewSettings
 def clean_preview_env():
     """Remove PREVIEW_* environment variables before each test."""
     prefix = "PREVIEW_"
-    original = {
-        key: value for key, value in os.environ.items() if key.startswith(prefix)
-    }
+    original = {key: value for key, value in os.environ.items() if key.startswith(prefix)}
     for key in list(os.environ.keys()):
         if key.startswith(prefix):
             del os.environ[key]

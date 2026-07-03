@@ -40,9 +40,7 @@ def roadmap_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(roadmap_routes, "create_roadmap_store", lambda: store)
     monkeypatch.setattr(roadmap_routes, "_resolve_contexts", lambda: contexts)
-    monkeypatch.setattr(
-        roadmap_routes, "create_github_client", lambda repo_path: github_client
-    )
+    monkeypatch.setattr(roadmap_routes, "create_github_client", lambda repo_path: github_client)
     monkeypatch.setattr(
         roadmap_routes,
         "create_process_runner",
@@ -87,9 +85,7 @@ def roadmap_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             runner_command=["echo", "fake"],
         )
     )
-    monkeypatch.setattr(
-        roadmap_routes, "load_fresh_agent_runner_settings", lambda: fake_settings
-    )
+    monkeypatch.setattr(roadmap_routes, "load_fresh_agent_runner_settings", lambda: fake_settings)
 
     return {
         "store": store,
@@ -129,9 +125,7 @@ def test_start_prd_rejects_missing_repo(roadmap_environment) -> None:
     """Starting a PRD for an unknown repo must return 400."""
     import base64
 
-    encoded = base64.urlsafe_b64encode(
-        b"tasks/pending/P1-FEAT-20260101-test.md"
-    ).decode("ascii")
+    encoded = base64.urlsafe_b64encode(b"tasks/pending/P1-FEAT-20260101-test.md").decode("ascii")
     response = client.post(
         f"/api/v1/agent-runner/roadmap/prds/{encoded}/start",
         json={"repo_id": "unknown"},

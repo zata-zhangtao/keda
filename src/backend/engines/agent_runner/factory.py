@@ -135,13 +135,9 @@ def _build_generated_content_config(
         fallback=gc_settings.fallback,
         max_input_chars=gc_settings.max_input_chars,
         default_agent=gc_settings.default_agent,
-        issue_from_prd=_build_generated_content_target_config(
-            gc_settings.issue_from_prd
-        ),
+        issue_from_prd=_build_generated_content_target_config(gc_settings.issue_from_prd),
         draft_pr=_build_generated_content_target_config(gc_settings.draft_pr),
-        prd_from_issue=_build_generated_content_target_config(
-            gc_settings.prd_from_issue
-        ),
+        prd_from_issue=_build_generated_content_target_config(gc_settings.prd_from_issue),
     )
 
 
@@ -196,9 +192,7 @@ def build_app_config_from_settings(
 
     pre_pr = agent_runner_settings.pre_pr_review
     post_supervisor = agent_runner_settings.post_pr_supervisor
-    generated_content = _build_generated_content_config(
-        agent_runner_settings.generated_content
-    )
+    generated_content = _build_generated_content_config(agent_runner_settings.generated_content)
     interactive_decision = agent_runner_settings.interactive_decision
     repl = _build_repl_config(agent_runner_settings.repl)
     deliberation = _build_deliberation_config(agent_runner_settings.deliberation)
@@ -214,6 +208,7 @@ def build_app_config_from_settings(
             waiting=label_settings.waiting,
             validation_pending=label_settings.validation_pending,
             validation_passed=label_settings.validation_passed,
+            verifier_passed=label_settings.verifier_passed,
             group_prefix=label_settings.group_prefix,
             rework_prd=label_settings.rework_prd,
             deliberate=label_settings.deliberate,
@@ -265,6 +260,7 @@ def build_app_config_from_settings(
             verifier_enabled=validation_settings.verifier_enabled,
             verifier_agent=validation_settings.verifier_agent,
             verifier_timeout_seconds=validation_settings.verifier_timeout_seconds,
+            artifact_health_enabled=validation_settings.artifact_health_enabled,
         ),
         prompts=PromptConfig(
             default_phase=prompt_settings.default_phase,
@@ -287,9 +283,7 @@ def build_app_config_from_settings(
             crash_retry_initial_backoff_seconds=(
                 post_supervisor.crash_retry_initial_backoff_seconds
             ),
-            crash_retry_max_backoff_seconds=(
-                post_supervisor.crash_retry_max_backoff_seconds
-            ),
+            crash_retry_max_backoff_seconds=(post_supervisor.crash_retry_max_backoff_seconds),
         ),
         generated_content=generated_content,
         interactive_decision=InteractiveDecisionConfig(
@@ -357,9 +351,7 @@ def get_agent_runner_status_data() -> dict:
             "max_issues": app_config.runner.max_issues,
             "default_agent": app_config.runner.default_agent,
             "max_recovery_attempts": app_config.runner.max_recovery_attempts,
-            "recovery_retry_delay_seconds": (
-                app_config.runner.recovery_retry_delay_seconds
-            ),
+            "recovery_retry_delay_seconds": (app_config.runner.recovery_retry_delay_seconds),
             "ready_label": app_config.labels.ready,
             "running_label": app_config.labels.running,
             "supervising_label": app_config.labels.supervising,
@@ -386,9 +378,7 @@ def _model_to_dict(model: object) -> dict:
 def _pydantic_override_dict(override_model: BaseModel) -> dict:
     """Return only explicitly-set fields from a pydantic override model."""
     return {
-        k: v
-        for k, v in override_model.model_dump().items()
-        if k in override_model.model_fields_set
+        k: v for k, v in override_model.model_dump().items() if k in override_model.model_fields_set
     }
 
 
@@ -422,12 +412,9 @@ def _merge_label_config(
         failed=override_data.get("failed", base_config.failed),
         blocked=override_data.get("blocked", base_config.blocked),
         waiting=override_data.get("waiting", base_config.waiting),
-        validation_pending=override_data.get(
-            "validation_pending", base_config.validation_pending
-        ),
-        validation_passed=override_data.get(
-            "validation_passed", base_config.validation_passed
-        ),
+        validation_pending=override_data.get("validation_pending", base_config.validation_pending),
+        validation_passed=override_data.get("validation_passed", base_config.validation_passed),
+        verifier_passed=override_data.get("verifier_passed", base_config.verifier_passed),
         group_prefix=override_data.get("group_prefix", base_config.group_prefix),
         rework_prd=override_data.get("rework_prd", base_config.rework_prd),
         deliberate=override_data.get("deliberate", base_config.deliberate),
@@ -482,16 +469,10 @@ def _merge_generated_content_target_config(
         title_template=override_data.get("title_template", base_config.title_template),
         body_template=override_data.get("body_template", base_config.body_template),
         agent=override_data.get("agent", base_config.agent),
-        timeout_seconds=override_data.get(
-            "timeout_seconds", base_config.timeout_seconds
-        ),
+        timeout_seconds=override_data.get("timeout_seconds", base_config.timeout_seconds),
         prompt=override_data.get("prompt", base_config.prompt),
-        include_commit_log=override_data.get(
-            "include_commit_log", base_config.include_commit_log
-        ),
-        include_diff_stat=override_data.get(
-            "include_diff_stat", base_config.include_diff_stat
-        ),
+        include_commit_log=override_data.get("include_commit_log", base_config.include_commit_log),
+        include_diff_stat=override_data.get("include_diff_stat", base_config.include_diff_stat),
     )
 
 
@@ -506,9 +487,7 @@ def _merge_generated_content_config(
     return GeneratedContentConfig(
         enabled=override_data.get("enabled", base_config.enabled),
         fallback=override_data.get("fallback", base_config.fallback),
-        max_input_chars=override_data.get(
-            "max_input_chars", base_config.max_input_chars
-        ),
+        max_input_chars=override_data.get("max_input_chars", base_config.max_input_chars),
         default_agent=override_data.get("default_agent", base_config.default_agent),
         issue_from_prd=_merge_generated_content_target_config(
             base_config.issue_from_prd,
@@ -551,9 +530,7 @@ def _merge_deliberation_config(
         default_synthesizer=override_data.get(
             "default_synthesizer", base_config.default_synthesizer
         ),
-        default_output_dir=override_data.get(
-            "default_output_dir", base_config.default_output_dir
-        ),
+        default_output_dir=override_data.get("default_output_dir", base_config.default_output_dir),
         continue_on_agent_error=override_data.get(
             "continue_on_agent_error", base_config.continue_on_agent_error
         ),
@@ -597,13 +574,9 @@ def merge_repository_config(
     worktree = _merge_optional_model(global_config.worktree, repo_settings.worktree)
     runner = _merge_optional_model(global_config.runner, repo_settings.runner)
     safety = _merge_optional_model(global_config.safety, repo_settings.safety)
-    validation = _merge_optional_model(
-        global_config.validation, repo_settings.validation
-    )
+    validation = _merge_optional_model(global_config.validation, repo_settings.validation)
     prompts = _merge_prompt_config(global_config.prompts, repo_settings.prompts)
-    pre_pr_review = _merge_optional_model(
-        global_config.pre_pr_review, repo_settings.pre_pr_review
-    )
+    pre_pr_review = _merge_optional_model(global_config.pre_pr_review, repo_settings.pre_pr_review)
     post_pr_supervisor = _merge_optional_model(
         global_config.post_pr_supervisor, repo_settings.post_pr_supervisor
     )
@@ -830,9 +803,7 @@ def resolve_repository_targets(
         ]
 
     if all_repositories:
-        enabled_repos = {
-            rid: rcfg for rid, rcfg in settings.repositories.items() if rcfg.enabled
-        }
+        enabled_repos = {rid: rcfg for rid, rcfg in settings.repositories.items() if rcfg.enabled}
         if not enabled_repos:
             raise ValueError("--all was provided, but no enabled repositories exist.")
         contexts: list[RepositoryRunContext] = []
@@ -894,9 +865,7 @@ def resolve_repository_targets_with_diagnostics(
         Tuple of (resolved contexts, per-repository resolution failures).
     """
     global_config = build_app_config_from_settings(settings)
-    enabled_repos = {
-        rid: rcfg for rid, rcfg in settings.repositories.items() if rcfg.enabled
-    }
+    enabled_repos = {rid: rcfg for rid, rcfg in settings.repositories.items() if rcfg.enabled}
     if not enabled_repos:
         return (
             resolve_repository_targets(settings, fallback_path=fallback_path),
@@ -1190,9 +1159,7 @@ def create_content_generator(
     read_only: bool = True,
 ) -> SubprocessContentGenerator:
     """Create a content generator instance."""
-    return SubprocessContentGenerator(
-        process_runner or SubprocessRunner(), read_only=read_only
-    )
+    return SubprocessContentGenerator(process_runner or SubprocessRunner(), read_only=read_only)
 
 
 def resolve_issue_from_prd_target(
@@ -1349,9 +1316,7 @@ def create_repl_command_executor(
 
     if config is None:
         config = build_app_config().repl
-    return ReplCommandExecutor(
-        process_runner=process_runner or SubprocessRunner(), config=config
-    )
+    return ReplCommandExecutor(process_runner=process_runner or SubprocessRunner(), config=config)
 
 
 def create_loop_state_store(state_path: Path | None = None) -> JsonLoopStateStore:

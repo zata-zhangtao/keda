@@ -135,19 +135,13 @@ class WorktreeManager:
             exclude_path = self._repo_root_path / exclude_path
         try:
             existing_text = (
-                exclude_path.read_text(encoding="utf-8")
-                if exclude_path.is_file()
-                else ""
+                exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
             )
             if exclude_line in existing_text.splitlines():
                 return
             exclude_path.parent.mkdir(parents=True, exist_ok=True)
-            separator = (
-                "" if not existing_text or existing_text.endswith("\n") else "\n"
-            )
-            exclude_path.write_text(
-                f"{existing_text}{separator}{exclude_line}\n", encoding="utf-8"
-            )
+            separator = "" if not existing_text or existing_text.endswith("\n") else "\n"
+            exclude_path.write_text(f"{existing_text}{separator}{exclude_line}\n", encoding="utf-8")
         except OSError:
             return
 

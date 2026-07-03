@@ -83,8 +83,7 @@ def main(argv: list[str]) -> int:
                 if stream is proc.stdout:
                     stdout_buffer += chunk
                     print(
-                        f"[rv-follow] stdout chunk len={len(chunk)} "
-                        f"total={len(stdout_buffer)}",
+                        f"[rv-follow] stdout chunk len={len(chunk)} " f"total={len(stdout_buffer)}",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -99,11 +98,7 @@ def main(argv: list[str]) -> int:
                         with args.log_file.open("a", encoding="utf-8") as log_file:
                             log_file.write(APPEND_SENTINEL + "\n")
                         appended = True
-                    if (
-                        appended
-                        and APPEND_SENTINEL.encode() in stdout_buffer
-                        and not sent_sigint
-                    ):
+                    if appended and APPEND_SENTINEL.encode() in stdout_buffer and not sent_sigint:
                         args.after_output.write_bytes(stdout_buffer)
                         print(
                             "[rv-follow] appended line captured, sending SIGINT",

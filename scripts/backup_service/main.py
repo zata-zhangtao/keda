@@ -55,9 +55,7 @@ def _run_backup(config: BackupConfig, s3: S3Client) -> None:
     """Execute a single backup cycle: DB, logs, resources, upload, cleanup."""
     now = datetime.now(timezone.utc)
     timestamp: str = now.strftime("%Y-%m-%d_%H%M%S")
-    backup_type: str = (
-        "full" if _is_full_backup_day(now, config.full_backup_day) else "incremental"
-    )
+    backup_type: str = "full" if _is_full_backup_day(now, config.full_backup_day) else "incremental"
 
     work_dir = Path(config.work_dir) / timestamp
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -123,9 +121,7 @@ def _run_backup(config: BackupConfig, s3: S3Client) -> None:
                 snapshot,
                 backup_type == "full",
             )
-            resources_key = (
-                f"{config.s3_prefix}/{timestamp}/{backup_type}/resources.tar.gz"
-            )
+            resources_key = f"{config.s3_prefix}/{timestamp}/{backup_type}/resources.tar.gz"
             s3.upload_file(resources_output, resources_key)
             manifest["files"].append(
                 {

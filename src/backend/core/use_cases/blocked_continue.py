@@ -70,9 +70,7 @@ def blocked_continue_issue(
 
     # Validate worktree
     try:
-        worktree_path = _find_worktree_path_for_issue(
-            repo_path, issue, config, process_runner
-        )
+        worktree_path = _find_worktree_path_for_issue(repo_path, issue, config, process_runner)
     except Exception as exc:
         raise BlockedContinueError(
             f"Could not locate worktree for Issue #{issue_number}: {exc}"
@@ -107,9 +105,7 @@ def blocked_continue_issue(
         blocked_paths=blocked_paths,
     )
     github_client.comment_issue(issue_number, marker)
-    _logger.info(
-        "Wrote blocked_resolution_requested marker for Issue #%d.", issue_number
-    )
+    _logger.info("Wrote blocked_resolution_requested marker for Issue #%d.", issue_number)
 
     # CAS claim
     claimed = claim_blocked_issue(github_client, issue_number, config)

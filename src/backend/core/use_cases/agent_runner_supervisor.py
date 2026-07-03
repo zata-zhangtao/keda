@@ -252,9 +252,7 @@ def _run_supervisor_with_repair_loop(
                 github_client, issue.number, config, config.labels.supervising
             )
             # 更新完整 PR 上下文后再继续循环，避免未知 mergeability 被批准。
-            refreshed_pr_context = github_client.get_pull_request_context(
-                current_pr_context.branch
-            )
+            refreshed_pr_context = github_client.get_pull_request_context(current_pr_context.branch)
             if refreshed_pr_context is None:
                 _logger.warning(
                     "Deferring post-repair supervisor for Issue #%d branch %s: "
@@ -324,9 +322,7 @@ def _run_supervisor_with_repair_loop(
             transition_issue_workflow_state(
                 github_client, issue.number, config, config.labels.supervising
             )
-            refreshed_pr_context = github_client.get_pull_request_context(
-                current_pr_context.branch
-            )
+            refreshed_pr_context = github_client.get_pull_request_context(current_pr_context.branch)
             if refreshed_pr_context is None:
                 _logger.warning(
                     "Deferring post-rebase supervisor for Issue #%d branch %s: "
@@ -341,12 +337,8 @@ def _run_supervisor_with_repair_loop(
         # 未知动作：标记为 blocked
         if stashed:
             pop_worktree_stash(worktree_path, process_runner)
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.blocked
-        )
+        transition_issue_workflow_state(github_client, issue.number, config, config.labels.blocked)
         return
 
     # 循环耗尽仍未批准：标记为 blocked
-    transition_issue_workflow_state(
-        github_client, issue.number, config, config.labels.blocked
-    )
+    transition_issue_workflow_state(github_client, issue.number, config, config.labels.blocked)

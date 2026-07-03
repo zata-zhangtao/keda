@@ -139,9 +139,7 @@ class TestFindModelProviders:
     def test_find_unknown_model_infers_provider(self) -> None:
         """Test that unknown model infers provider."""
         config: dict[str, Any] = load_models_config()
-        providers: list[tuple[str, Any]] = _find_model_providers(
-            "unknown-model", config
-        )
+        providers: list[tuple[str, Any]] = _find_model_providers("unknown-model", config)
 
         assert len(providers) == 1
         assert providers[0][0] == "openai"
@@ -193,9 +191,7 @@ class TestResolveProviderApiKey:
     def test_resolve_explicit_api_key(self) -> None:
         """Test that explicit API key takes priority."""
         config: dict[str, Any] = {"api_key_env": "TEST_ENV_KEY"}
-        resolved_key: str | None = _resolve_provider_api_key(
-            "test", config, "explicit-api-key"
-        )
+        resolved_key: str | None = _resolve_provider_api_key("test", config, "explicit-api-key")
 
         assert resolved_key == "explicit-api-key"
 
@@ -208,9 +204,7 @@ class TestResolveProviderApiKey:
 
         assert resolved_key == "custom-key-value"
 
-    def test_resolve_from_default_env_var(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_resolve_from_default_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test resolving API key from default env var."""
         monkeypatch.setenv("OPENAI_API_KEY", "openai-key-value")
         config: dict[str, Any] = {}
@@ -235,9 +229,7 @@ class TestResolveModelCredentials:
         """Test resolving credentials for gpt-4."""
         monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
-        credentials: list[tuple[str, str | None, str | None]] = (
-            resolve_model_credentials("gpt-4")
-        )
+        credentials: list[tuple[str, str | None, str | None]] = resolve_model_credentials("gpt-4")
 
         assert len(credentials) > 0
         provider, base_url, api_key = credentials[0]
@@ -247,8 +239,8 @@ class TestResolveModelCredentials:
 
     def test_resolve_with_explicit_api_key(self) -> None:
         """Test resolving with explicit API key override."""
-        credentials: list[tuple[str, str | None, str | None]] = (
-            resolve_model_credentials("gpt-4", api_key="my-explicit-key")
+        credentials: list[tuple[str, str | None, str | None]] = resolve_model_credentials(
+            "gpt-4", api_key="my-explicit-key"
         )
 
         assert len(credentials) > 0
@@ -256,9 +248,7 @@ class TestResolveModelCredentials:
 
     def test_resolve_deduplicates_credentials(self) -> None:
         """Test that duplicate credentials are deduplicated."""
-        credentials: list[tuple[str, str | None, str | None]] = (
-            resolve_model_credentials("gpt-4")
-        )
+        credentials: list[tuple[str, str | None, str | None]] = resolve_model_credentials("gpt-4")
 
         # Convert to set to check for duplicates
         unique_credentials: set[tuple[str | None, str | None, str | None]] = set(

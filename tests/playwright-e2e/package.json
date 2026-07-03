@@ -2,6 +2,7 @@
   "name": "playwright-e2e",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.3.0",
   "scripts": {
     "test": "playwright test --grep-invert @visual",
     "test:smoke": "playwright test tests/smoke",

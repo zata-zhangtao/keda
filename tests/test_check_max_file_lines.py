@@ -10,7 +10,7 @@ from types import ModuleType
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CHECK_MAX_FILE_LINES_SCRIPT_PATH = REPO_ROOT / "hooks" / "check_max_file_lines.py"
+CHECK_MAX_FILE_LINES_SCRIPT_PATH = REPO_ROOT / "hooks" / "shared" / "check_max_file_lines.py"
 
 
 def load_check_max_file_lines_module() -> ModuleType:
@@ -25,9 +25,7 @@ def load_check_max_file_lines_module() -> ModuleType:
     return check_max_file_lines_module
 
 
-def run_hook(
-    argv: list[str], cwd_path: Path | None = None
-) -> subprocess.CompletedProcess[str]:
+def run_hook(argv: list[str], cwd_path: Path | None = None) -> subprocess.CompletedProcess[str]:
     """Run the hook as a subprocess with the given argv."""
     command_parts = [
         "uv",
@@ -152,9 +150,7 @@ def test_duplicate_paths_are_deduplicated(tmp_path: Path) -> None:
     target_file = tmp_path / "long.py"
     write_file_with_lines(target_file, 12)
 
-    result = run_hook(
-        ["--max-lines", "5", str(target_file), str(tmp_path), str(target_file)]
-    )
+    result = run_hook(["--max-lines", "5", str(target_file), str(tmp_path), str(target_file)])
 
     assert result.returncode == 1
     assert result.stdout.count("long.py") == 1
@@ -191,7 +187,7 @@ def test_expand_paths_function_directly(tmp_path: Path) -> None:
                 "uv",
                 "run",
                 "python",
-                "hooks/check_max_file_lines.py",
+                "hooks/shared/check_max_file_lines.py",
                 "--max-lines",
                 "1000",
                 "--glob",
@@ -226,7 +222,7 @@ def test_old_find_command_tokenized_fails_with_argparse_error() -> None:
     import shlex
 
     old_command = (
-        "uv run python hooks/check_max_file_lines.py --max-lines 1000 "
+        "uv run python hooks/shared/check_max_file_lines.py --max-lines 1000 "
         "$(find src/backend -name '*.py')"
     )
     command_parts = shlex.split(old_command)

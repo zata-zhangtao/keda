@@ -55,9 +55,7 @@ def _run_registry_scan_command(parsed: argparse.Namespace) -> int:
     raise NotImplementedError("Use backend.api.cli for scan/sync dispatch.")
 
 
-def _run_registry_reinit_command(
-    parsed: argparse.Namespace, process_runner: IProcessRunner
-) -> int:
+def _run_registry_reinit_command(parsed: argparse.Namespace, process_runner: IProcessRunner) -> int:
     """Re-initialize an already registered repository's local config."""
     editor = create_registry_editor()
     repo_id = parsed.repo_id
@@ -90,8 +88,7 @@ def _run_registry_reinit_command(
         return 1
 
     console.print(
-        f"[green]Reinitialized[/] {repo_id} "
-        f"(remote={parsed.remote}, path={repo_path})"
+        f"[green]Reinitialized[/] {repo_id} " f"(remote={parsed.remote}, path={repo_path})"
     )
 
     if parsed.start_daemons:
@@ -99,9 +96,7 @@ def _run_registry_reinit_command(
     return 0
 
 
-def _run_registry_remove_command(
-    parsed: argparse.Namespace, process_runner: IProcessRunner
-) -> int:
+def _run_registry_remove_command(parsed: argparse.Namespace, process_runner: IProcessRunner) -> int:
     """Remove a repository from the registry and stop its daemons."""
     editor = create_registry_editor()
     repo_id = parsed.repo_id
@@ -216,9 +211,7 @@ def _run_registry_list_command(process_runner: IProcessRunner) -> int:
     return 0
 
 
-def _run_registry_start_command(
-    parsed: argparse.Namespace, process_runner: IProcessRunner
-) -> int:
+def _run_registry_start_command(parsed: argparse.Namespace, process_runner: IProcessRunner) -> int:
     """Start daemon and review-daemon for registered repositories."""
     settings = load_fresh_agent_runner_settings()
     supervisor = create_process_supervisor()
@@ -234,9 +227,7 @@ def _run_registry_start_command(
     else:
         repo_id = parsed.repo_id
         if repo_id not in settings.repositories:
-            error_console.print(
-                f"[red]Repository '{repo_id}' not found in registry.[/]"
-            )
+            error_console.print(f"[red]Repository '{repo_id}' not found in registry.[/]")
             return 1
         repo_entry = settings.repositories[repo_id]
         if not repo_entry.enabled:
@@ -287,18 +278,14 @@ def _run_registry_start_command(
                 )
             except Exception as exc:  # noqa: BLE001 - best effort start.
                 repo_success = False
-                error_console.print(
-                    f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}"
-                )
+                error_console.print(f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}")
         if not repo_success:
             exit_code = 1
 
     return exit_code
 
 
-def _run_registry_stop_command(
-    parsed: argparse.Namespace, process_runner: IProcessRunner
-) -> int:
+def _run_registry_stop_command(parsed: argparse.Namespace, process_runner: IProcessRunner) -> int:
     """Stop daemon and review-daemon for registered repositories."""
     supervisor = create_process_supervisor()
     records = supervisor.list_processes()
@@ -346,9 +333,7 @@ def _run_registry_stop_command(
     return exit_code
 
 
-def _format_process_status(
-    running: dict[str, list[tuple[str, bool]]], kind: str
-) -> str:
+def _format_process_status(running: dict[str, list[tuple[str, bool]]], kind: str) -> str:
     """Return a human-readable status string for a daemon kind.
 
     Managed running processes are shown with their process IDs. Unmanaged
@@ -387,9 +372,7 @@ def _restart_daemons(repo_id: str, repo_path: Path, process_runner) -> int:
                     supervisor=supervisor,
                     stop_timeout_seconds=30,
                 )
-                console.print(
-                    f"[green]Stopped old[/] {record.kind} {record.process_id}"
-                )
+                console.print(f"[green]Stopped old[/] {record.kind} {record.process_id}")
             except Exception as exc:  # noqa: BLE001 - best effort stop.
                 error_console.print(
                     f"[yellow]Failed to stop old {record.kind} {record.process_id}:[/] {exc}"
@@ -407,13 +390,10 @@ def _restart_daemons(repo_id: str, repo_path: Path, process_runner) -> int:
                 spawn_cwd=spawn_cwd,
             )
             console.print(
-                f"[green]Started {kind.value}[/] for {repo_id} "
-                f"(process {record.process_id})"
+                f"[green]Started {kind.value}[/] for {repo_id} " f"(process {record.process_id})"
             )
         except Exception as exc:  # noqa: BLE001 - daemon start is best effort.
-            error_console.print(
-                f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}"
-            )
+            error_console.print(f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}")
             return 1
     return 0
 
@@ -477,9 +457,7 @@ def _run_daemon_status_command(
             running_records.append((record, False))
 
     if not running_records:
-        console.print(
-            "[yellow]No running daemon processes for the selected repositories.[/]"
-        )
+        console.print("[yellow]No running daemon processes for the selected repositories.[/]")
         return 0
 
     table = Table(title="Daemon status")
@@ -494,11 +472,7 @@ def _run_daemon_status_command(
     table.add_column("command", overflow="fold")
 
     for record, is_managed in running_records:
-        status_text = (
-            "[green]managed running[/]"
-            if is_managed
-            else "[yellow]unmanaged running[/]"
-        )
+        status_text = "[green]managed running[/]" if is_managed else "[yellow]unmanaged running[/]"
         executable = _resolve_executable_from_command(record.command)
         log_path_display = record.log_path or "-"
         table.add_row(
@@ -646,9 +620,7 @@ def _run_logs_command(
     repo_override: str | None,
 ) -> int:
     """Print the recent log of a managed daemon / review-daemon process."""
-    del (
-        process_runner
-    )  # Unused; kept for dispatch signature parity with sibling handlers.
+    del process_runner  # Unused; kept for dispatch signature parity with sibling handlers.
 
     supervisor = create_process_supervisor()
 
@@ -680,11 +652,7 @@ def _run_logs_command(
     records = supervisor.list_processes()
     selected = _select_logs_record(records, context.repo_id, kind)
 
-    if (
-        selected is None
-        or not selected.log_path
-        or not Path(selected.log_path).exists()
-    ):
+    if selected is None or not selected.log_path or not Path(selected.log_path).exists():
         return _print_logs_fallback(context.repo_id, kind)
 
     start_offset = _compute_tail_window_offset(selected.log_path, lines)

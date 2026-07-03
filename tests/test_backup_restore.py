@@ -318,9 +318,7 @@ class TestGetTableRowCount:
 
 class TestVerifyAndSummarizeTables:
     @patch("scripts.backup_service.restore._get_table_row_count")
-    def test_passes_when_required_tables_have_rows(
-        self, mock_get_count: MagicMock
-    ) -> None:
+    def test_passes_when_required_tables_have_rows(self, mock_get_count: MagicMock) -> None:
         mock_get_count.side_effect = lambda _url, table: {
             "required_t": 10,
         }.get(table, 0)
@@ -333,9 +331,7 @@ class TestVerifyAndSummarizeTables:
 
     @patch("scripts.backup_service.restore._get_table_row_count")
     def test_passes_when_no_required_tables(self, mock_get_count: MagicMock) -> None:
-        passed, warnings = _verify_and_summarize_tables(
-            "postgresql://u:p@h:5432/db", []
-        )
+        passed, warnings = _verify_and_summarize_tables("postgresql://u:p@h:5432/db", [])
         assert passed is True
         assert not warnings
 

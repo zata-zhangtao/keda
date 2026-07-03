@@ -27,9 +27,7 @@ def _json_line(payload: dict) -> str:
 
 def test_should_filter_claude_stream_only_for_stream_json() -> None:
     """Claude stream-json commands should use the concise renderer."""
-    assert should_filter_claude_stream(
-        ["claude", "-p", "--output-format", "stream-json", "prompt"]
-    )
+    assert should_filter_claude_stream(["claude", "-p", "--output-format", "stream-json", "prompt"])
     assert not should_filter_claude_stream(["claude", "-p", "prompt"])
     assert not should_filter_claude_stream(["codex", "exec", "prompt"])
 
@@ -103,13 +101,9 @@ def test_claude_stream_renderer_prints_concise_progress() -> None:
         }
     )
     stop_line = _json_line({"type": "stream_event", "event": {"type": "message_stop"}})
-    error_line = _json_line(
-        {"type": "result", "is_error": True, "result": "API Error: 400"}
-    )
+    error_line = _json_line({"type": "result", "is_error": True, "result": "API Error: 400"})
 
-    assert renderer.render_line(tool_line) == (
-        "\n[agent tool] Read: /tmp/example.py limit=20\n"
-    )
+    assert renderer.render_line(tool_line) == ("\n[agent tool] Read: /tmp/example.py limit=20\n")
     assert renderer.render_line(tool_line) == ""
     assert renderer.render_line(text_line) == "done"
     assert renderer.render_line(stop_line) == "\n"
@@ -141,9 +135,7 @@ def test_claude_stream_renderer_output_is_transcript_safe() -> None:
         _json_line({"type": "stream_event", "event": {"type": "message_stop"}}),
     ]
 
-    transcript = "".join(
-        rendered for line in lines if (rendered := renderer.render_line(line))
-    )
+    transcript = "".join(rendered for line in lines if (rendered := renderer.render_line(line)))
 
     assert transcript == "visible\n"
 
@@ -724,12 +716,7 @@ def test_subprocess_runner_keeps_active_process_alive(
     from backend.infrastructure.process_runner import SubprocessRunner
 
     runner = SubprocessRunner()
-    script = (
-        "import time\n"
-        "for _ in range(5):\n"
-        "    print('tick')\n"
-        "    time.sleep(0.1)\n"
-    )
+    script = "import time\n" "for _ in range(5):\n" "    print('tick')\n" "    time.sleep(0.1)\n"
 
     result = runner.run(
         [sys.executable, "-c", script],
@@ -751,7 +738,9 @@ def test_subprocess_runner_replaces_invalid_utf8_in_captured_output(
 
     from backend.infrastructure.process_runner import SubprocessRunner
 
-    emit_binary_stdout = "import sys; sys.stdout.buffer.write(b'diff --git a/source.pdf\\n\\x78\\xda\\xff\\n')"
+    emit_binary_stdout = (
+        "import sys; sys.stdout.buffer.write(b'diff --git a/source.pdf\\n\\x78\\xda\\xff\\n')"
+    )
     runner = SubprocessRunner()
 
     captured_result = runner.run(

@@ -194,9 +194,7 @@ def _format_create_time(create_time: float | None) -> str:
     if create_time is None:
         return ""
     try:
-        return datetime.fromtimestamp(create_time, tz=timezone.utc).isoformat(
-            timespec="seconds"
-        )
+        return datetime.fromtimestamp(create_time, tz=timezone.utc).isoformat(timespec="seconds")
     except (OSError, ValueError, OverflowError):
         return ""
 
@@ -224,9 +222,7 @@ class PidfileProcessSupervisor:
             loaded = json.loads(raw_text or "{}")
             return loaded if isinstance(loaded, dict) else {}
         except (OSError, json.JSONDecodeError) as exc:
-            _logger.warning(
-                "Failed to read process registry %s: %s", self._registry_path, exc
-            )
+            _logger.warning("Failed to read process registry %s: %s", self._registry_path, exc)
             return {}
 
     def _save_registry(self, registry_entries: dict[str, dict]) -> None:
@@ -266,9 +262,7 @@ class PidfileProcessSupervisor:
         alive, exit_code = _probe_pid(record.pid)
         if alive:
             return record
-        return replace(
-            record, status="exited", exit_code=exit_code, stopped_at=_now_iso()
-        )
+        return replace(record, status="exited", exit_code=exit_code, stopped_at=_now_iso())
 
     # ── 端口实现 ───────────────────────────────────────────────────────
 
@@ -344,9 +338,7 @@ class PidfileProcessSupervisor:
             try:
                 record = self._record_from_entry(entry)
             except (KeyError, ValueError) as exc:
-                _logger.warning(
-                    "Dropping corrupt process registry entry %s: %s", process_id, exc
-                )
+                _logger.warning("Dropping corrupt process registry entry %s: %s", process_id, exc)
                 registry_changed = True
                 continue
             refreshed = self._refresh_record(record)
@@ -380,9 +372,7 @@ class PidfileProcessSupervisor:
                 匹配未显式指定 ``--repo-id`` 的手动进程。
         """
         if psutil is None:
-            _logger.warning(
-                "psutil is not available; cannot scan for unmanaged runner processes."
-            )
+            _logger.warning("psutil is not available; cannot scan for unmanaged runner processes.")
             return []
 
         # 收集已托管进程的 pid，避免重复报告。
@@ -401,9 +391,7 @@ class PidfileProcessSupervisor:
         current_pid = os.getpid()
 
         unmanaged_records: list[RunnerProcessRecord] = []
-        for proc in psutil.process_iter(
-            ["pid", "name", "cmdline", "username", "create_time"]
-        ):
+        for proc in psutil.process_iter(["pid", "name", "cmdline", "username", "create_time"]):
             try:
                 proc_info = proc.info
                 if not isinstance(proc_info, dict):
@@ -517,9 +505,7 @@ class PidfileProcessSupervisor:
         )
         return stopped_record
 
-    def read_log(
-        self, process_id: str, *, offset: int, max_bytes: int
-    ) -> ProcessLogChunk:
+    def read_log(self, process_id: str, *, offset: int, max_bytes: int) -> ProcessLogChunk:
         """从指定偏移量续读进程日志文件。"""
         registry_entries = self._load_registry()
         entry = registry_entries.get(process_id)

@@ -22,7 +22,7 @@ PRD 的章节结构、Human Review Map（介入与风险地图）、Realistic Va
 
 ### Acceptance Checklist 门禁（pre-commit）
 
-本仓库通过 `pre-commit` 本地 hook（`hooks/check_prd_acceptance_checklist.py`）检查 PRD 的 `Acceptance Checklist` 章节是否仍有未勾选项：
+本仓库通过 `pre-commit` 本地 hook（`hooks/shared/check_prd_acceptance_checklist.py`）检查 PRD 的 `Acceptance Checklist` 章节是否仍有未勾选项：
 
 - 检查范围：`tasks/` 根目录下的活跃 PRD；新增 / 复制 / 重命名进入 `tasks/archive/` 的归档 PRD。
 - `tasks/pending/` 下的草稿不检查；历史 archive PRD 的普通修改不被翻旧账。
@@ -36,6 +36,14 @@ keda 的 agent runner 会把 PRD 的 Realistic Validation oracle 物化到 Issue
 - runner **优先确定性解析** skill 产出的 **YAML oracle 块**；无则回退旧式 `### Realistic Validation` 复选框（向后兼容）。
 - 证据缺失 / 不达标会打回 runner 重跑（recovery 循环）。
 - 进一步的"负控 + keda 复跑命令 + 独立 verifier agent"门禁,见 `tasks/pending/` 中对应的 Realistic Validation 门禁 PRD。
+
+#### 证据形态与"产物健全性"提示（v1.2 跟进）
+
+RV item 的 `evidence_files` 不仅是 stdout/JSON,UI/视觉/交互型 Issue 常见**截图（.png/.jpg）+ 录屏（.webm/.mp4）+ trace（.har/.zip）+ 音频**等多模态产物。`return_code=0` 只能证明"复跑能跑出文件",验不了"内容对"（黑屏、0 字节、上次残留、截错时机、音频静音）。
+
+- **当前 v1（未补）**:keda 不验产物健全性,UI 类 RV 的内容对错由 verifier 自由发挥 + 人工签收兜底。
+- **v1 prompt 接入（已落地）**:verifier 看到 `evidence_files` 会被 prompt 指引用原生多模态读图(支持的模型)/`ffmpeg` 抽视频帧/`stat`/`ffprobe`/`file --mime` 看元数据;不依赖 keda 装任何图像处理库。多模态维度已从"verifier 自由发挥"升级为"prompt 强制 + 模型自主选择感知通道"。
+- **FR-11a 健全性硬卡点（已落地,两层设计）**:`expected_artifacts` 拆**硬层**(`ArtifactSpec` 的 mime / min_size / min_duration_seconds,keda 端 `validate_evidence_artifact` 走 `IProcessRunner` 用 `stat` / `ffprobe` / `file --mime` 必验,任何 verifier 一视同仁,失败即 `ValidationEvidenceError` 阻断)+ **软层**(`key_claim`,prompt 注入,verifier 按模型能力自陈:多模态读图验证、纯文本声明"未视觉验证"鼓励自降 yellow;**禁止对纯文本 verifier 强行 red**——会把"消除假绿"反过来变成"制造假红")。开关 `validation.artifact_health_enabled` 默认 `true`,旧无字段证据走兼容。**编写多模态类 RV 时,显式在 oracle 块声明产物类型 + 最小阈值 + 关键断言**（例 `screenshot:login.png mime=image/png min_size=50KB key_claim="Welcome, Alice"`）;缺字段则按旧路径走 verifier 兜底(verifier 仍可能"看过了"敷衍,但至少硬层机器可验项拦得住 0 字节 / 旧产物 / mime 错配)。
 
 ### PRD ↔ 任务同步
 

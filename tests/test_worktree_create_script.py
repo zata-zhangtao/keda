@@ -15,11 +15,7 @@ def _run_create_script(
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     script_path = (
-        Path(__file__).resolve().parents[1]
-        / "scripts"
-        / "shared"
-        / "worktree"
-        / "create.sh"
+        Path(__file__).resolve().parents[1] / "scripts" / "shared" / "worktree" / "create.sh"
     )
     env = os.environ.copy()
     env.update(extra_env or {})
@@ -217,9 +213,7 @@ def test_local_base_branch_not_moved(tmp_path: Path) -> None:
         capture_output=True,
     )
 
-    _run_create_script(
-        local_repo, "feature-a", extra_env={"KODA_WORKTREE_BASE_BRANCH": "main"}
-    )
+    _run_create_script(local_repo, "feature-a", extra_env={"KODA_WORKTREE_BASE_BRANCH": "main"})
 
     local_main_after = subprocess.run(
         ["git", "-C", str(local_repo), "rev-parse", "main"],
@@ -468,9 +462,7 @@ def test_env_copy_skips_iar_worktrees_and_node_modules(tmp_path: Path) -> None:
 
     node_modules_package_path = local_path / "frontend" / "node_modules" / "some-pkg"
     node_modules_package_path.mkdir(parents=True)
-    (node_modules_package_path / ".env.example").write_text(
-        "PKG_ENV=1\n", encoding="utf-8"
-    )
+    (node_modules_package_path / ".env.example").write_text("PKG_ENV=1\n", encoding="utf-8")
 
     result = _run_create_script(
         local_repo, "feature-env", extra_env={"KODA_WORKTREE_BASE_BRANCH": "main"}

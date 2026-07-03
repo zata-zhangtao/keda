@@ -208,9 +208,7 @@ def validate_branch_safety(
     # 编号作为完整 token 或路径 segment，避免 issue-421 被错误匹配到 Issue #42。
     issue_number_token = str(issue_number)
     branch_segments = re.split(r"[-_/]+", current_branch)
-    branch_matches_issue = any(
-        segment == issue_number_token for segment in branch_segments
-    )
+    branch_matches_issue = any(segment == issue_number_token for segment in branch_segments)
 
     if not branch_matches_issue:
         raise PublishRecoveryError(
@@ -286,9 +284,7 @@ def recover_publish_issue(
     issue_number = request.issue_number
 
     # 第一步：解析已存在的工作树（不创建）。
-    worktree_path = resolve_existing_worktree(
-        repo_path, issue_number, config, process_runner
-    )
+    worktree_path = resolve_existing_worktree(repo_path, issue_number, config, process_runner)
 
     # 第二步：确认工作树干净，保证只发布已有提交。
     validate_worktree_clean(worktree_path, process_runner)
@@ -397,22 +393,12 @@ def recover_publish_issue(
         # 不存在可复用 PR 时创建草稿 PR；正文中的 Closes #N 用于在合并后自动关闭
         # 对应 Issue。优先使用 Issue 标题让 PR 标题更具可读性，取不到时回退到编号。
         issue_title = recovered_issue.title if recovered_issue is not None else None
-        pr_title = (
-            f"[Agent] {issue_title}"
-            if issue_title
-            else f"[Agent] Issue #{issue_number}"
-        )
+        pr_title = f"[Agent] {issue_title}" if issue_title else f"[Agent] Issue #{issue_number}"
         pr_body = f"Closes #{issue_number}\n\nRecovered by issue-agent-runner.\n"
-        if recovered_issue is not None and validation_required(
-            recovered_issue.body, config
-        ):
-            validation_checklist_items = extract_realistic_validation_items(
-                recovered_issue.body
-            )
+        if recovered_issue is not None and validation_required(recovered_issue.body, config):
+            validation_checklist_items = extract_realistic_validation_items(recovered_issue.body)
             if validation_checklist_items:
-                checklist_block = build_validation_checklist_block(
-                    validation_checklist_items
-                )
+                checklist_block = build_validation_checklist_block(validation_checklist_items)
                 pr_body = f"{pr_body.rstrip()}\n\n{checklist_block}\n"
 
         _logger.info("Creating draft PR for Issue #%d", issue_number)
@@ -454,8 +440,7 @@ def recover_publish_issue(
             )
         except Exception as evidence_exc:  # noqa: BLE001 - recovery must not abort here.
             _logger.warning(
-                "Failed to publish validation evidence during recovery for "
-                "Issue #%d: %s",
+                "Failed to publish validation evidence during recovery for " "Issue #%d: %s",
                 issue_number,
                 evidence_exc,
             )

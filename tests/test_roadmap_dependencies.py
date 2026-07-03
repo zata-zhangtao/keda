@@ -85,18 +85,14 @@ def test_prd_dependency_blocks_until_upstream_merged() -> None:
         ),
     )
     client = FakeGitHubClient()
-    blockers = evaluate_roadmap_dependencies(
-        [upstream, downstream], client, LabelConfig()
-    )
+    blockers = evaluate_roadmap_dependencies([upstream, downstream], client, LabelConfig())
     assert "等待上游" in (blockers[downstream.prd_path] or "")
 
     upstream_merged = _make_prd(
         upstream.prd_path,
         state=RoadmapPrdState.MERGED,
     )
-    blockers = evaluate_roadmap_dependencies(
-        [upstream_merged, downstream], client, LabelConfig()
-    )
+    blockers = evaluate_roadmap_dependencies([upstream_merged, downstream], client, LabelConfig())
     assert blockers[downstream.prd_path] is None
 
 

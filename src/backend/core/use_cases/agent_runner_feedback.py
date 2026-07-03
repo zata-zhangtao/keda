@@ -55,11 +55,7 @@ def extract_prd_path(issue_body: str) -> str | None:
         issue_body,
     ):
         prd_path = match.group(1).strip()
-        if (
-            prd_path
-            and "/" in prd_path
-            and not any(char.isspace() for char in prd_path)
-        ):
+        if prd_path and "/" in prd_path and not any(char.isspace() for char in prd_path):
             return prd_path
     return None
 
@@ -86,8 +82,7 @@ _DEFAULT_EXECUTION_TEMPLATE = "\n".join(
         "- Only modify files inside the current worktree.",
         "- Do not merge main, delete branches, push, or create PRs; "
         "the runner handles publishing.",
-        "- Do not run `git add` or `git commit`; the runner exposes "
-        "a restricted commit proxy.",
+        "- Do not run `git add` or `git commit`; the runner exposes " "a restricted commit proxy.",
         "- After finishing your changes, run the verification commands above "
         "locally if possible, then request a commit by writing "
         "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
@@ -160,10 +155,7 @@ def _build_prd_context_block(
     prd_path = worktree_path / prd_relative_path
     prd_text = _read_prd_text(prd_path)
     if prd_text is None:
-        return (
-            f"Also read the canonical PRD at `{prd_relative_path}`. "
-            f"{closeout_instruction}"
-        )
+        return f"Also read the canonical PRD at `{prd_relative_path}`. " f"{closeout_instruction}"
 
     if len(prd_text) <= max_chars:
         inline_section = prd_text.rstrip()
@@ -312,14 +304,10 @@ def ensure_prd_delivery_ready(
         checklist_result = parse_prd_checklist(file_content)
 
         if not checklist_result.section_found:
-            raise PrdDeliveryError(
-                f"Acceptance Checklist section missing in {prd_relative_path}"
-            )
+            raise PrdDeliveryError(f"Acceptance Checklist section missing in {prd_relative_path}")
 
         if checklist_result.unchecked_items:
-            unchecked_summary = _format_unchecked_items(
-                checklist_result.unchecked_items
-            )
+            unchecked_summary = _format_unchecked_items(checklist_result.unchecked_items)
             raise PrdDeliveryError(
                 f"Acceptance Checklist has unchecked items in {prd_relative_path}:\n"
                 f"{unchecked_summary}"
@@ -367,9 +355,7 @@ def ensure_prd_delivery_ready(
                     f"Acceptance Checklist section missing in {archive_relative_path}"
                 )
             if checklist_result.unchecked_items:
-                unchecked_summary = _format_unchecked_items(
-                    checklist_result.unchecked_items
-                )
+                unchecked_summary = _format_unchecked_items(checklist_result.unchecked_items)
                 raise PrdDeliveryError(
                     f"Acceptance Checklist has unchecked items in {archive_relative_path}:\n"
                     f"{unchecked_summary}"
@@ -411,11 +397,7 @@ def assert_prd_archived_for_publish(
     archive_relative_path = resolve_prd_archive_path(prd_relative_path)
     if archive_relative_path is None:
         path_parts = Path(prd_relative_path).parts
-        if (
-            len(path_parts) >= 2
-            and path_parts[0] == "tasks"
-            and path_parts[1] == "archive"
-        ):
+        if len(path_parts) >= 2 and path_parts[0] == "tasks" and path_parts[1] == "archive":
             archive_relative_path = prd_relative_path
         else:
             raise PrdDeliveryError(
@@ -424,25 +406,19 @@ def assert_prd_archived_for_publish(
 
     archive_path = worktree_path / archive_relative_path
     if not archive_path.exists():
-        raise PrdDeliveryError(
-            f"Archived PRD not found in worktree: {archive_relative_path}"
-        )
+        raise PrdDeliveryError(f"Archived PRD not found in worktree: {archive_relative_path}")
 
     # If the Issue still points at the pending path, ensure the pending file is
     # gone so the archive copy is unambiguously the canonical one.
     if prd_relative_path != archive_relative_path:
         pending_path = worktree_path / prd_relative_path
         if pending_path.exists():
-            raise PrdDeliveryError(
-                f"PRD is still present at pending path: {prd_relative_path}"
-            )
+            raise PrdDeliveryError(f"PRD is still present at pending path: {prd_relative_path}")
 
     file_content = archive_path.read_text(encoding="utf-8")
     checklist_result = parse_prd_checklist(file_content)
     if not checklist_result.section_found:
-        raise PrdDeliveryError(
-            f"Acceptance Checklist section missing in {archive_relative_path}"
-        )
+        raise PrdDeliveryError(f"Acceptance Checklist section missing in {archive_relative_path}")
 
     if checklist_result.unchecked_items:
         unchecked_summary = _format_unchecked_items(checklist_result.unchecked_items)

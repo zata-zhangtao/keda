@@ -139,9 +139,7 @@ def test_run_loop_create_command_persists(
         loop_repo_id=None,
         loop_repo=None,
     )
-    rc = cli_loop.run_loop_create_command(
-        parsed, state_store_factory=state_store_factory
-    )
+    rc = cli_loop.run_loop_create_command(parsed, state_store_factory=state_store_factory)
     assert rc == 0
     state_store.load()
     assert state_store.get_task("cli-demo") is not None
@@ -162,9 +160,7 @@ def test_run_loop_create_command_rejects_id_mismatch(
         loop_repo_id=None,
         loop_repo=None,
     )
-    rc = cli_loop.run_loop_create_command(
-        parsed, state_store_factory=lambda: state_store
-    )
+    rc = cli_loop.run_loop_create_command(parsed, state_store_factory=lambda: state_store)
     assert rc == 1
 
 
@@ -213,14 +209,10 @@ def test_run_loop_cancel_command(
     )
     cli_loop.run_loop_create_command(parsed, state_store_factory=state_store_factory)
     cancel_ns = argparse.Namespace(command="loop cancel", loop_id="cli-demo")
-    rc = cli_loop.run_loop_cancel_command(
-        cancel_ns, state_store_factory=state_store_factory
-    )
+    rc = cli_loop.run_loop_cancel_command(cancel_ns, state_store_factory=state_store_factory)
     assert rc == 0
     missing_ns = argparse.Namespace(command="loop cancel", loop_id="missing")
-    rc = cli_loop.run_loop_cancel_command(
-        missing_ns, state_store_factory=state_store_factory
-    )
+    rc = cli_loop.run_loop_cancel_command(missing_ns, state_store_factory=state_store_factory)
     assert rc == 1
 
 

@@ -98,9 +98,7 @@ class ReplCommandExecutor(IReplCommandExecutor):
         self._process_runner = process_runner
         self._config = config
         self._input_fn = input_fn if input_fn is not None else input
-        self._prompt_output_fn = (
-            prompt_output_fn if prompt_output_fn is not None else print
-        )
+        self._prompt_output_fn = prompt_output_fn if prompt_output_fn is not None else print
 
     def execute(
         self,
@@ -143,9 +141,7 @@ class ReplCommandExecutor(IReplCommandExecutor):
                 stdout="",
                 stderr="",
                 rejected=True,
-                rejection_reason=(
-                    f"Command {joined!r} is forbidden in the REPL sandbox."
-                ),
+                rejection_reason=(f"Command {joined!r} is forbidden in the REPL sandbox."),
             )
 
         # Allowlist: the first argv must match a known IAR subcommand.
@@ -185,8 +181,7 @@ class ReplCommandExecutor(IReplCommandExecutor):
                     stderr="",
                     rejected=True,
                     rejection_reason=(
-                        "No interactive input available for confirmation; "
-                        "command refused."
+                        "No interactive input available for confirmation; " "command refused."
                     ),
                     confirmation_prompted=True,
                     confirmation_granted=False,

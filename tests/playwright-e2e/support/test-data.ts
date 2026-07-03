@@ -9,3 +9,12 @@ import { randomUUID } from 'node:crypto'
 export function buildUniqueName(prefix: string): string {
   return `${prefix}-${randomUUID().slice(0, 8)}`
 }
+
+/**
+ * Builds a unique workspace id for one test so that file workspace tests do not
+ * share the `default` workspace. The timestamp prefix makes ordering obvious in
+ * logs; the UUID suffix guarantees safety across parallel workers.
+ */
+export function buildUniqueWorkspaceId(): string {
+  return `e2e-${Date.now()}-${randomUUID().slice(0, 8)}`
+}

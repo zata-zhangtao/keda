@@ -41,9 +41,7 @@ def _setup_worktree_runner() -> FakeProcessRunner:
         ("git", "rev-parse", "HEAD"): CommandResult(
             ("git", "rev-parse", "HEAD"), 0, "abc123\n", ""
         ),
-        ("git", "status", "--short"): CommandResult(
-            ("git", "status", "--short"), 0, "", ""
-        ),
+        ("git", "status", "--short"): CommandResult(("git", "status", "--short"), 0, "", ""),
     }
     return FakeProcessRunner(responses=responses)
 

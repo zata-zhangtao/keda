@@ -59,12 +59,8 @@ def _expected_env_lines(pr_number: int, sha: str, **overrides: object) -> list[s
         "registry_namespace": overrides.get("registry_namespace", "zata-zhangtao"),
         "traefik_network": overrides.get("traefik_network", "traefik"),
         "url_scheme": overrides.get("url_scheme", "https"),
-        "subdomain_template": overrides.get(
-            "subdomain_template", "pr-{pr_number}.{base_domain}"
-        ),
-        "compose_template": overrides.get(
-            "compose_template", "{project_slug}-pr-{pr_number}"
-        ),
+        "subdomain_template": overrides.get("subdomain_template", "pr-{pr_number}.{base_domain}"),
+        "compose_template": overrides.get("compose_template", "{project_slug}-pr-{pr_number}"),
     }
     short_sha = sha[:8] if len(sha) > 8 else sha
     subdomain = str(defaults["subdomain_template"]).format(
@@ -102,9 +98,7 @@ def _expected_env_lines(pr_number: int, sha: str, **overrides: object) -> list[s
 def clean_preview_env():
     """Remove PREVIEW_* environment variables before each test."""
     prefix = "PREVIEW_"
-    original = {
-        key: value for key, value in os.environ.items() if key.startswith(prefix)
-    }
+    original = {key: value for key, value in os.environ.items() if key.startswith(prefix)}
     for key in list(os.environ.keys()):
         if key.startswith(prefix):
             del os.environ[key]

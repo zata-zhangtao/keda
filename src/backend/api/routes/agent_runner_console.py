@@ -195,9 +195,7 @@ class IssueActionRequest(BaseModel):
 
 
 @router.post("/agent-runner/console/repositories/{repo_id}/actions")
-def execute_console_repository_action(
-    repo_id: str, request: RepositoryActionRequest
-) -> dict:
+def execute_console_repository_action(repo_id: str, request: RepositoryActionRequest) -> dict:
     """执行仓库级白名单动作。"""
     settings = load_fresh_agent_runner_settings()
     try:
@@ -215,9 +213,7 @@ def execute_console_repository_action(
     return _serialize(action_result)
 
 
-@router.post(
-    "/agent-runner/console/repositories/{repo_id}/issues/{issue_number}/actions"
-)
+@router.post("/agent-runner/console/repositories/{repo_id}/issues/{issue_number}/actions")
 def execute_console_issue_action(
     repo_id: str, issue_number: int, request: IssueActionRequest
 ) -> dict:
@@ -258,9 +254,7 @@ def get_console_stats_overview() -> dict:
 @router.get("/agent-runner/console/stats/history")
 def get_console_stats_history(repo_id: str | None = None, days: int = 30) -> dict:
     """本地运行历史的按天趋势（SQLite 口径）。"""
-    trend = build_run_history_trend(
-        store=create_console_store(), repo_id=repo_id, days=days
-    )
+    trend = build_run_history_trend(store=create_console_store(), repo_id=repo_id, days=days)
     return {
         "repo_id": repo_id,
         "days": days,
@@ -391,9 +385,7 @@ def batch_add_console_repositories(request: BatchAddRepositoriesRequest) -> dict
 
 
 @router.patch("/agent-runner/repositories/{repo_id}")
-def set_console_repository_enabled(
-    repo_id: str, request: SetRepositoryEnabledRequest
-) -> dict:
+def set_console_repository_enabled(repo_id: str, request: SetRepositoryEnabledRequest) -> dict:
     """启用或停用一个 registry 仓库条目。"""
     try:
         set_registry_repository_enabled(

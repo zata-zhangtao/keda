@@ -7,6 +7,13 @@ import { getApiBaseUrl, getCredentials } from './env'
 
 // export type UserRecord = { id: string; email: string }
 
+/**
+ * The shape Playwright's `APIRequestContext.post()` accepts for its `multipart`
+ * field. Derived from the library so it can never drift from what Playwright
+ * actually supports (form fields plus file parts / FormData).
+ */
+type Multipart = NonNullable<Parameters<APIRequestContext['post']>[1]>['multipart']
+
 // ── Client ────────────────────────────────────────────────────────────────────
 
 /**
@@ -45,7 +52,7 @@ export class ApiClient {
    */
   private async login(): Promise<void> {
     const { identifier, password } = getCredentials()
-    const response = await this.context.post('/api/auth/login', {
+    const response = await this.context.post('/auth/login', {
       data: { identifier, password },
     })
     await this.parseResponse<unknown>(response, 'Failed to authenticate the Playwright API client.')
@@ -73,7 +80,7 @@ export class ApiClient {
 
   async postMultipart<T>(
     path: string,
-    multipart: Record<string, unknown>,
+    multipart: Multipart,
   ): Promise<T> {
     return this.parseResponse<T>(
       await this.context.post(path, { multipart }),

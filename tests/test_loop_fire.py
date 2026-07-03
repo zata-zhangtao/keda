@@ -65,9 +65,7 @@ def repo_path(tmp_path: Path) -> Path:
     """Initialise a minimal git repo so ``publish_prd`` can be exercised."""
     import subprocess
 
-    subprocess.run(
-        ["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True
-    )
+    subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(
         ["git", "config", "user.email", "test@example.com"],
         cwd=tmp_path,
@@ -124,9 +122,7 @@ def test_fire_loop_writes_prd_and_creates_issue(
     task: LoopTask, repo_path: Path, tmp_path: Path
 ) -> None:
     """A real fire writes the PRD file, creates an Issue, and updates state."""
-    fake_github = FakeGitHubClient(
-        issue_url="https://github.com/example/fire-demo/issues/101"
-    )
+    fake_github = FakeGitHubClient(issue_url="https://github.com/example/fire-demo/issues/101")
     fake_github.set_list_issues_by_label_result([])  # no duplicate today
 
     state_store = JsonLoopStateStore(tmp_path / "loop-state.json")
@@ -166,9 +162,7 @@ def test_fire_loop_writes_prd_and_creates_issue(
     assert "agent/ready" in create_call["labels"]
 
     # Loop-specific labels are applied in a follow-up edit_issue_labels call.
-    label_edit_calls = [
-        c for c in fake_github.calls if c["method"] == "edit_issue_labels"
-    ]
+    label_edit_calls = [c for c in fake_github.calls if c["method"] == "edit_issue_labels"]
     assert len(label_edit_calls) == 1
     edit_call = label_edit_calls[0]
     assert edit_call["issue_number"] == 101
@@ -186,9 +180,7 @@ def test_fire_loop_writes_prd_and_creates_issue(
     assert persisted.next_fire_at > persisted.last_fire_at
 
 
-def test_fire_loop_dry_run_writes_nothing(
-    task: LoopTask, repo_path: Path, tmp_path: Path
-) -> None:
+def test_fire_loop_dry_run_writes_nothing(task: LoopTask, repo_path: Path, tmp_path: Path) -> None:
     """``dry_run=True`` renders but never touches disk or GitHub."""
     fake_github = FakeGitHubClient()
     state_store = JsonLoopStateStore(tmp_path / "loop-state.json")
@@ -252,9 +244,7 @@ def test_fire_loop_skips_when_duplicate_exists(
     assert persisted.last_fire_at is not None
 
 
-def test_fire_loop_runs_pre_command_for_extra_variables(
-    tmp_path: Path, repo_path: Path
-) -> None:
+def test_fire_loop_runs_pre_command_for_extra_variables(tmp_path: Path, repo_path: Path) -> None:
     """pre_command ``KEY=value`` stdout is injected into the template."""
     recipe_path = tmp_path / "github-trending.md"
     recipe_path.write_text(
@@ -277,9 +267,7 @@ Trending repo: {{trending_repo}} (count={{count}})
         publish_prd=False,
     )
 
-    fake_github = FakeGitHubClient(
-        issue_url="https://github.com/example/fire-demo/issues/123"
-    )
+    fake_github = FakeGitHubClient(issue_url="https://github.com/example/fire-demo/issues/123")
     fake_github.set_list_issues_by_label_result([])
     state_store = JsonLoopStateStore(tmp_path / "loop-state.json")
     clock = FixedClock(datetime(2026, 6, 23, 8, 0, tzinfo=timezone.utc))

@@ -99,9 +99,7 @@ def _make_config(
                 behavior_prompt="be a skeptic",
             ),
         )
-    return DeliberationConfig(
-        profiles=profiles, continue_on_agent_error=continue_on_agent_error
-    )
+    return DeliberationConfig(profiles=profiles, continue_on_agent_error=continue_on_agent_error)
 
 
 def test_build_isolated_prompt_excludes_transcript() -> None:
@@ -264,9 +262,7 @@ def test_run_agent_deliberation_output_files_written(
     """Deliberation should write output files."""
     request = _make_request(rounds=1, output_dir=str(tmp_path))
     config = _make_config()
-    fake_runner = FakeTranscriptRunner(
-        responses={"claude": "architect out", "kimi": "skeptic out"}
-    )
+    fake_runner = FakeTranscriptRunner(responses={"claude": "architect out", "kimi": "skeptic out"})
     events: list[DeliberationEvent] = []
 
     result = run_agent_deliberation(
@@ -287,9 +283,9 @@ def test_run_agent_deliberation_output_files_written(
     assert (output_dir / "workspaces" / "skeptic" / "round-1-output.md").read_text(
         encoding="utf-8"
     ) == "skeptic out"
-    assert (
-        output_dir / "workspaces" / "synthesizer" / "synthesis-output.md"
-    ).read_text(encoding="utf-8") == "architect out"
+    assert (output_dir / "workspaces" / "synthesizer" / "synthesis-output.md").read_text(
+        encoding="utf-8"
+    ) == "architect out"
 
 
 class _DisplayEmittingRunner(IAgentTranscriptRunner):
@@ -430,9 +426,7 @@ def test_run_agent_deliberation_preserves_profile_ids_in_outputs(
     """Round outputs should keep profile IDs for transcript rendering."""
     request = _make_request(agents=("skeptic",), rounds=1)
     config = _make_config()
-    fake_runner = FakeTranscriptRunner(
-        responses={"kimi": "skeptic output", "claude": "summary"}
-    )
+    fake_runner = FakeTranscriptRunner(responses={"kimi": "skeptic output", "claude": "summary"})
 
     result = run_agent_deliberation(
         request=request,
@@ -612,9 +606,7 @@ def test_run_agent_deliberation_uses_injected_synthesis_prompt_builder(
     """A custom synthesis_prompt_builder should override the default prompt."""
     request = _make_request(agents=("skeptic",), rounds=1)
     config = _make_config()
-    fake_runner = FakeTranscriptRunner(
-        responses={"kimi": "skeptic output", "claude": "summary"}
-    )
+    fake_runner = FakeTranscriptRunner(responses={"kimi": "skeptic output", "claude": "summary"})
 
     seen_prompts: list[str] = []
 
@@ -644,9 +636,7 @@ def test_run_agent_deliberation_default_synthesis_when_builder_omitted(
     """No builder → existing 5-section ``_build_synthesis_prompt`` is used."""
     request = _make_request(agents=("skeptic",), rounds=1)
     config = _make_config()
-    fake_runner = FakeTranscriptRunner(
-        responses={"kimi": "skeptic output", "claude": "summary"}
-    )
+    fake_runner = FakeTranscriptRunner(responses={"kimi": "skeptic output", "claude": "summary"})
 
     run_agent_deliberation(
         request=request,

@@ -39,9 +39,7 @@ _RECOVERY_MESSAGE = (
 def _is_transient_network_error(exc: Exception) -> bool:
     """Return True when the exception looks like a transient network failure."""
     exc_text = f"{exc}"
-    return any(
-        hint.lower() in exc_text.lower() for hint in _TRANSIENT_NETWORK_ERROR_HINTS
-    )
+    return any(hint.lower() in exc_text.lower() for hint in _TRANSIENT_NETWORK_ERROR_HINTS)
 
 
 def run_agent_repositories_once(

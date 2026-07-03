@@ -50,9 +50,7 @@ class FixedClock(ILoopClock):
         if seconds > 0:
             self._current = self._current + timedelta(seconds=seconds)
 
-    def advance(
-        self, *, seconds: float = 0, minutes: float = 0, hours: float = 0
-    ) -> None:
+    def advance(self, *, seconds: float = 0, minutes: float = 0, hours: float = 0) -> None:
         """Advance the clock by the given offsets."""
         delta = timedelta(seconds=seconds, minutes=minutes, hours=hours)
         if delta.total_seconds() > 0:

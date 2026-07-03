@@ -69,13 +69,9 @@ def parse_interval_seconds(expression: str) -> int:
     try:
         magnitude = int(value_text)
     except ValueError as exc:
-        raise ValueError(
-            f"Invalid interval magnitude {value_text!r} in {expression!r}."
-        ) from exc
+        raise ValueError(f"Invalid interval magnitude {value_text!r} in {expression!r}.") from exc
     if magnitude <= 0:
-        raise ValueError(
-            f"Interval magnitude must be positive; got {magnitude} in {expression!r}."
-        )
+        raise ValueError(f"Interval magnitude must be positive; got {magnitude} in {expression!r}.")
     return int(_INTERVAL_PATTERN_TO_DELTA[unit].total_seconds() * magnitude)
 
 
@@ -117,9 +113,7 @@ def compute_next_fire(
         try:
             iterator = croniter(schedule.expression, after_utc)
         except (ValueError, KeyError) as exc:
-            raise ValueError(
-                f"Invalid cron expression {schedule.expression!r}: {exc}"
-            ) from exc
+            raise ValueError(f"Invalid cron expression {schedule.expression!r}: {exc}") from exc
         return iterator.get_next(datetime).astimezone(timezone.utc)
     seconds = parse_interval_seconds(schedule.expression)
     base = _ensure_aware_utc(origin or after_utc)

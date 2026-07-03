@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from backend.core.shared.interfaces.agent_runner import IProcessRunner
+from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
 from backend.core.shared.models.agent_runner import AppConfig, IssueSummary
 from backend.core.use_cases.agent_runner_structured_evidence import (
     EvidenceManifest,
@@ -41,9 +41,7 @@ _VALID_RISKS: tuple[str, ...] = ("green", "yellow", "red")
 _VERDICT_MARKER_PATTERN = re.compile(
     r"<!--\s*iar:verifier-verdict\s+risk=(?P<risk>green|yellow|red)\s*-->"
 )
-_NO_VERDICT_FINDINGS = (
-    "No parseable verifier verdict marker found; treating as blocked (red)."
-)
+_NO_VERDICT_FINDINGS = "No parseable verifier verdict marker found; treating as blocked (red)."
 
 
 @dataclass(frozen=True)
@@ -72,9 +70,7 @@ class ValidationVerdict:
 def format_verifier_verdict_marker(risk: str) -> str:
     """Format the hidden ``iar:verifier-verdict`` marker for a PR/Issue comment."""
     if risk not in _VALID_RISKS:
-        raise ValueError(
-            f"invalid verifier risk: {risk!r}; expected one of {_VALID_RISKS}"
-        )
+        raise ValueError(f"invalid verifier risk: {risk!r}; expected one of {_VALID_RISKS}")
     return f"<!-- iar:verifier-verdict risk={risk} -->"
 
 
@@ -116,11 +112,19 @@ def build_verifier_prompt(
         oracle_lines.append(f"- Item {block.item_number} ({block.item_name}):")
         oracle_lines.append(f"    real entry / command: {block.command}")
         if block.negative_control:
-            oracle_lines.append(
-                f"    negative control (must go RED): {block.negative_control}"
-            )
+            oracle_lines.append(f"    negative control (must go RED): {block.negative_control}")
         if block.expected_fail:
             oracle_lines.append(f"    expected failure: {block.expected_fail}")
+        if block.evidence_files:
+            files = ", ".join(block.evidence_files)
+            oracle_lines.append(f"    evidence artifacts on disk: {files}")
+        for spec in block.expected_artifacts:
+            claim = f" (key claim: {spec.key_claim!r})" if spec.key_claim else ""
+            oracle_lines.append(
+                f"    expected artifact: {spec.path} mime={spec.mime}"
+                f" min_size={spec.min_size} min_duration={spec.min_duration_seconds}"
+                f"{claim}"
+            )
     oracle_block = "\n".join(oracle_lines) or "(no structured oracle items)"
 
     return "\n".join(
@@ -152,6 +156,27 @@ def build_verifier_prompt(
             "   probes); yellow = main path works but a real, non-blocking gap/risk",
             "   (state it); red = does NOT match the intent, OR you found a break, OR",
             "   you could not independently confirm it.",
+            "",
+            "Multimodal evidence: the manifest's `evidence artifacts` may include",
+            "images (.png/.jpg), videos (.webm/.mp4), audio, or other non-text",
+            "files. Handle them with whatever your model natively supports — read",
+            "the image directly if you can, use `ffmpeg` to extract a frame from",
+            "a video if you can, listen to audio if you can. If you cannot read",
+            "the artifact yourself, fall back to shell metadata: `stat <path>` for",
+            "size, `file --mime <path>` for type, `ffprobe <path>` for duration /",
+            "resolution. Never trust the file's existence or size alone — a 0-byte",
+            "screenshot or a video with no frames is not evidence. State in your",
+            "findings which artifacts you actually inspected and how.",
+            "",
+            "When the oracle includes `key_claim` assertions on an artifact, apply",
+            "the D-14c fairness rule: IF you are a multimodal model that CAN read",
+            "the file directly, verify the key_claim and report what you actually",
+            "saw (green if confirmed, red if contradicted). IF you are a TEXT-ONLY",
+            "model that CANNOT read images/video/audio, state 'I am text-only and",
+            "cannot visually verify the key_claim; only file metadata was checked'.",
+            "Encourage a self-downgrade to yellow in that case — but NEVER return",
+            "red solely because you cannot read a non-text artifact. Red is for",
+            "proven breaks only, not model-capability gaps.",
             "",
             "Be a skeptic. If you cannot independently confirm it works, the verdict",
             "is RED — do not give the builder the benefit of the doubt.",
@@ -218,7 +243,7 @@ def run_verifier_gate(
     config: AppConfig,
     process_runner: IProcessRunner,
     builder_agent: str,
-) -> None:
+) -> ValidationVerdict | None:
     """Pre-PR independent-verifier gate (PR#2 T3 integration).
 
     在 builder 通过证据门禁后、开 PR 之前运行:换一个 agent 对带结构化证据的
@@ -228,21 +253,25 @@ def run_verifier_gate(
       循环(verifier findings 当 repair 反馈,自动重做、bounded;耗尽才升级给
       人)。因为是 pre-PR 门禁,所以"PR 存在 ⟹ verifier 已通过",无需额外的
       daemon 双门禁。
-    - **yellow** → 记警告并放行。
-    - **green** → 放行。
+    - **yellow** → 记警告并放行,返回 verdict 供调用方在开 PR 后贴警告评论。
+    - **green** → 放行,返回 verdict 供调用方在开 PR 后置 ``validation/verifier-passed`` label。
 
-    默认关(``verifier_enabled``),按仓库灰度开启。仅对带 ``iar:structured-
-    evidence`` marker、且要求验证的 issue 生效。
+    默认关(``verifier_enabled``),按仓库灰度开启。仅对带 ``iar:structured-evidence`` marker、且要求验证的 issue 生效。
+
+    Returns:
+        ``ValidationVerdict`` 当 verifier 实际运行(verdict 非 red 时返回,red
+        时抛异常);``None`` 当 verifier 未启用 / issue 不要求验证 / 无结构化证据
+        marker(调用方据此决定是否在 PR 上做 label/评论副作用)。
 
     Raises:
         ValidationEvidenceError: verifier 判定 red(经 recovery 自动打回 builder)。
     """
     if not config.validation.verifier_enabled:
-        return
+        return None
     if not validation_required(issue.body, config):
-        return
+        return None
     if not has_structured_evidence_marker(issue.body):
-        return
+        return None
 
     manifest = load_evidence_manifest(worktree_path, config)
     verifier_agent = _choose_verifier_agent(config, builder_agent)
@@ -270,4 +299,94 @@ def run_verifier_gate(
             "Independent verifier returned YELLOW for issue #%d: %s",
             issue.number,
             verdict.findings,
+        )
+    return verdict
+
+
+_PR_URL_NUMBER_PATTERN = re.compile(r"/pull/(?P<number>\d+)")
+
+
+def _extract_pr_number(pr_url: str) -> int | None:
+    """Extract the PR number from a GitHub PR URL.
+
+    Returns ``None`` when the URL does not contain a parseable PR number,
+    so callers can skip the post-PR verifier side effects gracefully.
+    """
+    match = _PR_URL_NUMBER_PATTERN.search(pr_url)
+    if match is None:
+        return None
+    return int(match.group("number"))
+
+
+def build_verifier_yellow_comment(verdict: ValidationVerdict, issue_number: int) -> str:
+    """Build the PR warning comment for a yellow verifier verdict.
+
+    ``yellow`` 不阻断发布,但要在 PR 上贴一条可见的警告评论,把 verifier 的
+    findings 交给人审者——避免"verifier 提了风险但没人看到"。评论带 hidden
+    marker,后续可幂等更新或清除。
+    """
+    return "\n".join(
+        [
+            "<!-- iar:verifier-warning risk=yellow -->",
+            "",
+            "## ⚠️ Independent verifier returned YELLOW",
+            "",
+            f"The independent verifier ran for issue #{issue_number} and found a "
+            "non-blocking risk. Review the findings below before merging:",
+            "",
+            "<details>",
+            "<summary>Verifier findings</summary>",
+            "",
+            verdict.findings.strip() or "(no findings emitted)",
+            "",
+            "</details>",
+        ]
+    )
+
+
+def apply_verifier_verdict_to_pr(
+    pr_url: str,
+    verdict: ValidationVerdict | None,
+    issue_number: int,
+    *,
+    verifier_passed_label: str,
+    github_client: IGitHubClient,
+) -> None:
+    """Apply the verifier verdict to the PR after it is created.
+
+    pre-PR verifier 跑完后,verdict 的副作用在 PR 创建后落地:
+
+    - ``green`` → 置 ``validation/verifier-passed`` label,为后续 autopilot
+      合并队列提供显式状态位。
+    - ``yellow`` → 贴警告评论(findings 给人审者看),不阻断发布。
+    - ``None`` (verifier 未启用 / issue 不要求验证) → 无操作。
+    - ``red`` 不会到这里(pre-PR 阶段已抛 ``ValidationEvidenceError`` 进 recovery)。
+
+    PR number 从 ``pr_url`` 解析;解析失败时记日志并跳过,不阻断发布。
+    """
+    if verdict is None:
+        return
+    pr_number = _extract_pr_number(pr_url)
+    if pr_number is None:
+        _logger.warning(
+            "Could not parse PR number from URL %r; skipping verifier verdict "
+            "side effects for issue #%d.",
+            pr_url,
+            issue_number,
+        )
+        return
+    if verdict.risk == "green":
+        github_client.edit_issue_labels(pr_number, add=(verifier_passed_label,))
+        _logger.info(
+            "Verifier GREEN for issue #%d: set label %r on PR #%d.",
+            issue_number,
+            verifier_passed_label,
+            pr_number,
+        )
+    elif verdict.risk == "yellow":
+        github_client.comment_pr(pr_number, build_verifier_yellow_comment(verdict, issue_number))
+        _logger.info(
+            "Verifier YELLOW for issue #%d: posted warning comment on PR #%d.",
+            issue_number,
+            pr_number,
         )

@@ -10,7 +10,7 @@ from types import ModuleType
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRD_ACCEPTANCE_CHECKLIST_SCRIPT_PATH = (
-    REPO_ROOT / "hooks" / "check_prd_acceptance_checklist.py"
+    REPO_ROOT / "hooks" / "shared" / "check_prd_acceptance_checklist.py"
 )
 
 
@@ -27,9 +27,7 @@ def load_prd_acceptance_checklist_module() -> ModuleType:
     return prd_acceptance_checklist_module
 
 
-def run_command(
-    command_parts: list[str], cwd_path: Path
-) -> subprocess.CompletedProcess[str]:
+def run_command(command_parts: list[str], cwd_path: Path) -> subprocess.CompletedProcess[str]:
     """Run a subprocess command with UTF-8 output handling."""
 
     return subprocess.run(
@@ -179,10 +177,8 @@ def test_staged_archive_prd_paths_collect_added_archive_prds(tmp_path: Path) -> 
     add_process = run_command(["git", "add", "tasks"], cwd_path=tmp_path)
     assert add_process.returncode == 0
 
-    staged_archive_prd_paths = (
-        prd_acceptance_checklist_module._staged_archive_prd_paths(  # noqa: SLF001
-            tmp_path
-        )
+    staged_archive_prd_paths = prd_acceptance_checklist_module._staged_archive_prd_paths(  # noqa: SLF001
+        tmp_path
     )
 
     assert staged_archive_prd_paths == {archived_relative_path}
@@ -204,10 +200,8 @@ def test_staged_archive_prd_paths_collect_priority_prds(tmp_path: Path) -> None:
     add_process = run_command(["git", "add", "tasks"], cwd_path=tmp_path)
     assert add_process.returncode == 0
 
-    staged_archive_prd_paths = (
-        prd_acceptance_checklist_module._staged_archive_prd_paths(  # noqa: SLF001
-            tmp_path
-        )
+    staged_archive_prd_paths = prd_acceptance_checklist_module._staged_archive_prd_paths(  # noqa: SLF001
+        tmp_path
     )
 
     assert staged_archive_prd_paths == {archived_relative_path}

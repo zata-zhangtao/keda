@@ -238,9 +238,7 @@ def test_create_draft_falls_back_when_generator_returns_empty(
 
     class _FailingGenerator(IContentGenerator):
         def generate(self, agent_name, prompt, *, cwd, timeout=None):
-            return CommandResult(
-                return_code=1, stdout="", stderr="boom", command=("x",)
-            )
+            return CommandResult(return_code=1, stdout="", stderr="boom", command=("x",))
 
     result = create_prd_draft(
         repo_dir,
@@ -349,8 +347,7 @@ def test_approve_draft_rejects_existing_pending_path(repo_dir: Path) -> None:
     # Pre-create a pending file matching the same naming pattern.
     draft_stem = Path(created.draft_path).stem
     pending_filename = (
-        f"P2-FEAT-{created.draft.metadata.draft_id}-"
-        f"{'-'.join(draft_stem.split('-')[2:])}.md"
+        f"P2-FEAT-{created.draft.metadata.draft_id}-" f"{'-'.join(draft_stem.split('-')[2:])}.md"
     )
     pending_dir.joinpath(pending_filename).write_text("placeholder", encoding="utf-8")
     with pytest.raises(IdeaInboxError) as excinfo:
@@ -397,9 +394,7 @@ def test_api_append_idea_returns_entry_id(api_environment: dict) -> None:
     payload = response.json()
     assert payload["entry"]["text"] == "来自 API"
     # Snapshot now has the entry.
-    snapshot = client.get(
-        "/api/v1/agent-runner/idea-inbox/repositories/keda-main"
-    ).json()
+    snapshot = client.get("/api/v1/agent-runner/idea-inbox/repositories/keda-main").json()
     assert len(snapshot["entries"]) == 1
     assert snapshot["entries"][0]["text"] == "来自 API"
 
@@ -423,9 +418,7 @@ def test_api_create_draft_uses_content_generator(api_environment: dict) -> None:
         "/api/v1/agent-runner/idea-inbox/repositories/keda-main/ideas",
         json={"text": "想法 A", "author": "tester"},
     )
-    snapshot = client.get(
-        "/api/v1/agent-runner/idea-inbox/repositories/keda-main"
-    ).json()
+    snapshot = client.get("/api/v1/agent-runner/idea-inbox/repositories/keda-main").json()
     entry_id = snapshot["entries"][0]["entry_id"]
     response = client.post(
         "/api/v1/agent-runner/idea-inbox/repositories/keda-main/drafts",
@@ -448,9 +441,7 @@ def test_api_approve_draft_moves_to_pending(api_environment: dict) -> None:
         "/api/v1/agent-runner/idea-inbox/repositories/keda-main/ideas",
         json={"text": "想法 A", "author": "tester"},
     )
-    snapshot = client.get(
-        "/api/v1/agent-runner/idea-inbox/repositories/keda-main"
-    ).json()
+    snapshot = client.get("/api/v1/agent-runner/idea-inbox/repositories/keda-main").json()
     entry_id = snapshot["entries"][0]["entry_id"]
     draft = client.post(
         "/api/v1/agent-runner/idea-inbox/repositories/keda-main/drafts",
@@ -475,9 +466,7 @@ def test_api_approve_draft_returns_400_on_already_approved(
         "/api/v1/agent-runner/idea-inbox/repositories/keda-main/ideas",
         json={"text": "想法 A", "author": "tester"},
     )
-    snapshot = client.get(
-        "/api/v1/agent-runner/idea-inbox/repositories/keda-main"
-    ).json()
+    snapshot = client.get("/api/v1/agent-runner/idea-inbox/repositories/keda-main").json()
     entry_id = snapshot["entries"][0]["entry_id"]
     draft = client.post(
         "/api/v1/agent-runner/idea-inbox/repositories/keda-main/drafts",
@@ -556,10 +545,7 @@ def test_api_inbound_rejects_missing_secret(
         },
         ensure_ascii=False,
     )
-    sig = (
-        "sha256="
-        + hmac.new(b"topsecret", body.encode("utf-8"), hashlib.sha256).hexdigest()
-    )
+    sig = "sha256=" + hmac.new(b"topsecret", body.encode("utf-8"), hashlib.sha256).hexdigest()
     response = client.post(
         "/api/v1/agent-runner/idea-inbox/inbound",
         content=body,
@@ -591,10 +577,7 @@ def test_api_inbound_rejects_unknown_repo(
         },
         ensure_ascii=False,
     )
-    sig = (
-        "sha256="
-        + hmac.new(b"topsecret", body.encode("utf-8"), hashlib.sha256).hexdigest()
-    )
+    sig = "sha256=" + hmac.new(b"topsecret", body.encode("utf-8"), hashlib.sha256).hexdigest()
     response = client.post(
         "/api/v1/agent-runner/idea-inbox/inbound",
         content=body,
@@ -620,10 +603,7 @@ def test_api_inbound_accepts_valid_signature(
         },
         ensure_ascii=False,
     )
-    sig = (
-        "sha256="
-        + hmac.new(b"topsecret", body.encode("utf-8"), hashlib.sha256).hexdigest()
-    )
+    sig = "sha256=" + hmac.new(b"topsecret", body.encode("utf-8"), hashlib.sha256).hexdigest()
     response = client.post(
         "/api/v1/agent-runner/idea-inbox/inbound",
         content=body,

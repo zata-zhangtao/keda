@@ -404,9 +404,7 @@ def _summarize_attempt_detail(detail: str) -> str:
     """
     stripped_lines = (line.strip() for line in detail.splitlines())
     informative_lines = [
-        line
-        for line in stripped_lines
-        if line and line not in _ATTEMPT_DETAIL_SCAFFOLD_LINES
+        line for line in stripped_lines if line and line not in _ATTEMPT_DETAIL_SCAFFOLD_LINES
     ]
     if not informative_lines:
         return ""
@@ -489,9 +487,7 @@ def format_failure_comment(
         lines.extend(["```text", str(cause), "```", ""])
     if issue_number is not None:
         transition_label = _detect_transition_target_label(exc)
-        if transition_label is not None and _is_completion_workflow_label(
-            transition_label
-        ):
+        if transition_label is not None and _is_completion_workflow_label(transition_label):
             lines.extend(
                 [
                     "### How To Recover",
@@ -535,9 +531,7 @@ def format_failure_comment(
     return "\n".join(lines)
 
 
-def format_minimal_failure_comment(
-    exc: BaseException, *, issue_number: int | None = None
-) -> str:
+def format_minimal_failure_comment(exc: BaseException, *, issue_number: int | None = None) -> str:
     """Build a compact failure comment used as a posting fallback.
 
     The full failure report embeds agent command output, which GitHub can
@@ -564,9 +558,7 @@ def format_minimal_failure_comment(
     ]
     if issue_number is not None:
         transition_label = _detect_transition_target_label(exc)
-        if transition_label is not None and _is_completion_workflow_label(
-            transition_label
-        ):
+        if transition_label is not None and _is_completion_workflow_label(transition_label):
             lines.extend(
                 [
                     "",
@@ -761,9 +753,7 @@ def format_recovery_failure_summary(
     failed_results = failed_verification_results(verification_results)
     if not failed_results:
         return heading
-    result_sections = "\n\n".join(
-        format_result_for_recovery(result) for result in failed_results
-    )
+    result_sections = "\n\n".join(format_result_for_recovery(result) for result in failed_results)
     return "\n\n".join([heading, result_sections])
 
 

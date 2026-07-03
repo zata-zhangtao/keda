@@ -102,9 +102,7 @@ def test_add_rejects_missing_path(config_with_repo: tuple[Path, Path]) -> None:
     assert config_path.read_text(encoding="utf-8") == original_text
 
 
-def test_add_rejects_non_git_path(
-    config_with_repo: tuple[Path, Path], tmp_path: Path
-) -> None:
+def test_add_rejects_non_git_path(config_with_repo: tuple[Path, Path], tmp_path: Path) -> None:
     """A directory without .git must be rejected."""
     config_path, _ = config_with_repo
     plain_dir = tmp_path / "plain"
@@ -159,9 +157,7 @@ def test_remove_repository_deletes_entry_and_preserves_comments(
     new_repo = tmp_path / "new-repo"
     (new_repo / ".git").mkdir(parents=True)
     editor = TomlRegistryEditor(config_path)
-    editor.add_repository(
-        repo_id="new-repo", path=str(new_repo), display_name="New Repo"
-    )
+    editor.add_repository(repo_id="new-repo", path=str(new_repo), display_name="New Repo")
 
     editor.remove_repository("existing")
 

@@ -205,9 +205,7 @@ def start_prd(
 
     if prd.issue_number is None:
         try:
-            issue_number = _create_issue_for_prd(
-                prd, context, github_client, process_runner
-            )
+            issue_number = _create_issue_for_prd(prd, context, github_client, process_runner)
         except Exception as exc:  # noqa: BLE001
             _audit(
                 store,
@@ -273,14 +271,10 @@ def _resolve_context(
     for context in contexts:
         if context.repo_id == repo_id:
             return context
-    raise RoadmapActionError(
-        f"Repository '{repo_id}' is not an enabled registry target."
-    )
+    raise RoadmapActionError(f"Repository '{repo_id}' is not an enabled registry target.")
 
 
-def get_or_create_roadmap_settings(
-    store: IRoadmapStore, repo_id: str
-) -> RoadmapSettingsEntry:
+def get_or_create_roadmap_settings(store: IRoadmapStore, repo_id: str) -> RoadmapSettingsEntry:
     """Return existing settings or create defaults."""
     settings = store.get_roadmap_settings(repo_id)
     if settings is not None:
@@ -354,9 +348,7 @@ def start_global_roadmap(
 
     # Eligible PRDs: not started and not blocked/merged/running.
     eligible = [
-        p
-        for p in resolved_prds
-        if p.state == RoadmapPrdState.NOT_STARTED and not p.block_reason
+        p for p in resolved_prds if p.state == RoadmapPrdState.NOT_STARTED and not p.block_reason
     ]
     # Sort by priority (P0 first) and then updated_at descending.
     priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}

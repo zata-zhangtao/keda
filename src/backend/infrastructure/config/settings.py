@@ -269,9 +269,7 @@ class DatabaseSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return _env_toml_init_sources(
-            settings_cls, "database", env_settings, init_settings
-        )
+        return _env_toml_init_sources(settings_cls, "database", env_settings, init_settings)
 
 
 class ChatModelSettings(BaseSettings):
@@ -292,9 +290,7 @@ class ChatModelSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return _env_toml_init_sources(
-            settings_cls, "chat_model", env_settings, init_settings
-        )
+        return _env_toml_init_sources(settings_cls, "chat_model", env_settings, init_settings)
 
 
 class MinioSettings(BaseSettings):
@@ -315,9 +311,7 @@ class MinioSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return _env_toml_init_sources(
-            settings_cls, "minio", env_settings, init_settings
-        )
+        return _env_toml_init_sources(settings_cls, "minio", env_settings, init_settings)
 
 
 class QdrantSettings(BaseSettings):
@@ -338,9 +332,7 @@ class QdrantSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return _env_toml_init_sources(
-            settings_cls, "qdrant", env_settings, init_settings
-        )
+        return _env_toml_init_sources(settings_cls, "qdrant", env_settings, init_settings)
 
 
 class EmbeddingSettings(BaseSettings):
@@ -362,9 +354,7 @@ class EmbeddingSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return _env_toml_init_sources(
-            settings_cls, "embedding", env_settings, init_settings
-        )
+        return _env_toml_init_sources(settings_cls, "embedding", env_settings, init_settings)
 
 
 class ChunkingSettings(BaseSettings):
@@ -384,9 +374,7 @@ class ChunkingSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return _env_toml_init_sources(
-            settings_cls, "chunking", env_settings, init_settings
-        )
+        return _env_toml_init_sources(settings_cls, "chunking", env_settings, init_settings)
 
 
 class TimeoutSettings(BaseSettings):
@@ -408,9 +396,7 @@ class TimeoutSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return _env_toml_init_sources(
-            settings_cls, "timeouts", env_settings, init_settings
-        )
+        return _env_toml_init_sources(settings_cls, "timeouts", env_settings, init_settings)
 
 
 class AgentRunnerLabelSettings(BaseModel):
@@ -425,6 +411,7 @@ class AgentRunnerLabelSettings(BaseModel):
     waiting: str = "agent/waiting"
     validation_pending: str = "validation/pending"
     validation_passed: str = "validation/passed"
+    verifier_passed: str = "validation/verifier-passed"
     group_prefix: str = "task-group/"
     codex: str = "agent/codex"
     claude: str = "agent/claude"
@@ -458,8 +445,7 @@ class AgentRunnerWorktreeSettings(BaseModel):
     """
 
     create_command: str = (
-        "iar worktree create --branch issue-{issue_number} "
-        "--base-branch {base_branch}"
+        "iar worktree create --branch issue-{issue_number} " "--base-branch {base_branch}"
     )
     reuse_command: str = "iar worktree path --branch issue-{issue_number}"
     path_command: str = "iar worktree path --branch issue-{issue_number}"
@@ -479,9 +465,7 @@ class AgentRunnerRunnerSettings(BaseModel):
     # falls back to the next locally available agent when recovery is exhausted
     # or the provider is capacity-limited. Commands that are not installed on
     # this machine are automatically skipped. Set to [] to disable switching.
-    agent_fallback_order: list[str] = Field(
-        default_factory=lambda: ["claude", "kimi", "codex"]
-    )
+    agent_fallback_order: list[str] = Field(default_factory=lambda: ["claude", "kimi", "codex"])
     # Maximum number of agent switches before the Issue is marked failed.
     # With order [a, b, c] and max_agent_switches=2, up to 3 agents are tried.
     max_agent_switches: int = 2
@@ -533,6 +517,7 @@ class AgentRunnerValidationSettings(BaseModel):
     verifier_enabled: bool = False
     verifier_agent: str = "auto"
     verifier_timeout_seconds: int = 1800
+    artifact_health_enabled: bool = True
 
 
 class AgentRunnerConsoleSettings(BaseModel):
@@ -597,9 +582,7 @@ class AgentRunnerPrePrReviewSettings(BaseModel):
     def _normalize_review_prompt_template(self) -> "AgentRunnerPrePrReviewSettings":
         """Collapse empty / scalar values to a stable list representation."""
         if isinstance(self.review_prompt_template, str):
-            normalized = (
-                [self.review_prompt_template] if self.review_prompt_template else []
-            )
+            normalized = [self.review_prompt_template] if self.review_prompt_template else []
         else:
             normalized = [str(item) for item in self.review_prompt_template]
         # Pydantic v2 disallows assigning to a field directly after validation;
@@ -808,18 +791,13 @@ class AgentRunnerRepositoryMetadataSettings(BaseModel):
             return None
         if not isinstance(value, str) or not value.strip():
             raise ValueError(
-                "Invalid github_repo: must be a non-empty 'owner/name' "
-                "string or null."
+                "Invalid github_repo: must be a non-empty 'owner/name' " "string or null."
             )
         if "/" not in value or value.startswith("/") or value.endswith("/"):
-            raise ValueError(
-                f"Invalid github_repo {value!r}; expected 'owner/name' format."
-            )
+            raise ValueError(f"Invalid github_repo {value!r}; expected 'owner/name' format.")
         owner_part, _, name_part = value.partition("/")
         if not owner_part or not name_part or "/" in name_part:
-            raise ValueError(
-                f"Invalid github_repo {value!r}; expected 'owner/name' format."
-            )
+            raise ValueError(f"Invalid github_repo {value!r}; expected 'owner/name' format.")
         return value
 
 
@@ -862,18 +840,13 @@ class AgentRunnerRepositorySettings(_AgentRunnerRepositoryOverrideSettings):
             return None
         if not isinstance(value, str) or not value.strip():
             raise ValueError(
-                "Invalid github_repo: must be a non-empty 'owner/name' "
-                "string or null."
+                "Invalid github_repo: must be a non-empty 'owner/name' " "string or null."
             )
         if "/" not in value or value.startswith("/") or value.endswith("/"):
-            raise ValueError(
-                f"Invalid github_repo {value!r}; expected 'owner/name' format."
-            )
+            raise ValueError(f"Invalid github_repo {value!r}; expected 'owner/name' format.")
         owner_part, _, name_part = value.partition("/")
         if not owner_part or not name_part or "/" in name_part:
-            raise ValueError(
-                f"Invalid github_repo {value!r}; expected 'owner/name' format."
-            )
+            raise ValueError(f"Invalid github_repo {value!r}; expected 'owner/name' format.")
         return value
 
 
@@ -908,23 +881,18 @@ def load_agent_runner_local_settings(
         with open(local_config_path, "rb") as local_config_file:
             local_toml_data: dict[str, Any] = tomllib.load(local_config_file)
     except tomllib.TOMLDecodeError as exc:
-        raise ValueError(
-            f"Invalid IAR local config at {local_config_path}: {exc}"
-        ) from exc
+        raise ValueError(f"Invalid IAR local config at {local_config_path}: {exc}") from exc
 
     agent_runner_section = local_toml_data.get("agent_runner")
     if not isinstance(agent_runner_section, dict):
         raise ValueError(
-            f"Invalid IAR local config at {local_config_path}: "
-            "missing [agent_runner] section."
+            f"Invalid IAR local config at {local_config_path}: " "missing [agent_runner] section."
         )
 
     try:
         local_settings = AgentRunnerLocalSettings(**agent_runner_section)
     except ValidationError as exc:
-        raise ValueError(
-            f"Invalid IAR local config at {local_config_path}: {exc}"
-        ) from exc
+        raise ValueError(f"Invalid IAR local config at {local_config_path}: {exc}") from exc
 
     repository_metadata = local_settings.repository
     return AgentRunnerRepositorySettings(
@@ -958,21 +926,13 @@ class AgentRunnerSettings(BaseSettings):
     default_agent: str = "auto"
     labels: AgentRunnerLabelSettings = Field(default_factory=AgentRunnerLabelSettings)
     git: AgentRunnerGitSettings = Field(default_factory=AgentRunnerGitSettings)
-    worktree: AgentRunnerWorktreeSettings = Field(
-        default_factory=AgentRunnerWorktreeSettings
-    )
+    worktree: AgentRunnerWorktreeSettings = Field(default_factory=AgentRunnerWorktreeSettings)
     runner: AgentRunnerRunnerSettings = Field(default_factory=AgentRunnerRunnerSettings)
     safety: AgentRunnerSafetySettings = Field(default_factory=AgentRunnerSafetySettings)
-    validation: AgentRunnerValidationSettings = Field(
-        default_factory=AgentRunnerValidationSettings
-    )
-    console: AgentRunnerConsoleSettings = Field(
-        default_factory=AgentRunnerConsoleSettings
-    )
+    validation: AgentRunnerValidationSettings = Field(default_factory=AgentRunnerValidationSettings)
+    console: AgentRunnerConsoleSettings = Field(default_factory=AgentRunnerConsoleSettings)
     daemon: AgentRunnerDaemonSettings = Field(default_factory=AgentRunnerDaemonSettings)
-    prompts: AgentRunnerPromptSettings = Field(
-        default_factory=AgentRunnerPromptSettings
-    )
+    prompts: AgentRunnerPromptSettings = Field(default_factory=AgentRunnerPromptSettings)
     pre_pr_review: AgentRunnerPrePrReviewSettings = Field(
         default_factory=AgentRunnerPrePrReviewSettings
     )
@@ -1034,9 +994,7 @@ class PreviewSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
         file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return _env_toml_init_sources(
-            settings_cls, "preview", env_settings, init_settings
-        )
+        return _env_toml_init_sources(settings_cls, "preview", env_settings, init_settings)
 
 
 class AppSettings(BaseSettings):
@@ -1071,9 +1029,7 @@ class AppSettings(BaseSettings):
 
     base_dir: Path = _PROJECT_ROOT_PATH
     log_dir: Path = Field(default_factory=lambda: _PROJECT_ROOT_PATH / "logs")
-    log_file: Path = Field(
-        default_factory=lambda: _PROJECT_ROOT_PATH / "logs" / "app.log"
-    )
+    log_file: Path = Field(default_factory=lambda: _PROJECT_ROOT_PATH / "logs" / "app.log")
 
     @property
     def resolved_database_url(self) -> str:
@@ -1090,13 +1046,11 @@ class AppSettings(BaseSettings):
         if encoded_user or encoded_password:
             credentials_part = f"{encoded_user}:{encoded_password}"
 
-        netloc: str = (
-            f"{credentials_part}@{db_config.host}"
-            if credentials_part
-            else db_config.host
-        )
+        netloc: str = f"{credentials_part}@{db_config.host}" if credentials_part else db_config.host
 
-        resolved_url: str = f"{db_config.backend}+{db_config.driver}://{netloc}:{db_config.port}/{db_config.name}"
+        resolved_url: str = (
+            f"{db_config.backend}+{db_config.driver}://{netloc}:{db_config.port}/{db_config.name}"
+        )
         return resolved_url
 
     @property

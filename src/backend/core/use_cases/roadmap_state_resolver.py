@@ -62,9 +62,7 @@ def _is_pr_merged(
     # Reuse the monitor helper to resolve the PR branch from event markers.
     from backend.core.shared.models.agent_runner import IssueSummary
 
-    issue = IssueSummary(
-        number=issue_number, title="", url="", body=issue_body, labels=()
-    )
+    issue = IssueSummary(number=issue_number, title="", url="", body=issue_body, labels=())
     pr_branch = _extract_pr_branch_from_issue(issue, github_client, comments)
     if pr_branch is None:
         return False, None
@@ -162,9 +160,7 @@ def resolve_roadmap_states(
             )
             continue
 
-        pr_merged, merged_url = _is_pr_merged(
-            prd.issue_number, github_client, issue.body
-        )
+        pr_merged, merged_url = _is_pr_merged(prd.issue_number, github_client, issue.body)
         pr_context = _lookup_pr_context(issue, github_client)
         state = _state_from_labels(issue.labels, labels_config, issue.state, pr_merged)
 

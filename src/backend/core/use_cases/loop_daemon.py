@@ -68,9 +68,7 @@ def _run_daemon_tick(
         repo_path = repo_resolver(task)
         github_client = github_client_factory(repo_path)
         content_generator = (
-            content_generator_factory(repo_path)
-            if content_generator_factory is not None
-            else None
+            content_generator_factory(repo_path) if content_generator_factory is not None else None
         )
         try:
             result = fire_loop(
@@ -147,9 +145,7 @@ def run_loop_daemon(
             )
             outcomes = []
         if outcomes:
-            _logger.info(
-                "Loop daemon pass: %s", ", ".join(f"{i}={s}" for i, s in outcomes)
-            )
+            _logger.info("Loop daemon pass: %s", ", ".join(f"{i}={s}" for i, s in outcomes))
         passes_completed += 1
         if max_passes is not None and passes_completed >= max_passes:
             return

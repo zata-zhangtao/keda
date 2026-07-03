@@ -251,10 +251,7 @@ No h1 line here.
 """,
     )
     recipe = parse_loop_recipe(recipe_path)
-    assert (
-        render_loop_recipe_title(recipe, fire_at=datetime(2026, 1, 1, 0, 0, 0))
-        == "fallback"
-    )
+    assert render_loop_recipe_title(recipe, fire_at=datetime(2026, 1, 1, 0, 0, 0)) == "fallback"
 
 
 def test_parse_pre_command_output_handles_quotes_and_comments() -> None:

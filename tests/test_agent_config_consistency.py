@@ -60,10 +60,7 @@ def test_factory_maps_fix_agent_enabled() -> None:
     from backend.engines.agent_runner.factory import build_app_config_from_settings
     from backend.infrastructure.config.settings import AgentRunnerRunnerSettings
 
-    assert (
-        AgentRunnerRunnerSettings().fix_agent_enabled
-        == RunnerConfig().fix_agent_enabled
-    )
+    assert AgentRunnerRunnerSettings().fix_agent_enabled == RunnerConfig().fix_agent_enabled
 
     settings = AgentRunnerSettings()
     settings.runner = AgentRunnerRunnerSettings(fix_agent_enabled=False)
@@ -132,9 +129,7 @@ def _label_config_scalar_field_names() -> list[str]:
     """Scalar (string) field names on the core LabelConfig dataclass."""
     import dataclasses
 
-    return [
-        f.name for f in dataclasses.fields(CoreLabelConfig) if f.name != "agent_labels"
-    ]
+    return [f.name for f in dataclasses.fields(CoreLabelConfig) if f.name != "agent_labels"]
 
 
 def test_factory_maps_every_label_config_field() -> None:
@@ -194,13 +189,8 @@ def test_settings_review_and_supervisor_match_core() -> None:
     assert pre_push.allow_same_agent == core_pre.allow_same_agent
     assert pre_push.max_attempts == core_pre.max_attempts
     assert pre_push.timeout_seconds == core_pre.timeout_seconds
-    assert (
-        pre_push.commit_request_reminder_attempts
-        == core_pre.commit_request_reminder_attempts
-    )
-    assert list(pre_push.review_prompt_template) == list(
-        core_pre.review_prompt_template
-    )
+    assert pre_push.commit_request_reminder_attempts == core_pre.commit_request_reminder_attempts
+    assert list(pre_push.review_prompt_template) == list(core_pre.review_prompt_template)
 
     assert post_sup.enabled == core_post.enabled
     assert post_sup.supervisor_agent == core_post.supervisor_agent

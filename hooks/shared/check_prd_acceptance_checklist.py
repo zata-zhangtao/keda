@@ -9,9 +9,7 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-ACTIVE_PRD_PATH_RE = re.compile(
-    r"^tasks/([^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md$"
-)
+ACTIVE_PRD_PATH_RE = re.compile(r"^tasks/([^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md$")
 ARCHIVED_PRD_PATH_RE = re.compile(
     r"^tasks/archive/([^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md$"
 )
@@ -119,10 +117,7 @@ def _candidate_prd_paths(
             if _is_active_prd_path(path, repo_root):
                 candidate_paths.append(path)
                 continue
-            if (
-                _is_archived_prd_path(path, repo_root)
-                and relative_path in staged_archive_prd_paths
-            ):
+            if _is_archived_prd_path(path, repo_root) and relative_path in staged_archive_prd_paths:
                 candidate_paths.append(path)
         return candidate_paths
 
@@ -224,9 +219,7 @@ def main() -> int:
         print()
 
     if has_errors:
-        print(
-            "⚠️  One or more active PRD acceptance checklists still contain unchecked items."
-        )
+        print("⚠️  One or more active PRD acceptance checklists still contain unchecked items.")
         return 1
 
     print("\n🎉 All active PRD acceptance checklists are complete.")

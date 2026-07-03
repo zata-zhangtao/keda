@@ -27,9 +27,7 @@ from tests.conftest import FakeGitHubClient, FakeProcessRunner
 
 def _make_issue() -> IssueSummary:
     """Return an Issue in the post-PR workflow."""
-    return IssueSummary(
-        number=1, title="T", url="U", body="B", labels=("agent/running",)
-    )
+    return IssueSummary(number=1, title="T", url="U", body="B", labels=("agent/running",))
 
 
 @pytest.mark.parametrize(
@@ -61,12 +59,8 @@ def test_publication_defers_supervisor_without_full_pr_context(
             "create_draft_pr",
             return_value=("issue-1", "https://github.com/example/repo/pull/1"),
         ),
-        patch.object(
-            agent_runner_publication, "get_head_sha", return_value="publish-sha"
-        ),
-        patch.object(
-            agent_runner_supervisor, "_run_supervisor_with_repair_loop"
-        ) as run_supervisor,
+        patch.object(agent_runner_publication, "get_head_sha", return_value="publish-sha"),
+        patch.object(agent_runner_supervisor, "_run_supervisor_with_repair_loop") as run_supervisor,
     ):
         finish_publication(
             issue=_make_issue(),
@@ -80,9 +74,7 @@ def test_publication_defers_supervisor_without_full_pr_context(
         )
 
     run_supervisor.assert_not_called()
-    label_calls = [
-        call for call in github_client.calls if call["method"] == "edit_issue_labels"
-    ]
+    label_calls = [call for call in github_client.calls if call["method"] == "edit_issue_labels"]
     assert any(config.labels.supervising in call["add"] for call in label_calls)
     assert not any(config.labels.review in call["add"] for call in label_calls)
 
@@ -198,9 +190,7 @@ def test_running_rework_defers_supervisor_without_full_pr_context(
         ),
         patch.object(agent_runner_orchestrate, "choose_agent", return_value="codex"),
         patch.object(agent_runner_orchestrate, "execute_rebase", return_value=[]),
-        patch.object(
-            agent_runner_orchestrate, "get_head_sha", return_value="after-sha"
-        ),
+        patch.object(agent_runner_orchestrate, "get_head_sha", return_value="after-sha"),
         patch.object(
             agent_runner_orchestrate, "_run_supervisor_with_repair_loop"
         ) as run_supervisor,
@@ -216,9 +206,7 @@ def test_running_rework_defers_supervisor_without_full_pr_context(
         )
 
     run_supervisor.assert_not_called()
-    assert any(
-        call["method"] == "get_pull_request_context" for call in github_client.calls
-    )
+    assert any(call["method"] == "get_pull_request_context" for call in github_client.calls)
     assert not any(
         call["method"] == "edit_issue_labels" and config.labels.review in call["add"]
         for call in github_client.calls
@@ -245,9 +233,7 @@ def test_running_rework_without_supervisor_does_not_require_pr_context(
         ),
         patch.object(agent_runner_orchestrate, "choose_agent", return_value="codex"),
         patch.object(agent_runner_orchestrate, "execute_rebase", return_value=[]),
-        patch.object(
-            agent_runner_orchestrate, "get_head_sha", return_value="after-sha"
-        ),
+        patch.object(agent_runner_orchestrate, "get_head_sha", return_value="after-sha"),
     ):
         agent_runner_orchestrate._process_running_rework(
             issue=_make_issue(),
@@ -259,9 +245,7 @@ def test_running_rework_without_supervisor_does_not_require_pr_context(
             marker=_make_rework_marker(),
         )
 
-    assert not any(
-        call["method"] == "get_pull_request_context" for call in github_client.calls
-    )
+    assert not any(call["method"] == "get_pull_request_context" for call in github_client.calls)
     assert any(
         call["method"] == "edit_issue_labels" and config.labels.review in call["add"]
         for call in github_client.calls
@@ -304,17 +288,13 @@ def test_supervisor_loop_defers_after_rework_when_pr_context_refresh_fails(
         )
 
     assert supervisor_cycle.call_count == 1
-    assert any(
-        call["method"] == "get_pull_request_context" for call in github_client.calls
-    )
+    assert any(call["method"] == "get_pull_request_context" for call in github_client.calls)
     assert not any(
         call["method"] == "edit_issue_labels" and config.labels.review in call["add"]
         for call in github_client.calls
     )
     comment_bodies = [
-        call["body"]
-        for call in github_client.calls
-        if call["method"] == "comment_issue"
+        call["body"] for call in github_client.calls if call["method"] == "comment_issue"
     ]
     assert any("phase=post_pr_rework_requested" in body for body in comment_bodies)
     assert any("phase=rebase_repair_complete" in body for body in comment_bodies)

@@ -227,12 +227,8 @@ def create_repo_draft(repo_id: str, request: CreateDraftRequest) -> dict:
     return _serialize(result)
 
 
-@router.post(
-    "/agent-runner/idea-inbox/repositories/{repo_id}/drafts/{encoded_path:path}/approve"
-)
-def approve_repo_draft(
-    repo_id: str, encoded_path: str, request: ApproveDraftRequest
-) -> dict:
+@router.post("/agent-runner/idea-inbox/repositories/{repo_id}/drafts/{encoded_path:path}/approve")
+def approve_repo_draft(repo_id: str, encoded_path: str, request: ApproveDraftRequest) -> dict:
     """确认草稿落入 ``tasks/pending/``。"""
     context = _resolve_context(repo_id)
     draft_path = _decode_draft_path(encoded_path)
@@ -254,9 +250,7 @@ def approve_repo_draft(
 
 
 def _expected_signature(secret: str, body: str) -> str:
-    digest = hmac.new(
-        secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
+    digest = hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"sha256={digest}"
 
 
@@ -280,8 +274,7 @@ def _verify_signature(
         raise HTTPException(
             status_code=503,
             detail=(
-                f"inbound endpoint 未配置共享 secret "
-                f"({INBOUND_SECRET_ENV} 为空)，拒绝接收。"
+                f"inbound endpoint 未配置共享 secret " f"({INBOUND_SECRET_ENV} 为空)，拒绝接收。"
             ),
         )
     if not signature_header:
@@ -335,11 +328,7 @@ async def inbound_idea(
 
     context = _resolve_context(payload.repo_id)
     source = _resolve_source(payload.provider)
-    author = (
-        f"feishu:{payload.sender}"
-        if source is IdeaInboxSource.FEISHU
-        else payload.sender
-    )
+    author = f"feishu:{payload.sender}" if source is IdeaInboxSource.FEISHU else payload.sender
     append_result = append_idea(
         context.repo_path,
         source=source,

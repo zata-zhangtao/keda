@@ -93,9 +93,7 @@ def test_completion_stats_dedupes_multi_label_issues() -> None:
 
 def test_completion_stats_empty_repo() -> None:
     """No tracked issues → completion_rate is None, not a division error."""
-    stats = build_completion_stats(
-        context=_make_context(), github_client=FakeStatsGitHubClient({})
-    )
+    stats = build_completion_stats(context=_make_context(), github_client=FakeStatsGitHubClient({}))
     assert stats.total_tracked == 0
     assert stats.completion_rate is None
 
@@ -107,8 +105,6 @@ def test_completion_stats_isolates_github_failure() -> None:
         def list_issues_by_label(self, label, limit, state="all"):
             raise RuntimeError("gh exploded")
 
-    stats = build_completion_stats(
-        context=_make_context(), github_client=ExplodingClient()
-    )
+    stats = build_completion_stats(context=_make_context(), github_client=ExplodingClient())
     assert stats.error is not None
     assert stats.total_tracked == 0

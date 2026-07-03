@@ -38,9 +38,7 @@ if TYPE_CHECKING:
     from backend.core.shared.interfaces.agent_runner import IProcessRunner
 
 
-def _run_init_command(
-    parsed: argparse.Namespace, process_runner: IProcessRunner
-) -> int:
+def _run_init_command(parsed: argparse.Namespace, process_runner: IProcessRunner) -> int:
     """Render / write the local config, copy bundled skills, sync labels."""
     try:
         init_result = initialize_repository_local_config(
@@ -78,9 +76,7 @@ def _run_init_command(
     if init_result.wrote_file:
         console.print(f"[green]Wrote IAR local config:[/] {init_result.config_path}")
     else:
-        console.print(
-            f"[dim]IAR local config already up to date:[/] {init_result.config_path}"
-        )
+        console.print(f"[dim]IAR local config already up to date:[/] {init_result.config_path}")
     _print_gitignore_summary(gitignore_result)
     if init_result.repo_id:
         try:
@@ -91,9 +87,7 @@ def _run_init_command(
                 editor=create_registry_editor(),
             )
             if registry_result.action == "added":
-                console.print(
-                    f"[green]Registered repository:[/] {registry_result.repo_id}"
-                )
+                console.print(f"[green]Registered repository:[/] {registry_result.repo_id}")
             elif registry_result.action == "updated":
                 console.print(
                     f"[yellow]Updated registry path for {registry_result.repo_id}:[/] "
@@ -132,9 +126,7 @@ def _run_init_command(
     try:
         sync_labels(
             labels_config=LabelConfig(),
-            github_client=create_github_client(
-                init_result.repo_root_path, process_runner
-            ),
+            github_client=create_github_client(init_result.repo_root_path, process_runner),
         )
         console.print(f"[green]Labels synced for:[/] {init_result.repo_root_path}")
     except Exception as exc:  # noqa: BLE001
@@ -222,9 +214,7 @@ def _print_gitignore_summary(result: GitignoreSyncResult) -> None:
             f"skipped_external={joined_skipped} -> {result.gitignore_path}"
         )
     else:
-        console.print(
-            f"[dim]IAR .gitignore block already up to date:[/] {result.gitignore_path}"
-        )
+        console.print(f"[dim]IAR .gitignore block already up to date:[/] {result.gitignore_path}")
     _print_info_exclude_hint_if_needed(result)
 
 

@@ -663,10 +663,7 @@ def run_filtered_claude_stream(
                     else:
                         text_buffer.append(rendered_text)
                         buffered_text = "".join(text_buffer)
-                        if (
-                            rendered_text.endswith("\n")
-                            or len(buffered_text) >= _MAX_BUFFER_SIZE
-                        ):
+                        if rendered_text.endswith("\n") or len(buffered_text) >= _MAX_BUFFER_SIZE:
                             stripped = buffered_text.strip()
                             if stripped:
                                 logger.info("Agent output: %s", stripped)

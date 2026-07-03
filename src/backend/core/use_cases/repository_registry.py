@@ -67,13 +67,9 @@ def add_registry_repository(
         )
     existing_ids = {entry.repo_id for entry in editor.list_repositories()}
     if repo_id in existing_ids:
-        raise RegistryValidationError(
-            f"Repository '{repo_id}' already exists in the registry."
-        )
+        raise RegistryValidationError(f"Repository '{repo_id}' already exists in the registry.")
     try:
-        editor.add_repository(
-            repo_id=repo_id, path=str(resolved_path), display_name=display_name
-        )
+        editor.add_repository(repo_id=repo_id, path=str(resolved_path), display_name=display_name)
     except ValueError as exc:
         raise RegistryValidationError(str(exc)) from exc
     return RegistryRepositoryEntry(

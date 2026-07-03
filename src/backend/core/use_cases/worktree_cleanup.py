@@ -82,9 +82,7 @@ class WorktreeCleanupResult:
         return self._count_status(WorktreeCleanupStatus.FAILED)
 
     def _count_status(self, status: WorktreeCleanupStatus) -> int:
-        return sum(
-            1 for branch_result in self.branches if branch_result.status is status
-        )
+        return sum(1 for branch_result in self.branches if branch_result.status is status)
 
 
 def cleanup_iar_worktrees(
@@ -112,9 +110,7 @@ def cleanup_iar_worktrees(
     _fetch_pruned_remote(repo_path, request.remote, process_runner)
     current_branch = _current_branch(repo_path, process_runner)
     branch_worktree_paths = _branch_worktree_paths(repo_path, process_runner)
-    local_issue_branches = _local_issue_branches(
-        repo_path, request.branch_prefix, process_runner
-    )
+    local_issue_branches = _local_issue_branches(repo_path, request.branch_prefix, process_runner)
 
     cleanup_results = [
         _evaluate_issue_branch(
@@ -148,9 +144,7 @@ def _evaluate_issue_branch(
     candidate_worktree_path = branch_worktree_paths.get(branch)
 
     if branch == current_branch:
-        return _skipped(
-            candidate, "branch is currently checked out", candidate_worktree_path
-        )
+        return _skipped(candidate, "branch is currently checked out", candidate_worktree_path)
 
     if _remote_branch_exists(repo_path, request.remote, branch, process_runner):
         return _skipped(
@@ -218,16 +212,12 @@ def _evaluate_issue_branch(
     )
 
 
-def _fetch_pruned_remote(
-    repo_path: Path, remote: str, process_runner: IProcessRunner
-) -> None:
+def _fetch_pruned_remote(repo_path: Path, remote: str, process_runner: IProcessRunner) -> None:
     process_runner.run(["git", "fetch", remote, "--prune"], cwd=repo_path)
 
 
 def _current_branch(repo_path: Path, process_runner: IProcessRunner) -> str:
-    current_branch_result = process_runner.run(
-        ["git", "branch", "--show-current"], cwd=repo_path
-    )
+    current_branch_result = process_runner.run(["git", "branch", "--show-current"], cwd=repo_path)
     return current_branch_result.stdout.strip()
 
 
@@ -253,9 +243,7 @@ def _local_issue_branches(
     return tuple(branch_candidates)
 
 
-def _branch_worktree_paths(
-    repo_path: Path, process_runner: IProcessRunner
-) -> dict[str, Path]:
+def _branch_worktree_paths(repo_path: Path, process_runner: IProcessRunner) -> dict[str, Path]:
     worktree_list_result = process_runner.run(
         ["git", "worktree", "list", "--porcelain"], cwd=repo_path
     )
@@ -263,9 +251,7 @@ def _branch_worktree_paths(
     current_worktree_path: Path | None = None
     for worktree_line in worktree_list_result.stdout.splitlines():
         if worktree_line.startswith("worktree "):
-            current_worktree_path = Path(
-                worktree_line.removeprefix("worktree ")
-            ).resolve()
+            current_worktree_path = Path(worktree_line.removeprefix("worktree ")).resolve()
             continue
         if worktree_line.startswith("branch refs/heads/") and current_worktree_path:
             branch_name = worktree_line.removeprefix("branch refs/heads/").strip()
@@ -290,9 +276,7 @@ def _remote_branch_exists(
     return remote_ref_result.return_code == 0
 
 
-def _issue_is_closed(
-    github_client: IGitHubClient, issue_number: int
-) -> tuple[bool, str]:
+def _issue_is_closed(github_client: IGitHubClient, issue_number: int) -> tuple[bool, str]:
     try:
         issue_summary = github_client.get_issue(issue_number)
     except Exception as exc:  # noqa: BLE001 - cleanup should continue per branch.

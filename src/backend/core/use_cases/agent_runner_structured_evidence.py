@@ -18,8 +18,10 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.core.shared.interfaces.agent_runner import IProcessRunner
 from backend.core.shared.models.agent_runner import AppConfig
 from backend.core.use_cases.agent_runner_evidence_format import (
     IMAGE_EVIDENCE_SUFFIXES,
@@ -63,12 +65,38 @@ class StructuredEvidenceMarker:
 
 
 @dataclass(frozen=True)
+class ArtifactSpec:
+    """Expected shape of a non-text evidence artifact (FR-11a hard/soft layers).
+
+    **Hard layer**(machine-checked, keda validates via ``IProcessRunner`` for
+    every verifier model equally): ``path``, ``mime``, ``min_size``,
+    ``min_duration_seconds``.  Any failure → ``ValidationEvidenceError``.
+
+    **Soft layer**(model-checked, verifier self-declares, does not block):
+    ``key_claim``.  Prompt-injected so multimodal models read the image and
+    verify; text-only models state "not visually verified" and are encouraged to
+    self-downgrade to yellow.  Must never be a hard requirement — that would
+    structurally exclude text-only verifiers from UI-type RVs (D-14c).
+    """
+
+    path: str
+    mime: str
+    min_size: int | None = None
+    min_duration_seconds: float | None = None
+    key_claim: str = ""
+
+
+@dataclass(frozen=True)
 class EvidenceBlock:
     """A single checklist item's structured evidence block from the manifest.
 
     ``negative_control`` / ``expected_fail`` 承载"红→绿"判别力证据：能让该项
     变红的命令或注入故障,以及变红时的样子。当前为可选字段（向后兼容旧
     manifest）;门禁层按配置决定是否对高证据项强制要求。
+
+    ``expected_artifacts`` (FR-11a, optional) carries machine-checkable shape
+    assertions for non-text evidence files (images/videos/audio). Old manifests
+    without this field are treated as passing the artifact-health check.
     """
 
     item_number: int
@@ -80,6 +108,7 @@ class EvidenceBlock:
     risks: str
     negative_control: str = ""
     expected_fail: str = ""
+    expected_artifacts: tuple[ArtifactSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -221,9 +250,7 @@ def _load_manifest_json(worktree_path: Path, config: AppConfig) -> dict[str, obj
 def _parse_evidence_block(block_data: object, item_number: int) -> EvidenceBlock:
     """Parse a single evidence block and validate required fields."""
     if not isinstance(block_data, dict):
-        raise ValidationEvidenceError(
-            f"Item {item_number}: evidence block must be a JSON object."
-        )
+        raise ValidationEvidenceError(f"Item {item_number}: evidence block must be a JSON object.")
 
     item_name = _extract_nonempty_string(block_data, "item_name", item_number)
     command = _extract_nonempty_string(block_data, "command", item_number)
@@ -233,6 +260,7 @@ def _parse_evidence_block(block_data: object, item_number: int) -> EvidenceBlock
     evidence_files = _extract_evidence_files(block_data, item_number)
     negative_control = _extract_optional_string(block_data, "negative_control")
     expected_fail = _extract_optional_string(block_data, "expected_fail")
+    expected_artifacts = _extract_expected_artifacts(block_data, item_number)
 
     return EvidenceBlock(
         item_number=item_number,
@@ -244,6 +272,7 @@ def _parse_evidence_block(block_data: object, item_number: int) -> EvidenceBlock
         risks=risks,
         negative_control=negative_control,
         expected_fail=expected_fail,
+        expected_artifacts=expected_artifacts,
     )
 
 
@@ -268,9 +297,7 @@ def _extract_optional_string(block_data: dict[str, object], field_name: str) -> 
     return ""
 
 
-def _extract_evidence_files(
-    block_data: dict[str, object], item_number: int
-) -> tuple[str, ...]:
+def _extract_evidence_files(block_data: dict[str, object], item_number: int) -> tuple[str, ...]:
     """Extract and validate the ``evidence_files`` list."""
     raw_files = block_data.get("evidence_files")
     if not isinstance(raw_files, list) or not raw_files:
@@ -281,11 +308,66 @@ def _extract_evidence_files(
     for file_name in raw_files:
         if not isinstance(file_name, str) or not file_name.strip():
             raise ValidationEvidenceError(
-                f"Item {item_number}: `evidence_files` contains an empty "
-                "or non-string entry."
+                f"Item {item_number}: `evidence_files` contains an empty " "or non-string entry."
             )
         evidence_files.append(file_name.strip())
     return tuple(evidence_files)
+
+
+def _extract_expected_artifacts(
+    block_data: dict[str, object], item_number: int
+) -> tuple[ArtifactSpec, ...]:
+    """Extract and validate the optional ``expected_artifacts`` list (FR-11a).
+
+    Absent / non-list / empty → ``()`` (backward compatible; old manifests
+    skip the artifact-health check). Each entry must be a JSON object with a
+    non-empty ``path`` and ``mime``; ``min_size`` / ``min_duration_seconds`` /
+    ``key_claim`` are optional. Malformed entries raise
+    ``ValidationEvidenceError`` so the agent cannot silently emit garbage.
+    """
+    raw = block_data.get("expected_artifacts")
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValidationEvidenceError(f"Item {item_number}: `expected_artifacts` must be a list.")
+    specs: list[ArtifactSpec] = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ValidationEvidenceError(
+                f"Item {item_number}: `expected_artifacts[{index}]` must be a " "JSON object."
+            )
+        path = _extract_nonempty_string(entry, "path", item_number)
+        mime = _extract_nonempty_string(entry, "mime", item_number)
+        min_size_raw = entry.get("min_size")
+        min_size: int | None = None
+        if min_size_raw is not None:
+            if not isinstance(min_size_raw, int) or min_size_raw < 0:
+                raise ValidationEvidenceError(
+                    f"Item {item_number}: `expected_artifacts[{index}].min_size` "
+                    "must be a non-negative integer."
+                )
+            min_size = min_size_raw
+        min_duration_raw = entry.get("min_duration_seconds")
+        min_duration: float | None = None
+        if min_duration_raw is not None:
+            if not isinstance(min_duration_raw, (int, float)) or min_duration_raw < 0:
+                raise ValidationEvidenceError(
+                    f"Item {item_number}: "
+                    "`expected_artifacts[{index}].min_duration_seconds` must be a "
+                    "non-negative number."
+                )
+            min_duration = float(min_duration_raw)
+        key_claim = _extract_optional_string(entry, "key_claim")
+        specs.append(
+            ArtifactSpec(
+                path=path,
+                mime=mime,
+                min_size=min_size,
+                min_duration_seconds=min_duration,
+                key_claim=key_claim,
+            )
+        )
+    return tuple(specs)
 
 
 def load_evidence_manifest(worktree_path: Path, config: AppConfig) -> EvidenceManifest:
@@ -455,9 +537,7 @@ def _validate_evidence_file_content(
         return
 
     foreign_items = sorted(
-        item_number
-        for item_number in found_items
-        if item_number != expected_item_number
+        item_number for item_number in found_items if item_number != expected_item_number
     )
     if foreign_items:
         raise ValidationEvidenceError(
@@ -523,12 +603,8 @@ def validate_evidence_manifest(
 
     item_number_counts: dict[int, int] = {}
     for block in manifest.items:
-        item_number_counts[block.item_number] = (
-            item_number_counts.get(block.item_number, 0) + 1
-        )
-    duplicate_numbers = sorted(
-        num for num, count in item_number_counts.items() if count > 1
-    )
+        item_number_counts[block.item_number] = item_number_counts.get(block.item_number, 0) + 1
+    duplicate_numbers = sorted(num for num, count in item_number_counts.items() if count > 1)
     if duplicate_numbers:
         raise ValidationEvidenceError(
             "Structured evidence manifest contains duplicate item number(s): "
@@ -548,9 +624,7 @@ def validate_evidence_manifest(
                     config=config,
                 )
             )
-        item_reports.append(
-            StructuredEvidenceItemReport(block=block, files=tuple(file_infos))
-        )
+        item_reports.append(StructuredEvidenceItemReport(block=block, files=tuple(file_infos)))
 
     if config.validation.require_negative_control:
         missing_control = sorted(
@@ -748,3 +822,128 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
         "never mix output from multiple items into one file. Avoid shell-wide stdout "
         "redirection such as `exec > >(tee -a ...)` which leaks output across files."
     ).format(language=language, evidence_dir="{evidence_dir}")
+
+
+# ---------------------------------------------------------------------------
+# FR-11a: evidence artifact health (hard layer — machine-checkable assertions)
+# ---------------------------------------------------------------------------
+
+
+def validate_evidence_artifact(
+    worktree_path: Path,
+    spec: ArtifactSpec,
+    process_runner: IProcessRunner,
+    *,
+    since: datetime | None = None,
+) -> None:
+    """Validate that an evidence artifact satisfies its hard-layer ``ArtifactSpec``.
+
+    All checks go through ``IProcessRunner`` so keda carries zero new library
+    dependencies (no ffmpeg, no Pillow). Only machine-checkable assertions
+    (existence, size, mime, duration, freshness) are enforced here;
+    ``key_claim`` is model-checked — the verifier prompt injects it, and the
+    verifier self-declares what it observed.
+
+    Args:
+        worktree_path: Root of the builder's worktree.
+        spec: Expected shape from the manifest's ``expected_artifacts`` entry.
+        process_runner: Command runner for ``stat`` / ``file`` / ``ffprobe``.
+        since: Optional wall-clock lower bound for file mtime. When set, a
+            file older than this timestamp is treated as stale (it may belong
+            to a previous builder run and was not regenerated during the
+            current verification cycle).
+
+    Raises:
+        ValidationEvidenceError: Any hard-layer assertion fails.
+    """
+    full = worktree_path / spec.path
+    if not full.is_file():
+        raise ValidationEvidenceError(f"Evidence artifact `{spec.path}` does not exist.")
+    if full.stat().st_size == 0:
+        raise ValidationEvidenceError(f"Evidence artifact `{spec.path}` is a 0-byte file.")
+
+    # mime type
+    mime_result = process_runner.run(
+        ("file", "--mime-type", "-b", str(full)),
+        cwd=worktree_path,
+        check=False,
+        capture_output=True,
+    )
+    actual_mime = mime_result.stdout.strip()
+    if actual_mime != spec.mime:
+        raise ValidationEvidenceError(
+            f"Evidence artifact `{spec.path}` has mime type "
+            f"`{actual_mime}`; expected `{spec.mime}`."
+        )
+
+    # min_size
+    if spec.min_size is not None:
+        size = full.stat().st_size
+        if size < spec.min_size:
+            raise ValidationEvidenceError(
+                f"Evidence artifact `{spec.path}` is {size} bytes; "
+                f"minimum expected is {spec.min_size} bytes."
+            )
+
+    # min_duration_seconds (video/audio only)
+    if spec.min_duration_seconds is not None and spec.mime.startswith(("video/", "audio/")):
+        dur_result = process_runner.run(
+            (
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(full),
+            ),
+            cwd=worktree_path,
+            check=False,
+            capture_output=True,
+        )
+        try:
+            duration = float(dur_result.stdout.strip())
+        except ValueError:
+            raise ValidationEvidenceError(
+                f"Evidence artifact `{spec.path}`: ffprobe duration "
+                f"unparseable: {dur_result.stdout.strip()[:200]}"
+            ) from None
+        if duration < spec.min_duration_seconds:
+            raise ValidationEvidenceError(
+                f"Evidence artifact `{spec.path}` is {duration:.1f}s; "
+                f"minimum expected is {spec.min_duration_seconds}s."
+            )
+
+    # freshness (mtime must be >= since)
+    if since is not None:
+        mtime = datetime.fromtimestamp(full.stat().st_mtime, tz=timezone.utc)
+        if mtime < since:
+            raise ValidationEvidenceError(
+                f"Evidence artifact `{spec.path}` has mtime {mtime.isoformat()}; "
+                f"expected mtime >= {since.isoformat()} (stale artifact from a "
+                "previous run?)."
+            )
+
+
+def validate_evidence_artifacts(
+    manifest: EvidenceManifest,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+    *,
+    since: datetime | None = None,
+) -> None:
+    """Run artifact-health checks across every item in the manifest (FR-11a hard layer).
+
+    Only active when ``config.validation.artifact_health_enabled`` is true.
+    Items without ``expected_artifacts`` are silently skipped (backward compatible).
+
+    Raises:
+        ValidationEvidenceError: Any hard-layer assertion fails.
+    """
+    if not config.validation.artifact_health_enabled:
+        return
+    for block in manifest.items:
+        for spec in block.expected_artifacts:
+            validate_evidence_artifact(worktree_path, spec, process_runner, since=since)

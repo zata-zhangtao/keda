@@ -251,12 +251,8 @@ def test_list_issues_with_prs_with_pr_filter(tmp_path: Path) -> None:
             _make_issue(3, "Update docs"),
         ]
     )
-    github_client.set_prs_for_repo_issue(
-        "owner/repo", 1, [_make_pr(42, "merged", merged=True)]
-    )
-    github_client.set_prs_for_repo_issue(
-        "owner/repo", 2, [_make_pr(43, "draft", is_draft=True)]
-    )
+    github_client.set_prs_for_repo_issue("owner/repo", 1, [_make_pr(42, "merged", merged=True)])
+    github_client.set_prs_for_repo_issue("owner/repo", 2, [_make_pr(43, "draft", is_draft=True)])
     # issue 3 has no PRs
 
     result = list_issues_with_prs(
@@ -282,9 +278,7 @@ def test_list_issues_with_prs_without_pr_filter(tmp_path: Path) -> None:
             _make_issue(2, "No PR"),
         ]
     )
-    github_client.set_prs_for_repo_issue(
-        "owner/repo", 1, [_make_pr(42, "merged", merged=True)]
-    )
+    github_client.set_prs_for_repo_issue("owner/repo", 1, [_make_pr(42, "merged", merged=True)])
 
     result = list_issues_with_prs(
         IssueListRequest(with_pr=False),
@@ -307,9 +301,7 @@ def test_list_issues_with_prs_state_filter_is_validated(tmp_path: Path) -> None:
             IssueListRequest(state_filter="garbage"),
             cwd=tmp_path,
             github_client_factory=lambda _: github_client,
-            resolve_targets=_fake_resolve_factory(
-                [_make_context("test-repo", tmp_path)]
-            ),
+            resolve_targets=_fake_resolve_factory([_make_context("test-repo", tmp_path)]),
             has_local_iar_repo=lambda _: True,
         )
 
@@ -386,9 +378,7 @@ def test_repo_label_for_handles_legacy_context_without_config(tmp_path: Path) ->
     """Context without a config (defensive) returns None instead of crashing."""
     from backend.core.use_cases.issue_pr_status import _repo_label_for
 
-    legacy = _FakeContext(
-        repo_id="keda", display_name="keda", repo_path=tmp_path, config=None
-    )
+    legacy = _FakeContext(repo_id="keda", display_name="keda", repo_path=tmp_path, config=None)
     assert _repo_label_for(legacy) is None
 
 

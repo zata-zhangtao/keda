@@ -204,12 +204,9 @@ def format_command(
     if "{base_branch}" in template:
         if base_branch is None:
             raise ValueError(
-                "Command template references {base_branch} but no base_branch "
-                "was provided."
+                "Command template references {base_branch} but no base_branch " "was provided."
             )
-        return shlex.split(
-            template.format(issue_number=issue_number, base_branch=base_branch)
-        )
+        return shlex.split(template.format(issue_number=issue_number, base_branch=base_branch))
     return shlex.split(template.format(issue_number=issue_number))
 
 
@@ -220,11 +217,7 @@ def choose_agent(issue: IssueSummary, config: AppConfig, override_agent: str) ->
     for agent_name, label in config.labels.agent_labels.items():
         if label in issue.labels:
             return agent_name
-    return (
-        config.runner.default_agent
-        if config.runner.default_agent != "auto"
-        else "claude"
-    )
+    return config.runner.default_agent if config.runner.default_agent != "auto" else "claude"
 
 
 def resolve_agent_fallback_order(
@@ -359,9 +352,7 @@ def create_or_reuse_worktree(
         repo_path, worktree_path, process_runner
     )
     if linked_frontend_paths:
-        exclude_frontend_node_modules_from_git(
-            worktree_path, linked_frontend_paths, process_runner
-        )
+        exclude_frontend_node_modules_from_git(worktree_path, linked_frontend_paths, process_runner)
     handled_frontend_paths = installed_frontend_paths + linked_frontend_paths
     if handled_frontend_paths:
         _logger.info(
@@ -373,9 +364,7 @@ def create_or_reuse_worktree(
             ", ".join(str(frontend_path) for frontend_path in linked_frontend_paths),
         )
     expected_branch = f"issue-{issue.number}"
-    _ensure_worktree_branch(
-        worktree_path, expected_branch, issue, config, process_runner
-    )
+    _ensure_worktree_branch(worktree_path, expected_branch, issue, config, process_runner)
     _reconcile_worktree_with_remote_branch(worktree_path, config, process_runner)
     return worktree_path
 
@@ -650,8 +639,7 @@ def run_agent_with_prompt_resilient(
             if retry_index >= max_retries or not is_transient_failure(exc):
                 raise
             _logger.warning(
-                "Transient error from agent '%s' for Issue #%d; "
-                "retrying (%d/%d): %s",
+                "Transient error from agent '%s' for Issue #%d; " "retrying (%d/%d): %s",
                 agent_name,
                 issue_number,
                 retry_index + 1,
@@ -824,8 +812,7 @@ def run_agent_until_committed(
     before_sha: str,
     expected_branch: str,
     prompt_override: str | None = None,
-    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None]
-    | None = None,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None] | None = None,
 ) -> AgentCommitResult:
     """Run the agent, recover failed verification, and return final checks.
 
@@ -860,6 +847,7 @@ def run_agent_until_committed(
     recovery_failure_summary = ""
     final_verification_results: list[CommandResult] = []
     attempt_results: list[AttemptResult] = []
+    verifier_verdict = None  # set by Phase 3.6 when the independent verifier runs
 
     # Recovery 重试循环：第 0 次是正常执行，后续是 recovery
     for attempt_index in range(max_recovery_attempts + 1):
@@ -884,12 +872,8 @@ def run_agent_until_committed(
                         worktree_path,
                         process_runner,
                         issue=issue,
-                        transient_retry_attempts=(
-                            config.runner.transient_retry_attempts
-                        ),
-                        transient_retry_delay_seconds=(
-                            config.runner.transient_retry_delay_seconds
-                        ),
+                        transient_retry_attempts=(config.runner.transient_retry_attempts),
+                        transient_retry_delay_seconds=(config.runner.transient_retry_delay_seconds),
                         timeout_seconds=config.runner.timeout_seconds,
                         inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                     )
@@ -913,8 +897,7 @@ def run_agent_until_committed(
                     verification_results=final_verification_results,
                 )
                 recovery_timeout = (
-                    config.runner.recovery_timeout_seconds
-                    or config.runner.timeout_seconds
+                    config.runner.recovery_timeout_seconds or config.runner.timeout_seconds
                 )
                 run_agent_with_prompt_resilient(
                     selected_agent,
@@ -923,9 +906,7 @@ def run_agent_until_committed(
                     process_runner,
                     issue=issue,
                     transient_retry_attempts=config.runner.transient_retry_attempts,
-                    transient_retry_delay_seconds=(
-                        config.runner.transient_retry_delay_seconds
-                    ),
+                    transient_retry_delay_seconds=(config.runner.transient_retry_delay_seconds),
                     timeout_seconds=recovery_timeout,
                     inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                 )
@@ -973,8 +954,7 @@ def run_agent_until_committed(
                 raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_agent_execution_failure(exc)
             _logger.warning(
-                "Agent command failed for Issue #%d; "
-                "asking agent to recover (%d/%d).",
+                "Agent command failed for Issue #%d; " "asking agent to recover (%d/%d).",
                 issue.number,
                 attempt_index + 1,
                 max_recovery_attempts,
@@ -1019,8 +999,7 @@ def run_agent_until_committed(
                 exc.verification_results,
             )
             _logger.warning(
-                "Verification failed for Issue #%d; "
-                "asking agent to recover (%d/%d).",
+                "Verification failed for Issue #%d; " "asking agent to recover (%d/%d).",
                 issue.number,
                 attempt_index + 1,
                 max_recovery_attempts,
@@ -1057,8 +1036,7 @@ def run_agent_until_committed(
                 raise MaxRetriesExceededError(attempt_results) from exc
             recovery_failure_summary = format_prd_delivery_failure(str(exc))
             _logger.warning(
-                "PRD delivery check failed for Issue #%d; "
-                "asking agent to recover (%d/%d).",
+                "PRD delivery check failed for Issue #%d; " "asking agent to recover (%d/%d).",
                 issue.number,
                 attempt_index + 1,
                 max_recovery_attempts,
@@ -1067,16 +1045,14 @@ def run_agent_until_committed(
 
         # Phase 3.5: Realistic Validation 证据门禁（要求验证且无豁免时）
         try:
-            ensure_validation_evidence_ready(issue, worktree_path, config)
-            ensure_validation_commands_pass(
-                issue, worktree_path, config, process_runner
-            )
+            ensure_validation_evidence_ready(issue, worktree_path, config, process_runner)
+            ensure_validation_commands_pass(issue, worktree_path, config, process_runner)
             # Phase 3.6: independent verifier (pre-PR; red -> this same recovery
             # loop auto-repairs, bounded; escalates to a human only on exhaustion).
             # Local import breaks the run_agent_once <-> run_verifier_agent cycle.
             from backend.core.use_cases.run_verifier_agent import run_verifier_gate
 
-            run_verifier_gate(
+            verifier_verdict = run_verifier_gate(
                 issue, worktree_path, config, process_runner, selected_agent
             )
         except ValidationEvidenceError as exc:
@@ -1152,8 +1128,7 @@ def run_agent_until_committed(
                         )
                         if fix_agent_result.return_code != 0:
                             raise RuntimeError(
-                                "Fix Agent exited with code "
-                                f"{fix_agent_result.return_code}"
+                                "Fix Agent exited with code " f"{fix_agent_result.return_code}"
                             )
                         post_fix_verification = run_verification(
                             worktree_path, config, process_runner
@@ -1294,8 +1269,7 @@ def run_agent_until_committed(
                     ]
                 )
                 _logger.warning(
-                    "Commit request failed for Issue #%d; "
-                    "asking agent to recover (%d/%d).",
+                    "Commit request failed for Issue #%d; " "asking agent to recover (%d/%d).",
                     issue.number,
                     attempt_index + 1,
                     max_recovery_attempts,
@@ -1318,7 +1292,7 @@ def run_agent_until_committed(
                 ),
                 on_attempt_recorded,
             )
-            return AgentCommitResult(final_verification_results, attempt_results)
+            return AgentCommitResult(final_verification_results, attempt_results, verifier_verdict)
 
         # Agent 没有产生任何变更：进入 recovery 要求实际修改代码
         has_uncommitted = has_changes(worktree_path, process_runner)
@@ -1352,8 +1326,7 @@ def run_agent_until_committed(
             ]
         )
         _logger.warning(
-            "Agent produced no git commits for Issue #%d; "
-            "asking agent to recover (%d/%d).",
+            "Agent produced no git commits for Issue #%d; " "asking agent to recover (%d/%d).",
             issue.number,
             attempt_index + 1,
             max_recovery_attempts,

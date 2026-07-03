@@ -245,9 +245,7 @@ def _run_loop_command(parsed: argparse.Namespace, process_runner) -> int:
 def _run_parsed_command(parsed: argparse.Namespace) -> int:
     """Run a command after CLI arguments have been parsed."""
     if parsed.config:
-        logger.warning(
-            "The --config flag is deprecated. Use config.toml or env vars instead."
-        )
+        logger.warning("The --config flag is deprecated. Use config.toml or env vars instead.")
 
     repo_id: str | None = getattr(parsed, "repo_id", None)
     repo_override: str | None = getattr(parsed, "repo", None)
@@ -277,18 +275,12 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
 
     if parsed.command == "init":
         if repo_id is not None or repo_override is not None:
-            logger.error(
-                "iar init uses the current Git repository; omit --repo/--repo-id."
-            )
+            logger.error("iar init uses the current Git repository; omit --repo/--repo-id.")
             return 1
         return _run_init_command(parsed, process_runner)
 
     if parsed.command == "workflow install":
-        if (
-            repo_id is not None
-            or repo_override is not None
-            or parsed.config is not None
-        ):
+        if repo_id is not None or repo_override is not None or parsed.config is not None:
             logger.error(
                 "iar workflow install uses the current Git repository; "
                 "omit --repo/--repo-id/--config."
@@ -319,13 +311,10 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             console.print("[cyan]Would install workflow:[/] %s" % install_result.name)
             for plan in install_result.template_file_plans:
                 marker = (
-                    "[yellow]would overwrite[/]"
-                    if plan.exists_on_disk
-                    else "[green]would write[/]"
+                    "[yellow]would overwrite[/]" if plan.exists_on_disk else "[green]would write[/]"
                 )
                 console.print(
-                    "  %s %s (%d bytes)"
-                    % (marker, plan.target_path, plan.bytes_to_write)
+                    "  %s %s (%d bytes)" % (marker, plan.target_path, plan.bytes_to_write)
                 )
             _print_workflow_config_plan(install_result.config_toml_plan, dry_run=True)
             return 0
@@ -336,9 +325,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             console.print(
                 "%s %s"
                 % (
-                    "[green]Wrote[/]"
-                    if not plan.exists_on_disk
-                    else "[yellow]Overwrote[/]",
+                    "[green]Wrote[/]" if not plan.exists_on_disk else "[yellow]Overwrote[/]",
                     plan.target_path,
                 )
             )
@@ -438,9 +425,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             created_worktree_path = manager.create(
                 branch=parsed.branch, base_branch=parsed.base_branch
             )
-            copied_env_paths = copy_missing_env_files(
-                repo_root_path, created_worktree_path
-            )
+            copied_env_paths = copy_missing_env_files(repo_root_path, created_worktree_path)
             if copied_env_paths:
                 logger.info(
                     "Copied %d missing env file(s) into worktree %s",
@@ -503,9 +488,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 _ensure_gh_auth_or_prompt(contexts[0].repo_path, process_runner)
             for context in contexts:
                 github_client = github_client_factory(context.repo_path)
-                sync_labels(
-                    labels_config=context.config.labels, github_client=github_client
-                )
+                sync_labels(labels_config=context.config.labels, github_client=github_client)
             logger.info("Labels are ready.")
             return 0
 
@@ -519,30 +502,23 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 cwd=Path.cwd(),
             )
             try:
-                prd_paths, skipped_prd_paths = _expand_prd_paths(
-                    context.repo_path, raw_prd_paths
-                )
+                prd_paths, skipped_prd_paths = _expand_prd_paths(context.repo_path, raw_prd_paths)
             except ValueError as exc:
                 logger.error("iar issue create failed: %s", exc)
                 return 1
 
             for skipped_prd_path in skipped_prd_paths:
-                console.print(
-                    f"[yellow]Skipped PRD with existing Issue:[/] {skipped_prd_path}"
-                )
+                console.print(f"[yellow]Skipped PRD with existing Issue:[/] {skipped_prd_path}")
                 logger.info("Skipped PRD with existing Issue: %s", skipped_prd_path)
 
             if not prd_paths:
                 console.print(
-                    "[green]All PRDs in the requested directories already have "
-                    "GitHub Issues.[/]"
+                    "[green]All PRDs in the requested directories already have " "GitHub Issues.[/]"
                 )
                 return 0
 
             if len(prd_paths) > 1 and parsed.title is not None:
-                logger.error(
-                    "--title cannot be used when creating Issues from multiple PRDs."
-                )
+                logger.error("--title cannot be used when creating Issues from multiple PRDs.")
                 return 1
 
             require_iar_repository_initialized(context.repo_path, process_runner)
@@ -561,9 +537,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 # runner 在 worktree 里读到过时 PRD。交互式 prompt 在 push 成功后再补 ready。
                 queue_ready_for_request = parsed.ready if parsed.publish_prd else False
                 try:
-                    _, relative_prd_path = resolve_prd_paths(
-                        context.repo_path, Path(prd_path_text)
-                    )
+                    _, relative_prd_path = resolve_prd_paths(context.repo_path, Path(prd_path_text))
                     issue_url = create_issue_from_prd(
                         request=IssueFromPrdRequest(
                             repo_path=context.repo_path,
@@ -579,9 +553,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                             git_base_branch=context.config.git.base_branch,
                             generated_content_config=gc_config,
                             depends_on=tuple(getattr(parsed, "depends_on", []) or []),
-                            depends_on_group=tuple(
-                                getattr(parsed, "depends_on_group", []) or []
-                            ),
+                            depends_on_group=tuple(getattr(parsed, "depends_on_group", []) or []),
                             parse_evidence_format_with_agent=context.config.validation.parse_evidence_format_with_agent,
                             validation_language=context.config.validation.language,
                             structured_evidence=context.config.validation.structured_evidence,
@@ -621,9 +593,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                         prd_path_text,
                         error_detail,
                     )
-                    error_console.print(
-                        f"[red]Failed to create Issue from {prd_path_text}:[/]"
-                    )
+                    error_console.print(f"[red]Failed to create Issue from {prd_path_text}:[/]")
                     error_console.print(error_detail, markup=False)
 
             if failed_prd_paths:
@@ -669,9 +639,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 all_repositories=getattr(parsed, "all_registered", False),
                 state_filter=parsed.state,
                 label_filter=parsed.label,
-                with_pr=True
-                if parsed.with_pr
-                else (False if parsed.without_pr else None),
+                with_pr=True if parsed.with_pr else (False if parsed.without_pr else None),
                 limit=parsed.limit,
             )
             try:
@@ -708,9 +676,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 return 0
             if output_format == "json":
                 for row in result.rows:
-                    sys.stdout.write(
-                        json.dumps(render_issue_with_pulls_json(row)) + "\n"
-                    )
+                    sys.stdout.write(json.dumps(render_issue_with_pulls_json(row)) + "\n")
             else:
                 table = Table(show_header=True, header_style="bold")
                 if multi_repo:
@@ -733,9 +699,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     table.add_row(*cells)
                 render_console.print(table)
             for repo_label, error_message in result.errors:
-                error_console.print(
-                    f"[red]Error fetching {repo_label}:[/] {error_message}"
-                )
+                error_console.print(f"[red]Error fetching {repo_label}:[/] {error_message}")
             return 1 if result.errors else 0
 
         if parsed.command == "run":
@@ -799,12 +763,9 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             # A per-Issue live view (Rich on a TTY, plain otherwise) is created
             # only when running >1 in parallel; the sequential path is unchanged.
             daemon_concurrency = (
-                getattr(parsed, "concurrency", None)
-                or runner_settings.runner.max_concurrent_issues
+                getattr(parsed, "concurrency", None) or runner_settings.runner.max_concurrent_issues
             )
-            daemon_output_view = (
-                create_runner_live_view() if daemon_concurrency > 1 else None
-            )
+            daemon_output_view = create_runner_live_view() if daemon_concurrency > 1 else None
 
             def content_generator_factory(repo_path: Path):
                 return create_content_generator(process_runner)
@@ -816,13 +777,9 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             # repository would double the queue polling and agent spawns, so
             # refuse to start rather than pile up duplicate daemons.
             daemon_repo_ids = [context.repo_id for context in contexts]
-            daemon_locks_dir = daemon_lock_dir(
-                runner_settings.console.process_registry_path
-            )
+            daemon_locks_dir = daemon_lock_dir(runner_settings.console.process_registry_path)
             try:
-                acquired_daemon_locks = acquire_daemon_locks(
-                    daemon_locks_dir, daemon_repo_ids
-                )
+                acquired_daemon_locks = acquire_daemon_locks(daemon_locks_dir, daemon_repo_ids)
             except DaemonAlreadyRunningError as already_running:
                 error_console.print(f"[red]{already_running}[/]")
                 return 1
@@ -868,8 +825,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                         config=context.config,
                         dry_run=parsed.dry_run,
                         agent=parsed.agent,
-                        max_issues=parsed.max_issues
-                        or runner_settings.runner.max_issues,
+                        max_issues=parsed.max_issues or runner_settings.runner.max_issues,
                         github_client=github_client,
                         process_runner=process_runner,
                     )
@@ -993,13 +949,9 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     process_runner=process_runner,
                 )
                 if claimed:
-                    console.print(
-                        f"[green]Issue #{parsed.issue} resumed successfully.[/]"
-                    )
+                    console.print(f"[green]Issue #{parsed.issue} resumed successfully.[/]")
                     return 0
-                console.print(
-                    f"[yellow]Issue #{parsed.issue} was claimed by another runner.[/]"
-                )
+                console.print(f"[yellow]Issue #{parsed.issue} was claimed by another runner.[/]")
                 return 0
             except BlockedContinueError as exc:
                 logger.error("blocked-continue failed: %s", exc)
@@ -1088,9 +1040,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                 )
                 agent_override = None
             effective_agent = agent_override or context.config.repl.default_agent
-            content_generator = create_content_generator(
-                process_runner, read_only=False
-            )
+            content_generator = create_content_generator(process_runner, read_only=False)
             command_executor = create_repl_command_executor(
                 process_runner=process_runner,
                 config=context.config.repl,
@@ -1126,13 +1076,9 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             deliberation_settings = context.config.deliberation
             output_dir = parsed.output or deliberation_settings.default_output_dir
             rounds = (
-                parsed.rounds
-                if parsed.rounds is not None
-                else deliberation_settings.default_rounds
+                parsed.rounds if parsed.rounds is not None else deliberation_settings.default_rounds
             )
-            synthesizer = (
-                parsed.synthesizer or deliberation_settings.default_synthesizer
-            )
+            synthesizer = parsed.synthesizer or deliberation_settings.default_synthesizer
             agents = tuple(a.strip() for a in parsed.agents.split(",") if a.strip())
             session_id = parsed.session_id or create_default_session_id()
             output_path = Path(output_dir) / session_id
@@ -1202,9 +1148,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                         f"fallback={failure.fallback_agent or 'none'}, "
                         f"reason={failure.reason}).[/]"
                     )
-            strict_mode = (
-                parsed.strict or not deliberation_config.continue_on_agent_error
-            )
+            strict_mode = parsed.strict or not deliberation_config.continue_on_agent_error
             all_participants_failed = len(selected_profile_ids) > 0 and all(
                 profile_id in {f.profile_id for f in result.failed_agents}
                 for profile_id in selected_profile_ids
@@ -1256,13 +1200,9 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
             deliberation_settings = context.config.deliberation
             output_dir = parsed.output or deliberation_settings.default_output_dir
             rounds = (
-                parsed.rounds
-                if parsed.rounds is not None
-                else deliberation_settings.default_rounds
+                parsed.rounds if parsed.rounds is not None else deliberation_settings.default_rounds
             )
-            synthesizer = (
-                parsed.synthesizer or deliberation_settings.default_synthesizer
-            )
+            synthesizer = parsed.synthesizer or deliberation_settings.default_synthesizer
             agents = tuple(a.strip() for a in parsed.agents.split(",") if a.strip())
             session_id = parsed.session_id or create_default_session_id()
             output_path = Path(output_dir) / session_id
@@ -1332,9 +1272,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                         f"fallback={failure.fallback_agent or 'none'}, "
                         f"reason={failure.reason}).[/]"
                     )
-            strict_mode = (
-                parsed.strict or not deliberation_config.continue_on_agent_error
-            )
+            strict_mode = parsed.strict or not deliberation_config.continue_on_agent_error
             all_participants_failed = len(selected_profile_ids) > 0 and all(
                 profile_id in {f.profile_id for f in result.failed_agents}
                 for profile_id in selected_profile_ids

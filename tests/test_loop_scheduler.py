@@ -148,9 +148,7 @@ def test_list_due_tasks_includes_only_overdue() -> None:
 
 def test_list_due_tasks_skips_disabled() -> None:
     tasks = [
-        _make_task(
-            loop_id="disabled", next_fire_at="2026-06-23T07:00:00+00:00", enabled=False
-        )
+        _make_task(loop_id="disabled", next_fire_at="2026-06-23T07:00:00+00:00", enabled=False)
     ]
     clock = FixedClock(datetime(2026, 6, 23, 8, 0, 0, tzinfo=timezone.utc))
     assert list_due_tasks(tasks, clock=clock) == []

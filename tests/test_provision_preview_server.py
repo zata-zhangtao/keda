@@ -23,9 +23,7 @@ import _remote  # noqa: E402
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location(
-        "provision_preview_server", SCRIPT_PATH
-    )
+    spec = importlib.util.spec_from_file_location("provision_preview_server", SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -446,8 +444,7 @@ def test_ensure_external_traefik_network_ignores_consumers_of_traefik_net(capsys
     fake = _FakeRemote(
         [
             "",
-            "kimi-ppt-frontend-1|nginx:alpine|traefik,bridge\n"
-            "traefik|traefik:v3.1|traefik\n",
+            "kimi-ppt-frontend-1|nginx:alpine|traefik,bridge\n" "traefik|traefik:v3.1|traefik\n",
         ]
     )
     pps.ensure_external_traefik_network(fake)
@@ -601,9 +598,7 @@ def test_generate_deploy_key_flag_is_parseable(monkeypatch):
 def test_print_secrets_instructions_uses_deploy_key_when_set(monkeypatch, capsys):
     """When generate_deploy_key was used, the secret-set command should
     point at the scp'd local file, and warn the user to delete it after."""
-    monkeypatch.setenv(
-        "PREVIEW_DEPLOY_KEY_PATH", "/tmp/preview-deploy-key-XYZ/id_ed25519"
-    )
+    monkeypatch.setenv("PREVIEW_DEPLOY_KEY_PATH", "/tmp/preview-deploy-key-XYZ/id_ed25519")
     args = type(
         "A",
         (),
@@ -621,9 +616,7 @@ def test_print_secrets_instructions_uses_deploy_key_when_set(monkeypatch, capsys
     assert "Delete the local private key" in out
 
 
-def test_print_secrets_instructions_uses_deploy_user_when_create_flag_set(
-    monkeypatch, capsys
-):
+def test_print_secrets_instructions_uses_deploy_user_when_create_flag_set(monkeypatch, capsys):
     """With --create-deploy-user, SERVER_USER should be args.deploy_user
     (the script reconnects as that user), not args.user (the SSH bootstrap)."""
     monkeypatch.delenv("PREVIEW_DEPLOY_KEY_PATH", raising=False)
@@ -692,9 +685,7 @@ def test_set_github_secrets_uses_deploy_key_when_set(monkeypatch, tmp_path, caps
     monkeypatch.setenv("PREVIEW_DEPLOY_KEY_PATH", str(deploy_key))
     monkeypatch.setattr(_apply, "_gh_auth_ok", lambda: True)
     monkeypatch.setattr(_apply, "_gh_repo_slug", lambda: "owner/repo")
-    monkeypatch.setattr(
-        _apply, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY"
-    )
+    monkeypatch.setattr(_apply, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY")
     monkeypatch.setattr(_remote, "_confirm", lambda *a, **kw: True)
     monkeypatch.setattr("builtins.input", lambda *a, **kw: "x")
     monkeypatch.setattr(_apply.getpass, "getpass", lambda *a, **kw: "x")
@@ -709,9 +700,7 @@ def test_set_github_secrets_uses_deploy_key_when_set(monkeypatch, tmp_path, caps
 
     pps.apply_secrets(_make_args(key=str(operator_key)))
 
-    secret_calls = [
-        (argv, payload) for argv, payload in captured if "SERVER_SSH_KEY" in argv
-    ]
+    secret_calls = [(argv, payload) for argv, payload in captured if "SERVER_SSH_KEY" in argv]
     assert len(secret_calls) == 1
     argv, payload = secret_calls[0]
     assert payload == "DEPLOY-PRIVATE-KEY-CONTENT"
@@ -726,9 +715,7 @@ def test_set_github_secrets_falls_back_to_args_key(monkeypatch, tmp_path):
     operator_key.write_text("OPERATOR-PRIVATE-KEY-CONTENT", encoding="utf-8")
     monkeypatch.setattr(_apply, "_gh_auth_ok", lambda: True)
     monkeypatch.setattr(_apply, "_gh_repo_slug", lambda: "owner/repo")
-    monkeypatch.setattr(
-        _apply, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY"
-    )
+    monkeypatch.setattr(_apply, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY")
     monkeypatch.setattr(_remote, "_confirm", lambda *a, **kw: True)
     monkeypatch.setattr("builtins.input", lambda *a, **kw: "x")
     monkeypatch.setattr(_apply.getpass, "getpass", lambda *a, **kw: "x")
@@ -743,9 +730,7 @@ def test_set_github_secrets_falls_back_to_args_key(monkeypatch, tmp_path):
 
     pps.apply_secrets(_make_args(key=str(operator_key)))
 
-    secret_calls = [
-        (argv, payload) for argv, payload in captured if "SERVER_SSH_KEY" in argv
-    ]
+    secret_calls = [(argv, payload) for argv, payload in captured if "SERVER_SSH_KEY" in argv]
     assert len(secret_calls) == 1
     _, payload = secret_calls[0]
     assert payload == "OPERATOR-PRIVATE-KEY-CONTENT"
@@ -757,9 +742,7 @@ def test_set_github_secrets_skips_ssh_key_when_neither_set(monkeypatch, tmp_path
     monkeypatch.delenv("PREVIEW_DEPLOY_KEY_PATH", raising=False)
     monkeypatch.setattr(_apply, "_gh_auth_ok", lambda: True)
     monkeypatch.setattr(_apply, "_gh_repo_slug", lambda: "owner/repo")
-    monkeypatch.setattr(
-        _apply, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY"
-    )
+    monkeypatch.setattr(_apply, "_gh_secret_exists", lambda name: name != "SERVER_SSH_KEY")
     monkeypatch.setattr(_remote, "_confirm", lambda *a, **kw: True)
     monkeypatch.setattr("builtins.input", lambda *a, **kw: "x")
     monkeypatch.setattr(_apply.getpass, "getpass", lambda *a, **kw: "x")
@@ -779,9 +762,7 @@ def test_set_github_secrets_skips_ssh_key_when_neither_set(monkeypatch, tmp_path
 
 
 def test_create_deploy_user_refuses_for_root_deploy():
-    args = type(
-        "A", (), {"user": "root", "deploy_user": "root", "app_dir": "/opt/preview"}
-    )()
+    args = type("A", (), {"user": "root", "deploy_user": "root", "app_dir": "/opt/preview"})()
     fake = _FakeRemote([])
     with pytest.raises(SystemExit) as excinfo:
         pps.create_deploy_user(fake, args)
@@ -789,9 +770,7 @@ def test_create_deploy_user_refuses_for_root_deploy():
 
 
 def test_create_deploy_user_refuses_same_as_ssh_user():
-    args = type(
-        "A", (), {"user": "deploy", "deploy_user": "deploy", "app_dir": "/opt/preview"}
-    )()
+    args = type("A", (), {"user": "deploy", "deploy_user": "deploy", "app_dir": "/opt/preview"})()
     fake = _FakeRemote([])
     with pytest.raises(SystemExit) as excinfo:
         pps.create_deploy_user(fake, args)
@@ -867,9 +846,7 @@ def test_create_deploy_user_flag_is_parseable(monkeypatch):
     assert args.create_deploy_user is True
 
 
-def test_generate_deploy_key_installs_pub_to_deploy_when_flag_set(
-    monkeypatch, tmp_path
-):
+def test_generate_deploy_key_installs_pub_to_deploy_when_flag_set(monkeypatch, tmp_path):
     """With --create-deploy-user, the generated public key must land in
     /home/<deploy_user>/.ssh/authorized_keys (chowned to them) — not in
     the bootstrap user's home. The operator's --key is intentionally
@@ -900,10 +877,7 @@ def test_generate_deploy_key_installs_pub_to_deploy_when_flag_set(
     assert "/home/deploy/.ssh/authorized_keys" in joined
     assert "chown deploy:deploy" in joined
     # Must NOT install into the bootstrap user's ~/.ssh/authorized_keys.
-    assert (
-        'grep -qxF "$(cat ~/.ssh/preview_deploy_key.pub)" ~/.ssh/authorized_keys'
-        not in joined
-    )
+    assert 'grep -qxF "$(cat ~/.ssh/preview_deploy_key.pub)" ~/.ssh/authorized_keys' not in joined
 
 
 def test_generate_deploy_key_uses_bootstrap_home_by_default(monkeypatch, tmp_path):

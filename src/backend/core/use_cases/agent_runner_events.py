@@ -57,9 +57,7 @@ def _parse_event_marker(comment_body: str) -> ReviewEventMarker | None:
     blocked_paths_raw = match.group("blocked_paths")
     blocked_paths: tuple[str, ...] = ()
     if blocked_paths_raw is not None:
-        blocked_paths = tuple(
-            path.strip() for path in blocked_paths_raw.split(",") if path.strip()
-        )
+        blocked_paths = tuple(path.strip() for path in blocked_paths_raw.split(",") if path.strip())
     return ReviewEventMarker(
         version=int(match.group("version")),
         phase=match.group("phase"),
@@ -73,9 +71,7 @@ def _parse_event_marker(comment_body: str) -> ReviewEventMarker | None:
         issue_comments_count=int(issue_comments_count_raw)
         if issue_comments_count_raw is not None
         else None,
-        pr_comments_count=int(pr_comments_count_raw)
-        if pr_comments_count_raw is not None
-        else None,
+        pr_comments_count=int(pr_comments_count_raw) if pr_comments_count_raw is not None else None,
         blocked_paths=blocked_paths,
     )
 

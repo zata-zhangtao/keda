@@ -103,9 +103,7 @@ def build_takeover_options(
     dry_run: bool = False,
 ) -> TakeoverOptions:
     """Build validated takeover options from CLI arguments."""
-    resolved_clone_root = (
-        Path(clone_root).expanduser() if clone_root else _default_clone_root()
-    )
+    resolved_clone_root = Path(clone_root).expanduser() if clone_root else _default_clone_root()
     resolved_clone_root.mkdir(parents=True, exist_ok=True)
     return TakeoverOptions(
         clone_root=resolved_clone_root,
@@ -149,13 +147,9 @@ def list_github_repositories(
     if owner:
         command.append(owner)
 
-    result = process_runner.run(
-        command, cwd=Path.cwd(), check=False, capture_output=True
-    )
+    result = process_runner.run(command, cwd=Path.cwd(), check=False, capture_output=True)
     if result.return_code != 0:
-        error_message = (
-            result.stderr.strip() or result.stdout.strip() or "unknown error"
-        )
+        error_message = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise RuntimeError(f"Failed to list GitHub repositories: {error_message}")
 
     try:
@@ -247,13 +241,9 @@ def clone_github_repository(
         candidate.full_name,
         str(repo_path),
     ]
-    result = process_runner.run(
-        command, cwd=clone_root, check=False, capture_output=True
-    )
+    result = process_runner.run(command, cwd=clone_root, check=False, capture_output=True)
     if result.return_code != 0:
-        error_message = (
-            result.stderr.strip() or result.stdout.strip() or "unknown error"
-        )
+        error_message = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise RuntimeError(f"Failed to clone {candidate.full_name}: {error_message}")
     return repo_path
 
@@ -443,11 +433,7 @@ def filter_unregistered_candidates(
     for candidate in candidates:
         repo_id = candidate.normalized_repo_id
         repo_path = _repository_path(clone_root, candidate)
-        if (
-            repo_id in registered
-            and repo_path.exists()
-            and (repo_path / ".git").exists()
-        ):
+        if repo_id in registered and repo_path.exists() and (repo_path / ".git").exists():
             _logger.info("Skipping already-managed repository: %s", candidate.full_name)
             continue
         filtered.append(candidate)

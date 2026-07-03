@@ -129,9 +129,7 @@ app.add_typer(daemon_app, name="daemon")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(loop_app, name="loop")
 
-RepoOption = Annotated[
-    str | None, typer.Option("--repo", help="Target repository path.")
-]
+RepoOption = Annotated[str | None, typer.Option("--repo", help="Target repository path.")]
 RepoIdOption = Annotated[
     str | None, typer.Option("--repo-id", help="Target configured repository ID.")
 ]
@@ -212,9 +210,7 @@ def _run_typer_repository_command(
     **kwargs: Any,
 ) -> int:
     """Run a command that accepts repository selector options."""
-    selector_options = _typer_selector_options(
-        ctx, repo=repo, repo_id=repo_id, config=config
-    )
+    selector_options = _typer_selector_options(ctx, repo=repo, repo_id=repo_id, config=config)
     return _run_typer_command(command, **selector_options, **kwargs)
 
 
@@ -271,9 +267,7 @@ def init_command(
     display_name: Annotated[
         str | None, typer.Option("--display-name", help="Repository display name.")
     ] = None,
-    remote: Annotated[
-        str | None, typer.Option("--remote", help="Git remote name.")
-    ] = None,
+    remote: Annotated[str | None, typer.Option("--remote", help="Git remote name.")] = None,
     base_branch: Annotated[
         str | None, typer.Option("--base-branch", help="Git base branch.")
     ] = None,
@@ -303,9 +297,7 @@ def init_command(
     ] = False,
 ) -> int:
     """Create repository-local .iar.toml config."""
-    selector_options = _typer_selector_options(
-        ctx, repo=None, repo_id=None, config=None
-    )
+    selector_options = _typer_selector_options(ctx, repo=None, repo_id=None, config=None)
     return _run_typer_command(
         "init",
         **selector_options,
@@ -349,12 +341,8 @@ def registry_sync_command(
 
 @registry_app.command("reinit")
 def registry_reinit_command(
-    repo_id: Annotated[
-        str, typer.Option("--repo-id", help="Registry identifier to reinitialize.")
-    ],
-    remote: Annotated[
-        str, typer.Option("--remote", help="Git remote name to write.")
-    ] = "origin",
+    repo_id: Annotated[str, typer.Option("--repo-id", help="Registry identifier to reinitialize.")],
+    remote: Annotated[str, typer.Option("--remote", help="Git remote name to write.")] = "origin",
     base_branch: Annotated[
         str | None, typer.Option("--base-branch", help="Base branch to write.")
     ] = None,
@@ -375,9 +363,7 @@ def registry_reinit_command(
 
 @registry_app.command("remove")
 def registry_remove_command(
-    repo_id: Annotated[
-        str, typer.Option("--repo-id", help="Registry identifier to remove.")
-    ],
+    repo_id: Annotated[str, typer.Option("--repo-id", help="Registry identifier to remove.")],
     delete: Annotated[
         bool,
         typer.Option("--delete", help="Also delete the cloned repository directory."),
@@ -417,9 +403,7 @@ def registry_start_command(
 ) -> int:
     """Start daemon and review-daemon for registered repositories."""
     if not repo_id and not all:
-        error_console.print(
-            "[red]Either --repo-id or --all is required for iar registry start.[/]"
-        )
+        error_console.print("[red]Either --repo-id or --all is required for iar registry start.[/]")
         return 1
     if repo_id and all:
         error_console.print("[red]--repo-id and --all are mutually exclusive.[/]")
@@ -440,9 +424,7 @@ def registry_stop_command(
     ] = None,
     all: Annotated[
         bool,
-        typer.Option(
-            "--all", help="Stop daemons for all repositories with running processes."
-        ),
+        typer.Option("--all", help="Stop daemons for all repositories with running processes."),
     ] = False,
     no_review_daemon: Annotated[
         bool,
@@ -454,9 +436,7 @@ def registry_stop_command(
 ) -> int:
     """Stop daemon and review-daemon for registered repositories."""
     if not repo_id and not all:
-        error_console.print(
-            "[red]Either --repo-id or --all is required for iar registry stop.[/]"
-        )
+        error_console.print("[red]Either --repo-id or --all is required for iar registry stop.[/]")
         return 1
     if repo_id and all:
         error_console.print("[red]--repo-id and --all are mutually exclusive.[/]")
@@ -529,9 +509,7 @@ def issue_create_command(
     ctx: typer.Context,
     prd_paths: Annotated[
         list[str],
-        typer.Argument(
-            help="One or more PRD Markdown files or directories containing PRD files."
-        ),
+        typer.Argument(help="One or more PRD Markdown files or directories containing PRD files."),
     ],
     issue_type: Annotated[
         IssueTypeChoice,
@@ -589,9 +567,7 @@ def issue_create_command(
 @issue_app.command("list", context_settings=_HELP_CONTEXT)
 def issue_list_command(
     ctx: typer.Context,
-    repo: Annotated[
-        str | None, typer.Option("--repo", help="Target repository path.")
-    ] = None,
+    repo: Annotated[str | None, typer.Option("--repo", help="Target repository path.")] = None,
     repo_id: Annotated[
         str | None, typer.Option("--repo-id", help="Target configured repository ID.")
     ] = None,
@@ -619,16 +595,12 @@ def issue_list_command(
         int,
         typer.Option("--limit", help="Maximum Issues per repository (default: 100)."),
     ] = 100,
-    output: Annotated[
-        str, typer.Option("--output", help="Render format: table|json.")
-    ] = "table",
+    output: Annotated[str, typer.Option("--output", help="Render format: table|json.")] = "table",
 ) -> int:
     """List Issues with linked Pull Request status."""
     context_values = ctx.obj or {}
     effective_repo = repo if repo is not None else context_values.get("repo")
-    effective_repo_id = (
-        repo_id if repo_id is not None else context_values.get("repo_id")
-    )
+    effective_repo_id = repo_id if repo_id is not None else context_values.get("repo_id")
     return _run_typer_command(
         "issue list",
         repo=effective_repo,
@@ -793,9 +765,7 @@ def daemon_status_command(
     all_repositories: AllRepositoriesOption = False,
 ) -> int:
     """Show running daemon and review-daemon processes."""
-    selector_options = _typer_selector_options(
-        ctx, repo=repo, repo_id=repo_id, config=config
-    )
+    selector_options = _typer_selector_options(ctx, repo=repo, repo_id=repo_id, config=config)
     return _run_typer_command(
         "daemon",
         daemon_command="status",
@@ -829,9 +799,7 @@ def logs_command(
     from the current working directory.  Pass --kind review_daemon to tail
     the review-daemon log instead.
     """
-    selector_options = _typer_selector_options(
-        ctx, repo=repo, repo_id=repo_id, config=config
-    )
+    selector_options = _typer_selector_options(ctx, repo=repo, repo_id=repo_id, config=config)
     return _run_typer_command(
         "logs",
         **selector_options,
@@ -969,9 +937,7 @@ def ask_command(
     config: ConfigOption = None,
 ) -> int:
     """Ask the agent runner to decide the next safe action."""
-    selector_options = _typer_selector_options(
-        ctx, repo=repo, repo_id=repo_id, config=config
-    )
+    selector_options = _typer_selector_options(ctx, repo=repo, repo_id=repo_id, config=config)
     return _run_typer_command(
         "ask",
         **selector_options,
@@ -999,9 +965,7 @@ def repl_command(
     config: ConfigOption = None,
 ) -> int:
     """Run the interactive REPL session."""
-    selector_options = _typer_selector_options(
-        ctx, repo=repo, repo_id=repo_id, config=config
-    )
+    selector_options = _typer_selector_options(ctx, repo=repo, repo_id=repo_id, config=config)
     return _run_typer_command(
         "repl",
         **selector_options,
@@ -1023,9 +987,7 @@ def deliberate_command(
     synthesizer: Annotated[
         str | None, typer.Option("--synthesizer", help="Agent to run synthesis.")
     ] = None,
-    output: Annotated[
-        str | None, typer.Option("--output", help="Output directory.")
-    ] = None,
+    output: Annotated[str | None, typer.Option("--output", help="Output directory.")] = None,
     session_id: Annotated[
         str | None,
         typer.Option("--session-id", help="Optional session ID for reproducibility."),
@@ -1077,9 +1039,7 @@ def worktree_create_command(
 @workflow_app.command("install")
 def workflow_install_command(
     ctx: typer.Context,
-    name: Annotated[
-        str, typer.Argument(help="Workflow template name (e.g. 'preview').")
-    ],
+    name: Annotated[str, typer.Argument(help="Workflow template name (e.g. 'preview').")],
     force: Annotated[
         bool,
         typer.Option(
@@ -1099,9 +1059,7 @@ def workflow_install_command(
     config: ConfigOption = None,
 ) -> int:
     """Install a bundled workflow template into the current repository."""
-    selector_options = _typer_selector_options(
-        ctx, repo=repo, repo_id=repo_id, config=config
-    )
+    selector_options = _typer_selector_options(ctx, repo=repo, repo_id=repo_id, config=config)
     return _run_typer_command(
         "workflow install",
         **selector_options,
@@ -1128,9 +1086,7 @@ def worktree_path_command(
 
 @worktree_app.command("remove")
 def worktree_remove_command(
-    branch: Annotated[
-        str, typer.Option("--branch", help="Branch name whose worktree to remove.")
-    ],
+    branch: Annotated[str, typer.Option("--branch", help="Branch name whose worktree to remove.")],
 ) -> int:
     """Remove a worktree and prune Git metadata."""
     return _run_typer_command(
@@ -1148,9 +1104,7 @@ def worktree_cleanup_command(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Preview cleanup without deleting.")
     ] = False,
-    yes: Annotated[
-        bool, typer.Option("--yes", help="Actually delete eligible branches.")
-    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Actually delete eligible branches.")] = False,
     force: Annotated[
         bool,
         typer.Option(
@@ -1176,21 +1130,15 @@ def worktree_cleanup_command(
 def takeover_command(
     owner: Annotated[
         str | None,
-        typer.Option(
-            "--owner", help="GitHub user or organization whose repositories to list."
-        ),
+        typer.Option("--owner", help="GitHub user or organization whose repositories to list."),
     ] = None,
     limit: Annotated[
         int,
-        typer.Option(
-            "--limit", help="Maximum number of repositories to fetch from GitHub."
-        ),
+        typer.Option("--limit", help="Maximum number of repositories to fetch from GitHub."),
     ] = 100,
     clone_root: Annotated[
         str | None,
-        typer.Option(
-            "--clone-root", help="Directory where repositories will be cloned."
-        ),
+        typer.Option("--clone-root", help="Directory where repositories will be cloned."),
     ] = None,
     repos: Annotated[
         list[str] | None,
@@ -1205,9 +1153,7 @@ def takeover_command(
     ] = False,
     dry_run: Annotated[
         bool,
-        typer.Option(
-            "--dry-run", help="Preview the takeover plan without making changes."
-        ),
+        typer.Option("--dry-run", help="Preview the takeover plan without making changes."),
     ] = False,
 ) -> int:
     """Take over GitHub repositories: clone, init, register, and start daemons."""
@@ -1225,9 +1171,7 @@ def takeover_command(
 @loop_app.command("create")
 def loop_create_command(
     loop_id: Annotated[str, typer.Argument(help="Short kebab-case identifier.")],
-    recipe: Annotated[
-        str, typer.Option("--recipe", help="Path to the loop recipe Markdown file.")
-    ],
+    recipe: Annotated[str, typer.Option("--recipe", help="Path to the loop recipe Markdown file.")],
     cron: Annotated[
         str | None,
         typer.Option("--cron", help="5-field cron expression overriding the recipe."),
@@ -1250,9 +1194,7 @@ def loop_create_command(
         str | None,
         typer.Option("--repo", help="Override the target repository path."),
     ] = None,
-    force: Annotated[
-        bool, typer.Option("--force", help="Replace an existing loop entry.")
-    ] = False,
+    force: Annotated[bool, typer.Option("--force", help="Replace an existing loop entry.")] = False,
 ) -> int:
     """Register a loop recipe as a persistent scheduler entry."""
     return _run_typer_command(
@@ -1338,9 +1280,7 @@ def loop_daemon_command(
     ] = None,
     repo: Annotated[
         str | None,
-        typer.Option(
-            "--repo", help="Override the local path of the target repository."
-        ),
+        typer.Option("--repo", help="Override the local path of the target repository."),
     ] = None,
 ) -> int:
     """Run the loop scheduler continuously (polls ~/.iar/loop-state.json)."""

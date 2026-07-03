@@ -226,9 +226,7 @@ def test_merge_repository_config_inherits_label_agent_labels() -> None:
     from backend.core.shared.models.agent_runner import LabelConfig
 
     global_config = AppConfig(
-        labels=LabelConfig(
-            agent_labels={"codex": "global/codex", "claude": "global/claude"}
-        )
+        labels=LabelConfig(agent_labels={"codex": "global/codex", "claude": "global/claude"})
     )
     repo_settings = AgentRunnerRepositorySettings(
         path="/tmp/repo",
@@ -243,9 +241,7 @@ def test_resolve_repository_targets_ad_hoc_repo(tmp_path: Path) -> None:
     """--repo should return a single context for the explicit Git repository."""
     repo_path = _init_git_repository(tmp_path, "repo")
     settings = _make_settings()
-    contexts = resolve_repository_targets(
-        settings, repo_id=None, repo_path_override=str(repo_path)
-    )
+    contexts = resolve_repository_targets(settings, repo_id=None, repo_path_override=str(repo_path))
     assert len(contexts) == 1
     assert contexts[0].repo_id == "repo"
     assert contexts[0].repo_path == repo_path.resolve()
@@ -401,9 +397,7 @@ base_branch = "current-main"
             ),
         }
     )
-    contexts = resolve_repository_targets(
-        settings, fallback_path=str(current_repo_path)
-    )
+    contexts = resolve_repository_targets(settings, fallback_path=str(current_repo_path))
     assert len(contexts) == 1
     assert contexts[0].repo_id == "current-local"
     assert contexts[0].repo_path == current_repo_path.resolve()
@@ -442,9 +436,7 @@ def test_resolve_repository_targets_mutual_exclusion() -> None:
     """--repo and --repo-id together should raise an error."""
     settings = _make_settings()
     try:
-        resolve_repository_targets(
-            settings, repo_id="keda", repo_path_override="/tmp/repo"
-        )
+        resolve_repository_targets(settings, repo_id="keda", repo_path_override="/tmp/repo")
         raise AssertionError("Expected ValueError")
     except ValueError as exc:
         assert "mutually exclusive" in str(exc)
@@ -454,9 +446,7 @@ def test_resolve_repository_targets_disabled_repo(tmp_path: Path) -> None:
     """Selecting a disabled repo should raise an error."""
     repo_path = _init_git_repository(tmp_path, "keda")
     settings = _make_settings(
-        repositories={
-            "keda": AgentRunnerRepositorySettings(path=str(repo_path), enabled=False)
-        }
+        repositories={"keda": AgentRunnerRepositorySettings(path=str(repo_path), enabled=False)}
     )
     try:
         resolve_repository_targets(settings, repo_id="keda")
@@ -542,9 +532,7 @@ def test_merge_repository_config_overrides_generated_content() -> None:
         path="/tmp/repo",
         generated_content=AgentRunnerGeneratedContentSettings(
             enabled=True,
-            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
-                enabled=True, mode="agent"
-            ),
+            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(enabled=True, mode="agent"),
         ),
     )
     merged = merge_repository_config(global_config, repo_settings)
@@ -671,9 +659,7 @@ def test_merge_repository_config_inherits_generated_content() -> None:
     repo_settings = AgentRunnerRepositorySettings(
         path="/tmp/repo",
         generated_content=AgentRunnerGeneratedContentSettings(
-            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(
-                title_template="repo"
-            ),
+            issue_from_prd=AgentRunnerGeneratedContentTargetSettings(title_template="repo"),
         ),
     )
     merged = merge_repository_config(global_config, repo_settings)
@@ -696,14 +682,10 @@ def test_build_app_config_maps_validation_language_and_structured_evidence(
             return {}
         return original_loader(section_name)
 
-    monkeypatch.setattr(
-        settings_module, "_load_toml_section_data", load_empty_agent_runner
-    )
+    monkeypatch.setattr(settings_module, "_load_toml_section_data", load_empty_agent_runner)
 
     settings = AgentRunnerSettings(
-        validation=AgentRunnerValidationSettings(
-            language="en-US", structured_evidence=False
-        )
+        validation=AgentRunnerValidationSettings(language="en-US", structured_evidence=False)
     )
     app_config = build_app_config_from_settings(settings)
     assert app_config.validation.language == "en-US"
@@ -773,9 +755,7 @@ def test_merge_repository_config_inherits_deliberation_profiles() -> None:
     from dataclasses import replace
 
     custom_profile = replace(DeliberationConfig().profiles[0], agent="custom-claude")
-    global_config = AppConfig(
-        deliberation=DeliberationConfig(profiles=(custom_profile,))
-    )
+    global_config = AppConfig(deliberation=DeliberationConfig(profiles=(custom_profile,)))
     repo_settings = AgentRunnerRepositorySettings(
         path="/tmp/repo",
         deliberation=AgentRunnerDeliberationSettings(default_rounds=3),

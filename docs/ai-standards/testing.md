@@ -52,14 +52,77 @@
 
 - 包管理器使用 `npm`
 - 不要对该目录强加 Python SSA 命名规则
-- 先看 `tests/playwright-e2e/README.md` 的适配说明
+- 先看 `tests/playwright-e2e/README.md` 和 `docs/guides/e2e.md` 的适配说明
 
-常用命令：
+### 模板同步边界
 
-- `just e2e-install`
-- `just e2e`
-- `just e2e smoke`
-- `just e2e no-auth`
+E2E 基础设施（runner、配置、共享 support/fixtures/page-objects/scripts、README）是上游模板维护的共享层，`just sync-template` 会自动提示同步。项目特定的测试用例放在 `tests/playwright-e2e/tests/`，默认被 `config.toml` 的 `project_skip_paths` 排除，不会被模板覆盖。运行时产物（`.auth/`、`node_modules/`、`playwright-report/`、`test-results/`、`.env.e2e.local`）永远不会出现在同步列表中。
+
+### AI Agent 常用命令
+
+`just e2e` 是单命令入口，会自动启停 `backend + admin 前端 + public 前端`。服务已在运行时直接复用，跑完自动 `just down` 清理。
+
+```bash
+# 首次运行先安装依赖
+just e2e-install
+
+# 最稳妥：无需登录的测试，一行跑通
+just e2e no-auth
+
+# 跑单个文件 / 目录
+just e2e tests/smoke/public-home.no-auth.spec.ts
+just e2e tests/smoke
+
+# 有头模式（弹出浏览器），--headed 可放在任意位置
+just e2e tests/smoke/public-home.no-auth.spec.ts --headed
+just e2e --headed tests/smoke/public-home.no-auth.spec.ts
+
+# 全量测试（需要凭据，见下文）
+just e2e
+
+# smoke 测试
+just e2e smoke
+
+# 查看 HTML 报告
+just e2e-report
+```
+
+### 凭据
+
+`no-auth` 测试不需要凭据。
+
+涉及登录的测试（`smoke` / `chromium` / `admin` project）默认从项目根目录 `.env.local` 读取种子凭据，后端启动时会自动创建对应用户：
+
+```bash
+# public 用户
+APP_BOOTSTRAP_EMAIL=user@example.com
+APP_BOOTSTRAP_PASSWORD=user123
+
+# admin 用户
+AUTH_ADMIN_BOOTSTRAP_USERNAME=admin
+AUTH_ADMIN_BOOTSTRAP_PASSWORD=admin
+```
+
+如需覆盖，可在 `tests/playwright-e2e/.env.e2e.local` 中设置：
+
+```bash
+PLAYWRIGHT_IDENTIFIER=<public 邮箱>
+PLAYWRIGHT_PASSWORD=<密码>
+PLAYWRIGHT_ADMIN_IDENTIFIER=<admin 用户名>
+PLAYWRIGHT_ADMIN_PASSWORD=<密码>
+```
+
+`.env.e2e.local` 优先级高于 `.env.local`。缺少凭据时，相关 setup 会失败，此时应改跑 `just e2e no-auth` 或先配置凭据。
+
+### 测试结果
+
+`just e2e` 会把视频、截图、trace、junit.xml 写入按运行时间戳命名的目录：
+
+```text
+tests/playwright-e2e/test-results/2026-07-02T11-31-08/
+```
+
+HTML 报告仍固定在 `tests/playwright-e2e/playwright-report/`，可用 `just e2e-report` 打开。
 
 `just test` 会先执行 `SKIP=check-test-flag just lint --full`；当测试最终通过时，会同时刷新 `just test` 与 full lint 的本地通过标记。若代码有效 tree 未变化，后续 `just lint --full` 可以复用该标记走快速路径，但提交门禁仍会检查 `just test` 标记。
 

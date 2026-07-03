@@ -110,11 +110,7 @@ def acquire_daemon_lock(lock_path: Path, repo_id: str) -> None:
         pass
 
     owner_pid = _read_lock_owner(lock_path)
-    if (
-        owner_pid is not None
-        and owner_pid != os.getpid()
-        and _is_process_alive(owner_pid)
-    ):
+    if owner_pid is not None and owner_pid != os.getpid() and _is_process_alive(owner_pid):
         _logger.info(
             "Daemon for repository '%s' already owned by alive PID %d.",
             repo_id,

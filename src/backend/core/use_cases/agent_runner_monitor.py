@@ -274,9 +274,7 @@ def _read_worktree_status(
     so a missing worktree does not break the whole monitoring view.
     """
     try:
-        path_command = _resolve_worktree_path_command(
-            worktree_path_command, issue_number
-        )
+        path_command = _resolve_worktree_path_command(worktree_path_command, issue_number)
         path_result = process_runner.run(
             path_command,
             cwd=repo_path,
@@ -341,12 +339,8 @@ def _read_worktree_status(
             head_sha=head_sha,
         )
 
-    porcelain_lines = [
-        line for line in (status_result.stdout or "").splitlines() if line
-    ]
-    dirty_files: tuple[str, ...] = tuple(
-        _parse_status_path(line) for line in porcelain_lines
-    )
+    porcelain_lines = [line for line in (status_result.stdout or "").splitlines() if line]
+    dirty_files: tuple[str, ...] = tuple(_parse_status_path(line) for line in porcelain_lines)
     return WorktreeStatus(
         exists=True,
         path=str(worktree_path),
@@ -461,9 +455,7 @@ def detect_anomalies(context: AnomalyDetectionContext) -> tuple[Anomaly, ...]:
     anomalies: list[Anomaly] = []
 
     has_pr = context.pr_context is not None
-    pr_dirty = bool(
-        context.pr_context is not None and context.pr_context.mergeable is False
-    )
+    pr_dirty = bool(context.pr_context is not None and context.pr_context.mergeable is False)
     worktree_dirty = bool(context.worktree.exists and not context.worktree.is_clean)
 
     if has_pr and context.primary_label not in _POST_PR_LABELS:
@@ -491,10 +483,7 @@ def detect_anomalies(context: AnomalyDetectionContext) -> tuple[Anomaly, ...]:
             Anomaly(
                 type="dirty_worktree_mismatch",
                 severity="warning",
-                message=(
-                    "Worktree has uncommitted changes but Issue is not in "
-                    "running state."
-                ),
+                message=("Worktree has uncommitted changes but Issue is not in " "running state."),
                 suggested_cli=("iar run --dry-run", "git status"),
             )
         )
@@ -511,8 +500,7 @@ def detect_anomalies(context: AnomalyDetectionContext) -> tuple[Anomaly, ...]:
                     type="event_label_mismatch",
                     severity="warning",
                     message=(
-                        "Latest event marker suggests a different state than "
-                        "current label."
+                        "Latest event marker suggests a different state than " "current label."
                     ),
                     suggested_cli=("iar labels sync",),
                 )
@@ -823,9 +811,7 @@ def build_repository_overview(
             try:
                 snapshot = future.result()
             except Exception as exc:  # noqa: BLE001 - one bad Issue must not blank the page.
-                _logger.warning(
-                    "Failed to build snapshot for Issue #%d: %s", issue.number, exc
-                )
+                _logger.warning("Failed to build snapshot for Issue #%d: %s", issue.number, exc)
                 continue
             issue_snapshots.append(snapshot)
 
@@ -834,9 +820,7 @@ def build_repository_overview(
     anomaly_summary: dict[str, int] = {"warning": 0, "error": 0}
     for snap in issue_snapshots:
         for anomaly in snap.anomalies:
-            anomaly_summary[anomaly.severity] = (
-                anomaly_summary.get(anomaly.severity, 0) + 1
-            )
+            anomaly_summary[anomaly.severity] = anomaly_summary.get(anomaly.severity, 0) + 1
 
     health = {
         "gh_available": _check_gh_available(process_runner, repo_path),

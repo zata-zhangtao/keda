@@ -295,14 +295,9 @@ def test_find_iar_command_index() -> None:
 
 def test_parse_unmanaged_kind() -> None:
     """Detect daemon and review-daemon subcommands, ignoring options."""
+    assert _parse_unmanaged_kind(("uv", "run", "iar", "daemon", "--repo-id", "keda")) == "daemon"
     assert (
-        _parse_unmanaged_kind(("uv", "run", "iar", "daemon", "--repo-id", "keda"))
-        == "daemon"
-    )
-    assert (
-        _parse_unmanaged_kind(
-            ("iar", "review-daemon", "--repo-id", "keda", "--agent", "claude")
-        )
+        _parse_unmanaged_kind(("iar", "review-daemon", "--repo-id", "keda", "--agent", "claude"))
         == "review_daemon"
     )
     assert _parse_unmanaged_kind(("iar", "run", "--repo-id", "keda")) is None
@@ -311,10 +306,7 @@ def test_parse_unmanaged_kind() -> None:
 
 def test_parse_repo_id_from_argv() -> None:
     """Extract --repo-id value from command line."""
-    assert (
-        _parse_repo_id_from_argv(("iar", "daemon", "--repo-id", "keda-main"))
-        == "keda-main"
-    )
+    assert _parse_repo_id_from_argv(("iar", "daemon", "--repo-id", "keda-main")) == "keda-main"
     assert _parse_repo_id_from_argv(("iar", "daemon")) is None
 
 
@@ -356,9 +348,7 @@ def test_list_unmanaged_processes_skips_managed_pids(
     fake_current_user = "testuser"
     monkeypatch.setattr(
         "backend.infrastructure.console.process_supervisor.psutil.Process",
-        lambda: type(
-            "_FakeCurrent", (), {"username": lambda self: fake_current_user}
-        )(),
+        lambda: type("_FakeCurrent", (), {"username": lambda self: fake_current_user})(),
     )
     monkeypatch.setattr(
         "backend.infrastructure.console.process_supervisor.psutil.process_iter",
@@ -373,17 +363,13 @@ def test_list_unmanaged_processes_skips_managed_pids(
         cwd=tmp_path,
     )
     # Force the managed record to use the same pid as the fake scanner.
-    registry = json.loads(
-        tmp_path.joinpath("processes.json").read_text(encoding="utf-8")
-    )
+    registry = json.loads(tmp_path.joinpath("processes.json").read_text(encoding="utf-8"))
     registry[managed_record.process_id]["pid"] = 12345
     tmp_path.joinpath("processes.json").write_text(
         json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    registry_entries = [
-        type("_Entry", (), {"repo_id": "keda-main", "path": str(tmp_path)})()
-    ]
+    registry_entries = [type("_Entry", (), {"repo_id": "keda-main", "path": str(tmp_path)})()]
     unmanaged = supervisor.list_unmanaged_processes(registry_entries)
     assert unmanaged == []
 
@@ -408,18 +394,14 @@ def test_list_unmanaged_processes_reports_unmanaged_by_repo_id(
     fake_current_user = "testuser"
     monkeypatch.setattr(
         "backend.infrastructure.console.process_supervisor.psutil.Process",
-        lambda: type(
-            "_FakeCurrent", (), {"username": lambda self: fake_current_user}
-        )(),
+        lambda: type("_FakeCurrent", (), {"username": lambda self: fake_current_user})(),
     )
     monkeypatch.setattr(
         "backend.infrastructure.console.process_supervisor.psutil.process_iter",
         lambda attrs: [_FakeProc()],
     )
 
-    registry_entries = [
-        type("_Entry", (), {"repo_id": "keda-main", "path": str(tmp_path)})()
-    ]
+    registry_entries = [type("_Entry", (), {"repo_id": "keda-main", "path": str(tmp_path)})()]
     unmanaged = supervisor.list_unmanaged_processes(registry_entries)
     assert len(unmanaged) == 1
     assert unmanaged[0].process_id == "unmanaged-12345"

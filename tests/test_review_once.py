@@ -79,9 +79,7 @@ def test_review_once_detects_checks_state_change_and_triggers_supervisor() -> No
     client._remote_base_sha = "def456"
     client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
-        _marker_comment(
-            checks_state="PENDING", issue_comments_count=1, pr_comments_count=0
-        )
+        _marker_comment(checks_state="PENDING", issue_comments_count=1, pr_comments_count=0)
     ]
     client._pr_contexts["issue-1"] = _make_pr_context(checks_state="FAILURE")
 
@@ -172,9 +170,7 @@ def test_review_once_detects_new_pr_comments_and_triggers_supervisor() -> None:
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
     client._issue_labels[issue.number] = issue.labels
-    client._issue_comments[1] = [
-        _marker_comment(issue_comments_count=1, pr_comments_count=1)
-    ]
+    client._issue_comments[1] = [_marker_comment(issue_comments_count=1, pr_comments_count=1)]
     client._pr_contexts["issue-1"] = _make_pr_context()
     client._pr_comments[1] = ["new pr comment", "another"]
 
@@ -415,9 +411,7 @@ def test_review_once_skips_when_no_context_change() -> None:
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
     client._issue_labels[issue.number] = issue.labels
-    client._issue_comments[1] = [
-        _marker_comment(issue_comments_count=1, pr_comments_count=1)
-    ]
+    client._issue_comments[1] = [_marker_comment(issue_comments_count=1, pr_comments_count=1)]
     client._pr_contexts["issue-1"] = _make_pr_context()
     client._pr_comments[1] = ["one"]
 
@@ -530,9 +524,7 @@ def test_review_once_reruns_supervisor_after_mark_failed_marker() -> None:
     client._remote_base_sha = "def456"
     client._issue_labels[issue.number] = issue.labels
     client._issue_comments[1] = [
-        _marker_comment(
-            action="mark_failed", issue_comments_count=1, pr_comments_count=0
-        )
+        _marker_comment(action="mark_failed", issue_comments_count=1, pr_comments_count=0)
     ]
     # PR 上下文与 marker 完全一致：没有 mark_failed 放行的话本应被去重跳过
     client._pr_contexts["issue-1"] = _make_pr_context()
@@ -614,9 +606,7 @@ def test_review_once_moves_review_label_to_supervising_on_change() -> None:
     client = FakeGitHubClient()
     client._remote_base_sha = "def456"
     client._issue_labels[issue.number] = issue.labels
-    client._issue_comments[1] = [
-        _marker_comment(issue_comments_count=1, pr_comments_count=0)
-    ]
+    client._issue_comments[1] = [_marker_comment(issue_comments_count=1, pr_comments_count=0)]
     client._pr_contexts["issue-1"] = _make_pr_context(checks_state="FAILURE")
 
     with (
@@ -716,9 +706,7 @@ def test_review_once_recovers_branch_from_draft_pr_comment(tmp_path: Path) -> No
         "method": "get_pull_request_context",
         "branch": "issue-23",
     } in fake_client.calls
-    assert not any(
-        call["method"] == "find_open_pr_by_head" for call in fake_client.calls
-    )
+    assert not any(call["method"] == "find_open_pr_by_head" for call in fake_client.calls)
 
 
 def test_review_once_cleans_dirty_workflow_labels() -> None:
@@ -739,9 +727,7 @@ def test_review_once_cleans_dirty_workflow_labels() -> None:
     client = FakeGitHubClient()
     client._issue_labels[issue.number] = issue.labels
     client._remote_base_sha = "def456"
-    client._issue_comments[1] = [
-        _marker_comment(issue_comments_count=1, pr_comments_count=0)
-    ]
+    client._issue_comments[1] = [_marker_comment(issue_comments_count=1, pr_comments_count=0)]
     client._pr_contexts["issue-1"] = _make_pr_context(checks_state="SUCCESS")
     client._pr_comments[1] = ["new pr comment"]
 
@@ -788,9 +774,7 @@ def test_review_once_waits_for_pending_checks() -> None:
     client._issue_labels[issue.number] = issue.labels
     client._remote_base_sha = "def456"
     client._issue_comments[1] = [
-        _marker_comment(
-            checks_state="PENDING", issue_comments_count=1, pr_comments_count=0
-        )
+        _marker_comment(checks_state="PENDING", issue_comments_count=1, pr_comments_count=0)
     ]
     client._pr_contexts["issue-1"] = _make_pr_context(checks_state="PENDING")
     client._pr_comments[1] = ["new pr comment"]

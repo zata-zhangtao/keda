@@ -116,9 +116,7 @@ def test_parse_product_recipe_succeeds() -> None:
 def test_render_keda_recipe_built_in_variables() -> None:
     recipe = parse_loop_recipe(KEDA_RECIPE)
     fire_at = datetime(2026, 7, 2, 2, 0, 0)
-    rendered = render_loop_recipe(
-        recipe, fire_at=fire_at, extra_variables=_extra_vars()
-    )
+    rendered = render_loop_recipe(recipe, fire_at=fire_at, extra_variables=_extra_vars())
     assert "Trigger date: `2026-07-02`" in rendered
     assert "Loop id: `nightly-cleanup-keda`" in rendered
     assert "Target repository: `keda`" in rendered
@@ -127,9 +125,7 @@ def test_render_keda_recipe_built_in_variables() -> None:
 def test_render_product_recipe_built_in_variables() -> None:
     recipe = parse_loop_recipe(PRODUCT_RECIPE)
     fire_at = datetime(2026, 7, 2, 2, 30, 0)
-    rendered = render_loop_recipe(
-        recipe, fire_at=fire_at, extra_variables=_extra_vars()
-    )
+    rendered = render_loop_recipe(recipe, fire_at=fire_at, extra_variables=_extra_vars())
     assert "Trigger date: `2026-07-02`" in rendered
     assert "Loop id: `nightly-cleanup-product`" in rendered
 
@@ -192,8 +188,7 @@ def test_body_references_all_four_scope_labels(recipe_path: Path) -> None:
         extra_variables=_extra_vars(),
     )
     assert EXPECTED_SCOPE_TEMPLATE in rendered, (
-        f"Recipe {recipe_path.name} body missing scope template: "
-        f"{EXPECTED_SCOPE_TEMPLATE!r}"
+        f"Recipe {recipe_path.name} body missing scope template: " f"{EXPECTED_SCOPE_TEMPLATE!r}"
     )
     for scope_value in EXPECTED_SCOPE_X_VALUES:
         assert scope_value in rendered, (
@@ -339,9 +334,7 @@ def test_fire_keda_recipe_writes_prd_creates_issue_and_calls_runner(
     (repo_path / "tasks" / "pending").mkdir(parents=True)
     recipe = parse_loop_recipe(KEDA_RECIPE)
 
-    fake_github = FakeGitHubClient(
-        issue_url="https://github.com/example/keda/issues/777"
-    )
+    fake_github = FakeGitHubClient(issue_url="https://github.com/example/keda/issues/777")
     fake_github.set_list_issues_by_label_result([])  # no duplicate today
 
     state_store = JsonLoopStateStore(tmp_path / "loop-state.json")
@@ -365,9 +358,7 @@ def test_fire_keda_recipe_writes_prd_creates_issue_and_calls_runner(
         id=recipe.id,
         recipe_path=KEDA_RECIPE,
         repo_id=recipe.repo_id,
-        schedule=LoopSchedule(
-            kind=LoopScheduleKind.CRON, expression=recipe.schedule.expression
-        ),
+        schedule=LoopSchedule(kind=LoopScheduleKind.CRON, expression=recipe.schedule.expression),
         pre_command=recipe.pre_command,
         # publish_prd=True requires a real git checkout on the base branch;
         # the unit-level fire path uses publish_prd=False to avoid that

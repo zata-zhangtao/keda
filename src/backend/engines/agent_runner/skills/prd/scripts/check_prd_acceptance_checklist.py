@@ -10,9 +10,7 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-ACTIVE_PRD_PATH_RE = re.compile(
-    r"^tasks/([^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md$"
-)
+ACTIVE_PRD_PATH_RE = re.compile(r"^tasks/([^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md$")
 ARCHIVED_PRD_PATH_RE = re.compile(
     r"^tasks/archive/([^/]+-prd-[^/]+|P[0-3]-[A-Z]+-\d{8}-\d{6}-[^/]+)\.md$"
 )
@@ -251,9 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_provided:
         if not args.paths:
             parser.error("--check-provided requires at least one PRD path")
-        candidate_paths = [
-            path if path.is_absolute() else repo_root / path for path in args.paths
-        ]
+        candidate_paths = [path if path.is_absolute() else repo_root / path for path in args.paths]
         missing_paths = [path for path in candidate_paths if not path.exists()]
         if missing_paths:
             print("Missing PRD path(s):")

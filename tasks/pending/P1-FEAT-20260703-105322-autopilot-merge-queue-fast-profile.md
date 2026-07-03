@@ -118,7 +118,7 @@ uv run iar review-daemon
 
 **相关 PRD（已检查 `tasks/pending/` 与 `tasks/archive/`）**：
 
-- **依赖（pending）**：`P1-FEAT-20260628-041733-realistic-validation-independent-verifier-gate`——它交付 T3 独立 verifier（默认换 agent、干净 worktree、对抗性验证）与 `validation/verifier-passed` 标签。本 PRD 的"交叉 agent 评估"**直接复用该门禁**而不重造评估器；快速档把该 PRD 的"verifier + 人工双门禁"中的人工一侧替换为自动勾选。硬依赖。
+- **依赖（archive）**：`P1-FEAT-20260628-041733-realistic-validation-independent-verifier-gate`——它交付 T3 独立 verifier（默认换 agent、干净 worktree、对抗性验证）与 `validation/verifier-passed` 标签。本 PRD 的"交叉 agent 评估"**直接复用该门禁**而不重造评估器；快速档把该 PRD 的"verifier + 人工双门禁"中的人工一侧替换为自动勾选。硬依赖。
 - **相关（archive，机制复用）**：`20260523-...-rebase-conflict-agent-resolution-...`（rebase/冲突机器）、`20260527-234531-...-pr-context-approval-gate`（approve 语义）、`20260522-143103-...-two-stage-agent-review-pr-supervisor`（supervisor 结构）。
 - **无重复**：pending 中的 nightly-cleanup-loop / memory-persistence / session-persistence / frontend-template-migration 与本 PRD 正交。
 - **被依赖**：同组 PRD `roadmap-continuous-scheduling`（20260703-105330）依赖本 PRD 的 autopilot 配置段。

@@ -29,6 +29,8 @@ JSCPD_CORPUS_ROOTS: list[Path] = [
 JSCPD_FORMATS = "python,javascript,jsx,typescript,tsx"
 JSCPD_MIN_LINES = "5"
 JSCPD_MIN_TOKENS = "50"
+# jscpd 默认没有任何忽略规则（也不读取 .gitignore），必须显式排除依赖与构建产物目录
+JSCPD_IGNORE_GLOBS = "**/node_modules/**,**/dist/**,**/build/**,**/.next/**,**/coverage/**"
 
 
 def _build_scan_targets(repo_root: Path, candidate_paths: list[Path]) -> list[str]:
@@ -90,9 +92,7 @@ def _duplicate_touches_candidate(
     return False
 
 
-def _format_duplicate_message(
-    duplicate_entry: dict[str, object], repo_root: Path
-) -> str:
+def _format_duplicate_message(duplicate_entry: dict[str, object], repo_root: Path) -> str:
     """Format one duplicate entry for human-readable output."""
 
     first_file_entry = duplicate_entry.get("firstFile")
@@ -163,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
                     report_dir_path.as_posix(),
                     "--format",
                     JSCPD_FORMATS,
+                    "--ignore",
+                    JSCPD_IGNORE_GLOBS,
                     "--exitCode",
                     "0",
                     "--noTips",

@@ -770,8 +770,8 @@ implement prd_file ai_tool prompt="":
 #   just ai push                              # run `just test`, commit, then push with claude
 #   just ai push kimi "custom prompt"          # use kimi, then push
 #   just ai implement <prd-file> [tool]       # implement a PRD (default: claude)
-#   just ai tag <name>                        # write tag message and create annotated tag with claude
-#   just ai tag <name> kimi "custom prompt"   # use kimi with a custom prompt
+#   just ai tag <name>                        # write tag message, create annotated tag with claude, then push
+#   just ai tag <name> kimi "custom prompt"   # use kimi with a custom prompt, then push
 # Shortcuts: check, fix, commit, push, implement, tag — all delegate to scripts/shared/just/ai_run.sh
 ai subcommand arg1="" arg2="" arg3="" :
     #!/usr/bin/env bash
@@ -797,12 +797,12 @@ ai subcommand arg1="" arg2="" arg3="" :
             ;;
         *)
             echo "Usage:"
-            echo "  just ai check <file>  # review file against project standards, stay interactive"
-            echo "  just ai fix           # resolve git conflicts (rebase, merge, stash pop, etc.)"
-            echo "  just ai commit        # run just test, then commit"
-            echo "  just ai push          # run just test, then commit and push"
-            echo "  just ai implement     # implement a PRD"
-            echo "  just ai tag <name>    # write tag message and create annotated tag"
+            echo "  just ai check <file>            # review file against project standards, stay interactive"
+            echo "  just ai fix                     # resolve git conflicts (rebase, merge, stash pop, etc.)"
+            echo "  just ai commit                  # run just test, then commit"
+            echo "  just ai push                    # run just test, then commit and push"
+            echo "  just ai implement <prd-file>    # implement a PRD"
+            echo "  just ai tag <name>              # write tag message, create annotated tag, then push (default: claude)"
             exit 1
             ;;
     esac
@@ -811,6 +811,8 @@ ai subcommand arg1="" arg2="" arg3="" :
 # Output is a structured report; the AI does NOT modify the file, and the
 # REPL stays open so the caller can drill into findings or request targeted
 # edits one at a time.
+# When using kimi, the previous session for the current working directory is
+# resumed automatically, so follow-up `just ai check` calls keep context.
 _ai_check file_path ai_tool="claude" prompt="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1012,12 +1014,16 @@ _ai_push ai_tool="claude" prompt="" :
         git push
     fi
 
-# Internal: ask an AI tool to write a release-note message and create an annotated git tag on the current commit.
+# Internal: ask an AI tool to write a release-note message, create an annotated
+# git tag on the current commit, and push the tag to the default remote.
 _ai_tag tag_name ai_tool="claude" prompt="" :
     #!/usr/bin/env bash
     set -euo pipefail
 
+    # Capture recipe params into shell vars so downstream defaults and
+    # validation all read from the same place.
     tag_name="{{tag_name}}"
+    ai_tool="{{ai_tool}}"
     prompt_text="{{prompt}}"
 
     if [ -z "$tag_name" ]; then
@@ -1028,9 +1034,13 @@ _ai_tag tag_name ai_tool="claude" prompt="" :
 
     # Tag is the only `ai` subcommand that strictly whitelists tools,
     # since wrong tool here would silently create a malformed tag.
-    if [ "{{ai_tool}}" != "claude" ] && [ "{{ai_tool}}" != "kimi" ]; then
-        echo "Unsupported AI tool: {{ai_tool}}"
-        echo "Supported tools: claude, kimi"
+    # The `ai` dispatcher always forwards all positional args, so an
+    # unspecified tool arrives as an empty string — default it to claude.
+    if [ -z "$ai_tool" ]; then
+        ai_tool="claude"
+    elif [ "$ai_tool" != "claude" ] && [ "$ai_tool" != "kimi" ]; then
+        echo "Unsupported AI tool: $ai_tool"
+        echo "Supported tools: claude, kimi (default: claude)"
         echo "Usage: just ai tag <name> [claude|kimi] [prompt]"
         exit 1
     fi
@@ -1044,11 +1054,34 @@ _ai_tag tag_name ai_tool="claude" prompt="" :
             range_desc="all commits"
             log_cmd="git log --oneline"
         fi
-        prompt_text="Summarize the ${range_desc} with \`${log_cmd}\` (and \`git diff --stat <ref>..HEAD\` if needed) and create an annotated git tag named '${tag_name}' on the current HEAD using \`git tag -a '${tag_name}' -m \"<release notes>\"\`. The tag message should be a scannable release note — short subject line, then a few bullet points describing user-visible changes. If the tag already exists locally, do NOT overwrite or delete it — stop and report the conflict. Do NOT push. Do NOT amend existing commits. Proceed autonomously without asking for confirmation — tag directly."
+        prompt_text="Summarize the ${range_desc} with \`${log_cmd}\` (and \`git diff --stat <ref>..HEAD\` if needed) and create an annotated git tag named '${tag_name}' on the current HEAD using \`git tag -a '${tag_name}' -m \"<release notes>\"\`. The tag message should be a scannable release note — short subject line, then a few bullet points describing user-visible changes. If the tag already exists locally, do NOT overwrite or delete it — stop and report the conflict. Do NOT amend existing commits. The script will push the tag after you finish, so do NOT push. Proceed autonomously without asking for confirmation — tag directly."
     fi
 
     echo "Tag: $tag_name"
-    ./scripts/shared/just/ai_run.sh "{{ai_tool}}" "$prompt_text"
+    ./scripts/shared/just/ai_run.sh "$ai_tool" "$prompt_text"
+
+    # AI finished - auto-push the tag to the default remote.
+    # Tags are not pushed by `git push` unless explicitly named or `--tags` is used,
+    # so the recipe handles push here rather than relying on the user.
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🏷️  AI finished tagging. Pushing tag '$tag_name'..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    remote="$(git remote | head -1)"
+    if [ -z "$remote" ]; then
+        echo "WARNING: No git remote configured. Tag '$tag_name' created locally only."
+        echo "Push it manually with: git push <remote> $tag_name"
+        exit 0
+    fi
+
+    if git ls-remote --tags "$remote" "$tag_name" 2>/dev/null | grep -q "refs/tags/$tag_name\$"; then
+        echo "Tag '$tag_name' already exists on $remote. Skipping push."
+        exit 0
+    fi
+
+    git push "$remote" "$tag_name"
 
 # Sync files from the upstream template repository.
 # Compares local files against the template and lets you pick which to apply
@@ -1138,31 +1171,26 @@ sync-template flags="":
     echo "✅ just lint --full flag updated: $branch_name @ $head_hash"
 
 
-# Run Playwright e2e tests using pnpm (requires: just e2e-install first)
-# Usage:
-#   just e2e            # all tests (excluding visual regression)
-#   just e2e smoke      # smoke tests only
-#   just e2e no-auth    # public-page tests (no login required)
-#   just e2e report     # open HTML test report
-e2e type="":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd "{{justfile_directory()}}/tests/playwright-e2e"
-    case "{{type}}" in
-        smoke)   pnpm run test:smoke ;;
-        no-auth) pnpm run test:no-auth ;;
-        report)  pnpm run report ;;
-        "")      pnpm test ;;
-        *)
-            echo "ERROR: Unknown type: {{type}}"
-            echo "Usage: just e2e [smoke|no-auth|report]"
-            exit 1
-            ;;
-    esac
-
-# Install e2e dependencies and Playwright browsers using pnpm (run once before first just e2e)
+# Install E2E dependencies and Playwright browsers (first time only).
 e2e-install:
-    cd "{{justfile_directory()}}/tests/playwright-e2e" && pnpm install && pnpm exec playwright install chromium
+    cd "{{justfile_directory()}}/tests/playwright-e2e" && pnpm install
+    cd "{{justfile_directory()}}/tests/playwright-e2e" && pnpm exec playwright install chromium
+
+# Run E2E tests locally, starting services with `just run` if not already running.
+# Usage:
+#   just e2e
+#   just e2e headed                              # run with --headed --workers=1
+#   just e2e smoke                               # run only smoke tests
+#   just e2e @visual                             # run tests matching a grep tag
+#   just e2e tests/smoke/public-home.no-auth.spec.ts
+#   just e2e tests/smoke/public-home.no-auth.spec.ts --headed
+#   PLAYWRIGHT_SKIP_STACK_BOOT=1 just e2e        # reuse already-running services, skip teardown
+e2e *filter:
+    cd "{{justfile_directory()}}" && ./scripts/shared/e2e/run-with-just-stack.sh "{{filter}}"
+
+# Show the Playwright HTML report from the last E2E run.
+e2e-report:
+    cd "{{justfile_directory()}}/tests/playwright-e2e" && pnpm report
 
 # Pack all gitignored .env* files into a password-protected encrypted zip.
 # Output: ./<project_name>.zip  (one fixed file per project root)

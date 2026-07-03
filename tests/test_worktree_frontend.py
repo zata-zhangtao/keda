@@ -33,9 +33,7 @@ def _make_frontend_project(project_dir: Path) -> None:
     _write_file(project_dir / "node_modules" / ".bin" / "vite", "#!/bin/sh\n")
 
 
-def _make_fake_process_runner(
-    *, return_code: int = 0, stderr: str = ""
-) -> FakeProcessRunner:
+def _make_fake_process_runner(*, return_code: int = 0, stderr: str = "") -> FakeProcessRunner:
     """Return a fake runner that makes every install command succeed (or fail)."""
     return FakeProcessRunner(
         responses={
@@ -176,9 +174,7 @@ class TestEnsureFrontendNodeModules:
         _make_frontend_project(repo_path / "frontend")
         _write_file(worktree_path / "frontend" / "package.json", "{}\n")
         _write_file(worktree_path / "frontend" / "pnpm-lock.yaml", "lockfile\n")
-        process_runner = _make_fake_process_runner(
-            return_code=1, stderr="network error"
-        )
+        process_runner = _make_fake_process_runner(return_code=1, stderr="network error")
 
         with caplog.at_level(logging.WARNING):
             installed_paths, linked_paths = ensure_frontend_node_modules(
@@ -212,9 +208,7 @@ class TestEnsureFrontendNodeModules:
         _make_frontend_project(repo_path / "frontend")
         _write_file(worktree_path / "frontend" / "package.json", "{}\n")
         _write_file(worktree_path / "frontend" / "pnpm-lock.yaml", "lockfile\n")
-        _write_file(
-            worktree_path / "frontend" / "node_modules" / "marker.txt", "local\n"
-        )
+        _write_file(worktree_path / "frontend" / "node_modules" / "marker.txt", "local\n")
         process_runner = _make_fake_process_runner()
 
         installed_paths, linked_paths = ensure_frontend_node_modules(
@@ -244,9 +238,7 @@ class TestEnsureFrontendNodeModules:
         assert installed_paths == []
         assert linked_paths == []
         assert process_runner.calls == []
-        assert (
-            worktree_path / "frontend" / "node_modules"
-        ).readlink() == dangling_target
+        assert (worktree_path / "frontend" / "node_modules").readlink() == dangling_target
 
     def test_prunes_vcs_cache_and_nested_node_modules(self, tmp_path: Path) -> None:
         """Manifests under pruned directories are ignored during install scan."""
@@ -263,9 +255,7 @@ class TestEnsureFrontendNodeModules:
         )
         process_runner = _make_fake_process_runner()
 
-        installed_paths, _ = ensure_frontend_node_modules(
-            repo_path, worktree_path, process_runner
-        )
+        installed_paths, _ = ensure_frontend_node_modules(repo_path, worktree_path, process_runner)
 
         assert [str(path) for path in installed_paths] == ["frontend"]
         assert not (worktree_path / "node_modules" / "dep" / "node_modules").exists()
@@ -309,9 +299,7 @@ class TestEnsureFrontendNodeModules:
 class TestLinkFrontendNodeModules:
     """Legacy symlink-only fallback behavior."""
 
-    def test_links_node_modules_for_root_and_nested_projects(
-        self, tmp_path: Path
-    ) -> None:
+    def test_links_node_modules_for_root_and_nested_projects(self, tmp_path: Path) -> None:
         """Every frontend project in the worktree gets a symlink to main's deps."""
         repo_path = tmp_path / "repo"
         worktree_path = tmp_path / "worktree"
@@ -337,18 +325,14 @@ class TestLinkFrontendNodeModules:
             == (repo_path / "frontend" / "node_modules" / ".bin" / "vite").resolve()
         )
 
-    def test_never_overwrites_existing_worktree_node_modules(
-        self, tmp_path: Path
-    ) -> None:
+    def test_never_overwrites_existing_worktree_node_modules(self, tmp_path: Path) -> None:
         """A real ``node_modules`` already installed in the worktree is untouched."""
         repo_path = tmp_path / "repo"
         worktree_path = tmp_path / "worktree"
         _make_frontend_project(repo_path / "frontend")
         _write_file(worktree_path / "frontend" / "package.json", "{}\n")
         # A previous `npm install` left a real directory in the worktree.
-        _write_file(
-            worktree_path / "frontend" / "node_modules" / "marker.txt", "local\n"
-        )
+        _write_file(worktree_path / "frontend" / "node_modules" / "marker.txt", "local\n")
 
         linked_relative_paths = link_frontend_node_modules(repo_path, worktree_path)
 
@@ -370,9 +354,7 @@ class TestLinkFrontendNodeModules:
         linked_relative_paths = link_frontend_node_modules(repo_path, worktree_path)
 
         assert linked_relative_paths == []
-        assert (
-            worktree_path / "frontend" / "node_modules"
-        ).readlink() == dangling_target
+        assert (worktree_path / "frontend" / "node_modules").readlink() == dangling_target
 
     def test_returns_empty_when_no_frontend_projects(self, tmp_path: Path) -> None:
         repo_path = tmp_path / "repo"

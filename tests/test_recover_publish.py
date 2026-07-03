@@ -273,9 +273,7 @@ class TestValidateBranchSafety:
     def test_rejects_feature_issue_420(self, tmp_path: Path) -> None:
         """Should reject feature/issue-420 when looking for Issue #42."""
         config = _make_config()
-        runner = _make_process_runner_with_worktree(
-            tmp_path, branch="feature/issue-420"
-        )
+        runner = _make_process_runner_with_worktree(tmp_path, branch="feature/issue-420")
 
         with pytest.raises(PublishRecoveryError) as exc_info:
             validate_branch_safety(
@@ -363,15 +361,11 @@ class TestRecoverPublishIssue:
         assert result.pr_reused is False
         assert result.supervisor_action == "supervisor_disabled_fallback"
 
-        pr_create_calls = [
-            c for c in github_client.calls if c["method"] == "create_draft_pr"
-        ]
+        pr_create_calls = [c for c in github_client.calls if c["method"] == "create_draft_pr"]
         assert len(pr_create_calls) == 1
         assert pr_create_calls[0]["title"] == "[Agent] Fix login timeout"
 
-        label_calls = [
-            c for c in github_client.calls if c["method"] == "edit_issue_labels"
-        ]
+        label_calls = [c for c in github_client.calls if c["method"] == "edit_issue_labels"]
         assert len(label_calls) == 1
         assert "agent/review" in label_calls[0]["add"]
         assert "agent/failed" in label_calls[0]["remove"]
@@ -418,15 +412,11 @@ class TestRecoverPublishIssue:
 
         assert result.issue_number == 42
 
-        pr_create_calls = [
-            c for c in github_client.calls if c["method"] == "create_draft_pr"
-        ]
+        pr_create_calls = [c for c in github_client.calls if c["method"] == "create_draft_pr"]
         assert len(pr_create_calls) == 1
         assert pr_create_calls[0]["title"] == "[Agent] Issue #42"
 
-    def test_success_supervisor_enabled_goes_to_supervising(
-        self, tmp_path: Path
-    ) -> None:
+    def test_success_supervisor_enabled_goes_to_supervising(self, tmp_path: Path) -> None:
         """Should move to supervising when supervisor is enabled."""
         config = _make_config(supervisor_enabled=True)
         worktree_path = tmp_path / "issue-42"
@@ -469,9 +459,7 @@ class TestRecoverPublishIssue:
         assert result.branch == "issue-42"
         # When supervisor is enabled but no agent is available to run,
         # the supervisor cycle will fail; however labels should still be supervising
-        label_calls = [
-            c for c in github_client.calls if c["method"] == "edit_issue_labels"
-        ]
+        label_calls = [c for c in github_client.calls if c["method"] == "edit_issue_labels"]
         # First label call moves to supervising
         assert any("agent/supervising" in c["add"] for c in label_calls)
 
@@ -512,9 +500,7 @@ class TestRecoverPublishIssue:
         assert result.pr_url == "https://github.com/example/repo/pull/99"
         assert result.pr_reused is True
 
-    def test_push_failure_posts_comment_and_does_not_modify_labels(
-        self, tmp_path: Path
-    ) -> None:
+    def test_push_failure_posts_comment_and_does_not_modify_labels(self, tmp_path: Path) -> None:
         """Push failure should post a failure comment and not modify labels."""
         config = _make_config(supervisor_enabled=False)
         worktree_path = tmp_path / "issue-42"
@@ -552,17 +538,13 @@ class TestRecoverPublishIssue:
         assert exc_info.value.failure_category == "push"
 
         # Should post a failure comment
-        comment_calls = [
-            c for c in github_client.calls if c["method"] == "comment_issue"
-        ]
+        comment_calls = [c for c in github_client.calls if c["method"] == "comment_issue"]
         assert len(comment_calls) == 1
         assert "Publish Recovery Failed" in comment_calls[0]["body"]
         assert "push" in comment_calls[0]["body"]
 
         # Should NOT modify labels
-        label_calls = [
-            c for c in github_client.calls if c["method"] == "edit_issue_labels"
-        ]
+        label_calls = [c for c in github_client.calls if c["method"] == "edit_issue_labels"]
         assert len(label_calls) == 0
 
     def test_pr_lookup_failure_posts_comment_and_does_not_modify_labels(
@@ -607,15 +589,11 @@ class TestRecoverPublishIssue:
 
         assert "pr_lookup" in exc_info.value.failure_category
 
-        comment_calls = [
-            c for c in github_client.calls if c["method"] == "comment_issue"
-        ]
+        comment_calls = [c for c in github_client.calls if c["method"] == "comment_issue"]
         assert len(comment_calls) == 1
         assert "pr_lookup" in comment_calls[0]["body"]
 
-        label_calls = [
-            c for c in github_client.calls if c["method"] == "edit_issue_labels"
-        ]
+        label_calls = [c for c in github_client.calls if c["method"] == "edit_issue_labels"]
         assert len(label_calls) == 0
 
     def test_pr_create_failure_posts_comment_and_does_not_modify_labels(
@@ -661,15 +639,11 @@ class TestRecoverPublishIssue:
 
         assert "pr_create" in exc_info.value.failure_category
 
-        comment_calls = [
-            c for c in github_client.calls if c["method"] == "comment_issue"
-        ]
+        comment_calls = [c for c in github_client.calls if c["method"] == "comment_issue"]
         assert len(comment_calls) == 1
         assert "pr_create" in comment_calls[0]["body"]
 
-        label_calls = [
-            c for c in github_client.calls if c["method"] == "edit_issue_labels"
-        ]
+        label_calls = [c for c in github_client.calls if c["method"] == "edit_issue_labels"]
         assert len(label_calls) == 0
 
     def test_raises_when_remote_missing(
@@ -711,9 +685,7 @@ class TestRecoverPublishIssue:
         assert "does not exist" in str(exc_info.value)
         assert exc_info.value.failure_category == "push"
 
-    def test_idempotent_rerun(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_idempotent_rerun(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Should be safe to rerun after success."""
         config = _make_config(supervisor_enabled=False)
         worktree_path = tmp_path / "issue-42"

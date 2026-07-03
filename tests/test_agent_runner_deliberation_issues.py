@@ -109,9 +109,7 @@ def _make_deliberate_issue(
     )
 
 
-def _set_deliberate_issues(
-    fake_github: FakeGitHubClient, issues: list[IssueSummary]
-) -> None:
+def _set_deliberate_issues(fake_github: FakeGitHubClient, issues: list[IssueSummary]) -> None:
     """Seed the fake client to return ``issues`` from ``list_issues_by_label``.
 
     ``FakeGitHubClient.list_issues_by_label`` returns an empty list by default
@@ -165,9 +163,7 @@ def test_resolve_turn_skips_when_user_has_not_replied() -> None:
         (),
         {"issue_comments_count": 3, "cycle": 2},
     )()
-    is_ai_turn, cycle = _resolve_turn(
-        comments=["q1", "q2", "ai question"], marker=marker
-    )
+    is_ai_turn, cycle = _resolve_turn(comments=["q1", "q2", "ai question"], marker=marker)
     assert is_ai_turn is False
     assert cycle == 3
 
@@ -207,9 +203,7 @@ def test_format_question_list_comment_includes_soft_hint_after_threshold() -> No
 def test_build_deliberation_issue_prompt_includes_comments() -> None:
     """The assembled prompt must carry the Issue body and the full thread."""
     issue = _make_deliberate_issue(body="Need new feature X")
-    prompt = _build_deliberation_issue_prompt(
-        issue, comments=["User asked: what about Y?"]
-    )
+    prompt = _build_deliberation_issue_prompt(issue, comments=["User asked: what about Y?"])
     assert "Need new feature X" in prompt
     assert "User asked: what about Y?" in prompt
     assert "## Issue body" in prompt
@@ -347,8 +341,7 @@ def test_process_deliberation_issues_failure_isolates_to_one_issue(
     label_calls = [
         entry
         for entry in fake_github.calls
-        if entry.get("method") == "edit_issue_labels"
-        and entry.get("issue_number") == 201
+        if entry.get("method") == "edit_issue_labels" and entry.get("issue_number") == 201
     ]
     assert label_calls, "expected edit_issue_labels call for the bad issue"
     assert "agent/failed" in label_calls[0]["add"]
@@ -356,9 +349,7 @@ def test_process_deliberation_issues_failure_isolates_to_one_issue(
 
     # A failure diagnostic comment was posted.
     failure_comments = [
-        body
-        for body in fake_github.list_issue_comments(201)
-        if "Deliberation phase failed" in body
+        body for body in fake_github.list_issue_comments(201) if "Deliberation phase failed" in body
     ]
     assert failure_comments, "expected a failure diagnostic comment"
 

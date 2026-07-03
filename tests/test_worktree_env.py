@@ -59,12 +59,8 @@ def test_never_overwrites_existing_worktree_files(tmp_path: Path) -> None:
     copied_relative_paths = copy_missing_env_files(repo_path, worktree_path)
 
     assert copied_relative_paths == []
-    assert (worktree_path / ".env").read_text(
-        encoding="utf-8"
-    ) == "ROOT=worktree-local\n"
-    assert (worktree_path / ".env.example").read_text(
-        encoding="utf-8"
-    ) == "EXAMPLE=tracked\n"
+    assert (worktree_path / ".env").read_text(encoding="utf-8") == "ROOT=worktree-local\n"
+    assert (worktree_path / ".env.example").read_text(encoding="utf-8") == "EXAMPLE=tracked\n"
 
 
 def test_prunes_vcs_cache_and_worktree_container_dirs(tmp_path: Path) -> None:

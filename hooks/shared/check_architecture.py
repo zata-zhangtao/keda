@@ -7,7 +7,7 @@
     <module>/api/ → <module>/core/ → <module>/engines/ → <module>/infrastructure/
 
 依赖规则（只允许向内依赖）：
-    - <module>/api/              可以依赖: <module>/core
+    - <module>/api/              可以依赖: <module>/core, <module>/engines
     - <module>/core/             可以依赖: （仅 <module>/core 内部的 shared/interfaces）
     - <module>/engines/          可以依赖: <module>/core, <module>/infrastructure
     - <module>/infrastructure/   可以依赖: （仅外部第三方包）
@@ -15,8 +15,11 @@
 禁止的方向：
     - <module>/infrastructure/ 不得 import <module>/core, <module>/engines, <module>/api
     - <module>/core/           不得 import <module>/engines, <module>/infrastructure, <module>/api
-    - <module>/api/            不得 import <module>/infrastructure, <module>/engines（直接依赖）
+    - <module>/api/            不得 import <module>/infrastructure（直接依赖）
     - 任意层                  不得反向依赖外层
+
+注：`api/ → engines/` 当前作为过渡期放宽允许（与 CLAUDE.md 一致）；docs 架构规范
+的最终目标是 `api/ → core/ → engines/`，相关迁移由独立 PRD 跟踪。
 """
 
 import ast
@@ -35,10 +38,13 @@ LAYER_ORDER: list[str] = ["infrastructure", "engines", "core", "api"]
 FORBIDDEN_IMPORTS: dict[str, list[str]] = {
     "infrastructure": ["core", "engines", "api"],
     "core": ["engines", "infrastructure", "api"],
-    "api": ["infrastructure", "engines"],
+    "api": ["infrastructure"],
     "engines": ["api"],
 }
-"""每个层禁止 import 的其他层列表。"""
+"""每个层禁止 import 的其他层列表。
+
+`api/` 暂未禁止 `engines/`：过渡期放宽，与 CLAUDE.md 一致；最终目标见模块 docstring。
+"""
 
 LEGACY_MODULES: set[str] = set()
 """迁移期兼容模块，不参与架构检查（见 system-design.md 迁移策略）。"""
@@ -122,9 +128,7 @@ def _discover_layered_modules(project_root: Path) -> list[tuple[str, Path]]:
     return discovered_modules
 
 
-def _resolve_module_and_layer(
-    file_path: Path, project_root: Path
-) -> Optional[tuple[str, str]]:
+def _resolve_module_and_layer(file_path: Path, project_root: Path) -> Optional[tuple[str, str]]:
     """从文件路径推断所属的模块名和架构层名称。
 
     Args:
@@ -171,8 +175,7 @@ def _extract_imported_modules(source_code: str) -> list[tuple[int, str]]:
                 imported_module_parts: list[str] = alias.name.split(".")
                 imported_layer_name: str = (
                     imported_module_parts[1]
-                    if len(imported_module_parts) > 1
-                    and imported_module_parts[1] in LAYER_ORDER
+                    if len(imported_module_parts) > 1 and imported_module_parts[1] in LAYER_ORDER
                     else imported_module_parts[0]
                 )
                 imported_module_entries.append((ast_node.lineno, imported_layer_name))
@@ -182,8 +185,7 @@ def _extract_imported_modules(source_code: str) -> list[tuple[int, str]]:
                 imported_module_parts = ast_node.module.split(".")
                 imported_layer_name = (
                     imported_module_parts[1]
-                    if len(imported_module_parts) > 1
-                    and imported_module_parts[1] in LAYER_ORDER
+                    if len(imported_module_parts) > 1 and imported_module_parts[1] in LAYER_ORDER
                     else imported_module_parts[0]
                 )
                 imported_module_entries.append((ast_node.lineno, imported_layer_name))
@@ -218,9 +220,7 @@ def _check_single_file(
         return file_violations
 
     raw_source_code: str = python_file.read_text(encoding="utf-8")
-    imported_module_entries: list[tuple[int, str]] = _extract_imported_modules(
-        raw_source_code
-    )
+    imported_module_entries: list[tuple[int, str]] = _extract_imported_modules(raw_source_code)
 
     whitelisted_submodules: list[str] = WHITELISTED_SUBMODULES.get(source_layer, [])
 
@@ -307,9 +307,7 @@ def _format_report(check_result: CheckResult) -> str:
     report_lines.append(f"❌ 发现 {len(check_result.violations)} 处违规：\n")
 
     for violation in check_result.violations:
-        relative_file_path: str = str(violation.file_path).split("zata_code_template/")[
-            -1
-        ]
+        relative_file_path: str = str(violation.file_path).split("zata_code_template/")[-1]
         report_lines.append(
             f"  [{violation.module_name}/{violation.source_layer}]"
             f" → [{violation.forbidden_layer}]  "

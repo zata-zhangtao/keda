@@ -73,18 +73,14 @@ class TomlRegistryEditor:
                     path=configured_path,
                     enabled=bool(repo_table.get("enabled", True)),
                     display_name=(
-                        str(repo_table["display_name"])
-                        if "display_name" in repo_table
-                        else None
+                        str(repo_table["display_name"]) if "display_name" in repo_table else None
                     ),
                     path_exists=resolved_path.exists(),
                 )
             )
         return registry_entries
 
-    def add_repository(
-        self, *, repo_id: str, path: str, display_name: str | None
-    ) -> None:
+    def add_repository(self, *, repo_id: str, path: str, display_name: str | None) -> None:
         """新增一个仓库条目（enabled 默认 true）。"""
         document = self._read_document()
         repositories_table = self._repositories_table(document)

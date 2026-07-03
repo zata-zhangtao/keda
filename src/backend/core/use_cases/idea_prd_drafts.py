@@ -107,9 +107,7 @@ def _now_iso() -> str:
 def _validate_priority(priority: str) -> str:
     normalized = priority.strip().upper()
     if normalized not in _ALLOWED_PRIORITIES:
-        raise IdeaInboxError(
-            f"priority 必须是 {_ALLOWED_PRIORITIES} 之一，得到 '{priority}'。"
-        )
+        raise IdeaInboxError(f"priority 必须是 {_ALLOWED_PRIORITIES} 之一，得到 '{priority}'。")
     return normalized
 
 
@@ -133,9 +131,7 @@ def _pending_filename(priority: str, prd_type: str, draft_id: str, slug: str) ->
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _select_idea_texts(
-    repo_path: Path, idea_refs: tuple[str, ...]
-) -> tuple[IdeaEntry, ...]:
+def _select_idea_texts(repo_path: Path, idea_refs: tuple[str, ...]) -> tuple[IdeaEntry, ...]:
     """根据 idea_refs 选取想法；缺失时报错。"""
     snapshot = read_idea_inbox(repo_path)
     by_id = {entry.entry_id: entry for entry in snapshot.entries}
@@ -230,9 +226,7 @@ def _fallback_draft_body(idea_aggregated: str) -> str:
         "# PRD: 基于想法的草稿（待人补全）\n\n"
         "## 1. Introduction & Goals\n\n"
         "本草稿由 append-only 想法生成，缺少完整的 AI 总结。请基于下列原话补全。\n\n"
-        "### 想法原话摘录\n\n"
-        + "\n".join(excerpt)
-        + "\n\n## 2. Acceptance Checklist\n\n"
+        "### 想法原话摘录\n\n" + "\n".join(excerpt) + "\n\n## 2. Acceptance Checklist\n\n"
         "- [ ] 阅读 `tasks/inbox/ideas.md` 完整原话并补全上下文。\n"
         "- [ ] 填写 Introduction / Goals 章节。\n"
         "- [ ] 描述实现方案与模块划分。\n"
@@ -320,9 +314,7 @@ def create_prd_draft(
         body_excerpt=build_excerpt(body),
     )
     _logger.info("Created PRD draft %s for repo %s", draft_path, repo_resolved.name)
-    return CreateDraftResult(
-        draft=summary, draft_path=str(draft_path.relative_to(repo_resolved))
-    )
+    return CreateDraftResult(draft=summary, draft_path=str(draft_path.relative_to(repo_resolved)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -348,9 +340,7 @@ def _ensure_pending_path_free(repo_path: Path, pending_filename: str) -> Path:
     pending_dir.mkdir(parents=True, exist_ok=True)
     pending_path = pending_dir / pending_filename
     if pending_path.exists():
-        raise IdeaInboxError(
-            f"pending 文件已存在，拒绝覆盖: tasks/pending/{pending_filename}"
-        )
+        raise IdeaInboxError(f"pending 文件已存在，拒绝覆盖: tasks/pending/{pending_filename}")
     return pending_path
 
 
@@ -388,11 +378,7 @@ def _replace_metadata_status(
         return f"Approved Pending Path: {approved_path}\n" + updated
     closing = matches[-1]
     insert_pos = closing.start()
-    return (
-        updated[:insert_pos]
-        + f"Approved Pending Path: {approved_path}\n"
-        + updated[insert_pos:]
-    )
+    return updated[:insert_pos] + f"Approved Pending Path: {approved_path}\n" + updated[insert_pos:]
 
 
 def approve_prd_draft(
@@ -415,9 +401,7 @@ def approve_prd_draft(
     if metadata is None:
         raise IdeaInboxError(f"草稿缺少 metadata 块: {draft_relpath}")
     if metadata.status is not PrdDraftStatus.PENDING_REVIEW:
-        raise IdeaInboxError(
-            f"草稿状态为 {metadata.status.value}，仅 pending-review 可批准。"
-        )
+        raise IdeaInboxError(f"草稿状态为 {metadata.status.value}，仅 pending-review 可批准。")
     effective_priority = _validate_priority(priority or metadata.priority)
     effective_type = _validate_prd_type(prd_type or metadata.prd_type)
 
@@ -495,9 +479,7 @@ def append_idea_via_inbound(
     """外部入口（飞书 / 自定义 webhook）追加想法的薄包装。返回 entry_id。"""
     result = append_idea(
         repo_path,
-        source=IdeaInboxSource.FEISHU
-        if sender.startswith("feishu:")
-        else IdeaInboxSource.INBOUND,
+        source=IdeaInboxSource.FEISHU if sender.startswith("feishu:") else IdeaInboxSource.INBOUND,
         author=sender or "anonymous",
         text=text,
         occurred_at=occurred_at,

@@ -250,9 +250,7 @@ def build_issue_body(
     # 使用与 AI 上下文构建器相同的关键词列表，确保 template、agent、
     # fallback 三条路径保持一致。若未匹配到关键词，则兜底取第一个 ## 标题
     # 下的全部内容，避免中文 PRD（如“背景与目标”）出现空引言。
-    introduction = extract_prd_section(
-        prd_text, ("introduction", "intro", "引言", "概述")
-    )
+    introduction = extract_prd_section(prd_text, ("introduction", "intro", "引言", "概述"))
     if not introduction:
         introduction = extract_first_h2_section(prd_text)
     body_parts: list[str] = [
@@ -303,9 +301,7 @@ def resolve_prd_paths(repo_path: Path, prd_path: Path) -> tuple[Path, Path]:
         ``(absolute_prd_path, relative_prd_path)`` 元组。
     """
 
-    absolute_prd_path = (
-        (repo_path / prd_path).resolve() if not prd_path.is_absolute() else prd_path
-    )
+    absolute_prd_path = (repo_path / prd_path).resolve() if not prd_path.is_absolute() else prd_path
     relative_prd_path = absolute_prd_path.relative_to(repo_path.resolve())
     return absolute_prd_path, relative_prd_path
 
@@ -345,9 +341,7 @@ def build_issue_labels(
     if request.issue_agent in effective_labels_config.agent_labels:
         labels.append(effective_labels_config.agent_labels[request.issue_agent])
     elif request.issue_agent not in {"auto", "none"}:
-        allowed = ", ".join(
-            [*effective_labels_config.agent_labels.keys(), "auto", "none"]
-        )
+        allowed = ", ".join([*effective_labels_config.agent_labels.keys(), "auto", "none"])
         raise ValueError(f"issue_agent must be one of: {allowed}")
     return labels
 
@@ -437,9 +431,7 @@ def current_git_branch(repo_path: Path, process_runner: IProcessRunner) -> str:
         RuntimeError: 当仓库处于 detached HEAD 状态时。
     """
 
-    branch_result = process_runner.run(
-        ["git", "branch", "--show-current"], cwd=repo_path
-    )
+    branch_result = process_runner.run(["git", "branch", "--show-current"], cwd=repo_path)
     current_branch = branch_result.stdout.strip()
     if not current_branch:
         raise RuntimeError("Cannot publish a PRD from a detached HEAD checkout.")
@@ -529,9 +521,7 @@ def build_prd_commit_message(relative_prd_path: Path) -> str:
     return f"docs(prd): publish {prd_slug}"
 
 
-def publish_prd_file(
-    publish_context: PrdPublishContext, process_runner: IProcessRunner
-) -> None:
+def publish_prd_file(publish_context: PrdPublishContext, process_runner: IProcessRunner) -> None:
     """仅暂存、提交并推送目标 PRD 文件。
 
     使用 ``git add -- <path>``、``git commit -m <msg> -- <path>`` 和
@@ -543,9 +533,7 @@ def publish_prd_file(
     """
 
     relative_prd_path_text = publish_context.relative_prd_path.as_posix()
-    process_runner.run(
-        ["git", "add", "--", relative_prd_path_text], cwd=publish_context.repo_path
-    )
+    process_runner.run(["git", "add", "--", relative_prd_path_text], cwd=publish_context.repo_path)
     process_runner.run(
         [
             "git",
@@ -623,13 +611,9 @@ def _resolve_dependencies(
 
     # Deduplicate while preserving order
     seen_issues: set[int] = set()
-    deduped_issues = [
-        n for n in resolved_issues if not (n in seen_issues or seen_issues.add(n))
-    ]
+    deduped_issues = [n for n in resolved_issues if not (n in seen_issues or seen_issues.add(n))]
     seen_groups: set[str] = set()
-    deduped_groups = [
-        g for g in resolved_groups if not (g in seen_groups or seen_groups.add(g))
-    ]
+    deduped_groups = [g for g in resolved_groups if not (g in seen_groups or seen_groups.add(g))]
 
     return (
         gate_type,
@@ -747,8 +731,7 @@ def _resolve_dependency_prd_path(*, repo_root: Path, prd_ref: str) -> Path:
         raise ValueError(_format_missing_prd_dependency_error(cleaned_ref))
     if len(matches) > 1:
         matched_paths = ", ".join(
-            _format_repo_relative_path(repo_root, matched_path)
-            for matched_path in matches
+            _format_repo_relative_path(repo_root, matched_path) for matched_path in matches
         )
         raise ValueError(
             "Ambiguous PRD dependency reference "
@@ -763,9 +746,7 @@ def _resolve_dependency_prd_path(*, repo_root: Path, prd_ref: str) -> Path:
     )
 
 
-def _resolve_repo_relative_dependency_prd_path(
-    *, repo_root: Path, relative_ref: str
-) -> Path:
+def _resolve_repo_relative_dependency_prd_path(*, repo_root: Path, relative_ref: str) -> Path:
     """Resolve an explicit repo-relative PRD dependency path."""
     candidate_paths = _existing_markdown_path_candidates(repo_root / relative_ref)
     if not candidate_paths:
@@ -783,9 +764,7 @@ def _existing_markdown_path_candidates(candidate_path: Path) -> list[Path]:
     if candidate_path.suffix == "":
         candidates.append(candidate_path.with_suffix(".md"))
     return [
-        path.resolve()
-        for path in candidates
-        if path.is_file() and path.suffix.lower() == ".md"
+        path.resolve() for path in candidates if path.is_file() and path.suffix.lower() == ".md"
     ]
 
 
@@ -801,9 +780,7 @@ def _find_task_prd_matches(*, repo_root: Path, prd_ref: str) -> list[Path]:
     return sorted(matches, key=lambda path: path.as_posix())
 
 
-def _validate_dependency_prd_path(
-    *, repo_root: Path, candidate_path: Path, prd_ref: str
-) -> Path:
+def _validate_dependency_prd_path(*, repo_root: Path, candidate_path: Path, prd_ref: str) -> Path:
     """Validate that a resolved PRD path is a Markdown file inside the repo."""
     resolved_path = candidate_path.resolve()
     try:
@@ -1007,27 +984,19 @@ def create_issue_from_prd(
     # ------------------------------------------------------------------
     # 1. 解析路径，得到绝对路径（用于 I/O）和相对路径（用于 Issue 正文和提交信息）。
     # ------------------------------------------------------------------
-    absolute_prd_path, relative_prd_path = resolve_prd_paths(
-        request.repo_path, request.prd_path
-    )
+    absolute_prd_path, relative_prd_path = resolve_prd_paths(request.repo_path, request.prd_path)
 
     # ------------------------------------------------------------------
     # 2. 读取 PRD 并防止意外重复创建 Issue。
     # ------------------------------------------------------------------
     prd_text = absolute_prd_path.read_text(encoding="utf-8")
-    if not request.force and any(
-        ISSUE_LINK_LINE_RE.match(line) for line in prd_text.splitlines()
-    ):
-        raise ValueError(
-            "PRD already has a GitHub Issue link. Use --force to replace it."
-        )
+    if not request.force and any(ISSUE_LINK_LINE_RE.match(line) for line in prd_text.splitlines()):
+        raise ValueError("PRD already has a GitHub Issue link. Use --force to replace it.")
 
     # ------------------------------------------------------------------
     # 3. 派生 fallback 标题。当 PRD 没有 H1 标题时，使用文件名 slug（"-prd-" 之后部分）作为最后手段。
     # ------------------------------------------------------------------
-    fallback_title = absolute_prd_path.stem.split("-prd-", maxsplit=1)[-1].replace(
-        "-", " "
-    )
+    fallback_title = absolute_prd_path.stem.split("-prd-", maxsplit=1)[-1].replace("-", " ")
     fallback_title = (
         request.title_override
         or f"[{request.issue_type.title()}] {extract_title(prd_text, fallback_title)}"
@@ -1069,9 +1038,7 @@ def create_issue_from_prd(
             git_base_branch=request.git_base_branch,
             queue_ready=request.queue_ready,
         )
-        validate_staged_changes_are_prd_only(
-            request.repo_path, relative_prd_path, process_runner
-        )
+        validate_staged_changes_are_prd_only(request.repo_path, relative_prd_path, process_runner)
         publish_context = PrdPublishContext(
             repo_path=request.repo_path,
             relative_prd_path=relative_prd_path,

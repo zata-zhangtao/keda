@@ -29,9 +29,7 @@ from tests.conftest import FakeContentGenerator, FakeGitHubClient, FakeProcessRu
 
 def _run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """Run a command for test setup."""
-    return subprocess.run(
-        command, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
-    )
+    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8")
 
 
 def _init_repo(path: Path) -> None:
@@ -53,9 +51,7 @@ def _init_remote_repo(local_repo_path: Path, remote_repo_path: Path) -> None:
     _run(["git", "push", "-u", "origin", "main"], local_repo_path)
 
 
-def _request(
-    repo_path: Path, prd_path: Path, **request_overrides: Any
-) -> IssueFromPrdRequest:
+def _request(repo_path: Path, prd_path: Path, **request_overrides: Any) -> IssueFromPrdRequest:
     """Build a PRD-to-Issue request for tests."""
     request_values = {"issue_type": "feature", **request_overrides}
     return IssueFromPrdRequest(
@@ -67,9 +63,7 @@ def _request(
 
 def _command_result(command: list[str], stdout: str = "") -> CommandResult:
     """Build a successful command result for tests."""
-    return CommandResult(
-        command=tuple(command), return_code=0, stdout=stdout, stderr=""
-    )
+    return CommandResult(command=tuple(command), return_code=0, stdout=stdout, stderr="")
 
 
 def test_create_issue_from_prd_writes_issue_link(tmp_path: Path) -> None:
@@ -177,9 +171,7 @@ def test_create_issue_from_prd_replaces_placeholder_issue_link(
         "- GitHub Issue: https://github.com/example/repo/issues/7 （含尾注说明）",
     ],
 )
-def test_create_issue_from_prd_rejects_existing_issue_link(
-    tmp_path: Path, issue_line: str
-) -> None:
+def test_create_issue_from_prd_rejects_existing_issue_link(tmp_path: Path, issue_line: str) -> None:
     """A real Issue URL should block creation without --force."""
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -212,8 +204,7 @@ def test_create_issue_from_prd_materializes_prd_ref_issue_link(
     task_dir.mkdir(parents=True)
     upstream_prd = task_dir / "P2-FEAT-20260527-190923-prd-from-issue.md"
     upstream_prd.write_text(
-        "# PRD: Upstream\n\n"
-        "- GitHub Issue: https://github.com/example/repo/issues/77\n",
+        "# PRD: Upstream\n\n" "- GitHub Issue: https://github.com/example/repo/issues/77\n",
         encoding="utf-8",
     )
     downstream_prd = task_dir / "P2-FEAT-20260528-110730-prd-review.md"
@@ -282,10 +273,7 @@ def test_create_issue_from_prd_materializes_prd_ref_group_fallback(
     )
 
     create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
-    assert (
-        "<!-- iar:depends-on group:prd-from-issue-generation -->"
-        in create_calls[0]["body"]
-    )
+    assert "<!-- iar:depends-on group:prd-from-issue-generation -->" in create_calls[0]["body"]
 
 
 def test_create_issue_from_prd_unresolved_prd_ref_is_actionable(
@@ -425,9 +413,7 @@ def test_publish_prd_adds_ready_label_after_push(tmp_path: Path) -> None:
     )
 
     assert issue_url == "https://github.com/example/repo/issues/42"
-    create_calls = [
-        call for call in fake_client.calls if call["method"] == "create_issue"
-    ]
+    create_calls = [call for call in fake_client.calls if call["method"] == "create_issue"]
     assert create_calls[0]["labels"] == [
         "type/feature",
         "status/backlog",
@@ -502,12 +488,8 @@ def test_publish_prd_push_failure_does_not_add_ready_label(tmp_path: Path) -> No
             process_runner=process_runner,
         )
 
-    create_calls = [
-        call for call in fake_client.calls if call["method"] == "create_issue"
-    ]
-    edit_calls = [
-        call for call in fake_client.calls if call["method"] == "edit_issue_labels"
-    ]
+    create_calls = [call for call in fake_client.calls if call["method"] == "create_issue"]
+    edit_calls = [call for call in fake_client.calls if call["method"] == "edit_issue_labels"]
     assert "agent/ready" not in create_calls[0]["labels"]
     assert edit_calls == []
 
@@ -715,9 +697,7 @@ def test_prompt_publish_on_no(tmp_path: Path) -> None:
 
     assert published is False
     assert process_runner.calls == [["git", "status", "--porcelain"]]
-    assert [
-        call for call in fake_client.calls if call["method"] == "edit_issue_labels"
-    ] == []
+    assert [call for call in fake_client.calls if call["method"] == "edit_issue_labels"] == []
 
 
 def test_prompt_publish_clean_worktree(tmp_path: Path) -> None:
@@ -747,9 +727,7 @@ def test_prompt_publish_clean_worktree(tmp_path: Path) -> None:
 
     assert published is False
     assert process_runner.calls == [["git", "status", "--porcelain"]]
-    assert [
-        call for call in fake_client.calls if call["method"] == "edit_issue_labels"
-    ] == []
+    assert [call for call in fake_client.calls if call["method"] == "edit_issue_labels"] == []
 
 
 def test_create_issue_from_prd_with_generated_content_template(tmp_path: Path) -> None:
@@ -793,9 +771,7 @@ def test_create_issue_from_prd_with_generated_content_template(tmp_path: Path) -
     create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
     assert len(create_calls) == 1
     assert create_calls[0]["title"] == "[feature] Example"
-    assert (
-        "- PRD path: `tasks/20260516-120000-prd-example.md`" in create_calls[0]["body"]
-    )
+    assert "- PRD path: `tasks/20260516-120000-prd-example.md`" in create_calls[0]["body"]
 
 
 def test_create_issue_from_prd_generated_content_fallback_on_invalid(
@@ -836,9 +812,7 @@ def test_create_issue_from_prd_generated_content_fallback_on_invalid(
     assert issue_url == "https://github.com/example/repo/issues/42"
     create_calls = [c for c in fake_client.calls if c["method"] == "create_issue"]
     assert len(create_calls) == 1
-    assert (
-        "- PRD path: `tasks/20260516-120000-prd-example.md`" in create_calls[0]["body"]
-    )
+    assert "- PRD path: `tasks/20260516-120000-prd-example.md`" in create_calls[0]["body"]
 
 
 def test_create_issue_from_prd_agent_mode_generates_content(tmp_path: Path) -> None:
@@ -941,10 +915,7 @@ def test_create_issue_from_prd_materializes_structured_evidence_marker(
     prd = repo / "tasks" / "pending" / "structured.md"
     prd.parent.mkdir(parents=True)
     prd.write_text(
-        "# PRD: Structured\n\n"
-        "### Realistic Validation\n\n"
-        "- [ ] Item A\n"
-        "- [ ] Item B\n",
+        "# PRD: Structured\n\n" "### Realistic Validation\n\n" "- [ ] Item A\n" "- [ ] Item B\n",
         encoding="utf-8",
     )
 
@@ -954,10 +925,7 @@ def test_create_issue_from_prd_materializes_structured_evidence_marker(
     )
 
     create_call = next(c for c in fake_client.calls if c["method"] == "create_issue")
-    assert (
-        '<!-- iar:structured-evidence version=1 language="zh-CN" -->'
-        in create_call["body"]
-    )
+    assert '<!-- iar:structured-evidence version=1 language="zh-CN" -->' in create_call["body"]
 
 
 def test_create_issue_from_prd_honors_validation_language(
@@ -986,10 +954,7 @@ def test_create_issue_from_prd_honors_validation_language(
     )
 
     create_call = next(c for c in fake_client.calls if c["method"] == "create_issue")
-    assert (
-        '<!-- iar:structured-evidence version=1 language="en-US" -->'
-        in create_call["body"]
-    )
+    assert '<!-- iar:structured-evidence version=1 language="en-US" -->' in create_call["body"]
 
 
 def test_create_issue_from_prd_skips_marker_when_structured_evidence_disabled(
@@ -1023,17 +988,13 @@ def test_create_issue_from_prd_skips_marker_when_structured_evidence_disabled(
 
 def test_extract_title_strips_prd_prefix() -> None:
     """extract_title should remove the PRD: prefix from the first H1."""
-    assert (
-        extract_title("# PRD: Example Feature\n\nbody", "fallback") == "Example Feature"
-    )
+    assert extract_title("# PRD: Example Feature\n\nbody", "fallback") == "Example Feature"
 
 
 def test_extract_title_skips_part_a_heading() -> None:
     """extract_title should skip Part A / Part B structural headings."""
     prd_text = (
-        "# Part A · 人审层 (Review Layer)\n\n"
-        "## 1. Introduction\n\n"
-        "# PRD: Real Feature\n"
+        "# Part A · 人审层 (Review Layer)\n\n" "## 1. Introduction\n\n" "# PRD: Real Feature\n"
     )
     assert extract_title(prd_text, "fallback") == "Real Feature"
 

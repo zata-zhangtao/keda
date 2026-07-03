@@ -43,9 +43,7 @@ def _is_group_fully_closed(
     """Return ``True`` if every open issue with the group label is closed."""
     group_label = f"{labels_config.group_prefix}{group_name}"
     try:
-        issues = github_client.list_issues_by_label(
-            label=group_label, limit=1000, state="all"
-        )
+        issues = github_client.list_issues_by_label(label=group_label, limit=1000, state="all")
     except Exception as exc:  # noqa: BLE001
         _logger.info("Failed to list group %s issues: %s", group_label, exc)
         return False
@@ -119,9 +117,7 @@ def evaluate_roadmap_dependencies(
             if dep.kind is RoadmapDependencyKind.PRD and dep.to_path in prd_by_path:
                 in_degree[prd.prd_path] += 1
 
-    queue: deque[str] = deque(
-        [path for path, degree in in_degree.items() if degree == 0]
-    )
+    queue: deque[str] = deque([path for path, degree in in_degree.items() if degree == 0])
     ordered_paths: list[str] = []
     while queue:
         path = queue.popleft()

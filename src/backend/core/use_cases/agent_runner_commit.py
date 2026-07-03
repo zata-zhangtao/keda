@@ -123,8 +123,7 @@ def _verification_left_tracked_worktree_changes(
     if diff_result.return_code == 1:
         return True
     raise RuntimeError(
-        "Unable to inspect worktree changes after verification: "
-        f"{diff_result.stderr.strip()}"
+        "Unable to inspect worktree changes after verification: " f"{diff_result.stderr.strip()}"
     )
 
 
@@ -296,9 +295,7 @@ def checkpoint_uncommitted_progress(
         cwd=worktree_path,
     )
     excluded_paths = [
-        changed_path
-        for changed_path in changed_paths
-        if is_forbidden_path(changed_path, config)
+        changed_path for changed_path in changed_paths if is_forbidden_path(changed_path, config)
     ]
     if excluded_paths:
         _logger.warning(

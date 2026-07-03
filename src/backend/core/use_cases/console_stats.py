@@ -94,9 +94,7 @@ def build_completion_stats(
             for issue in labeled_issues:
                 tracked_issues[issue.number] = issue
     except Exception as exc:  # noqa: BLE001 - isolate per-repo stats failures.
-        _logger.warning(
-            "Completion stats unavailable for '%s': %s", context.repo_id, exc
-        )
+        _logger.warning("Completion stats unavailable for '%s': %s", context.repo_id, exc)
         return RepositoryCompletionStats(
             repo_id=context.repo_id,
             display_name=context.display_name,

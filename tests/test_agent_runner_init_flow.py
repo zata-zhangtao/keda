@@ -126,9 +126,7 @@ def test_copy_bundled_skills_diverged_without_force_keeps_local(tmp_path: Path) 
     original_bytes = prd_target.read_bytes()
     prd_target.write_text("local customisation", encoding="utf-8")
 
-    result = copy_bundled_skills(
-        BundledSkillCopyOptions(repo_root_path=tmp_path, force=False)
-    )
+    result = copy_bundled_skills(BundledSkillCopyOptions(repo_root_path=tmp_path, force=False))
 
     assert not result.copied_skills
     assert "prd" in result.diverged_skills
@@ -145,9 +143,7 @@ def test_copy_bundled_skills_force_overwrites_diverged(tmp_path: Path) -> None:
     prd_target = tmp_path / ".claude" / "skills" / "prd" / "SKILL.md"
     prd_target.write_text("local customisation", encoding="utf-8")
 
-    result = copy_bundled_skills(
-        BundledSkillCopyOptions(repo_root_path=tmp_path, force=True)
-    )
+    result = copy_bundled_skills(BundledSkillCopyOptions(repo_root_path=tmp_path, force=True))
 
     assert "prd" in result.overwritten_skills
     assert "prd" not in result.diverged_skills
@@ -158,9 +154,7 @@ def test_copy_bundled_skills_force_overwrites_diverged(tmp_path: Path) -> None:
 
 def test_copy_bundled_skills_skip_skips_step(tmp_path: Path) -> None:
     """``skip=True`` must skip the step entirely (no files written)."""
-    result = copy_bundled_skills(
-        BundledSkillCopyOptions(repo_root_path=tmp_path, skip=True)
-    )
+    result = copy_bundled_skills(BundledSkillCopyOptions(repo_root_path=tmp_path, skip=True))
     assert result.skipped
     assert not result.copied_skills
     assert not (tmp_path / ".claude" / "skills").exists()
@@ -168,9 +162,7 @@ def test_copy_bundled_skills_skip_skips_step(tmp_path: Path) -> None:
 
 def test_copy_bundled_skills_dry_run_does_not_write(tmp_path: Path) -> None:
     """``dry_run=True`` must return plans without touching the filesystem."""
-    result = copy_bundled_skills(
-        BundledSkillCopyOptions(repo_root_path=tmp_path, dry_run=True)
-    )
+    result = copy_bundled_skills(BundledSkillCopyOptions(repo_root_path=tmp_path, dry_run=True))
 
     assert result.dry_run
     assert set(result.copied_skills) == {"prd", "code-reviewer"}
@@ -206,9 +198,7 @@ def test_target_hash_matches_bundled_hash_after_copy(tmp_path: Path) -> None:
     for skill_name in ("prd", "code-reviewer"):
         target_root = tmp_path / ".claude" / "skills" / skill_name
         actual_hash = compute_target_skill_directory_hash(target_root)
-        _, bundled_hash = plan_skill_copy(
-            repo_root_path=tmp_path, skill_name=skill_name
-        )
+        _, bundled_hash = plan_skill_copy(repo_root_path=tmp_path, skill_name=skill_name)
         assert actual_hash == bundled_hash, skill_name
 
 
@@ -240,7 +230,5 @@ def test_format_skill_copy_summary_reports_copied_and_skipped(tmp_path: Path) ->
 
 def test_format_skill_copy_summary_skipped_returns_empty(tmp_path: Path) -> None:
     """``skipped=True`` results must produce no summary lines."""
-    result = copy_bundled_skills(
-        BundledSkillCopyOptions(repo_root_path=tmp_path, skip=True)
-    )
+    result = copy_bundled_skills(BundledSkillCopyOptions(repo_root_path=tmp_path, skip=True))
     assert format_skill_copy_summary(result) == []

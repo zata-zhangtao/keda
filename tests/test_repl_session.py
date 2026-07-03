@@ -96,8 +96,7 @@ def test_parse_markers_extracts_multiple_commands() -> None:
 
 def test_parse_markers_preserves_quoted_args() -> None:
     text = (
-        f'{IAR_EXEC_OPEN_MARKER} iar issue create --title "Hello World" '
-        f"{IAR_EXEC_CLOSE_MARKER}"
+        f'{IAR_EXEC_OPEN_MARKER} iar issue create --title "Hello World" ' f"{IAR_EXEC_CLOSE_MARKER}"
     )
     requests = parse_iar_exec_markers(text)
     assert len(requests) == 1
@@ -117,10 +116,7 @@ def test_parse_markers_skips_malformed_body() -> None:
     text = f"{IAR_EXEC_OPEN_MARKER} not a valid shell line " f"{IAR_EXEC_CLOSE_MARKER}"
     # shlex.split can split the body, but the first token "not" is fine.
     # Truly malformed bodies (unterminated quotes) should be skipped.
-    text2 = (
-        f'{IAR_EXEC_OPEN_MARKER} iar issue create --title "oops '
-        f"{IAR_EXEC_CLOSE_MARKER}"
-    )
+    text2 = f'{IAR_EXEC_OPEN_MARKER} iar issue create --title "oops ' f"{IAR_EXEC_CLOSE_MARKER}"
     requests = parse_iar_exec_markers(text)
     # First one parses fine; the malformed second one should be skipped.
     assert all(not r.raw_text.endswith("oops ") for r in requests)
@@ -302,11 +298,9 @@ def test_run_repl_executes_iar_command_from_agent_reply(
     assert content_generator.calls[0][0] == "claude"
 
     # The iar labels sync command was actually executed by the process runner.
-    assert [
-        call
-        for call in process_runner.calls
-        if call[0] == "iar" and call[1] == "labels"
-    ] == [["iar", "labels", "sync", "--dry-run"]]
+    assert [call for call in process_runner.calls if call[0] == "iar" and call[1] == "labels"] == [
+        ["iar", "labels", "sync", "--dry-run"]
+    ]
 
     # Audit directory contains the session files.
     audit_root = tmp_path / "logs" / "agent-runner" / "repl-test"
@@ -315,9 +309,7 @@ def test_run_repl_executes_iar_command_from_agent_reply(
     session_dir = session_dirs[0]
     assert (session_dir / "session.json").is_file()
     assert (session_dir / "transcript.md").is_file()
-    session_metadata = json.loads(
-        (session_dir / "session.json").read_text(encoding="utf-8")
-    )
+    session_metadata = json.loads((session_dir / "session.json").read_text(encoding="utf-8"))
     assert session_metadata["agent"] == "claude"
     assert session_metadata["commands_executed"] == 1
 
@@ -326,9 +318,7 @@ def test_run_repl_exits_on_exit_command(tmp_path: Path) -> None:
     context = _make_context(tmp_path)
     process_runner = _make_process_runner()
     content_generator = FakeContentGenerator(response="hello")
-    command_executor = ReplCommandExecutor(
-        process_runner, _make_config(), input_fn=lambda _p: "y"
-    )
+    command_executor = ReplCommandExecutor(process_runner, _make_config(), input_fn=lambda _p: "y")
     inputs = _make_inputs(context)
     deps = _make_deps(
         process_runner=process_runner,
@@ -347,9 +337,7 @@ def test_run_repl_exits_on_eof(tmp_path: Path) -> None:
     context = _make_context(tmp_path)
     process_runner = _make_process_runner()
     content_generator = FakeContentGenerator(response="hello")
-    command_executor = ReplCommandExecutor(
-        process_runner, _make_config(), input_fn=lambda _p: "y"
-    )
+    command_executor = ReplCommandExecutor(process_runner, _make_config(), input_fn=lambda _p: "y")
     inputs = _make_inputs(context)
     deps = _make_deps(
         process_runner=process_runner,
@@ -376,9 +364,7 @@ def test_run_repl_records_agent_failure_in_history(tmp_path: Path) -> None:
                 stderr="timeout exceeded",
             )
 
-    command_executor = ReplCommandExecutor(
-        process_runner, _make_config(), input_fn=lambda _p: "y"
-    )
+    command_executor = ReplCommandExecutor(process_runner, _make_config(), input_fn=lambda _p: "y")
     inputs = _make_inputs(context)
     deps = _make_deps(
         process_runner=process_runner,
@@ -403,9 +389,7 @@ def test_run_repl_handles_help_command_without_calling_agent(
     context = _make_context(tmp_path)
     process_runner = _make_process_runner()
     content_generator = FakeContentGenerator(response="hello")
-    command_executor = ReplCommandExecutor(
-        process_runner, _make_config(), input_fn=lambda _p: "y"
-    )
+    command_executor = ReplCommandExecutor(process_runner, _make_config(), input_fn=lambda _p: "y")
     inputs = _make_inputs(context)
     deps = _make_deps(
         process_runner=process_runner,

@@ -191,9 +191,7 @@ def _try_link_frontend_node_modules(
     Returns:
         ``True`` when a symlink was created; ``False`` otherwise.
     """
-    source_node_modules_path = (
-        repo_root_path / relative_project_path / NODE_MODULES_DIR_NAME
-    )
+    source_node_modules_path = repo_root_path / relative_project_path / NODE_MODULES_DIR_NAME
     target_node_modules_path = project_dir_path / NODE_MODULES_DIR_NAME
     if not source_node_modules_path.is_dir():
         _logger.warning(
@@ -399,14 +397,11 @@ def exclude_frontend_node_modules_from_git(
         exclude_path = worktree_path / exclude_path
     if exclude_path.is_dir():
         _logger.warning(
-            "Resolved info/exclude path is a directory (%s); skipping "
-            "node_modules exclusion.",
+            "Resolved info/exclude path is a directory (%s); skipping " "node_modules exclusion.",
             exclude_path,
         )
         return
-    existing_text = (
-        exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
-    )
+    existing_text = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
     known_lines = set(existing_text.splitlines())
     appended_lines: list[str] = []
     for relative_project_path in linked_relative_paths:
@@ -424,6 +419,4 @@ def exclude_frontend_node_modules_from_git(
     prefix_text = existing_text
     if prefix_text and not prefix_text.endswith("\n"):
         prefix_text += "\n"
-    exclude_path.write_text(
-        prefix_text + "\n".join(appended_lines) + "\n", encoding="utf-8"
-    )
+    exclude_path.write_text(prefix_text + "\n".join(appended_lines) + "\n", encoding="utf-8")

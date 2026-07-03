@@ -41,9 +41,7 @@ _PREVIEW_SECTION_HEADER = (
     "Preview deployment (placeholder values — see " "deploy/vps-traefik/README.md)"
 )
 
-_EXECUTABLE_RELATIVE_PATHS: frozenset[str] = frozenset(
-    {"deploy/vps-traefik/deploy-preview.sh"}
-)
+_EXECUTABLE_RELATIVE_PATHS: frozenset[str] = frozenset({"deploy/vps-traefik/deploy-preview.sh"})
 
 
 @dataclass(frozen=True)
@@ -218,9 +216,7 @@ def _iter_template_files(template_root) -> Iterable[tuple[str, object]]:
         yield relative_path, entry
 
 
-def _plan_template_writes(
-    template_root, repo_root_path: Path
-) -> tuple[TemplateFilePlan, ...]:
+def _plan_template_writes(template_root, repo_root_path: Path) -> tuple[TemplateFilePlan, ...]:
     """Build per-file write plans for a template root."""
     plans: list[TemplateFilePlan] = []
     for relative_posix_path, traversable in _iter_template_files(template_root):

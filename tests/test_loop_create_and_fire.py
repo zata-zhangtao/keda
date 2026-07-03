@@ -38,9 +38,7 @@ def _init_git_repo(path: Path) -> None:
     """Initialize a minimal git repo so ``current_git_branch`` works."""
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True
-    )
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True)
     # Initial commit so HEAD points to main.
     (path / ".gitkeep").write_text("", encoding="utf-8")
@@ -176,9 +174,7 @@ def test_update_loop_schedule_missing_raises(
         update_loop_schedule(
             "missing",
             state_store=state_store,
-            new_schedule=LoopSchedule(
-                kind=LoopScheduleKind.CRON, expression="0 8 * * *"
-            ),
+            new_schedule=LoopSchedule(kind=LoopScheduleKind.CRON, expression="0 8 * * *"),
         )
 
 
@@ -256,9 +252,7 @@ def test_fire_loop_renders_prd_and_creates_issue(
 
     # The default ``loop/<id>`` label and the recipe's extra labels were
     # added on top of the create_issue defaults.
-    label_call = next(
-        call for call in github.calls if call.get("method") == "edit_issue_labels"
-    )
+    label_call = next(call for call in github.calls if call.get("method") == "edit_issue_labels")
     assert "loop/github-trending" in label_call["add"]
     assert "area/docs" in label_call["add"]
 

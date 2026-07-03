@@ -41,9 +41,7 @@ def path_is_within_any_root(relative_path: Path, root_paths: Sequence[Path]) -> 
     return False
 
 
-def _normalize_repo_relative_path(
-    raw_path_text: str | Path, repo_root: Path
-) -> Path | None:
+def _normalize_repo_relative_path(raw_path_text: str | Path, repo_root: Path) -> Path | None:
     """Convert a filesystem path into a repository-relative path."""
 
     raw_path = Path(raw_path_text)

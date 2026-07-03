@@ -38,9 +38,7 @@ if TYPE_CHECKING:
     from backend.core.shared.models.agent_runner import RepositoryRunContext
 
 
-def _ensure_gh_auth_or_prompt(
-    repo_path: Path, process_runner: "IProcessRunner"
-) -> None:
+def _ensure_gh_auth_or_prompt(repo_path: Path, process_runner: "IProcessRunner") -> None:
     """Check gh auth status and exit with a friendly message if not authenticated."""
     if os.environ.get("IAR_SKIP_GH_AUTH_CHECK") == "1":
         return
@@ -62,9 +60,7 @@ def _print_worktree_cleanup_result(cleanup_result: WorktreeCleanupResult) -> Non
         return
 
     for branch_result in cleanup_result.branches:
-        worktree_suffix = (
-            f" ({branch_result.worktree_path})" if branch_result.worktree_path else ""
-        )
+        worktree_suffix = f" ({branch_result.worktree_path})" if branch_result.worktree_path else ""
         if branch_result.status is WorktreeCleanupStatus.WOULD_DELETE:
             console.print(
                 f"[yellow]Would delete:[/] {branch_result.branch}{worktree_suffix} - "

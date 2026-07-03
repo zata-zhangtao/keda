@@ -70,9 +70,7 @@ def _fetch_issue_body(issue_number: int) -> str | None:
         )
         return None
     except FileNotFoundError:
-        print(
-            "   `gh` CLI not found; cannot verify PRD archive state.", file=sys.stderr
-        )
+        print("   `gh` CLI not found; cannot verify PRD archive state.", file=sys.stderr)
         return None
 
     try:

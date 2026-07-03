@@ -66,13 +66,9 @@ def test_subprocess_runner_forwards_output_sink_to_claude_stream(
 
     def _fake_stream(command, **kwargs):
         captured["output_sink"] = kwargs.get("output_sink")
-        return subprocess.CompletedProcess(
-            args=list(command), returncode=0, stdout="", stderr=""
-        )
+        return subprocess.CompletedProcess(args=list(command), returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(
-        process_runner_module, "run_filtered_claude_stream", _fake_stream
-    )
+    monkeypatch.setattr(process_runner_module, "run_filtered_claude_stream", _fake_stream)
 
     def sink(_chunk: str) -> None:
         return None
@@ -125,9 +121,7 @@ def test_issue_output_routing_writes_file_and_view(tmp_path: Path) -> None:
     ) as sink:
         sink("agent says hi\n")
 
-    log_files = list(
-        (tmp_path / "agent-runner" / "issues" / "repo").glob("issue-7-*.log")
-    )
+    log_files = list((tmp_path / "agent-runner" / "issues" / "repo").glob("issue-7-*.log"))
     assert len(log_files) == 1
     assert "agent says hi" in log_files[0].read_text(encoding="utf-8")
     assert (7, "agent says hi\n") in view.appended

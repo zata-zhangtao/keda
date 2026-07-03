@@ -56,19 +56,14 @@ def _start_daemons_for_repo(repo_id: str, _repo_path: Path) -> None:
                 spawn_cwd=spawn_cwd,
             )
             console.print(
-                f"[green]Started {kind.value}[/] for {repo_id} "
-                f"(process {record.process_id})"
+                f"[green]Started {kind.value}[/] for {repo_id} " f"(process {record.process_id})"
             )
         except Exception as exc:  # noqa: BLE001 - daemon start is best effort.
             logger.warning("Failed to start %s for %s: %s", kind.value, repo_id, exc)
-            error_console.print(
-                f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}"
-            )
+            error_console.print(f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}")
 
 
-def _run_takeover_command(
-    parsed: argparse.Namespace, process_runner: IProcessRunner
-) -> int:
+def _run_takeover_command(parsed: argparse.Namespace, process_runner: IProcessRunner) -> int:
     """Run the global repository takeover flow."""
     auth_client = create_github_client(Path.cwd(), process_runner)
     auth_status = auth_client.check_auth_status()
@@ -132,9 +127,7 @@ def _run_takeover_command(
             candidates=candidates,
             editor=editor,
             process_runner=process_runner,
-            start_daemon_callback=_start_daemons_for_repo
-            if options.start_daemons
-            else None,
+            start_daemon_callback=_start_daemons_for_repo if options.start_daemons else None,
             progress_callback=_print_takeover_progress,
         )
     except Exception as exc:  # noqa: BLE001 - CLI should print concise failures.
@@ -142,9 +135,7 @@ def _run_takeover_command(
         error_console.print(f"[red]Takeover failed:[/] {exc}")
         return 1
 
-    console.print(
-        f"\n[green]Takeover complete:[/] {result.succeeded}/{result.attempted} succeeded"
-    )
+    console.print(f"\n[green]Takeover complete:[/] {result.succeeded}/{result.attempted} succeeded")
     if result.started_daemons:
         console.print(f"  Started {result.started_daemons} daemon(s)")
     if result.started_review_daemons:

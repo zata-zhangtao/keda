@@ -36,15 +36,11 @@ def get_current_branch(worktree_path: Path, process_runner: IProcessRunner) -> s
 
 def is_detached_head(worktree_path: Path, process_runner: IProcessRunner) -> bool:
     """Return whether the worktree is in detached HEAD state."""
-    result = process_runner.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree_path
-    )
+    result = process_runner.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree_path)
     return result.stdout.strip() == "HEAD"
 
 
-def get_active_rebase_target(
-    worktree_path: Path, process_runner: IProcessRunner
-) -> str | None:
+def get_active_rebase_target(worktree_path: Path, process_runner: IProcessRunner) -> str | None:
     """Return the target branch of an active rebase, or None if not rebasing.
 
     Reads Git's rebase metadata directories. An active rebase leaves the
@@ -178,14 +174,10 @@ def pop_worktree_stash(
         check=False,
     )
     if pop_result.return_code != 0:
-        raise RuntimeError(
-            f"Failed to restore auto-stashed changes: {pop_result.stderr.strip()}"
-        )
+        raise RuntimeError(f"Failed to restore auto-stashed changes: {pop_result.stderr.strip()}")
 
 
-def list_changed_paths(
-    worktree_path: Path, process_runner: IProcessRunner
-) -> list[str]:
+def list_changed_paths(worktree_path: Path, process_runner: IProcessRunner) -> list[str]:
     """List changed paths in a worktree.
 
     Uses NUL-separated ``--porcelain -z`` output so paths containing
@@ -193,9 +185,7 @@ def list_changed_paths(
     C-quotes such paths (``"secrets/\\345\\257\\206..."``), and the quoted
     text would slip past the fnmatch-based forbidden-path safety checks.
     """
-    status_result = process_runner.run(
-        ["git", "status", "--porcelain", "-z"], cwd=worktree_path
-    )
+    status_result = process_runner.run(["git", "status", "--porcelain", "-z"], cwd=worktree_path)
     status_tokens = status_result.stdout.split("\0")
     changed_paths: list[str] = []
     token_index = 0
@@ -208,9 +198,7 @@ def list_changed_paths(
         status_code = status_entry[:2]
         changed_paths.append(status_entry[3:])
         # Renames/copies emit the source path as the next NUL token.
-        if ("R" in status_code or "C" in status_code) and token_index < len(
-            status_tokens
-        ):
+        if ("R" in status_code or "C" in status_code) and token_index < len(status_tokens):
             rename_source_path = status_tokens[token_index]
             token_index += 1
             if rename_source_path:

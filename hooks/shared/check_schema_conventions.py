@@ -6,7 +6,8 @@
 - ``alembic/versions/`` 下 ``.py`` 迁移脚本的 ``revision`` 变量长度不得超过
   Alembic 默认 ``alembic_version.version_num`` 列宽（32 字符）。
 - 迁移脚本文件名必须符合 ``YYYYMMDD<sep>HHMMSS<sep><slug>.py`` 格式，其中
-  ``<sep>`` 可配置（本模板默认 ``-``，部分派生项目使用 ``_``）。
+  ``<sep>`` 默认可自动探测（在 ``-`` 和 ``_`` 之间取多数），也可通过
+  ``--filename-separator`` 显式指定。
 - 可选开启 ``文件内 revision 字符串 == 文件名时间戳前缀`` 检查，供采用
   ``时间戳前缀即 revision`` 约定的派生项目使用。
 
@@ -38,6 +39,9 @@ ALEMBIC_REVISION_PATTERN = re.compile(
 
 DEFAULT_FILENAME_SEPARATOR: str = "-"
 """默认文件名分隔符。"""
+
+SUPPORTED_FILENAME_SEPARATORS: list[str] = ["-", "_"]
+"""支持自动探测的文件名分隔符候选列表。"""
 
 MIGRATION_FILENAME_PATTERN_TEMPLATE = (
     r"^(?P<date>\d{8})__SEP__(?P<time>\d{6})__SEP__"
@@ -143,6 +147,38 @@ def parse_migration_filename(
         slug=match.group("slug"),
         suffix=match.group("suffix"),
     )
+
+
+def detect_filename_separator(migration_files: list[Path]) -> str:
+    """从候选迁移文件中自动探测文件名分隔符。
+
+    分别用 ``-`` 和 ``_`` 尝试匹配每个文件名，统计命中次数，返回多数派分隔符。
+    若两种分隔符命中数相同或都没有命中，回退到默认分隔符 ``-``。
+
+    Args:
+        migration_files: 候选迁移文件路径列表。
+
+    Returns:
+        探测到的分隔符，或默认分隔符 ``-``。
+    """
+    match_counts: dict[str, int] = {sep: 0 for sep in SUPPORTED_FILENAME_SEPARATORS}
+
+    for migration_file in migration_files:
+        for separator in SUPPORTED_FILENAME_SEPARATORS:
+            if parse_migration_filename(migration_file.name, separator) is not None:
+                match_counts[separator] += 1
+
+    if not any(match_counts.values()):
+        return DEFAULT_FILENAME_SEPARATOR
+
+    best_separator = max(match_counts, key=lambda sep: match_counts[sep])
+    best_count = match_counts[best_separator]
+
+    # 出现平票时回退到默认分隔符，避免武断选择。
+    if list(match_counts.values()).count(best_count) > 1:
+        return DEFAULT_FILENAME_SEPARATOR
+
+    return best_separator
 
 
 def extract_revision_ids(file_path: Path) -> list[str]:
@@ -377,8 +413,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--filename-separator",
         type=str,
-        default=DEFAULT_FILENAME_SEPARATOR,
-        help="文件名分隔符（默认：'-'）。",
+        default=None,
+        help=(
+            "文件名分隔符（默认：自动探测；探测失败时回退到 '-'）。"
+            "显式传入本参数可覆盖自动探测结果。"
+        ),
     )
     parser.add_argument(
         "--require-revision-equals-timestamp-prefix",
@@ -404,27 +443,43 @@ def main(argv: Optional[list[str]] = None) -> int:
     result = CheckResult()
 
     if args.files:
+        candidate_files: list[Path] = []
         for file_str in args.files:
             file_path = Path(file_str).resolve()
             if not file_path.is_file():
                 continue
             if not _classify_migration_file(file_path, versions_dir):
                 continue
+            candidate_files.append(file_path)
+
+        separator = (
+            args.filename_separator
+            if args.filename_separator is not None
+            else detect_filename_separator(candidate_files)
+        )
+
+        for file_path in candidate_files:
             result.checked_files_count += 1
             result.violations.extend(
                 check_alembic_migration_file(
                     file_path,
                     args.max_revision_length,
-                    args.filename_separator,
+                    separator,
                     args.require_revision_equals_timestamp_prefix,
                     args.disallow_zero_time,
                 )
             )
     else:
+        candidate_files = sorted(versions_dir.glob("*.py")) if versions_dir.exists() else []
+        separator = (
+            args.filename_separator
+            if args.filename_separator is not None
+            else detect_filename_separator(candidate_files)
+        )
         result = run_alembic_revision_check(
             versions_dir,
             args.max_revision_length,
-            args.filename_separator,
+            separator,
             args.require_revision_equals_timestamp_prefix,
             args.disallow_zero_time,
         )

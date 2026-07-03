@@ -64,9 +64,7 @@ def _prompt_and_publish_prd_if_needed(
     return True
 
 
-def _expand_prd_paths(
-    repo_path: Path, prd_paths: list[str]
-) -> tuple[list[str], list[str]]:
+def _expand_prd_paths(repo_path: Path, prd_paths: list[str]) -> tuple[list[str], list[str]]:
     """Expand directories in ``prd_paths`` to their ``*.md`` files.
 
     Files are returned as repo-relative paths. Directories are expanded to
@@ -125,13 +123,9 @@ def _expand_prd_paths(
                 key=lambda entry: entry.name,
             )
             if not file_entries:
-                raise ValueError(
-                    f"Directory contains no PRD Markdown files: {prd_path_text}"
-                )
+                raise ValueError(f"Directory contains no PRD Markdown files: {prd_path_text}")
         else:
-            raise ValueError(
-                f"PRD path is neither a file nor a directory: {prd_path_text}"
-            )
+            raise ValueError(f"PRD path is neither a file nor a directory: {prd_path_text}")
 
         for file_entry in file_entries:
             relative_path = file_entry.relative_to(repo_path.resolve()).as_posix()

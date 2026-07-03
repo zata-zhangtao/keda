@@ -19,9 +19,7 @@ def count_non_empty_lines(file_path: Path) -> int:
     return sum(1 for line in content.splitlines() if line.strip())
 
 
-def _expand_paths(
-    raw_paths: list[str], glob_pattern: str | None
-) -> tuple[list[Path], list[str]]:
+def _expand_paths(raw_paths: list[str], glob_pattern: str | None) -> tuple[list[Path], list[str]]:
     """把位置参数展开为待检查文件列表。
 
     Args:
@@ -47,9 +45,7 @@ def _expand_paths(
                     continue
                 files_to_check.append(child_path)
         else:
-            errors.append(
-                f"Path does not exist or is not a regular file/directory: {raw_path}"
-            )
+            errors.append(f"Path does not exist or is not a regular file/directory: {raw_path}")
 
     # 去重同时保持顺序。
     seen: set[Path] = set()
@@ -106,10 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     if violations:
         level = "WARNING" if args.warn_only else "ERROR"
         for file_path, line_count in violations:
-            print(
-                f"[{level}] {file_path}: {line_count} 非空行，"
-                f"超过上限 {args.max_lines} 行。"
-            )
+            print(f"[{level}] {file_path}: {line_count} 非空行，" f"超过上限 {args.max_lines} 行。")
 
     if errors and not args.warn_only:
         return 1

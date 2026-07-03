@@ -262,9 +262,7 @@ def _run_round(
         streaming_sink = _create_streaming_sink(
             output_path, output_view, round_number, profile.profile_id
         )
-        display_sink = _create_display_sink(
-            output_view, round_number, profile.profile_id
-        )
+        display_sink = _create_display_sink(output_view, round_number, profile.profile_id)
         return _run_single_agent(
             agent_name=profile.agent,
             prompt=prompt,
@@ -494,9 +492,7 @@ def run_agent_deliberation(
             )
             session_failed_agents.extend(discussion_failures)
             round_outputs[round_number] = discussion_outputs
-            transcript_parts.append(
-                _format_round_transcript(round_number, discussion_outputs)
-            )
+            transcript_parts.append(_format_round_transcript(round_number, discussion_outputs))
 
         # Synthesis
         full_transcript = "\n\n".join(transcript_parts)

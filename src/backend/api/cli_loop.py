@@ -56,9 +56,7 @@ def build_schedule_from_args(parsed: argparse.Namespace) -> LoopSchedule | None:
     if cron_expression and every_expression:
         raise ValueError("--cron and --every are mutually exclusive.")
     if cron_expression:
-        return LoopSchedule(
-            kind=LoopScheduleKind.CRON, expression=cron_expression.strip()
-        )
+        return LoopSchedule(kind=LoopScheduleKind.CRON, expression=cron_expression.strip())
     if every_expression:
         # ``1d`` short-form: callers may pass ``"1d"`` and expect cron-style
         # ``"0 0 * * *"`` semantics. Use the parser to validate the format.
@@ -276,9 +274,7 @@ def run_loop_run_now_command(
         return 1
     repo_path = repo_resolver(task)
     github_client = github_client_factory(repo_path)
-    content_generator = (
-        content_generator_factory(repo_path) if content_generator_factory else None
-    )
+    content_generator = content_generator_factory(repo_path) if content_generator_factory else None
     try:
         result = fire_loop(
             task,
@@ -408,14 +404,10 @@ def _resolve_loop_repo_path_for_task(task: LoopTask) -> Path:
 
     settings = get_agent_runner_settings()
     if task.repo_id not in settings.repositories:
-        raise ValueError(
-            f"Loop '{task.id}' targets unknown repository '{task.repo_id}'."
-        )
+        raise ValueError(f"Loop '{task.id}' targets unknown repository '{task.repo_id}'.")
     repo_settings = settings.repositories[task.repo_id]
     if not repo_settings.enabled:
-        raise ValueError(
-            f"Loop '{task.id}' targets disabled repository '{task.repo_id}'."
-        )
+        raise ValueError(f"Loop '{task.id}' targets disabled repository '{task.repo_id}'.")
     return Path(repo_settings.path).expanduser().resolve()
 
 

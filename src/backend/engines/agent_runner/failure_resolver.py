@@ -41,9 +41,7 @@ class AgentFailureResolver:
         printer: Callable[[str], None] | None = None,
     ) -> None:
         self._is_tty = (
-            is_tty
-            if is_tty is not None
-            else (sys.stdin.isatty() and sys.stdout.isatty())
+            is_tty if is_tty is not None else (sys.stdin.isatty() and sys.stdout.isatty())
         )
         self._input_reader = input_reader or input
         self._printer = printer or print
@@ -145,9 +143,7 @@ class AgentFailureResolver:
             is configured.
         """
         _ = reason
-        available_agents = self._available_agents(
-            failed_profile, config or DeliberationConfig()
-        )
+        available_agents = self._available_agents(failed_profile, config or DeliberationConfig())
         if not available_agents:
             return None
 

@@ -285,9 +285,7 @@ def _collect_provider_credentials(
         normalized_config,
         preferred_key=dashscope_region if provider == "dashscope" else None,
     )
-    resolved_api_key = _resolve_provider_api_key(
-        provider, normalized_config, explicit_api_key
-    )
+    resolved_api_key = _resolve_provider_api_key(provider, normalized_config, explicit_api_key)
     return [(provider, base_url, resolved_api_key) for base_url in base_urls]
 
 

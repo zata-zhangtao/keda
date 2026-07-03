@@ -16,17 +16,13 @@ def _load_release_module() -> ModuleType:
     Raises:
         RuntimeError: If the implementation module cannot be loaded.
     """
-    implementation_path = (
-        Path(__file__).resolve().parent / "release" / "build_release.py"
-    )
+    implementation_path = Path(__file__).resolve().parent / "release" / "build_release.py"
     implementation_spec = importlib.util.spec_from_file_location(
         "scripts_release_build_release",
         implementation_path,
     )
     if implementation_spec is None or implementation_spec.loader is None:
-        raise RuntimeError(
-            f"Unable to load release implementation: {implementation_path}"
-        )
+        raise RuntimeError(f"Unable to load release implementation: {implementation_path}")
 
     implementation_module = importlib.util.module_from_spec(implementation_spec)
     implementation_spec.loader.exec_module(implementation_module)

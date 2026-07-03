@@ -136,11 +136,7 @@ def detect_git_repository_root(
     if not resolved_start_path.exists():
         raise ValueError(f"Path '{resolved_start_path}' does not exist.")
 
-    cwd_path = (
-        resolved_start_path
-        if resolved_start_path.is_dir()
-        else resolved_start_path.parent
-    )
+    cwd_path = resolved_start_path if resolved_start_path.is_dir() else resolved_start_path.parent
     git_result = _run_git(["rev-parse", "--show-toplevel"], cwd_path, process_runner)
     git_root_text = git_result.stdout.strip()
     if git_result.return_code != 0 or not git_root_text:
@@ -224,9 +220,7 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "runner.max_agent_switches": (
         "最多切换 agent 次数（order=[a,b,c] 且此值=2 时最多尝试 3 个 agent）"
     ),
-    "runner.transient_retry_attempts": (
-        "瞬时网络错误（socket 断开 / 5xx / 超时）的就地重试次数"
-    ),
+    "runner.transient_retry_attempts": ("瞬时网络错误（socket 断开 / 5xx / 超时）的就地重试次数"),
     "runner.transient_retry_delay_seconds": "瞬时错误每次重试前等待的秒数",
     "runner.verification_commands": "提交前自动运行的验证命令；任一命令失败会进入 recovery",
     "safety.auto_merge": "是否允许自动合并 PR（强烈建议保持 false）",
@@ -434,9 +428,7 @@ def _dependency_name_matches(dependency_spec: str, package_name: str) -> bool:
     return spec_package_name.replace("_", "-").lower() == package_name
 
 
-def _uv_dependency_flag(
-    pyproject_data: dict[str, Any], package_name: str
-) -> str | None:
+def _uv_dependency_flag(pyproject_data: dict[str, Any], package_name: str) -> str | None:
     """Return the ``uv run`` flag needed to reach a declared dependency.
 
     Returns ``""`` when the package is in the main dependencies or in the
@@ -612,9 +604,7 @@ def detect_verification_commands(repo_root_path: Path) -> list[str]:
         # project's own pre-commit hooks (so lint/format failures surface during
         # verification, not at commit time) plus pytest. A bare ``pytest -q``
         # alone misses ruff/format hooks, letting them hard-fail at commit time.
-        precommit_command = _detect_precommit_verification_command(
-            repo_root_path, pyproject_data
-        )
+        precommit_command = _detect_precommit_verification_command(repo_root_path, pyproject_data)
         if precommit_command is not None:
             verification_commands.append(precommit_command)
         if has_tests:
@@ -643,9 +633,7 @@ def build_repository_local_config_text(
     selected_remote = options.remote_override or _detect_default_remote(
         repo_root_path, process_runner
     )
-    detected_repo_id = _detect_repository_id(
-        repo_root_path, selected_remote, process_runner
-    )
+    detected_repo_id = _detect_repository_id(repo_root_path, selected_remote, process_runner)
     selected_repo_id = options.repo_id_override or detected_repo_id
     selected_display_name = options.display_name_override or repo_root_path.name
     selected_base_branch = options.base_branch_override or _detect_default_base_branch(
@@ -694,16 +682,14 @@ def initialize_repository_local_config(
     Raises:
         ValueError: If ``.iar.toml`` already exists and overwrite was not forced.
     """
-    repo_root_path, config_text, verification_commands = (
-        build_repository_local_config_text(options, process_runner)
+    repo_root_path, config_text, verification_commands = build_repository_local_config_text(
+        options, process_runner
     )
     config_path = repo_root_path / IAR_REPOSITORY_CONFIG_FILENAME
     selected_remote = options.remote_override or _detect_default_remote(
         repo_root_path, process_runner
     )
-    detected_repo_id = _detect_repository_id(
-        repo_root_path, selected_remote, process_runner
-    )
+    detected_repo_id = _detect_repository_id(repo_root_path, selected_remote, process_runner)
     selected_repo_id = options.repo_id_override or detected_repo_id
     selected_display_name = options.display_name_override or repo_root_path.name
 
@@ -722,8 +708,7 @@ def initialize_repository_local_config(
         existing_text = config_path.read_text(encoding="utf-8")
         if existing_text != config_text:
             raise ValueError(
-                f"IAR local config already exists at {config_path}. "
-                "Use --force to overwrite it."
+                f"IAR local config already exists at {config_path}. " "Use --force to overwrite it."
             )
         return _make_result(wrote_file=False)
     if options.dry_run:
@@ -753,9 +738,7 @@ def _detect_default_remote(
 ) -> str:
     configured_remotes = _list_git_remotes(repo_root_path, process_runner)
 
-    current_branch_result = _run_git(
-        ["branch", "--show-current"], repo_root_path, process_runner
-    )
+    current_branch_result = _run_git(["branch", "--show-current"], repo_root_path, process_runner)
     current_branch = current_branch_result.stdout.strip()
     if current_branch:
         upstream_remote_result = _run_git(
@@ -787,9 +770,7 @@ def _detect_repository_id(
     remote_name: str,
     process_runner: SubprocessRunner | None,
 ) -> str:
-    remote_url_result = _run_git(
-        ["remote", "get-url", remote_name], repo_root_path, process_runner
-    )
+    remote_url_result = _run_git(["remote", "get-url", remote_name], repo_root_path, process_runner)
     remote_url = remote_url_result.stdout.strip()
     if remote_url:
         remote_repo_name = _repository_name_from_remote_url(remote_url)
@@ -818,9 +799,7 @@ def _detect_default_base_branch(
 ) -> str:
     remote_candidates = tuple(dict.fromkeys((remote_name, "origin")))
     for candidate_remote in remote_candidates:
-        remote_head_branch = _remote_head_branch(
-            repo_root_path, candidate_remote, process_runner
-        )
+        remote_head_branch = _remote_head_branch(repo_root_path, candidate_remote, process_runner)
         if remote_head_branch:
             return remote_head_branch
 
@@ -833,9 +812,7 @@ def _detect_default_base_branch(
         if branch_result.return_code == 0:
             return branch_name
 
-    current_branch_result = _run_git(
-        ["branch", "--show-current"], repo_root_path, process_runner
-    )
+    current_branch_result = _run_git(["branch", "--show-current"], repo_root_path, process_runner)
     current_branch = current_branch_result.stdout.strip()
     return current_branch or "main"
 
@@ -883,8 +860,7 @@ def discover_iar_repositories(
         raise ValueError(f"扫描目录不存在或不是目录：{resolved_root}")
 
     registered_paths = {
-        str(Path(entry.path).expanduser().resolve())
-        for entry in editor.list_repositories()
+        str(Path(entry.path).expanduser().resolve()) for entry in editor.list_repositories()
     }
 
     discovered: dict[str, DiscoveredRepositoryEntry] = {}
@@ -931,6 +907,4 @@ def _walk_directories(root: Path, max_depth: int):
 
 def _is_iar_git_repository(directory: Path) -> bool:
     """判断目录是否为带 IAR 配置的 git 仓库。"""
-    return (directory / ".git").exists() and (
-        directory / IAR_REPOSITORY_CONFIG_FILENAME
-    ).is_file()
+    return (directory / ".git").exists() and (directory / IAR_REPOSITORY_CONFIG_FILENAME).is_file()

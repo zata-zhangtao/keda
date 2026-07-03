@@ -164,9 +164,7 @@ def _build_dependencies(
     return tuple(dependencies)
 
 
-def _resolve_prd_ref(
-    prd_ref: str, prd_path_to_issue_number: dict[str, int | None]
-) -> str | None:
+def _resolve_prd_ref(prd_ref: str, prd_path_to_issue_number: dict[str, int | None]) -> str | None:
     """Resolve a PRD reference to a known relative PRD path.
 
     Accepts bare filenames or relative paths under ``tasks/pending/`` or
@@ -243,13 +241,11 @@ def scan_roadmap_prds(
         issue_number = prd_path_to_issue_number.get(relative_path)
         acceptance_checked, acceptance_total = _parse_acceptance_progress(prd_text)
         delivery_decl = parse_delivery_dependencies(prd_text)
-        dependencies = _build_dependencies(
-            relative_path, delivery_decl, prd_path_to_issue_number
-        )
+        dependencies = _build_dependencies(relative_path, delivery_decl, prd_path_to_issue_number)
         status = "archived" if "archive" in target_dir.name else "pending"
-        updated_at = datetime.fromtimestamp(
-            md_path.stat().st_mtime, tz=timezone.utc
-        ).isoformat(timespec="seconds")
+        updated_at = datetime.fromtimestamp(md_path.stat().st_mtime, tz=timezone.utc).isoformat(
+            timespec="seconds"
+        )
         prds.append(
             RoadmapPrd(
                 prd_path=relative_path,

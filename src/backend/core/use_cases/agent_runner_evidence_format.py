@@ -48,9 +48,7 @@ _EVIDENCE_KIND_RULES: tuple[EvidenceKindRule, ...] = (
     ),
     EvidenceKindRule(
         label="Word document",
-        requirement_pattern=re.compile(
-            r"\bdocx\b|\bword\s*文档|\bword\s+document", re.IGNORECASE
-        ),
+        requirement_pattern=re.compile(r"\bdocx\b|\bword\s*文档|\bword\s+document", re.IGNORECASE),
         accepted_suffixes=frozenset({".doc", ".docx"}),
     ),
     EvidenceKindRule(
@@ -158,9 +156,7 @@ def collect_evidence_coverage_problems(
     for evidence_file in evidence_files:
         file_match = _EVIDENCE_ITEM_FILE_PATTERN.match(evidence_file.name)
         if file_match:
-            files_by_item_number.setdefault(int(file_match.group("item")), []).append(
-                evidence_file
-            )
+            files_by_item_number.setdefault(int(file_match.group("item")), []).append(evidence_file)
 
     coverage_problems: list[str] = []
     for item_number, item_text in enumerate(checklist_items, start=1):

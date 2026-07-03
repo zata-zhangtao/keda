@@ -163,9 +163,7 @@ def plan_skill_copy(
             bundled directory.
     """
     skill_root = _resolve_skill_root(skill_name)
-    target_skill_root = (
-        repo_root_path / TARGET_SKILLS_DIRNAME / TARGET_SKILLS_SUBDIR / skill_name
-    )
+    target_skill_root = repo_root_path / TARGET_SKILLS_DIRNAME / TARGET_SKILLS_SUBDIR / skill_name
     plans: list[SkillFilePlan] = []
     aggregated_hash = hashlib.sha256()
     for relative_posix_path, traversable in _iter_skill_files(skill_root):
@@ -268,10 +266,7 @@ def copy_bundled_skills(
             skill_name=skill_name,
         )
         target_skill_root = (
-            options.repo_root_path
-            / TARGET_SKILLS_DIRNAME
-            / TARGET_SKILLS_SUBDIR
-            / skill_name
+            options.repo_root_path / TARGET_SKILLS_DIRNAME / TARGET_SKILLS_SUBDIR / skill_name
         )
         existing_hash = compute_target_skill_directory_hash(target_skill_root)
         all_plans.extend(plans)
@@ -352,9 +347,7 @@ def _apply_skill_writes(
     plans_list = list(plans)
     if not plans_list:
         return
-    target_skill_root = (
-        repo_root_path / TARGET_SKILLS_DIRNAME / TARGET_SKILLS_SUBDIR / skill_name
-    )
+    target_skill_root = repo_root_path / TARGET_SKILLS_DIRNAME / TARGET_SKILLS_SUBDIR / skill_name
     if target_skill_root.exists():
         shutil.rmtree(target_skill_root)
     target_skill_root.mkdir(parents=True, exist_ok=True)
@@ -396,10 +389,7 @@ def format_skill_copy_summary(skill_result: BundledSkillCopyResult) -> list[str]
     for skill_name in skill_result.overwritten_skills:
         lines.append(f"Overwrote skill: {skill_name} -> {target_root / skill_name}")
     for skill_name in skill_result.diverged_skills:
-        lines.append(
-            f"Skill diverged; kept local copy: {skill_name} "
-            "(use --force to overwrite)"
-        )
+        lines.append(f"Skill diverged; kept local copy: {skill_name} " "(use --force to overwrite)")
     return lines
 
 

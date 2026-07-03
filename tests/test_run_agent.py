@@ -114,9 +114,7 @@ def test_choose_agent_override() -> None:
 
 def test_choose_agent_from_labels() -> None:
     """Issue labels should determine agent when override is auto."""
-    issue = IssueSummary(
-        number=1, title="T", url="U", body="B", labels=("agent/claude",)
-    )
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=("agent/claude",))
     config = AppConfig()
     assert choose_agent(issue, config, "auto") == "claude"
 
@@ -217,14 +215,10 @@ def test_run_agent_with_prompt_logs_issue_context(
     fake_runner = FakeProcessRunner()
 
     with caplog.at_level(logging.INFO, logger="backend.core.use_cases.run_agent_once"):
-        result = run_agent_with_prompt(
-            "claude", "Implement.", tmp_path, fake_runner, issue=issue
-        )
+        result = run_agent_with_prompt("claude", "Implement.", tmp_path, fake_runner, issue=issue)
 
     assert result.return_code == 0
-    assert fake_runner.labels == [
-        "Issue #23: https://github.com/zata-zhangtao/fsense/issues/23"
-    ]
+    assert fake_runner.labels == ["Issue #23: https://github.com/zata-zhangtao/fsense/issues/23"]
     assert (
         "Starting agent for Issue #23: https://github.com/zata-zhangtao/fsense/issues/23"
         in caplog.text
@@ -306,9 +300,7 @@ def test_extract_agent_response_text_from_claude_stream_json() -> None:
         stderr="",
     )
 
-    assert extract_agent_response_text(result) == (
-        '```json\n{"verdict": "approved"}\n```'
-    )
+    assert extract_agent_response_text(result) == ('```json\n{"verdict": "approved"}\n```')
 
 
 def test_extract_agent_response_text_keeps_rendered_stream_output() -> None:
@@ -519,10 +511,7 @@ def test_extract_prd_path_ignores_inline_mention() -> None:
         "## Canonical PRD\n\n"
         "- PRD path: `tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md`\n"
     )
-    assert (
-        extract_prd_path(body)
-        == "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md"
-    )
+    assert extract_prd_path(body) == "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md"
 
 
 def test_extract_prd_path_returns_none_when_missing() -> None:
@@ -538,10 +527,7 @@ def test_extract_prd_path_ignores_inline_code_anchor() -> None:
         "## Canonical PRD\n"
         "- PRD path: `tasks/archive/P2-FEAT-20260527-190923-prd-from-issue.md`\n"
     )
-    assert (
-        extract_prd_path(body)
-        == "tasks/archive/P2-FEAT-20260527-190923-prd-from-issue.md"
-    )
+    assert extract_prd_path(body) == "tasks/archive/P2-FEAT-20260527-190923-prd-from-issue.md"
 
 
 def test_extract_prd_path_rejects_garbage_anchor() -> None:
@@ -550,10 +536,7 @@ def test_extract_prd_path_rejects_garbage_anchor() -> None:
         "- PRD path: ` anchor. The daemon or `run` path`\n"
         "- PRD path: `tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md`\n"
     )
-    assert (
-        extract_prd_path(body)
-        == "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md"
-    )
+    assert extract_prd_path(body) == "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md"
 
 
 def test_build_prompt_includes_prd_closeout_for_pending_prd() -> None:
@@ -608,10 +591,7 @@ def test_build_recovery_prompt_includes_prd_closeout() -> None:
 
 def test_resolve_prd_archive_path_converts_pending() -> None:
     """Pending PRD paths should map to the archive directory."""
-    assert (
-        resolve_prd_archive_path("tasks/pending/example.md")
-        == "tasks/archive/example.md"
-    )
+    assert resolve_prd_archive_path("tasks/pending/example.md") == "tasks/archive/example.md"
 
 
 def test_resolve_prd_archive_path_returns_none_for_non_pending() -> None:
@@ -845,9 +825,7 @@ def test_publish_changes_no_git_commit() -> None:
             _git_remote_command(): _git_remote_result("origin"),
         }
     )
-    branch, pr_url = publish_changes(
-        issue, Path("."), AppConfig(), fake_client, fake_runner
-    )
+    branch, pr_url = publish_changes(issue, Path("."), AppConfig(), fake_client, fake_runner)
     assert branch == "issue-1"
     assert pr_url == "https://github.com/example/repo/pull/1"
     commands = [tuple(c) for c in fake_runner.calls]
@@ -884,9 +862,7 @@ def test_publish_changes_reuses_existing_open_pr() -> None:
             _git_remote_command(): _git_remote_result("origin"),
         }
     )
-    branch, pr_url = publish_changes(
-        issue, Path("."), AppConfig(), fake_client, fake_runner
-    )
+    branch, pr_url = publish_changes(issue, Path("."), AppConfig(), fake_client, fake_runner)
     assert branch == "issue-1"
     assert pr_url == "https://github.com/example/repo/pull/52"
     commands = [tuple(c) for c in fake_runner.calls]
@@ -923,9 +899,7 @@ def test_publish_changes_creates_pr_when_no_open_pr() -> None:
             _git_remote_command(): _git_remote_result("origin"),
         }
     )
-    branch, pr_url = publish_changes(
-        issue, Path("."), AppConfig(), fake_client, fake_runner
-    )
+    branch, pr_url = publish_changes(issue, Path("."), AppConfig(), fake_client, fake_runner)
     assert branch == "issue-1"
     assert pr_url == "https://github.com/example/repo/pull/1"
     method_names = [call["method"] for call in fake_client.calls]
@@ -1210,9 +1184,7 @@ def _config_with_review_disabled(
     """
     commands = verification_commands or ("just test",)
     worktree_cfg = (
-        WorktreeConfig(path_command=f"echo {worktree_path}")
-        if worktree_path
-        else WorktreeConfig()
+        WorktreeConfig(path_command=f"echo {worktree_path}") if worktree_path else WorktreeConfig()
     )
     return AppConfig(
         runner=RunnerConfig(
@@ -1262,9 +1234,7 @@ def _write_commit_request(worktree_path: Path, commit_message: str) -> None:
     )
 
 
-def _write_complete_prd(
-    worktree_path: Path, relative_path: str = "tasks/example.md"
-) -> None:
+def _write_complete_prd(worktree_path: Path, relative_path: str = "tasks/example.md") -> None:
     prd_path = worktree_path / relative_path
     prd_path.parent.mkdir(parents=True, exist_ok=True)
     prd_path.write_text(
@@ -1283,9 +1253,7 @@ def _write_complete_prd(
     )
 
 
-def _write_incomplete_prd(
-    worktree_path: Path, relative_path: str = "tasks/example.md"
-) -> None:
+def _write_incomplete_prd(worktree_path: Path, relative_path: str = "tasks/example.md") -> None:
     prd_path = worktree_path / relative_path
     prd_path.parent.mkdir(parents=True, exist_ok=True)
     prd_path.write_text(
@@ -1412,16 +1380,13 @@ def test_run_once_uncommitted_changes_runner_commits(
     add_index = commands.index(("git", "add", "-A"))
     commit_index = commands.index(commit_command)
     head_indices = [
-        index
-        for index, command in enumerate(commands)
-        if command == ("git", "rev-parse", "HEAD")
+        index for index, command in enumerate(commands) if command == ("git", "rev-parse", "HEAD")
     ]
     assert len(validation_indices) == 2
     assert validation_indices[0] < add_index < validation_indices[1] < commit_index
     assert commit_index < head_indices[-1]
     assert not any(
-        _is_bash_wrapped_verification_call(command, ("just", "test"))
-        for command in commands
+        _is_bash_wrapped_verification_call(command, ("just", "test")) for command in commands
     )
     assert not (worktree_path / ".agent-runner" / "commit-request.json").exists()
     assert ("git", "push", "-u", "origin", "issue-123") in commands
@@ -1432,8 +1397,7 @@ def test_run_once_uncommitted_changes_runner_commits(
     review_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.review in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.review in c.get("add", [])
     ]
     assert len(review_calls) == 1
     pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
@@ -1441,8 +1405,7 @@ def test_run_once_uncommitted_changes_runner_commits(
     failed_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.failed in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 0
 
@@ -1537,9 +1500,7 @@ def test_run_once_recovers_after_staged_verification_failure(
     assert exit_code == 0
     commands = [tuple(command) for command in fake_runner.calls]
     add_indices = [
-        index
-        for index, command in enumerate(commands)
-        if command == ("git", "add", "-A")
+        index for index, command in enumerate(commands) if command == ("git", "add", "-A")
     ]
     test_indices = [
         index
@@ -1547,19 +1508,14 @@ def test_run_once_recovers_after_staged_verification_failure(
         if _is_bash_wrapped_verification_call(command, ("just", "test"))
     ]
     reset_index = commands.index(("git", "reset", "--mixed"))
-    recovery_prompt = [
-        command[-1] for command in commands if command[:1] == ("codex",)
-    ][2]
+    recovery_prompt = [command[-1] for command in commands if command[:1] == ("codex",)][2]
     assert len(add_indices) == 2
     # With the Fix Agent layer, the runner runs an extra post-fix verification
     # before falling back to the full recovery agent.
     assert len(test_indices) == 5
     assert add_indices[0] < test_indices[1] < reset_index
     assert reset_index < add_indices[1] < test_indices[4]
-    assert (
-        "Verification after runner staged changes with git add -A failed"
-        in recovery_prompt
-    )
+    assert "Verification after runner staged changes with git add -A failed" in recovery_prompt
     assert "staged stdout" in recovery_prompt
     assert "staged stderr" in recovery_prompt
     assert ("git", "commit", "-m", "agent: recovered fix") in commands
@@ -1658,8 +1614,7 @@ def test_run_once_recovers_after_agent_command_failure(
     failed_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.failed in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.failed in c.get("add", [])
     ]
     assert exit_code == 0
     assert len(agent_commands) == 2
@@ -1723,9 +1678,7 @@ def test_run_once_uncommitted_changes_validation_failure_does_not_stage(
     assert exit_code == 1
     commands = [tuple(command) for command in fake_runner.calls]
     just_test_count = sum(
-        1
-        for command in commands
-        if _is_bash_wrapped_verification_call(command, ("just", "test"))
+        1 for command in commands if _is_bash_wrapped_verification_call(command, ("just", "test"))
     )
     assert just_test_count == 3
     assert ("git", "add", "-A") not in commands
@@ -1733,15 +1686,13 @@ def test_run_once_uncommitted_changes_validation_failure_does_not_stage(
     failed_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.failed in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
     history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue"
-        and "<!-- iar-attempt-history -->" in c.get("body", "")
+        if c["method"] == "comment_issue" and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
     assert len(history_comment_calls) >= 1
     failure_comment_calls = [
@@ -1815,8 +1766,7 @@ def test_run_once_uncommitted_changes_missing_request_fails(tmp_path: Path) -> N
     history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue"
-        and "<!-- iar-attempt-history -->" in c.get("body", "")
+        if c["method"] == "comment_issue" and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
     assert len(history_comment_calls) >= 1
     failure_comment_calls = [
@@ -1899,15 +1849,13 @@ def test_run_once_uncommitted_changes_commit_failure_fails(tmp_path: Path) -> No
     failed_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.failed in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
     history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue"
-        and "<!-- iar-attempt-history -->" in c.get("body", "")
+        if c["method"] == "comment_issue" and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
     assert len(history_comment_calls) >= 1
     failure_comment_calls = [
@@ -2155,9 +2103,7 @@ def test_commit_requested_changes_retries_after_precommit_autofix(
     )
 
     proxy_commits = [
-        command
-        for command in fake_runner.calls
-        if tuple(command)[:2] == ("git", "commit")
+        command for command in fake_runner.calls if tuple(command)[:2] == ("git", "commit")
     ]
     assert len(proxy_commits) == 2
     assert proxy_commits[0] == ["git", "commit", "-m", "agent: implement example"]
@@ -2229,15 +2175,13 @@ def test_run_once_no_new_commits_fails() -> None:
     failed_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.failed in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
     history_comment_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "comment_issue"
-        and "<!-- iar-attempt-history -->" in c.get("body", "")
+        if c["method"] == "comment_issue" and "<!-- iar-attempt-history -->" in c.get("body", "")
     ]
     assert len(history_comment_calls) >= 1
     failure_comment_calls = [
@@ -2305,24 +2249,18 @@ def test_run_once_success(tmp_path: Path) -> None:
                     return CommandResult(
                         command=command_tuple,
                         return_code=0,
-                        stdout=(
-                            '{"action": "approve_for_human_review", "summary": "LGTM"}'
-                        )
+                        stdout=('{"action": "approve_for_human_review", "summary": "LGTM"}')
                         if capture_output
                         else "",
                         stderr="",
                     )
-                return CommandResult(
-                    command=command_tuple, return_code=0, stdout="", stderr=""
-                )
+                return CommandResult(command=command_tuple, return_code=0, stdout="", stderr="")
             if command_tuple in self.responses:
                 result = self.responses[command_tuple]
                 if check and result.return_code != 0:
                     raise RuntimeError(f"Command failed: {command}")
                 return result
-            return CommandResult(
-                command=command_tuple, return_code=0, stdout="", stderr=""
-            )
+            return CommandResult(command=command_tuple, return_code=0, stdout="", stderr="")
 
     fake_runner = _SuccessRunner()
     path_command, path_result = _worktree_path_response(worktree_path)
@@ -2422,17 +2360,13 @@ def test_run_once_failure_removes_supervising_label(tmp_path: Path) -> None:
                     )
                 if self._agent_calls == 3:
                     raise RuntimeError("supervisor crashed")
-                return CommandResult(
-                    command=command_tuple, return_code=0, stdout="", stderr=""
-                )
+                return CommandResult(command=command_tuple, return_code=0, stdout="", stderr="")
             if command_tuple in self.responses:
                 result = self.responses[command_tuple]
                 if check and result.return_code != 0:
                     raise RuntimeError(f"Command failed: {command}")
                 return result
-            return CommandResult(
-                command=command_tuple, return_code=0, stdout="", stderr=""
-            )
+            return CommandResult(command=command_tuple, return_code=0, stdout="", stderr="")
 
     fake_runner = _SupervisorFailureRunner()
     path_command, path_result = _worktree_path_response(worktree_path)
@@ -2470,8 +2404,7 @@ def test_run_once_failure_removes_supervising_label(tmp_path: Path) -> None:
     failed_calls = [
         call
         for call in fake_client.calls
-        if call["method"] == "edit_issue_labels"
-        and config.labels.failed in call.get("add", [])
+        if call["method"] == "edit_issue_labels" and config.labels.failed in call.get("add", [])
     ]
     assert len(failed_calls) == 1
     assert config.labels.supervising in failed_calls[0]["remove"]
@@ -2581,8 +2514,7 @@ def test_process_running_rework_blocks_when_worktree_missing(
     blocked_calls = [
         call
         for call in fake_client.calls
-        if call["method"] == "edit_issue_labels"
-        and config.labels.blocked in call.get("add", [])
+        if call["method"] == "edit_issue_labels" and config.labels.blocked in call.get("add", [])
     ]
     assert len(blocked_calls) == 1
     final_labels = set(fake_client._issue_labels[issue.number])
@@ -2595,9 +2527,7 @@ def test_process_running_rework_blocks_when_worktree_missing(
         config.labels.blocked,
     }
     assert final_labels.intersection(workflow_labels) == {config.labels.blocked}
-    comment_calls = [
-        call for call in fake_client.calls if call["method"] == "comment_issue"
-    ]
+    comment_calls = [call for call in fake_client.calls if call["method"] == "comment_issue"]
     assert any(str(missing_path) in call["body"] for call in comment_calls)
 
 
@@ -2671,9 +2601,7 @@ def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
                 if pending_path.exists():
                     archive_path.parent.mkdir(parents=True, exist_ok=True)
                     pending_path.rename(archive_path)
-                return CommandResult(
-                    command=command_tuple, return_code=0, stdout="", stderr=""
-                )
+                return CommandResult(command=command_tuple, return_code=0, stdout="", stderr="")
             return super().run(
                 command,
                 cwd=cwd,
@@ -2711,9 +2639,7 @@ def test_run_once_git_mv_prd_before_commit(tmp_path: Path) -> None:
 
     assert exit_code == 0
     commands = [tuple(command) for command in fake_runner.calls]
-    mv_index = commands.index(
-        ("git", "mv", "tasks/pending/example.md", "tasks/archive/example.md")
-    )
+    mv_index = commands.index(("git", "mv", "tasks/pending/example.md", "tasks/archive/example.md"))
     add_index = commands.index(("git", "add", "-A"))
     commit_index = commands.index(("git", "commit", "-m", "agent: implement example"))
     assert mv_index < add_index < commit_index
@@ -2815,17 +2741,14 @@ def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
     commands = [tuple(command) for command in fake_runner.calls]
     agent_commands = [command for command in commands if command[:1] == ("codex",)]
     assert len(agent_commands) == 2
-    mv_index = commands.index(
-        ("git", "mv", "tasks/pending/example.md", "tasks/archive/example.md")
-    )
+    mv_index = commands.index(("git", "mv", "tasks/pending/example.md", "tasks/archive/example.md"))
     add_index = commands.index(("git", "add", "-A"))
     commit_index = commands.index(("git", "commit", "-m", "agent: recovered fix"))
     assert mv_index < add_index < commit_index
     failed_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.failed in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 0
 
@@ -3043,9 +2966,7 @@ def test_publish_changes_generated_pr_template_mode() -> None:
         generated_content=gc_config,
     )
 
-    branch, pr_url = publish_changes(
-        issue, Path("."), app_config, fake_client, fake_runner
-    )
+    branch, pr_url = publish_changes(issue, Path("."), app_config, fake_client, fake_runner)
 
     assert branch == "issue-42"
     pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
@@ -3098,9 +3019,7 @@ def test_publish_changes_generated_pr_fallback_on_missing_closes() -> None:
         generated_content=gc_config,
     )
 
-    branch, pr_url = publish_changes(
-        issue, Path("."), app_config, fake_client, fake_runner
-    )
+    branch, pr_url = publish_changes(issue, Path("."), app_config, fake_client, fake_runner)
 
     pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
     assert len(pr_calls) == 1
@@ -3143,9 +3062,7 @@ def test_publish_changes_disabled_uses_fallback() -> None:
         generated_content=gc_config,
     )
 
-    branch, pr_url = publish_changes(
-        issue, Path("."), app_config, fake_client, fake_runner
-    )
+    branch, pr_url = publish_changes(issue, Path("."), app_config, fake_client, fake_runner)
 
     pr_calls = [c for c in fake_client.calls if c["method"] == "create_draft_pr"]
     assert len(pr_calls) == 1
@@ -3393,8 +3310,7 @@ def test_recovery_loop_exhausted_raises_max_retries(tmp_path: Path) -> None:
     failed_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.failed in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
@@ -3531,9 +3447,7 @@ def test_checkpoint_uncommitted_progress_commits_and_returns_sha(
     commit_calls = [c for c in commands if c[:2] == ("git", "commit")]
     assert len(commit_calls) == 1
     assert "--no-verify" in commit_calls[0]
-    assert any(
-        "[Agent][WIP] Issue #84 checkpoint" in token for token in commit_calls[0]
-    )
+    assert any("[Agent][WIP] Issue #84 checkpoint" in token for token in commit_calls[0])
 
 
 def test_checkpoint_uncommitted_progress_returns_none_when_clean(
@@ -3768,9 +3682,7 @@ def test_process_ready_issue_checkpoints_on_failure(
         checkpoint_called["branch"] = expected_branch
         return "wip-sha"
 
-    monkeypatch.setattr(
-        run_agent_once, "checkpoint_uncommitted_progress", _fake_checkpoint
-    )
+    monkeypatch.setattr(run_agent_once, "checkpoint_uncommitted_progress", _fake_checkpoint)
 
     with pytest.raises(MaxRetriesExceededError):
         orch._process_ready_issue(
@@ -3996,9 +3908,7 @@ def test_format_attempt_history_includes_agent_column() -> None:
         ),
     ]
     table = format_attempt_history(results)
-    assert (
-        "| 1 | claude | provider_capacity | No | 0.0s | Claude at capacity. |" in table
-    )
+    assert "| 1 | claude | provider_capacity | No | 0.0s | Claude at capacity. |" in table
     assert "| 1 | codex | success | Yes | 0.0s | Codex finished. |" in table
 
 
@@ -4131,9 +4041,7 @@ def test_format_failure_comment_surfaces_usage_limit_root_cause() -> None:
             detail=format_agent_execution_failure(_usage_limit_agent_error()),
         )
     ]
-    body = format_failure_comment(
-        MaxRetriesExceededError(attempt_history), attempt_history
-    )
+    body = format_failure_comment(MaxRetriesExceededError(attempt_history), attempt_history)
     root_cause_index = body.index("**Root cause:**")
     assert "2026-06-10T15:00:00+08:00" in body
     assert root_cause_index < body.index("### Attempt History")
@@ -4170,9 +4078,7 @@ def test_format_failure_comment_includes_recovery_guidance() -> None:
     failure = MaxRetriesExceededError(attempt_history)
     body = format_failure_comment(failure, attempt_history, issue_number=53)
     assert "### How To Recover" in body
-    assert (
-        "gh issue edit 53 --add-label agent/ready --remove-label agent/failed" in body
-    )
+    assert "gh issue edit 53 --add-label agent/ready --remove-label agent/failed" in body
     assert "docs/guides/agent-runner.md" in body
     assert body.index("### How To Recover") > body.index("### Attempt History")
 
@@ -4209,10 +4115,7 @@ def test_format_failure_comment_transition_to_supervising_recovery() -> None:
     )
     body = format_failure_comment(exc, issue_number=104)
     assert "### How To Recover" in body
-    assert (
-        "gh issue edit 104 --add-label agent/supervising --remove-label agent/failed"
-        in body
-    )
+    assert "gh issue edit 104 --add-label agent/supervising --remove-label agent/failed" in body
     assert "finished its work" in body
     assert "without re-running the agent" in body
     assert "agent/ready" not in body
@@ -4234,9 +4137,7 @@ def test_format_failure_comment_transition_to_review_recovery() -> None:
         ],
     )
     body = format_failure_comment(exc, issue_number=99)
-    assert (
-        "gh issue edit 99 --add-label agent/review --remove-label agent/failed" in body
-    )
+    assert "gh issue edit 99 --add-label agent/review --remove-label agent/failed" in body
     assert "finished its work" in body
     assert "agent/ready" not in body
 
@@ -4257,9 +4158,7 @@ def test_format_failure_comment_non_completion_transition_recovery() -> None:
         ],
     )
     body = format_failure_comment(exc, issue_number=77)
-    assert (
-        "gh issue edit 77 --add-label agent/ready --remove-label agent/failed" in body
-    )
+    assert "gh issue edit 77 --add-label agent/ready --remove-label agent/failed" in body
     assert "finished its work" not in body
 
 
@@ -4280,10 +4179,7 @@ def test_format_minimal_failure_comment_transition_to_supervising_recovery() -> 
     )
     body = format_minimal_failure_comment(exc, issue_number=104)
     assert "### How To Recover" in body
-    assert (
-        "gh issue edit 104 --add-label agent/supervising --remove-label agent/failed"
-        in body
-    )
+    assert "gh issue edit 104 --add-label agent/supervising --remove-label agent/failed" in body
     assert "finished its work" in body
     assert "agent/ready" not in body
 
@@ -4336,8 +4232,7 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
                 prompt = command_tuple[-1]
                 if "Recovery attempt: 1/2" in prompt:
                     assert (
-                        "Verification after runner staged changes with git add -A failed"
-                        in prompt
+                        "Verification after runner staged changes with git add -A failed" in prompt
                     )
                     assert "lint stdout" in prompt
                     assert "lint stderr" in prompt
@@ -4392,9 +4287,7 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
     assert exit_code == 0
     commands = [tuple(command) for command in fake_runner.calls]
     add_indices = [
-        index
-        for index, command in enumerate(commands)
-        if command == ("git", "add", "-A")
+        index for index, command in enumerate(commands) if command == ("git", "add", "-A")
     ]
     lint_indices = [
         index
@@ -4402,9 +4295,7 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
         if _is_bash_wrapped_verification_call(command, ("just", "lint"))
     ]
     reset_index = commands.index(("git", "reset", "--mixed"))
-    recovery_prompt = [
-        command[-1] for command in commands if command[:1] == ("codex",)
-    ][2]
+    recovery_prompt = [command[-1] for command in commands if command[:1] == ("codex",)][2]
 
     # Two staging rounds (initial + recovery)
     assert len(add_indices) == 2
@@ -4413,10 +4304,7 @@ def test_scenario_b_precommit_lint_failure_recovery(tmp_path: Path) -> None:
     assert len(lint_indices) == 5
     assert add_indices[0] < lint_indices[1] < reset_index
     assert reset_index < add_indices[1] < lint_indices[4]
-    assert (
-        "Verification after runner staged changes with git add -A failed"
-        in recovery_prompt
-    )
+    assert "Verification after runner staged changes with git add -A failed" in recovery_prompt
     assert "lint stdout" in recovery_prompt
     assert "lint stderr" in recovery_prompt
     assert ("git", "commit", "-m", "agent: fix lint") in commands
@@ -4475,9 +4363,7 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
                 return result
             if command_tuple[:1] == ("codex",):
                 self._agent_calls += 1
-                _write_commit_request(
-                    worktree_path, f"agent: attempt {self._agent_calls}"
-                )
+                _write_commit_request(worktree_path, f"agent: attempt {self._agent_calls}")
                 return CommandResult(command_tuple, 0, "", "")
             if command_tuple == ("git", "rev-parse", "HEAD"):
                 self._sha_calls += 1
@@ -4528,9 +4414,7 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
         if command == ("git", "add", "--", "file.txt")
     ]
     reset_indices = [
-        index
-        for index, command in enumerate(commands)
-        if command == ("git", "reset", "--mixed")
+        index for index, command in enumerate(commands) if command == ("git", "reset", "--mixed")
     ]
 
     # just lint 在 3 次尝试的预 staging 验证都失败，正常流程从不进入 commit proxy。
@@ -4549,8 +4433,7 @@ def test_scenario_e_lint_exhausted_max_retries(tmp_path: Path) -> None:
     failed_calls = [
         c
         for c in fake_client.calls
-        if c["method"] == "edit_issue_labels"
-        and config.labels.failed in c.get("add", [])
+        if c["method"] == "edit_issue_labels" and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 1
     comment_calls = [c for c in fake_client.calls if c["method"] == "comment_issue"]
@@ -4735,9 +4618,7 @@ def test_run_once_rebase_conflict_detached_head(
                 "rebase-merge/head-name",
             ):
                 self.calls.append(list(command))
-                head_name_path = (
-                    self._worktree_path / ".git" / "rebase-merge" / "head-name"
-                )
+                head_name_path = self._worktree_path / ".git" / "rebase-merge" / "head-name"
                 return CommandResult(command_tuple, 0, str(head_name_path) + "\n", "")
             return super().run(
                 command,
@@ -4876,18 +4757,14 @@ def _worktree_reconcile_ls_remote_result(
 ) -> tuple[tuple[str, ...], CommandResult]:
     stdout = f"abc123\trefs/heads/{branch}\n" if exists else ""
     command = ("git", "ls-remote", "--heads", remote, branch)
-    return command, CommandResult(
-        command=command, return_code=0, stdout=stdout, stderr=""
-    )
+    return command, CommandResult(command=command, return_code=0, stdout=stdout, stderr="")
 
 
 def _worktree_reconcile_rev_parse_result(
     ref: str, sha: str
 ) -> tuple[tuple[str, ...], CommandResult]:
     command = ("git", "rev-parse", ref)
-    return command, CommandResult(
-        command=command, return_code=0, stdout=f"{sha}\n", stderr=""
-    )
+    return command, CommandResult(command=command, return_code=0, stdout=f"{sha}\n", stderr="")
 
 
 def _worktree_reconcile_ancestor_result(
@@ -4921,20 +4798,14 @@ def test_worktree_reconcile_remote_ahead_clean_fast_forwards(tmp_path: Path) -> 
             ]: _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[1],
             _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
                 0
-            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
-                1
-            ],
+            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[1],
             _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", True)[
                 0
-            ]: _worktree_reconcile_ancestor_result(
-                "local-sha", "origin/issue-123", True
-            )[1],
+            ]: _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", True)[1],
             _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
                 0
             ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
-            ("git", "status", "--porcelain"): _worktree_reconcile_status_result(
-                dirty=False
-            ),
+            ("git", "status", "--porcelain"): _worktree_reconcile_status_result(dirty=False),
             ("git", "merge", "--ff-only", "origin/issue-123"): CommandResult(
                 command=("git", "merge", "--ff-only", "origin/issue-123"),
                 return_code=0,
@@ -4969,20 +4840,14 @@ def test_worktree_reconcile_remote_ahead_dirty_fails(tmp_path: Path) -> None:
             ]: _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[1],
             _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
                 0
-            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
-                1
-            ],
+            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[1],
             _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", True)[
                 0
-            ]: _worktree_reconcile_ancestor_result(
-                "local-sha", "origin/issue-123", True
-            )[1],
+            ]: _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", True)[1],
             _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
                 0
             ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
-            ("git", "status", "--porcelain"): _worktree_reconcile_status_result(
-                dirty=True
-            ),
+            ("git", "status", "--porcelain"): _worktree_reconcile_status_result(dirty=True),
         }
     )
 
@@ -5007,14 +4872,10 @@ def test_worktree_reconcile_local_ahead_preserved(tmp_path: Path) -> None:
             ]: _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[1],
             _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
                 0
-            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
-                1
-            ],
+            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[1],
             _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", False)[
                 0
-            ]: _worktree_reconcile_ancestor_result(
-                "local-sha", "origin/issue-123", False
-            )[1],
+            ]: _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", False)[1],
             _worktree_reconcile_ancestor_result("remote-sha", "HEAD", True)[
                 0
             ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", True)[1],
@@ -5041,14 +4902,10 @@ def test_worktree_reconcile_diverged_fails(tmp_path: Path) -> None:
             ]: _worktree_reconcile_rev_parse_result("HEAD", "local-sha")[1],
             _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
                 0
-            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
-                1
-            ],
+            ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[1],
             _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", False)[
                 0
-            ]: _worktree_reconcile_ancestor_result(
-                "local-sha", "origin/issue-123", False
-            )[1],
+            ]: _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", False)[1],
             _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
                 0
             ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
@@ -5121,15 +4978,11 @@ def test_worktree_reconcile_uses_configured_remote(tmp_path: Path) -> None:
             ]: _worktree_reconcile_rev_parse_result("zata/issue-123", "remote-sha")[1],
             _worktree_reconcile_ancestor_result("local-sha", "zata/issue-123", True)[
                 0
-            ]: _worktree_reconcile_ancestor_result("local-sha", "zata/issue-123", True)[
-                1
-            ],
+            ]: _worktree_reconcile_ancestor_result("local-sha", "zata/issue-123", True)[1],
             _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
                 0
             ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
-            ("git", "status", "--porcelain"): _worktree_reconcile_status_result(
-                dirty=False
-            ),
+            ("git", "status", "--porcelain"): _worktree_reconcile_status_result(dirty=False),
             ("git", "merge", "--ff-only", "zata/issue-123"): CommandResult(
                 command=("git", "merge", "--ff-only", "zata/issue-123"),
                 return_code=0,
@@ -5332,9 +5185,7 @@ def test_create_or_reuse_worktree_heals_detached_before_reconcile(
     assert result_path == worktree_path.resolve()
     commands = [tuple(c) for c in fake_runner.calls]
     checkout_index = commands.index(("git", "checkout", "issue-123"))
-    ls_remote_index = commands.index(
-        ("git", "ls-remote", "--heads", "origin", "issue-123")
-    )
+    ls_remote_index = commands.index(("git", "ls-remote", "--heads", "origin", "issue-123"))
     assert checkout_index < ls_remote_index
     assert ("git", "ls-remote", "--heads", "origin", "") not in commands
 
@@ -5343,9 +5194,7 @@ def test_create_or_reuse_worktree_heals_detached_before_reconcile(
 
 
 def _git_init_bare(path: Path) -> Path:
-    subprocess.run(
-        ["git", "init", "--bare", str(path)], check=True, capture_output=True
-    )
+    subprocess.run(["git", "init", "--bare", str(path)], check=True, capture_output=True)
     return path
 
 
@@ -5537,9 +5386,7 @@ def test_worktree_reconcile_remote_ahead_real_git_fast_forwards(tmp_path: Path) 
 
     from backend.infrastructure.process_runner import SubprocessRunner
 
-    _reconcile_worktree_with_remote_branch(
-        worktree_path, AppConfig(), SubprocessRunner()
-    )
+    _reconcile_worktree_with_remote_branch(worktree_path, AppConfig(), SubprocessRunner())
 
     local_head_after = subprocess.run(
         ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
@@ -5606,9 +5453,7 @@ def test_worktree_reconcile_local_ahead_real_git_preserved(tmp_path: Path) -> No
 
     from backend.infrastructure.process_runner import SubprocessRunner
 
-    _reconcile_worktree_with_remote_branch(
-        worktree_path, AppConfig(), SubprocessRunner()
-    )
+    _reconcile_worktree_with_remote_branch(worktree_path, AppConfig(), SubprocessRunner())
 
     local_head_after = subprocess.run(
         ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
@@ -5718,9 +5563,7 @@ def test_worktree_reconcile_dirty_real_git_fails(tmp_path: Path) -> None:
     from backend.infrastructure.process_runner import SubprocessRunner
 
     with pytest.raises(RuntimeError, match="uncommitted changes"):
-        _reconcile_worktree_with_remote_branch(
-            worktree_path, AppConfig(), SubprocessRunner()
-        )
+        _reconcile_worktree_with_remote_branch(worktree_path, AppConfig(), SubprocessRunner())
 
     status = subprocess.run(
         ["git", "-C", str(worktree_path), "status", "--porcelain"],
@@ -5827,9 +5670,7 @@ def test_worktree_reconcile_diverged_real_git_fails(tmp_path: Path) -> None:
     from backend.infrastructure.process_runner import SubprocessRunner
 
     with pytest.raises(RuntimeError, match="diverged"):
-        _reconcile_worktree_with_remote_branch(
-            worktree_path, AppConfig(), SubprocessRunner()
-        )
+        _reconcile_worktree_with_remote_branch(worktree_path, AppConfig(), SubprocessRunner())
 
     final_head = subprocess.run(
         ["git", "-C", str(worktree_path), "rev-parse", "HEAD"],
@@ -5898,9 +5739,7 @@ def test_worktree_reconcile_custom_remote_real_git(tmp_path: Path) -> None:
         check=True,
         capture_output=True,
     )
-    subprocess.run(
-        ["git", "-C", str(other_repo), "fetch", "zata"], check=True, capture_output=True
-    )
+    subprocess.run(["git", "-C", str(other_repo), "fetch", "zata"], check=True, capture_output=True)
     subprocess.run(
         [
             "git",
@@ -6093,14 +5932,10 @@ def test_worktree_reconcile_run_once(tmp_path: Path) -> None:
                 ]: _worktree_reconcile_ls_remote_result(exists=True)[1],
                 _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[
                     0
-                ]: _worktree_reconcile_rev_parse_result(
-                    "origin/issue-123", "remote-sha"
-                )[1],
-                _worktree_reconcile_ancestor_result(
-                    "local-sha", "origin/issue-123", True
-                )[0]: _worktree_reconcile_ancestor_result(
-                    "local-sha", "origin/issue-123", True
-                )[1],
+                ]: _worktree_reconcile_rev_parse_result("origin/issue-123", "remote-sha")[1],
+                _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", True)[
+                    0
+                ]: _worktree_reconcile_ancestor_result("local-sha", "origin/issue-123", True)[1],
                 _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[
                     0
                 ]: _worktree_reconcile_ancestor_result("remote-sha", "HEAD", False)[1],
@@ -6696,9 +6531,7 @@ def test_commit_requested_changes_rejects_detached_head(tmp_path: Path) -> None:
     worktree_path.mkdir()
     commit_request_path = worktree_path / ".agent-runner" / "commit-request.json"
     commit_request_path.parent.mkdir(parents=True, exist_ok=True)
-    commit_request_path.write_text(
-        '{"commit_message": "agent: commit"}', encoding="utf-8"
-    )
+    commit_request_path.write_text('{"commit_message": "agent: commit"}', encoding="utf-8")
     file_path = worktree_path / "file.txt"
     file_path.write_text("change\n", encoding="utf-8")
 
@@ -7141,9 +6974,7 @@ def _transient_command_error() -> CommandFailedError:
     return CommandFailedError(
         1,
         ["claude", "--dangerously-skip-permissions", "-p", "PROMPT"],
-        output=(
-            "[agent error] API Error: The socket connection was closed unexpectedly."
-        ),
+        output=("[agent error] API Error: The socket connection was closed unexpectedly."),
         stderr="",
     )
 
@@ -7353,9 +7184,7 @@ def test_resolve_agent_fallback_order_default_includes_primary_then_chain() -> N
 def test_resolve_agent_fallback_order_dedupes_and_preserves_order() -> None:
     """The primary agent is de-duplicated and configured order is preserved."""
     issue = _make_ready_issue()
-    config = AppConfig(
-        runner=RunnerConfig(agent_fallback_order=("codex", "claude", "kimi"))
-    )
+    config = AppConfig(runner=RunnerConfig(agent_fallback_order=("codex", "claude", "kimi")))
     order = resolve_agent_fallback_order(issue, config, "auto")
     assert order == ["codex", "claude", "kimi"]
 
@@ -7509,9 +7338,7 @@ def test_run_agent_until_committed_calls_fix_agent_before_recovery(
                 # Pass pre-staging verification (call 1), fail staged verification
                 # inside commit proxy (call 2), then pass after Fix Agent (call 3).
                 if self._verification_calls == 2:
-                    return CommandResult(
-                        command_tuple, 1, "lint stdout\n", "lint stderr\n"
-                    )
+                    return CommandResult(command_tuple, 1, "lint stdout\n", "lint stderr\n")
                 return CommandResult(command_tuple, 0, "", "")
             if command_tuple == ("git", "commit", "-m", "agent: fixed"):
                 self._committed = True
@@ -7629,9 +7456,7 @@ def test_run_agent_until_committed_skips_fix_agent_when_disabled(
 
     agent_commands = [c for c in fake_runner.calls if tuple(c)[:1] == ("claude",)]
     assert len(agent_commands) == 1
-    assert all(
-        "Fix the verification failure" not in tuple(c)[-1] for c in agent_commands
-    )
+    assert all("Fix the verification failure" not in tuple(c)[-1] for c in agent_commands)
     assert "Fix Agent disabled for Issue #1" in caplog.text
     assert "Starting Fix Agent" not in caplog.text
 
@@ -7713,9 +7538,7 @@ def test_run_agent_until_committed_recovery_uses_recovery_timeout_seconds(
         )
 
     claude_indices = [
-        index
-        for index, call in enumerate(fake_runner.calls)
-        if tuple(call)[:1] == ("claude",)
+        index for index, call in enumerate(fake_runner.calls) if tuple(call)[:1] == ("claude",)
     ]
     assert len(claude_indices) == 2
     assert fake_runner.timeouts[1] == 60

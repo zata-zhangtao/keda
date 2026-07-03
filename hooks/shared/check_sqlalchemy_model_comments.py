@@ -230,9 +230,7 @@ def check_python_file(python_file: Path) -> list[ModelViolation]:
         ]
 
     file_violations: list[ModelViolation] = []
-    for class_node in (
-        node for node in ast.walk(parsed_tree) if isinstance(node, ast.ClassDef)
-    ):
+    for class_node in (node for node in ast.walk(parsed_tree) if isinstance(node, ast.ClassDef)):
         # 列级检查：对所有 Column / mapped_column 调用都要求 comment=
         for call_node, line_number in _iter_column_calls_in_class(class_node):
             if not _call_has_comment_kwarg(call_node):
@@ -254,10 +252,7 @@ def check_python_file(python_file: Path) -> list[ModelViolation]:
                     line_number=class_node.lineno,
                     kind="table",
                     target=class_node.name,
-                    reason=(
-                        "模型类缺少表备注：请在 __table_args__ 中提供"
-                        ' comment="..." 字段。'
-                    ),
+                    reason=("模型类缺少表备注：请在 __table_args__ 中提供" ' comment="..." 字段。'),
                 )
             )
 

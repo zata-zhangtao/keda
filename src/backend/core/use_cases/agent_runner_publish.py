@@ -136,8 +136,7 @@ def _validate_branch_for_publish(
         raise RuntimeError("Refusing to publish: worktree is in detached HEAD state.")
     if expected_branch is not None and branch != expected_branch:
         raise RuntimeError(
-            f"Refusing to publish from unexpected branch: {branch} "
-            f"(expected {expected_branch})"
+            f"Refusing to publish from unexpected branch: {branch} " f"(expected {expected_branch})"
         )
     return branch
 
@@ -187,9 +186,7 @@ def push_changes(
     ensure_no_evidence_paths_in_changes(worktree_path, config, process_runner)
     publish_remote_name = validate_publish_remote(worktree_path, config, process_runner)
     try:
-        process_runner.run(
-            ["git", "push", "-u", publish_remote_name, branch], cwd=worktree_path
-        )
+        process_runner.run(["git", "push", "-u", publish_remote_name, branch], cwd=worktree_path)
     except (RuntimeError, OSError) as exc:
         raise PushChangesError(str(exc)) from exc
     return branch
@@ -271,9 +268,7 @@ def create_draft_pr(
     if validation_required(issue.body, config):
         validation_checklist_items = extract_realistic_validation_items(issue.body)
         if validation_checklist_items:
-            checklist_block = build_validation_checklist_block(
-                validation_checklist_items
-            )
+            checklist_block = build_validation_checklist_block(validation_checklist_items)
             pr_body = f"{pr_body.rstrip()}\n\n{checklist_block}\n"
 
     try:

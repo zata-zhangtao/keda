@@ -557,14 +557,10 @@ def test_build_pr_context_collects_git_info() -> None:
     )
     from backend.core.shared.models.agent_runner import IssueSummary
 
-    issue = IssueSummary(
-        number=42, title="Test", url="https://example.com", body="Body", labels=()
-    )
+    issue = IssueSummary(number=42, title="Test", url="https://example.com", body="Body", labels=())
     from backend.core.use_cases.generated_content import build_pr_context
 
-    target_config = GeneratedContentTargetConfig(
-        include_commit_log=True, include_diff_stat=True
-    )
+    target_config = GeneratedContentTargetConfig(include_commit_log=True, include_diff_stat=True)
     context = build_pr_context(
         issue=issue,
         branch="issue-42",
@@ -586,9 +582,7 @@ def test_build_prd_context_collects_issue_and_comments() -> None:
     from backend.core.use_cases.generated_content import build_prd_context
     from backend.core.shared.models.agent_runner import IssueSummary
 
-    issue = IssueSummary(
-        number=42, title="Test", url="https://example.com", body="Body", labels=()
-    )
+    issue = IssueSummary(number=42, title="Test", url="https://example.com", body="Body", labels=())
     context = build_prd_context(
         issue=issue,
         comments=["first", "second"],
@@ -662,10 +656,7 @@ def test_generate_prd_content_template_mode() -> None:
         fallback_prd_text="fallback",
     )
     assert result.text == (
-        "# PRD: Feature\n\n"
-        "- GitHub Issue: #3\n\n"
-        "## Acceptance Checklist\n\n"
-        "- [ ] item"
+        "# PRD: Feature\n\n" "- GitHub Issue: #3\n\n" "## Acceptance Checklist\n\n" "- [ ] item"
     )
     assert result.source == "template"
 
@@ -864,19 +855,14 @@ def test_load_prd_skill_spec_reads_and_handles_missing(tmp_path: Path) -> None:
     assert load_prd_skill_spec(tmp_path / "missing.md") is None
 
 
-def test_resolve_prd_skill_path_precedence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resolve_prd_skill_path_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Explicit path wins, then IAR_PRD_SKILL_PATH env, then the ~/.claude default."""
     explicit = tmp_path / "explicit.md"
     assert resolve_prd_skill_path(explicit) == explicit
     monkeypatch.setenv("IAR_PRD_SKILL_PATH", str(tmp_path / "env.md"))
     assert resolve_prd_skill_path() == tmp_path / "env.md"
     monkeypatch.delenv("IAR_PRD_SKILL_PATH", raising=False)
-    assert (
-        resolve_prd_skill_path()
-        == Path.home() / ".claude" / "skills" / "prd" / "SKILL.md"
-    )
+    assert resolve_prd_skill_path() == Path.home() / ".claude" / "skills" / "prd" / "SKILL.md"
 
 
 def test_generate_prd_content_agent_fallback_to_template() -> None:

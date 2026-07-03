@@ -15,6 +15,21 @@
 | 平台能力层 | `src/backend/engines/` | Skills、RAG、可插拔能力，实现 core 定义的接口 |
 | 基础设施层 | `src/backend/infrastructure/` | LLM 客户端、数据库、HTTP、日志、配置等具体实现 |
 
+## Persistence Layer Annotations
+
+`src/backend/infrastructure/persistence/models/` 下所有 SQLAlchemy ORM 类必须同时具备**表注释**与**列注释**，由 `hooks/shared/check_sqlalchemy_model_comments.py` 在 pre-commit 阶段强制执行：
+
+- **表注释**：含 `__tablename__` 的类必须通过 `__table_args__` 提供非空 `comment` 字符串。支持两种写法：
+
+  ```text
+  __table_args__ = {"comment": "..."}
+  __table_args__ = ({"comment": "..."}, Index(...))
+  ```
+
+- **列注释**：每个 `Column(...)` / `mapped_column(...)` 调用都必须显式带 `comment="..."` 关键字参数。
+
+新增模型必须从一开始即满足上述两条规则；该约束同时作为 Alembic 生成的 DDL 在运维排障时的字段说明来源。
+
 ## Agent-First Capabilities
 
 新增面向业务的具体能力时，应优先作为 Agent 可编排能力接入，通常落在 `src/backend/engines/`，并通过 skill、tool 或 capability adapter 供 `src/backend/core/` 编排层调用。

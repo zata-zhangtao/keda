@@ -272,9 +272,7 @@ def _build_issue_with_pulls(
     if repo_label is None:
         pulls: tuple[PullRequestSummary, ...] = ()
     else:
-        pulls = tuple(
-            github_client.list_pull_requests_for_issue(repo_label, issue.number)
-        )
+        pulls = tuple(github_client.list_pull_requests_for_issue(repo_label, issue.number))
     return IssueWithPulls(
         repo=repo_label,
         number=issue.number,
@@ -321,9 +319,7 @@ def _process_one_repo(
             error=_format_repo_error(context, exc),
         )
     rows = tuple(
-        _build_issue_with_pulls(
-            issue, repo_label=repo_label, github_client=github_client
-        )
+        _build_issue_with_pulls(issue, repo_label=repo_label, github_client=github_client)
         for issue in issues
     )
     return _RepoOutcome(repo_label=repo_label, rows=rows)
@@ -406,9 +402,7 @@ def list_issues_with_prs(
             continue
         all_rows.extend(outcome.rows)
 
-    filtered = [
-        row for row in all_rows if _should_keep_issue(row, with_pr=request.with_pr)
-    ]
+    filtered = [row for row in all_rows if _should_keep_issue(row, with_pr=request.with_pr)]
     sorted_rows = _sort_rows(filtered)
 
     return IssueListResult(

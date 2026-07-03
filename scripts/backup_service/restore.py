@@ -57,10 +57,7 @@ class RestoreClient(S3Client):
                 parts = key.split("/")
                 if len(parts) >= 2:
                     date_str = parts[1]
-                    if (
-                        "_" in date_str
-                        and date_str.replace("_", "").replace("-", "").isdigit()
-                    ):
+                    if "_" in date_str and date_str.replace("_", "").replace("-", "").isdigit():
                         dates.add(date_str)
         return sorted(dates)
 
@@ -223,9 +220,7 @@ def _pipe_gzip_to_command(
                     stop_after_line = True
 
             stripped = line.strip()
-            if line and any(
-                stripped.startswith(prefix) for prefix in _INCOMPATIBLE_SET_PREFIXES
-            ):
+            if line and any(stripped.startswith(prefix) for prefix in _INCOMPATIBLE_SET_PREFIXES):
                 if stop_after_line:
                     break
                 continue
@@ -344,9 +339,7 @@ def _restore_postgres(
     print("PostgreSQL restore complete.")
 
 
-def restore_archive(
-    archive_path: Path, target_dir: str, use_incremental: bool = False
-) -> None:
+def restore_archive(archive_path: Path, target_dir: str, use_incremental: bool = False) -> None:
     """Extract a ``tar.gz`` archive to *target_dir*.
 
     Args:
@@ -557,9 +550,7 @@ def _print_target_summary(
     print(f"  database.sql.gz: {'present' if manifest_has_db else 'missing'}")
 
 
-def _verify_and_summarize_tables(
-    db_url: str, required_tables: list[str]
-) -> tuple[bool, list[str]]:
+def _verify_and_summarize_tables(db_url: str, required_tables: list[str]) -> tuple[bool, list[str]]:
     """Print row-count summaries and verify required tables.
 
     Args:
@@ -697,9 +688,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--restore-db", action="store_true", help="Restore database")
     parser.add_argument("--restore-logs", action="store_true", help="Restore logs")
-    parser.add_argument(
-        "--restore-resources", action="store_true", help="Restore resources"
-    )
+    parser.add_argument("--restore-resources", action="store_true", help="Restore resources")
     parser.add_argument(
         "--chain",
         action="store_true",
@@ -735,9 +724,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip confirmation prompt (non-interactive)",
     )
-    parser.add_argument(
-        "-h", "--help", action="help", help="Show this help message and exit"
-    )
+    parser.add_argument("-h", "--help", action="help", help="Show this help message and exit")
     return parser
 
 
@@ -758,9 +745,7 @@ def _validate_config(args: argparse.Namespace) -> list[str]:
 def run_restore(args: argparse.Namespace) -> int:
     """Execute restore workflow from parsed arguments."""
     if args.clean_target_schema and args.drop_target_db:
-        print(
-            "Error: --clean-target-schema and --drop-target-db are mutually exclusive."
-        )
+        print("Error: --clean-target-schema and --drop-target-db are mutually exclusive.")
         return 1
 
     missing = _validate_config(args)
@@ -882,9 +867,7 @@ def run_restore(args: argparse.Namespace) -> int:
     )
 
     if args.drop_target_db:
-        print(
-            "\nWARNING: --drop-target-db will permanently delete the target database."
-        )
+        print("\nWARNING: --drop-target-db will permanently delete the target database.")
 
     print(f"\nThis will restore: {', '.join(restore_items)} from {args.date}")
     if not args.yes:
@@ -990,9 +973,7 @@ def _execute_restore(
             if chain:
                 full_date = _find_full_backup_before(client, dates, date_str)
                 if not full_date:
-                    print(
-                        "[ERROR] No full backup found before target date. Cannot chain restore."
-                    )
+                    print("[ERROR] No full backup found before target date. Cannot chain restore.")
                     return 1
                 full_idx = dates.index(full_date)
                 target_idx = dates.index(date_str)

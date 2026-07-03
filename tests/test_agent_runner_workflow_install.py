@@ -123,9 +123,7 @@ def test_install_workflow_writes_all_template_files(tmp_path: Path) -> None:
         assert target.is_file(), relative_posix_path
         assert (
             target.read_bytes()
-            == (
-                files(TEMPLATE_PACKAGE_NAME) / "preview" / relative_posix_path
-            ).read_bytes()
+            == (files(TEMPLATE_PACKAGE_NAME) / "preview" / relative_posix_path).read_bytes()
         )
     assert result.config_toml_plan is not None
     assert result.config_toml_plan.will_write_new_section
@@ -243,9 +241,7 @@ def test_install_workflow_requires_iar_init(tmp_path: Path) -> None:
         )
 
 
-def test_install_workflow_toml_parse_failure_does_not_block_files(
-    tmp_path: Path, caplog
-) -> None:
+def test_install_workflow_toml_parse_failure_does_not_block_files(tmp_path: Path, caplog) -> None:
     """A broken config.toml must not prevent the template files from being written."""
     _init_iar(tmp_path)
     fake_runner = _make_fake_runner(tmp_path)

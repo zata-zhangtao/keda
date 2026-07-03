@@ -36,9 +36,7 @@ def test_build_fix_prompt_includes_verification_failure() -> None:
         )
     ]
 
-    prompt = build_fix_prompt(
-        issue, worktree_path, verification_results=verification_results
-    )
+    prompt = build_fix_prompt(issue, worktree_path, verification_results=verification_results)
 
     assert "Fix the verification failure" in prompt
     assert "just lint" in prompt
@@ -59,9 +57,7 @@ def test_build_fix_prompt_forbids_global_deliverables() -> None:
         )
     ]
 
-    prompt = build_fix_prompt(
-        issue, worktree_path, verification_results=verification_results
-    )
+    prompt = build_fix_prompt(issue, worktree_path, verification_results=verification_results)
 
     assert "Do not update evidence files" in prompt
     assert "PRD Acceptance Checklists" in prompt
@@ -81,9 +77,7 @@ def test_build_fix_prompt_does_not_include_prd_closeout() -> None:
         )
     ]
 
-    prompt = build_fix_prompt(
-        issue, worktree_path, verification_results=verification_results
-    )
+    prompt = build_fix_prompt(issue, worktree_path, verification_results=verification_results)
 
     assert "move the PRD" not in prompt.lower()
     assert "tasks/pending" not in prompt

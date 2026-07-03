@@ -62,6 +62,7 @@ from backend.core.use_cases.agent_runner_structured_evidence import (
     has_structured_evidence_marker,
     load_evidence_manifest,
     render_structured_evidence_comment,
+    validate_evidence_artifacts,
     validate_evidence_manifest,
 )
 
@@ -383,9 +384,7 @@ def build_validation_prompt_line(issue: IssueSummary, config: AppConfig) -> str:
             "suffix is required. "
         )
     else:
-        enforcement_text = (
-            "The runner refuses to publish when the evidence directory is " "empty. "
-        )
+        enforcement_text = "The runner refuses to publish when the evidence directory is " "empty. "
     prompt_parts = [
         "Realistic Validation is MANDATORY for this Issue: actually execute "
         "every item of the Realistic Validation checklist through the real "
@@ -399,12 +398,8 @@ def build_validation_prompt_line(issue: IssueSummary, config: AppConfig) -> str:
         "version control and never capture secrets in them."
     ]
     if has_structured_evidence_marker(issue.body):
-        structured_suffix = build_structured_evidence_prompt_suffix(
-            config.validation.language
-        )
-        prompt_parts.append(
-            structured_suffix.format(evidence_dir=config.validation.evidence_dir)
-        )
+        structured_suffix = build_structured_evidence_prompt_suffix(config.validation.language)
+        prompt_parts.append(structured_suffix.format(evidence_dir=config.validation.evidence_dir))
     return " ".join(prompt_parts)
 
 
@@ -468,8 +463,7 @@ def ensure_evidence_dir_excluded(
         exclude_path = worktree_path / exclude_path
     if exclude_path.is_dir():
         _logger.warning(
-            "Resolved info/exclude path is a directory (%s); skipping "
-            "evidence exclusion.",
+            "Resolved info/exclude path is a directory (%s); skipping " "evidence exclusion.",
             exclude_path,
         )
         return
@@ -495,6 +489,7 @@ def ensure_validation_evidence_ready(
     issue: IssueSummary,
     worktree_path: Path,
     config: AppConfig,
+    process_runner: IProcessRunner | None = None,
 ) -> None:
     """Require per-item evidence when the Issue demands validation.
 
@@ -507,6 +502,10 @@ def ensure_validation_evidence_ready(
     对于带 ``iar:structured-evidence`` marker 的 Issue，额外校验
     ``evidence.json`` manifest：字段完整性、item 覆盖、证据文件存在性与
     编号一致性、语言一致性。
+
+    当 ``config.validation.artifact_health_enabled`` 为真且 ``process_runner``
+    被提供时,额外对 manifest 声明的 ``expected_artifacts`` 跑硬层健全性卡点
+    (mime/size/duration/mtime),FR-11a。
 
     Raises:
         ValidationEvidenceError: 要求验证但证据缺失或与清单不匹配。
@@ -531,6 +530,17 @@ def ensure_validation_evidence_ready(
             worktree_path=worktree_path,
             config=config,
         )
+        # FR-11a: artifact health hard layer (machine-checkable assertions).
+        # Skip when process_runner is None (caller did not wire it) to keep the
+        # legacy non-structured callers working.
+        if config.validation.artifact_health_enabled and process_runner is not None:
+            manifest = load_evidence_manifest(worktree_path, config)
+            validate_evidence_artifacts(
+                manifest,
+                worktree_path,
+                config,
+                process_runner,
+            )
         return
     if not evidence_format_check_required(issue.body, config):
         return
@@ -540,9 +550,7 @@ def ensure_validation_evidence_ready(
         issue_body=issue.body,
     )
     if coverage_problems:
-        problems_text = "\n".join(
-            f"- {coverage_problem}" for coverage_problem in coverage_problems
-        )
+        problems_text = "\n".join(f"- {coverage_problem}" for coverage_problem in coverage_problems)
         raise ValidationEvidenceError(
             "Realistic Validation evidence does not match the checklist:\n"
             f"{problems_text}\n"
@@ -571,9 +579,7 @@ def _rv_reexec_cache_path(worktree_path: Path, config: AppConfig) -> Path:
     return worktree_path / _rv_reexec_cache_relpath(config)
 
 
-def _clean_tree_fingerprint(
-    worktree_path: Path, process_runner: IProcessRunner
-) -> str | None:
+def _clean_tree_fingerprint(worktree_path: Path, process_runner: IProcessRunner) -> str | None:
     """Return ``HEAD`` 的 tree SHA(工作区干净时),否则 ``None``。
 
     tree SHA 是已提交代码的纯内容指纹(不含提交时间/作者/message)。工作区
@@ -991,9 +997,7 @@ def build_evidence_comment(
         if file_suffix in _INLINE_TEXT_SUFFIXES:
             evidence_file_path = evidence_dir_path(worktree_path, config) / file_name
             try:
-                file_text = evidence_file_path.read_text(
-                    encoding="utf-8", errors="replace"
-                )
+                file_text = evidence_file_path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 file_text = "[unreadable evidence file]"
             comment_lines.append("```text")
@@ -1049,9 +1053,7 @@ def publish_validation_evidence(
         return None
     pr_number = parse_pr_number(pr_url)
     if pr_number is None:
-        raise RuntimeError(
-            f"Cannot post validation evidence: unparsable PR URL {pr_url!r}"
-        )
+        raise RuntimeError(f"Cannot post validation evidence: unparsable PR URL {pr_url!r}")
     github_client.comment_pr(
         pr_number,
         build_evidence_comment(
@@ -1147,9 +1149,7 @@ def _gate_single_issue(
     pr_branch = lifecycle_marker.pr_branch if lifecycle_marker else None
     if not pr_branch:
         return
-    pr_context: PullRequestContext | None = github_client.get_pull_request_context(
-        pr_branch
-    )
+    pr_context: PullRequestContext | None = github_client.get_pull_request_context(pr_branch)
     if pr_context is None or pr_context.number is None:
         return
     checklist_state = parse_validation_checklist_state(pr_context.body)
@@ -1186,6 +1186,12 @@ def _gate_single_issue(
             github_client=github_client,
             target_passed=False,
         )
+        # FR-5/FR-6: head 漂移使旧 verifier verdict 失效——verifier 当初跑的是
+        # 旧 SHA,新 commit 没被独立验证过。清掉 validation/verifier-passed,
+        # 防止 autopilot 合并队列误判"新 commit 也过了 verifier"。verifier 只在
+        # pre-PR 跑,daemon 不重跑;label 保持清除直到 issue 重新走 builder→verifier。
+        if config.labels.verifier_passed in issue.labels:
+            github_client.edit_issue_labels(issue.number, remove=[config.labels.verifier_passed])
         return
 
     _ensure_issue_validation_labels(
@@ -1234,9 +1240,7 @@ def cleanup_closed_issue_evidence_branches(
     )
     if ls_remote_result.return_code != 0:
         return
-    branch_issue_pattern = re.compile(
-        rf"refs/heads/({re.escape(branch_prefix)}issue-(\d+))$"
-    )
+    branch_issue_pattern = re.compile(rf"refs/heads/({re.escape(branch_prefix)}issue-(\d+))$")
     for ls_remote_line in ls_remote_result.stdout.splitlines():
         branch_match = branch_issue_pattern.search(ls_remote_line.strip())
         if not branch_match:
@@ -1280,9 +1284,7 @@ def process_validation_gate(
     """
     if not config.validation.enabled:
         return
-    review_issues = github_client.list_review_candidate_issues(
-        [config.labels.review], max_issues
-    )
+    review_issues = github_client.list_review_candidate_issues([config.labels.review], max_issues)
     for review_issue in review_issues:
         try:
             _gate_single_issue(

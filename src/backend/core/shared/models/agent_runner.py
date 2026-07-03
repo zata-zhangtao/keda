@@ -5,12 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from backend.core.shared.models.agent_decision import (
     InteractiveDecisionConfig,
     ReplConfig,
 )
 from backend.core.shared.models.agent_deliberation import DeliberationConfig
+
+if TYPE_CHECKING:
+    # `ValidationVerdict` lives in the use-cases layer; import it only for
+    # type checking to avoid a circular runtime import (run_verifier_agent
+    # imports from this module). Annotations are strings via __future__.
+    from backend.core.use_cases.run_verifier_agent import ValidationVerdict
 
 
 @dataclass(frozen=True)
@@ -19,6 +26,7 @@ class AgentCommitResult:
 
     verification_results: list[CommandResult]
     attempt_results: list[AttemptResult]
+    verifier_verdict: "ValidationVerdict | None" = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +152,7 @@ class LabelConfig:
     waiting: str = "agent/waiting"
     validation_pending: str = "validation/pending"
     validation_passed: str = "validation/passed"
+    verifier_passed: str = "validation/verifier-passed"
     group_prefix: str = "task-group/"
     rework_prd: str = "agent/rework-prd"
     deliberate: str = "agent/deliberate"
@@ -176,8 +185,7 @@ class WorktreeConfig:
     """
 
     create_command: str = (
-        "iar worktree create --branch issue-{issue_number} "
-        "--base-branch {base_branch}"
+        "iar worktree create --branch issue-{issue_number} " "--base-branch {base_branch}"
     )
     reuse_command: str = "iar worktree path --branch issue-{issue_number}"
     path_command: str = "iar worktree path --branch issue-{issue_number}"
@@ -292,6 +300,7 @@ class ValidationConfig:
     verifier_enabled: bool = False
     verifier_agent: str = "auto"
     verifier_timeout_seconds: int = 1800
+    artifact_health_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -419,9 +428,7 @@ class GeneratedContentConfig:
     issue_from_prd: GeneratedContentTargetConfig = field(
         default_factory=GeneratedContentTargetConfig
     )
-    draft_pr: GeneratedContentTargetConfig = field(
-        default_factory=GeneratedContentTargetConfig
-    )
+    draft_pr: GeneratedContentTargetConfig = field(default_factory=GeneratedContentTargetConfig)
     prd_from_issue: GeneratedContentTargetConfig = field(
         # PRD 生成没有可用的内置 template，唯一有意义的模式是 agent；
         # agent 不可用时 generate_prd_content 会优雅退回 fallback。
@@ -492,9 +499,7 @@ class AppConfig:
     prompts: PromptConfig = field(default_factory=PromptConfig)
     pre_pr_review: PrePrReviewConfig = PrePrReviewConfig()
     post_pr_supervisor: PostPrSupervisorConfig = PostPrSupervisorConfig()
-    generated_content: GeneratedContentConfig = field(
-        default_factory=GeneratedContentConfig
-    )
+    generated_content: GeneratedContentConfig = field(default_factory=GeneratedContentConfig)
     interactive_decision: InteractiveDecisionConfig = field(
         default_factory=InteractiveDecisionConfig
     )

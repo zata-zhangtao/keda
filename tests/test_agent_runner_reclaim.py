@@ -25,12 +25,8 @@ def _seed_running_issue(
     """Seed an ``agent/running`` Issue, optionally with a claim marker comment."""
     github_client.edit_issue_labels(issue_number, add=[config.labels.running])
     if marker is not None:
-        github_client.comment_issue(
-            issue_number, f"## Agent Runner Claimed\n\n{marker}"
-        )
-    github_client.set_list_issues_by_label_result(
-        [github_client.get_issue(issue_number)]
-    )
+        github_client.comment_issue(issue_number, f"## Agent Runner Claimed\n\n{marker}")
+    github_client.set_list_issues_by_label_result([github_client.get_issue(issue_number)])
 
 
 def test_claim_marker_round_trip() -> None:
@@ -60,9 +56,7 @@ def test_reclaim_flips_dead_local_run_to_ready() -> None:
     """A same-host, dead-PID run is returned to ready with an explanatory note."""
     config = AppConfig()
     github = FakeGitHubClient()
-    _seed_running_issue(
-        github, config, issue_number=5, marker=format_claim_marker("host-a", 4242)
-    )
+    _seed_running_issue(github, config, issue_number=5, marker=format_claim_marker("host-a", 4242))
 
     reclaimed = reclaim_stale_running_issues(
         config=config,
@@ -82,9 +76,7 @@ def test_reclaim_skips_live_pid() -> None:
     """A run whose PID is still alive must never be reclaimed."""
     config = AppConfig()
     github = FakeGitHubClient()
-    _seed_running_issue(
-        github, config, issue_number=5, marker=format_claim_marker("host-a", 4242)
-    )
+    _seed_running_issue(github, config, issue_number=5, marker=format_claim_marker("host-a", 4242))
 
     reclaimed = reclaim_stale_running_issues(
         config=config,
@@ -101,9 +93,7 @@ def test_reclaim_skips_other_host() -> None:
     """A run claimed by a different machine is left untouched."""
     config = AppConfig()
     github = FakeGitHubClient()
-    _seed_running_issue(
-        github, config, issue_number=5, marker=format_claim_marker("host-b", 4242)
-    )
+    _seed_running_issue(github, config, issue_number=5, marker=format_claim_marker("host-b", 4242))
 
     reclaimed = reclaim_stale_running_issues(
         config=config,

@@ -120,17 +120,11 @@ class Remote:
         _print_cmd(cmd)
         # 5 min covers the slowest cloud-image PAM stacks; ConnectTimeout
         # already caps the TCP handshake separately.
-        cp = subprocess.run(
-            cmd, check=False, capture_output=True, text=True, timeout=300
-        )
+        cp = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=300)
         if cp.returncode != 0:
             if cp.stderr:
-                sys.stderr.write(
-                    f"--- ssh master stderr ---\n{cp.stderr}--- end stderr ---\n"
-                )
-            raise subprocess.CalledProcessError(
-                cp.returncode, cmd, cp.stdout, cp.stderr
-            )
+                sys.stderr.write(f"--- ssh master stderr ---\n{cp.stderr}--- end stderr ---\n")
+            raise subprocess.CalledProcessError(cp.returncode, cmd, cp.stdout, cp.stderr)
 
         # Verify the master daemon actually backgrounded itself. If it didn't,
         # every later call would re-auth from scratch and probably stall on
@@ -252,12 +246,8 @@ class Remote:
         if check and cp.returncode != 0:
             # SSH failures (exit 255) are cryptic without stderr — surface them.
             if cp.stderr:
-                sys.stderr.write(
-                    f"--- remote stderr ---\n{cp.stderr}--- end stderr ---\n"
-                )
-            raise subprocess.CalledProcessError(
-                cp.returncode, cmd, cp.stdout, cp.stderr
-            )
+                sys.stderr.write(f"--- remote stderr ---\n{cp.stderr}--- end stderr ---\n")
+            raise subprocess.CalledProcessError(cp.returncode, cmd, cp.stdout, cp.stderr)
         return cp
 
     def scp(self, local: Path, remote: str) -> None:

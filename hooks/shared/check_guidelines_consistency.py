@@ -28,10 +28,7 @@ class GuidelinesChecker:
             / "docs"
             / "ai-standards"
             / "comments-docstrings.md",
-            "documentation": project_root
-            / "docs"
-            / "ai-standards"
-            / "documentation.md",
+            "documentation": project_root / "docs" / "ai-standards" / "documentation.md",
             "testing": project_root / "docs" / "ai-standards" / "testing.md",
             "tooling": project_root / "docs" / "ai-standards" / "tooling.md",
         }
@@ -82,9 +79,7 @@ class GuidelinesChecker:
 
         for file_name, phrases in required_phrases.items():
             file_content = self._read_text(self.hub_files[file_name])
-            missing_phrases = [
-                phrase for phrase in phrases if phrase not in file_content
-            ]
+            missing_phrases = [phrase for phrase in phrases if phrase not in file_content]
             if missing_phrases:
                 issues.append(f"{file_name} 缺少关键短语: {', '.join(missing_phrases)}")
 
@@ -138,13 +133,9 @@ class GuidelinesChecker:
 
         for file_name, file_path in self.adapter_files.items():
             file_content = self._read_text(file_path)
-            matched_phrases = [
-                phrase for phrase in disallowed_phrases if phrase in file_content
-            ]
+            matched_phrases = [phrase for phrase in disallowed_phrases if phrase in file_content]
             if matched_phrases:
-                issues.append(
-                    f"{file_name} 仍包含旧的单点权威表述: {', '.join(matched_phrases)}"
-                )
+                issues.append(f"{file_name} 仍包含旧的单点权威表述: {', '.join(matched_phrases)}")
 
         if issues:
             print("❌ 入口适配层仍存在单点权威表述:")

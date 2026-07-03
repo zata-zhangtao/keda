@@ -208,9 +208,7 @@ def _build_repo_structure_summary(
             return
         try:
             entries = [
-                entry
-                for entry in current_path.iterdir()
-                if not _is_ignored_repo_entry(entry)
+                entry for entry in current_path.iterdir() if not _is_ignored_repo_entry(entry)
             ]
         except OSError:
             return
@@ -222,9 +220,7 @@ def _build_repo_structure_summary(
             if entry.is_dir():
                 _walk(entry, depth + 1, f"{prefix}  ")
         if len(entries) > max_entries_per_dir:
-            summary_lines.append(
-                f"{prefix}... ({len(entries) - max_entries_per_dir} more)"
-            )
+            summary_lines.append(f"{prefix}... ({len(entries) - max_entries_per_dir} more)")
 
     _walk(repo_path, 1, "")
     return "\n".join(summary_lines)
@@ -328,16 +324,12 @@ def build_issue_context(
         供模板渲染或 agent prompt 使用的 ``IssueContext`` 实例。
     """
     # 提取 PRD 的各个章节。关键词列表需覆盖中英文场景。
-    introduction = extract_prd_section(
-        prd_text, ("introduction", "intro", "引言", "概述")
-    )
+    introduction = extract_prd_section(prd_text, ("introduction", "intro", "引言", "概述"))
     if not introduction:
         introduction = extract_first_h2_section(prd_text)
     goals = extract_prd_section(prd_text, ("goal", "目标"))
     requirement_shape = extract_prd_section(prd_text, ("requirement", "需求", "shape"))
-    change_impact_tree = extract_prd_section(
-        prd_text, ("change impact", "impact tree", "变更影响")
-    )
+    change_impact_tree = extract_prd_section(prd_text, ("change impact", "impact tree", "变更影响"))
 
     # 从 PRD 的第一行 H1 标题中提取纯净标题，去掉 "PRD:" / "PRD：" 前缀。
     # 跳过 Part A / Part B 这类结构标题，避免把章节标题误当成 feature 标题。
@@ -397,9 +389,7 @@ def build_prd_context(
     )
 
 
-def _render_template(
-    template: str, context: IssueContext | PrContext | PrdContext
-) -> str:
+def _render_template(template: str, context: IssueContext | PrContext | PrdContext) -> str:
     """使用上下文变量渲染模板字符串。
 
     直接调用 ``str.format(**context.__dict__)``，因此模板中的占位符必须与
@@ -717,9 +707,7 @@ def load_prd_skill_spec(explicit_path: Path | None = None) -> str | None:
     return skill_text or None
 
 
-def _build_prd_agent_prompt(
-    skill_spec: str, context: PrdContext, max_context_chars: int
-) -> str:
+def _build_prd_agent_prompt(skill_spec: str, context: PrdContext, max_context_chars: int) -> str:
     """用 ``prd`` skill 规范 + PRD 上下文组合 agent prompt。
 
     skill 规范是方法论与输出契约的单一来源，始终完整注入（不截断）；
@@ -765,8 +753,7 @@ def _build_prd_agent_prompt(
             "",
             "Output rules:",
             "- Write the PRD in the same language as the Issue title.",
-            "- The PRD MUST start with `# PRD: <title>` and include a "
-            "`- GitHub Issue:` line.",
+            "- The PRD MUST start with `# PRD: <title>` and include a " "`- GitHub Issue:` line.",
             "- Output only the PRD markdown, with no extra commentary.",
         ]
     )
@@ -823,9 +810,7 @@ def generate_prd_content(
         # PRD 规范单一来源：优先注入 prd skill 规范；不可达时回退到配置模板 prompt。
         skill_spec = load_prd_skill_spec(prd_skill_path)
         if skill_spec:
-            prompt = _build_prd_agent_prompt(
-                skill_spec, context, config.max_input_chars
-            )
+            prompt = _build_prd_agent_prompt(skill_spec, context, config.max_input_chars)
         else:
             prompt = _truncate_text(
                 _render_template(target.prompt, context), config.max_input_chars
@@ -838,11 +823,7 @@ def generate_prd_content(
         return GeneratedPrdContent(text=generated_text, source=target.mode)
 
     # Agent 失败：按配置尝试 template 中间兜底。
-    if (
-        target.mode == "agent"
-        and config.fallback == "template"
-        and target.body_template
-    ):
+    if target.mode == "agent" and config.fallback == "template" and target.body_template:
         try:
             generated_text = _render_template(target.body_template, context)
         except (KeyError, ValueError):
@@ -893,9 +874,7 @@ def generate_issue_content(
     """
     target = config.issue_from_prd
     if not config.enabled or not target.enabled:
-        return GeneratedIssueContent(
-            title=fallback_title, body=fallback_body, source="fallback"
-        )
+        return GeneratedIssueContent(title=fallback_title, body=fallback_body, source="fallback")
 
     generated_title = ""
     generated_body = ""
@@ -930,9 +909,7 @@ def generate_issue_content(
         and generated_body
         and _validate_issue_body(generated_body, context.relative_prd_path)
     ):
-        return GeneratedIssueContent(
-            title=generated_title, body=generated_body, source=target.mode
-        )
+        return GeneratedIssueContent(title=generated_title, body=generated_body, source=target.mode)
 
     # Agent 失败：按配置尝试 template 中间兜底。
     if target.mode == "agent" and config.fallback == "template":
@@ -951,9 +928,7 @@ def generate_issue_content(
             )
 
     # 所有生成方式均失败，返回 hard fallback。
-    return GeneratedIssueContent(
-        title=fallback_title, body=fallback_body, source="fallback"
-    )
+    return GeneratedIssueContent(title=fallback_title, body=fallback_body, source="fallback")
 
 
 # ---------------------------------------------------------------------------
@@ -1098,9 +1073,7 @@ def generate_pr_content(
     """
     target = config.draft_pr
     if not config.enabled or not target.enabled:
-        return GeneratedPrContent(
-            title=fallback_title, body=fallback_body, source="fallback"
-        )
+        return GeneratedPrContent(title=fallback_title, body=fallback_body, source="fallback")
 
     generated_title = ""
     generated_body = ""
@@ -1145,6 +1118,4 @@ def generate_pr_content(
                 source="template",
             )
 
-    return GeneratedPrContent(
-        title=fallback_title, body=fallback_body, source="fallback"
-    )
+    return GeneratedPrContent(title=fallback_title, body=fallback_body, source="fallback")

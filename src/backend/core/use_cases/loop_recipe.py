@@ -102,9 +102,7 @@ def _parse_simple_yaml(raw_yaml: str) -> dict[str, Any]:
             item_text = stripped[2:].strip()
             existing = result.setdefault(current_list_key, [])
             if not isinstance(existing, list):
-                raise ValueError(
-                    f"Key {current_list_key!r} cannot be both scalar and list."
-                )
+                raise ValueError(f"Key {current_list_key!r} cannot be both scalar and list.")
             existing.append(_coerce_yaml_value(item_text))
             continue
         if ":" not in raw_line:
@@ -156,8 +154,7 @@ def _validate_recipe_fields(data: dict[str, Any]) -> None:
     ]
     if missing_fields:
         raise ValueError(
-            "Loop recipe frontmatter is missing required field(s): "
-            + ", ".join(missing_fields)
+            "Loop recipe frontmatter is missing required field(s): " + ", ".join(missing_fields)
         )
     issue_type = data.get("issue_type", "feature")
     if issue_type not in _VALID_ISSUE_TYPES:
@@ -168,8 +165,7 @@ def _validate_recipe_fields(data: dict[str, Any]) -> None:
     agent_name = data.get("agent", "auto")
     if agent_name not in _VALID_AGENTS:
         raise ValueError(
-            f"Loop recipe agent must be one of {sorted(_VALID_AGENTS)}; "
-            f"got {agent_name!r}."
+            f"Loop recipe agent must be one of {sorted(_VALID_AGENTS)}; " f"got {agent_name!r}."
         )
 
 
@@ -337,9 +333,7 @@ def render_loop_recipe_title(
         Rendered H1 title without the leading ``#`` and surrounding whitespace.
         Falls back to the recipe id when the body has no H1.
     """
-    rendered_body = render_loop_recipe(
-        recipe, fire_at=fire_at, extra_variables=extra_variables
-    )
+    rendered_body = render_loop_recipe(recipe, fire_at=fire_at, extra_variables=extra_variables)
     for line in rendered_body.splitlines():
         stripped = line.strip()
         if stripped.startswith("# "):
@@ -386,9 +380,7 @@ def _render_template(template_text: str, variables: dict[str, str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-_KEY_VALUE_LINE_RE = re.compile(
-    r"^\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*)$"
-)
+_KEY_VALUE_LINE_RE = re.compile(r"^\s*(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*)$")
 
 
 def parse_pre_command_output(stdout: str) -> dict[str, str]:

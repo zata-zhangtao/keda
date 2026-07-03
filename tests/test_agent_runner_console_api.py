@@ -75,9 +75,7 @@ def console_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             stop_timeout_seconds=5,
         )
     )
-    monkeypatch.setattr(
-        console_routes, "load_fresh_agent_runner_settings", lambda: fake_settings
-    )
+    monkeypatch.setattr(console_routes, "load_fresh_agent_runner_settings", lambda: fake_settings)
     return {
         "store": store,
         "supervisor": supervisor,
@@ -100,15 +98,11 @@ def test_process_lifecycle_via_api(console_environment) -> None:
     listed_ids = [p["process_id"] for p in list_response.json()["processes"]]
     assert process_id in listed_ids
 
-    log_response = client.get(
-        f"/api/v1/agent-runner/console/processes/{process_id}/logs?offset=0"
-    )
+    log_response = client.get(f"/api/v1/agent-runner/console/processes/{process_id}/logs?offset=0")
     assert log_response.status_code == 200
     assert "next_offset" in log_response.json()
 
-    stop_response = client.post(
-        f"/api/v1/agent-runner/console/processes/{process_id}/stop"
-    )
+    stop_response = client.post(f"/api/v1/agent-runner/console/processes/{process_id}/stop")
     assert stop_response.status_code == 200
     assert stop_response.json()["status"] in ("stopped", "exited", "killed")
 
@@ -196,9 +190,7 @@ def _write_iar_toml(repo_root: Path, repo_id: str, display_name: str) -> None:
     )
 
 
-def test_discover_iar_repositories_finds_local_repos(
-    console_environment, tmp_path: Path
-) -> None:
+def test_discover_iar_repositories_finds_local_repos(console_environment, tmp_path: Path) -> None:
     """Discover endpoint must find IAR-initialized git repositories."""
     scan_root = tmp_path / "code"
     scan_root.mkdir()
@@ -232,9 +224,7 @@ def test_discover_iar_repositories_finds_local_repos(
     assert all("already_registered" in entry for entry in discovered)
 
 
-def test_batch_add_repositories_skips_existing(
-    console_environment, tmp_path: Path
-) -> None:
+def test_batch_add_repositories_skips_existing(console_environment, tmp_path: Path) -> None:
     """Batch add should add new repos and skip already-registered ones."""
     first_repo = tmp_path / "first"
     first_repo.mkdir()

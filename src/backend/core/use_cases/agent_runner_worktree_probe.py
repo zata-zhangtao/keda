@@ -84,9 +84,7 @@ def _has_existing_local_commit_ready_for_publish(
         是否有可发布的本地 commit
     """
     try:
-        worktree_path = _find_worktree_path_for_issue(
-            repo_path, issue, config, process_runner
-        )
+        worktree_path = _find_worktree_path_for_issue(repo_path, issue, config, process_runner)
         from backend.core.use_cases.agent_runner_publication import (
             _count_local_commits_since_base,
         )
@@ -130,9 +128,7 @@ def _worktree_needs_rebase_recovery(
         worktree 是否处于需要恢复的 mid-rebase / detached HEAD 状态。
     """
     try:
-        worktree_path = _find_worktree_path_for_issue(
-            repo_path, issue, config, process_runner
-        )
+        worktree_path = _find_worktree_path_for_issue(repo_path, issue, config, process_runner)
     except Exception as exc:  # noqa: BLE001 - 探测不得中断轮询。
         _logger.info(
             "Skipping rebase-recovery probe for Issue #%d: %s",

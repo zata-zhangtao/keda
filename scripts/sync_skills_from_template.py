@@ -21,12 +21,7 @@ from pathlib import Path
 
 DEFAULT_SOURCE = Path.home() / "code" / "zata_code_template" / "skills"
 DEFAULT_TARGET = (
-    Path(__file__).resolve().parents[1]
-    / "src"
-    / "backend"
-    / "engines"
-    / "agent_runner"
-    / "skills"
+    Path(__file__).resolve().parents[1] / "src" / "backend" / "engines" / "agent_runner" / "skills"
 )
 DEFAULT_SKILL_NAMES = ("prd", "code-reviewer")
 
@@ -50,9 +45,7 @@ def _iter_sync_files(source_dir: Path) -> list[tuple[Path, Path]]:
     for source_file in sorted(source_dir.rglob("*")):
         if not source_file.is_file():
             continue
-        if any(
-            _is_ignored_path(part) for part in source_file.relative_to(source_dir).parts
-        ):
+        if any(_is_ignored_path(part) for part in source_file.relative_to(source_dir).parts):
             continue
         pairs.append((source_file, source_file.relative_to(source_dir)))
     return pairs
@@ -70,9 +63,7 @@ def _skill_dirs(source_dir: Path, skill_names: tuple[str, ...]) -> list[Path]:
     )
 
 
-def _sync_skills(
-    *, source: Path, target: Path, skill_names: tuple[str, ...], apply: bool
-) -> int:
+def _sync_skills(*, source: Path, target: Path, skill_names: tuple[str, ...], apply: bool) -> int:
     """Preview or perform the skill sync.
 
     Returns:

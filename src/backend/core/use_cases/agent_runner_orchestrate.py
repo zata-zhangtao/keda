@@ -160,17 +160,11 @@ def process_prd_rework_issues(
         content_generator: 可选的 AI 内容生成器。
         max_issues: 本轮最多处理的 rework-prd Issue 数量。
     """
-    issues = github_client.list_rework_prd_issues(
-        config.labels.rework_prd, limit=max_issues
-    )
+    issues = github_client.list_rework_prd_issues(config.labels.rework_prd, limit=max_issues)
     for issue in issues:
-        _logger.info(
-            "Processing PRD rework for Issue #%d: %s", issue.number, issue.title
-        )
+        _logger.info("Processing PRD rework for Issue #%d: %s", issue.number, issue.title)
         try:
-            worktree_path = create_or_reuse_worktree(
-                repo_path, issue, config, process_runner
-            )
+            worktree_path = create_or_reuse_worktree(repo_path, issue, config, process_runner)
             create_prd_from_issue(
                 request=CreatePrdFromIssueRequest(
                     repo_path=repo_path,
@@ -320,8 +314,7 @@ def _process_blocked_resolution(
     process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
     marker: ReviewEventMarker,
-    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None]
-    | None = None,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None] | None = None,
 ) -> None:
     """处理带 blocked_resolution marker 的 blocked Issue。
 
@@ -346,13 +339,9 @@ def _process_blocked_resolution(
     selected_agent = choose_agent(issue, config, agent)
 
     # 定位 worktree 并确认分支
-    worktree_path = _find_worktree_path_for_issue(
-        repo_path, issue, config, process_runner
-    )
+    worktree_path = _find_worktree_path_for_issue(repo_path, issue, config, process_runner)
     expected_branch = f"issue-{issue.number}"
-    _ensure_worktree_branch(
-        worktree_path, expected_branch, issue, config, process_runner
-    )
+    _ensure_worktree_branch(worktree_path, expected_branch, issue, config, process_runner)
     current_branch = get_current_branch(worktree_path, process_runner)
     if current_branch != expected_branch:
         raise RuntimeError(
@@ -417,8 +406,7 @@ def _process_ready_issue(
     github_client: IGitHubClient,
     process_runner: IProcessRunner,
     content_generator: IContentGenerator | None = None,
-    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None]
-    | None = None,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None] | None = None,
 ) -> None:
     """处理 ready 状态的 Issue（完整实现路径）。
 
@@ -451,9 +439,7 @@ def _process_ready_issue(
     selected_agent = choose_agent(issue, config, agent)
 
     # 步骤 1: 声明 Issue
-    transition_issue_workflow_state(
-        github_client, issue.number, config, config.labels.running
-    )
+    transition_issue_workflow_state(github_client, issue.number, config, config.labels.running)
     claim_host = socket.gethostname()
     claim_pid = os.getpid()
     github_client.comment_issue(
@@ -479,9 +465,7 @@ def _process_ready_issue(
     # - 无本地提交 → 全新实现。
     continuation_prompt: str | None = None
     try:
-        commit_result = _reuse_existing_local_commit(
-            issue, worktree_path, config, process_runner
-        )
+        commit_result = _reuse_existing_local_commit(issue, worktree_path, config, process_runner)
     except (VerificationFailedError, PrdDeliveryError, ValidationEvidenceError) as exc:
         _logger.info(
             "Issue #%d has partial local commits not yet delivery-ready (%s); "
@@ -607,9 +591,7 @@ def _process_running_rework(
 
     # 定位 worktree；缺失时进入 blocked 并给出可操作的恢复说明。
     try:
-        worktree_path = _find_worktree_path_for_issue(
-            repo_path, issue, config, process_runner
-        )
+        worktree_path = _find_worktree_path_for_issue(repo_path, issue, config, process_runner)
     except FileNotFoundError as exc:
         message = str(exc)
         prefix = "(path_command output): "
@@ -625,9 +607,7 @@ def _process_running_rework(
                 expected_path=expected_path,
             ),
         )
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.blocked
-        )
+        transition_issue_workflow_state(github_client, issue.number, config, config.labels.blocked)
         return
 
     # worktree 可能因上一次 runner 在 rebase 中途中断而停在 detached HEAD；
@@ -636,9 +616,7 @@ def _process_running_rework(
 
     current_branch = get_current_branch(worktree_path, process_runner)
     if current_branch != pr_branch:
-        raise RuntimeError(
-            f"Rework aborted: on branch {current_branch}, expected {pr_branch}"
-        )
+        raise RuntimeError(f"Rework aborted: on branch {current_branch}, expected {pr_branch}")
 
     expected_head = marker.head_sha or get_head_sha(worktree_path, process_runner)
     action = marker.action or "repair_pr_branch"
@@ -661,9 +639,7 @@ def _process_running_rework(
             build_rebase_repair_complete_comment(
                 action=action,
                 head_sha=rebase_sha,
-                verification_passed=all(
-                    result.return_code == 0 for result in verification_results
-                ),
+                verification_passed=all(result.return_code == 0 for result in verification_results),
             ),
         )
     else:
@@ -682,9 +658,7 @@ def _process_running_rework(
             build_rebase_repair_complete_comment(
                 action=action,
                 head_sha=repair_sha,
-                verification_passed=all(
-                    result.return_code == 0 for result in verification_results
-                ),
+                verification_passed=all(result.return_code == 0 for result in verification_results),
             ),
         )
 
@@ -709,9 +683,7 @@ def _process_running_rework(
             )
 
     # 标记为 supervising 并获取 PR 上下文
-    transition_issue_workflow_state(
-        github_client, issue.number, config, config.labels.supervising
-    )
+    transition_issue_workflow_state(github_client, issue.number, config, config.labels.supervising)
 
     # 修复后再次运行监督循环
     if config.post_pr_supervisor.enabled:
@@ -734,9 +706,7 @@ def _process_running_rework(
             supervisor_agent=supervisor_agent,
         )
     else:
-        transition_issue_workflow_state(
-            github_client, issue.number, config, config.labels.review
-        )
+        transition_issue_workflow_state(github_client, issue.number, config, config.labels.review)
 
 
 def _process_running_publish_recovery(
@@ -767,9 +737,7 @@ def _process_running_publish_recovery(
     selected_agent = choose_agent(issue, config, agent)
 
     # 定位 worktree 并确认分支
-    worktree_path = _find_worktree_path_for_issue(
-        repo_path, issue, config, process_runner
-    )
+    worktree_path = _find_worktree_path_for_issue(repo_path, issue, config, process_runner)
     expected_branch = f"issue-{issue.number}"
 
     # 原子锁：恢复路径会对 worktree 做 rebase 治愈与发布等写操作，必须与其他
@@ -779,14 +747,10 @@ def _process_running_publish_recovery(
     lock_path = worktree_claim_lock_path(worktree_path)
     _acquire_blocked_claim_lock(lock_path, issue.number)
     try:
-        _ensure_worktree_branch(
-            worktree_path, expected_branch, issue, config, process_runner
-        )
+        _ensure_worktree_branch(worktree_path, expected_branch, issue, config, process_runner)
 
         # 检查是否有可复用的本地 commit
-        commit_result = _reuse_existing_local_commit(
-            issue, worktree_path, config, process_runner
-        )
+        commit_result = _reuse_existing_local_commit(issue, worktree_path, config, process_runner)
         if commit_result is None:
             raise RuntimeError(
                 f"Issue #{issue.number} has no clean local commit ready for publication."
@@ -826,10 +790,7 @@ def _stamp_attempts_with_agent(
     Returns:
         A new list of attempts with the agent stamped.
     """
-    return [
-        attempt if attempt.agent else replace(attempt, agent=agent)
-        for attempt in attempts
-    ]
+    return [attempt if attempt.agent else replace(attempt, agent=agent) for attempt in attempts]
 
 
 _ATTEMPT_HISTORY_MARKER = "<!-- iar-attempt-history -->"
@@ -915,8 +876,7 @@ def run_issue_with_agent_fallback(
     config: AppConfig,
     agent: str,
     process_for_agent: Callable[..., None],
-    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None]
-    | None = None,
+    on_attempt_recorded: Callable[[AttemptResult, list[AttemptResult]], None] | None = None,
 ) -> str:
     """Process an Issue across the configured agent fallback chain.
 
@@ -1046,9 +1006,7 @@ def _process_single_issue(
     run_started_at = datetime.now(timezone.utc)
     used_agent = selected_agent
 
-    def _on_attempt_recorded(
-        result: AttemptResult, attempt_results: list[AttemptResult]
-    ) -> None:
+    def _on_attempt_recorded(result: AttemptResult, attempt_results: list[AttemptResult]) -> None:
         _persist_attempt_result(
             result=result,
             attempt_results=attempt_results,
@@ -1287,9 +1245,7 @@ def run_once(
     # 使单独一个 --concurrency N 即可领到并跑 N 个，无需另调 --max-issues。
     effective_max_issues = max(max_issues, concurrency)
     ready_discovery_limit = max(effective_max_issues, _READY_DISCOVERY_LIMIT)
-    ready_issues = github_client.list_ready_issues(
-        config.labels.ready, ready_discovery_limit
-    )
+    ready_issues = github_client.list_ready_issues(config.labels.ready, ready_discovery_limit)
     processed_count = 0
     issues_to_process: list[tuple[IssueSummary, str]] = []
 
@@ -1333,9 +1289,7 @@ def run_once(
             [config.labels.running], remaining
         )
         for issue in running_candidates:
-            is_rework, marker = _guard_running_issue_is_rework(
-                issue, config, github_client
-            )
+            is_rework, marker = _guard_running_issue_is_rework(issue, config, github_client)
             if is_rework and marker is not None:
                 issues_to_process.append((issue, "running_rework"))
             elif _has_existing_local_commit_ready_for_publish(
@@ -1452,9 +1406,7 @@ def run_once(
                     **process_kwargs,
                 )
         except Exception as exc:  # noqa: BLE001 - one Issue's I/O must not kill the pass.
-            _logger.error(
-                "Parallel routing failed for Issue #%d: %s", issue.number, exc
-            )
+            _logger.error("Parallel routing failed for Issue #%d: %s", issue.number, exc)
             return 1
 
     try:

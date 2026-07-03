@@ -240,9 +240,7 @@ class SqliteConsoleStore:
                 )
                 connection.commit()
         except Exception as exc:  # noqa: BLE001 - side-channel must not break runs.
-            _logger.warning(
-                "Failed to append attempt record to %s: %s", self._db_path, exc
-            )
+            _logger.warning("Failed to append attempt record to %s: %s", self._db_path, exc)
 
     def append_audit(self, audit_entry: AuditEntry) -> None:
         """追加审计条目；失败时降级为日志警告。"""
@@ -266,13 +264,9 @@ class SqliteConsoleStore:
                 )
                 connection.commit()
         except Exception as exc:  # noqa: BLE001 - side-channel must not break actions.
-            _logger.warning(
-                "Failed to append audit entry to %s: %s", self._db_path, exc
-            )
+            _logger.warning("Failed to append audit entry to %s: %s", self._db_path, exc)
 
-    def list_recent_runs(
-        self, *, repo_id: str | None = None, limit: int = 100
-    ) -> list[RunRecord]:
+    def list_recent_runs(self, *, repo_id: str | None = None, limit: int = 100) -> list[RunRecord]:
         """倒序列出最近的运行记录。"""
         query = (
             "SELECT repo_id, repo_path, issue_number, trigger, agent, outcome, "
@@ -330,9 +324,7 @@ class SqliteConsoleStore:
             for audit_row in audit_rows
         ]
 
-    def daily_run_trend(
-        self, *, repo_id: str | None, days: int
-    ) -> list[DailyRunTrendEntry]:
+    def daily_run_trend(self, *, repo_id: str | None, days: int) -> list[DailyRunTrendEntry]:
         """按天聚合最近 ``days`` 天的运行结果。"""
         query = (
             "SELECT date(started_at) AS day, "
@@ -481,9 +473,7 @@ class SqliteConsoleStore:
             if repo_id is None:
                 connection.execute("DELETE FROM roadmap_queue")
             else:
-                connection.execute(
-                    "DELETE FROM roadmap_queue WHERE repo_id = ?", (repo_id,)
-                )
+                connection.execute("DELETE FROM roadmap_queue WHERE repo_id = ?", (repo_id,))
             connection.commit()
 
 

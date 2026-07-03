@@ -199,9 +199,7 @@ def detect_os(remote: Remote) -> dict[str, str]:
 
 def install_docker(remote: Remote, os_info: dict[str, str]) -> None:
     """Install Docker via the official repo. Idempotent."""
-    has = remote.run(
-        "command -v docker >/dev/null 2>&1 && echo INSTALLED || echo MISSING"
-    )
+    has = remote.run("command -v docker >/dev/null 2>&1 && echo INSTALLED || echo MISSING")
     if "INSTALLED" in has.stdout:
         # Detect a half-installed Docker (binary present, daemon not running).
         ping = remote.run("docker info >/dev/null 2>&1 && echo OK || echo NOT_RUNNING")
@@ -321,9 +319,7 @@ def read_existing_email(remote: Remote, cfg_dir: str) -> str | None:
     account registered.
     """
     target = f"{cfg_dir}/traefik.yml"
-    cp = remote.run(
-        f"grep -E '^[[:space:]]+email:' {shlex.quote(target)} 2>/dev/null || true"
-    )
+    cp = remote.run(f"grep -E '^[[:space:]]+email:' {shlex.quote(target)} 2>/dev/null || true")
     for line in cp.stdout.splitlines():
         if "email:" not in line:
             continue
@@ -338,9 +334,7 @@ def upload_traefik_config(remote: Remote, app_dir: str, body: str) -> str:
     """Write the static config to ``<app_dir>/traefik/traefik.yml``."""
     cfg_dir = f"{app_dir}/traefik"
     remote.run(f"mkdir -p {shlex.quote(cfg_dir)}/letsencrypt")
-    with tempfile.NamedTemporaryFile(
-        "w", delete=False, suffix=".yml", encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yml", encoding="utf-8") as f:
         f.write(body)
         local = Path(f.name)
     try:
@@ -364,9 +358,7 @@ def _parse_traefik_state(stdout: str) -> tuple[bool, bool]:
     return False, False
 
 
-def ensure_traefik(
-    remote: Remote, app_dir: str, desired_cfg: str, *, force: bool = False
-) -> None:
+def ensure_traefik(remote: Remote, app_dir: str, desired_cfg: str, *, force: bool = False) -> None:
     """Idempotently reconcile the ``preview-traefik`` container with ``desired_cfg``.
 
     Preserves any existing ``letsencrypt/acme.json`` so issued certs are not
@@ -379,9 +371,7 @@ def ensure_traefik(
     le_json = f"{le_dir}/acme.json"
 
     if force:
-        print(
-            "Force mode: removing any existing preview-traefik container and acme.json"
-        )
+        print("Force mode: removing any existing preview-traefik container and acme.json")
         remote.run("docker rm -f preview-traefik 2>/dev/null || true", live=True)
         remote.run(f"rm -f {shlex.quote(le_json)}", live=True)
 
@@ -401,9 +391,7 @@ def ensure_traefik(
 
     cfg_matches = False
     if has_container:
-        cur = remote.run(
-            f"cat {shlex.quote(target_yml)} 2>/dev/null || echo __MISSING__"
-        )
+        cur = remote.run(f"cat {shlex.quote(target_yml)} 2>/dev/null || echo __MISSING__")
         cfg_matches = cur.stdout.strip() == desired_cfg.strip()
 
     if has_container and cfg_matches and is_running:
@@ -457,9 +445,7 @@ def ensure_external_traefik_network(remote: Remote) -> None:
        otherwise the user's Traefik won't discover preview containers.
     """
     remote.run("docker network create traefik 2>/dev/null || true", live=True)
-    state = remote.run(
-        "docker ps --format '{{.Names}}|{{.Image}}|{{.Networks}}' || true"
-    )
+    state = remote.run("docker ps --format '{{.Names}}|{{.Image}}|{{.Networks}}' || true")
     traefik_containers: list[tuple[str, list[str]]] = []
     for line in state.stdout.splitlines():
         parts = line.strip().split("|")
@@ -549,9 +535,7 @@ def create_deploy_user(remote: Remote, args: argparse.Namespace) -> None:
         f"id {shlex.quote(args.deploy_user)} >/dev/null 2>&1 && echo EXISTS || echo MISSING"
     )
     if "EXISTS" in probe.stdout:
-        print(
-            f"  --create-deploy-user: user {args.deploy_user!r} already exists; skipping useradd"
-        )
+        print(f"  --create-deploy-user: user {args.deploy_user!r} already exists; skipping useradd")
     else:
         remote.run(
             f"""
@@ -779,9 +763,7 @@ def _main_after_connect(args: argparse.Namespace, remote: "Remote") -> int:
             f"Detected OS: {os_info.get('ID')} "
             f"{os_info.get('VERSION_CODENAME') or os_info.get('VERSION_ID')}"
         )
-        print(
-            f"Would install Docker: {'no (--skip-docker)' if args.skip_docker else 'yes'}"
-        )
+        print(f"Would install Docker: {'no (--skip-docker)' if args.skip_docker else 'yes'}")
         print(f"Would configure Traefik with cert mode: {args.cert_mode}")
         print(f"Would use app dir: {args.app_dir}")
         print("(check-only: no changes made)")
@@ -810,9 +792,7 @@ def _main_after_connect(args: argparse.Namespace, remote: "Remote") -> int:
         )
         ensure_external_traefik_network(remote)
     else:
-        print(
-            f"==> Writing Traefik config to {args.app_dir}/traefik (mode={args.cert_mode})"
-        )
+        print(f"==> Writing Traefik config to {args.app_dir}/traefik (mode={args.cert_mode})")
         # Resolve ACME email: --email flag wins; otherwise try to reuse from the
         # existing config (idempotent re-runs). Refuse if first-install and no
         # email is given anywhere — LE requires an account to issue certs.

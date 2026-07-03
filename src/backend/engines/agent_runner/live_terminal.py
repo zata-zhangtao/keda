@@ -136,9 +136,7 @@ class RichLiveOutputView(IAgentOutputView):
 
     def _build_renderable(self) -> object:
         """Build the Rich renderable, adapting to the terminal width."""
-        return render_panel_grid(
-            self._console, list(self._panels.values()), self._make_panel
-        )
+        return render_panel_grid(self._console, list(self._panels.values()), self._make_panel)
 
     def append_output(
         self,

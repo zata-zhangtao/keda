@@ -152,8 +152,7 @@ def is_sign_off_gate_only_failure(pr_context: PullRequestContext) -> bool:
         identified as the expected manual gate.
     """
     return bool(pr_context.checks_summary) and all(
-        REALISTIC_VALIDATION_SIGN_OFF_CHECK in check
-        for check in pr_context.checks_summary
+        REALISTIC_VALIDATION_SIGN_OFF_CHECK in check for check in pr_context.checks_summary
     )
 
 
@@ -180,9 +179,7 @@ def build_supervisor_prompt(
         cwd=worktree_path,
         check=False,
     )
-    diff_text = (
-        diff_result.stdout if diff_result.return_code == 0 else "(diff unavailable)"
-    )
+    diff_text = diff_result.stdout if diff_result.return_code == 0 else "(diff unavailable)"
 
     verification_results = run_verification(worktree_path, config, process_runner)
     verification_lines = "\n".join(
@@ -191,9 +188,7 @@ def build_supervisor_prompt(
     )
 
     # 只取最近 10 条并截断到 200 字符，防止上下文过长导致模型注意力稀释或 token 超限
-    issue_comments_text = "\n".join(
-        f"- {comment[:200]}" for comment in issue_comments[-10:]
-    )
+    issue_comments_text = "\n".join(f"- {comment[:200]}" for comment in issue_comments[-10:])
     pr_comments_text = "\n".join(f"- {comment[:200]}" for comment in pr_comments[-10:])
 
     return "\n".join(
@@ -652,9 +647,7 @@ def execute_rebase(
                 check=False,
             )
             conflicted_files = [
-                line.strip()
-                for line in diff_names_result.stdout.splitlines()
-                if line.strip()
+                line.strip() for line in diff_names_result.stdout.splitlines() if line.strip()
             ]
 
             if not conflicted_files and not has_changes(worktree_path, process_runner):
@@ -704,21 +697,15 @@ def execute_rebase(
             request_path = worktree_path / ".agent-runner" / "commit-request.json"
             if request_path.is_file():
                 # 再次确认分支上下文，防止 Agent 中途切换分支
-                _ensure_rebase_context_matches_pr_branch(
-                    worktree_path, process_runner, pr_branch
-                )
+                _ensure_rebase_context_matches_pr_branch(worktree_path, process_runner, pr_branch)
                 _ = read_commit_request(worktree_path, issue)
                 remove_commit_request(worktree_path)
                 if not has_changes(worktree_path, process_runner):
-                    raise RuntimeError(
-                        "Agent requested a commit but produced no file changes."
-                    )
+                    raise RuntimeError("Agent requested a commit but produced no file changes.")
                 validate_safe_changes(worktree_path, config, process_runner)
                 process_runner.run(["git", "add", "-A"], cwd=worktree_path)
                 # continue 前验证冲突解决结果
-                verification_results = run_verification(
-                    worktree_path, config, process_runner
-                )
+                verification_results = run_verification(worktree_path, config, process_runner)
                 if failed_verification_results(verification_results):
                     # 验证失败则取消 staging，让 agent 下一轮继续修
                     process_runner.run(
@@ -835,9 +822,7 @@ def execute_repair(
 
     current_branch = get_current_branch(worktree_path, process_runner)
     if current_branch != pr_branch:
-        raise RuntimeError(
-            f"Repair aborted: on branch {current_branch}, expected {pr_branch}"
-        )
+        raise RuntimeError(f"Repair aborted: on branch {current_branch}, expected {pr_branch}")
 
     repair_prompt = "\n".join(
         [
@@ -899,9 +884,7 @@ def execute_repair(
                     ".agent-runner/commit-request.json."
                 )
             # Agent 未修改时仍需验证当前代码
-            verification_results = run_verification(
-                worktree_path, config, process_runner
-            )
+            verification_results = run_verification(worktree_path, config, process_runner)
             if failed_verification_results(verification_results):
                 if attempt >= max_attempts:
                     ensure_verification_passed(verification_results)
@@ -964,9 +947,7 @@ def run_post_pr_supervisor_cycle(
 
     # 获取远程 base 分支最新 SHA，用于判断 PR 是否落后于 base，
     # 并在提示词中给模型提供合并基线参考
-    base_sha_remote = github_client.get_remote_base_sha(
-        config.git.remote, config.git.base_branch
-    )
+    base_sha_remote = github_client.get_remote_base_sha(config.git.remote, config.git.base_branch)
 
     supervisor_prompt = build_supervisor_prompt(
         issue=issue,
@@ -986,12 +967,8 @@ def run_post_pr_supervisor_cycle(
     # 分钟级的 API 提供方中断，而不仅是秒级抖动
     max_crash_retries = max(0, config.post_pr_supervisor.max_agent_crash_retries)
     max_attempts = max_crash_retries + 1
-    initial_backoff_seconds = max(
-        0, config.post_pr_supervisor.crash_retry_initial_backoff_seconds
-    )
-    max_backoff_seconds = max(
-        0, config.post_pr_supervisor.crash_retry_max_backoff_seconds
-    )
+    initial_backoff_seconds = max(0, config.post_pr_supervisor.crash_retry_initial_backoff_seconds)
+    max_backoff_seconds = max(0, config.post_pr_supervisor.crash_retry_max_backoff_seconds)
     response_text = ""
     crash_exit_code: int | None = None
     for attempt in range(1, max_attempts + 1):
@@ -1041,8 +1018,7 @@ def run_post_pr_supervisor_cycle(
                 )
                 if backoff_seconds > 0:
                     _logger.info(
-                        "Waiting %d seconds before supervisor retry %d/%d "
-                        "for Issue #%d.",
+                        "Waiting %d seconds before supervisor retry %d/%d " "for Issue #%d.",
                         backoff_seconds,
                         attempt + 1,
                         max_attempts,

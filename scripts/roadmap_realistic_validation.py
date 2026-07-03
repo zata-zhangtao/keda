@@ -51,9 +51,7 @@ class FakeGitHubClient:
     labels: dict[int, set[str]] = field(default_factory=dict)
 
     def create_issue(self, *, title: str, body: str, labels: Sequence[str]) -> str:
-        self.calls.append(
-            {"method": "create_issue", "title": title, "labels": list(labels)}
-        )
+        self.calls.append({"method": "create_issue", "title": title, "labels": list(labels)})
         number = self.next_issue_number
         self.next_issue_number += 1
         self.labels[number] = set(labels)
@@ -125,11 +123,7 @@ class FakeProcessRunner(IProcessRunner):
             stdout = ""
             stderr = ""
 
-        if (
-            command[0] == "git"
-            and command[1] == "branch"
-            and command[2] == "--show-current"
-        ):
+        if command[0] == "git" and command[1] == "branch" and command[2] == "--show-current":
             Result.stdout = "main\n"
         elif command[0] == "git" and command[1] == "status":
             Result.stdout = ""
@@ -182,9 +176,7 @@ class FakeSupervisor(IRunnerProcessSupervisor):
     def stop(self, process_id: str, *, timeout_seconds: int) -> RunnerProcessRecord:
         raise KeyError(process_id)
 
-    def read_log(
-        self, process_id: str, *, offset: int, max_bytes: int
-    ) -> ProcessLogChunk:
+    def read_log(self, process_id: str, *, offset: int, max_bytes: int) -> ProcessLogChunk:
         return ProcessLogChunk(content="", next_offset=offset, eof=True)
 
 
@@ -281,15 +273,11 @@ def run_rv1(client: TestClient, env: dict, evidence: dict) -> None:
     assert issue_number is not None
 
     edit_calls = [c for c in gh.calls if c["method"] == "edit_issue_labels"]
-    ready_call = next(
-        (c for c in edit_calls if "agent/ready" in c.get("add", [])), None
-    )
+    ready_call = next((c for c in edit_calls if "agent/ready" in c.get("add", [])), None)
     assert ready_call is not None
     assert ready_call["issue_number"] == issue_number
 
-    git_commands = [
-        " ".join(c) for c in env["process_runner"].commands if c[0] == "git"
-    ]
+    git_commands = [" ".join(c) for c in env["process_runner"].commands if c[0] == "git"]
     assert any("git add" in cmd for cmd in git_commands)
     assert any("git commit" in cmd for cmd in git_commands)
     assert any("git push" in cmd for cmd in git_commands)
@@ -396,9 +384,7 @@ def main() -> int:
 
     poll_path = EVIDENCE_DIR / "roadmap-rv2-poll.jsonl"
     poll_lines = [
-        json.dumps(
-            {"started": evidence["rv2"]["started"], "queued": evidence["rv2"]["queued"]}
-        ),
+        json.dumps({"started": evidence["rv2"]["started"], "queued": evidence["rv2"]["queued"]}),
     ]
     poll_path.write_text("\n".join(poll_lines) + "\n", encoding="utf-8")
 

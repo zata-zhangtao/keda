@@ -110,9 +110,7 @@ def _truncate_prompt(prompt: str, max_chars: int) -> str:
         return prompt
     keep_each = (max_chars - 50) // 2
     return (
-        prompt[:keep_each]
-        + "\n\n...[context truncated due to length]...\n\n"
-        + prompt[-keep_each:]
+        prompt[:keep_each] + "\n\n...[context truncated due to length]...\n\n" + prompt[-keep_each:]
     )
 
 
@@ -380,15 +378,11 @@ def validate_decision_plan(
         # Required parameter validation
         if action.action_type == DecisionActionType.CREATE_ISSUE_FROM_PRD:
             if "prd_path" not in action.parameters:
-                raise ValueError(
-                    f"Action '{action.action_id}' requires 'prd_path' parameter"
-                )
+                raise ValueError(f"Action '{action.action_id}' requires 'prd_path' parameter")
 
         if action.action_type == DecisionActionType.MARK_ISSUE_READY:
             if "issue_number" not in action.parameters:
-                raise ValueError(
-                    f"Action '{action.action_id}' requires 'issue_number' parameter"
-                )
+                raise ValueError(f"Action '{action.action_id}' requires 'issue_number' parameter")
 
         # PRD path validation
         prd_path_param = action.parameters.get("prd_path")
@@ -527,9 +521,7 @@ def write_decision_audit(
     decision_dir = output_dir / plan.decision_id
     _write_json(decision_dir / "plan.json", _plan_to_dict(plan))
     (decision_dir / "plan.md").write_text(_plan_to_markdown(plan), encoding="utf-8")
-    _write_json(
-        decision_dir / "context-summary.json", _context_to_dict(decision_context)
-    )
+    _write_json(decision_dir / "context-summary.json", _context_to_dict(decision_context))
 
 
 def write_execution_audit(
@@ -556,9 +548,7 @@ def write_execution_audit(
         "",
     ]
     for ar in result.action_results:
-        lines.append(
-            f"- {ar.get('action_id', 'unknown')}: {ar.get('status', 'unknown')}"
-        )
+        lines.append(f"- {ar.get('action_id', 'unknown')}: {ar.get('status', 'unknown')}")
         if ar.get("error"):
             lines.append(f"  - Error: {ar['error']}")
     lines.append("")
@@ -834,15 +824,12 @@ def execute_decision_plan(
                 result = _execute_review_once(
                     action,
                     context,
-                    dry_run=action.action_type
-                    == DecisionActionType.REVIEW_ONCE_DRY_RUN,
+                    dry_run=action.action_type == DecisionActionType.REVIEW_ONCE_DRY_RUN,
                     process_runner=process_runner,
                     github_client=github_client,
                 )
             elif action.action_type == DecisionActionType.RUN_DELIBERATION:
-                result = _execute_run_deliberation(
-                    action, context, config, deliberation_deps
-                )
+                result = _execute_run_deliberation(action, context, config, deliberation_deps)
             elif action.action_type == DecisionActionType.NEEDS_CLARIFICATION:
                 result = _execute_needs_clarification(action)
             elif action.action_type == DecisionActionType.NO_OP:
@@ -921,9 +908,7 @@ def run_interactive_decision(
         timeout=config.planner_timeout_seconds,
     )
     if planner_result.return_code != 0:
-        _logger.error(
-            "Planner agent failed with exit code %d", planner_result.return_code
-        )
+        _logger.error("Planner agent failed with exit code %d", planner_result.return_code)
         return 1
 
     # 3. Parse plan
@@ -950,9 +935,7 @@ def run_interactive_decision(
     print(f"Risk: {plan.risk_level.value}")
     print("\nRecommended actions:")
     for action in plan.actions:
-        state_marker = (
-            " (writes external state)" if action.writes_external_state else ""
-        )
+        state_marker = " (writes external state)" if action.writes_external_state else ""
         print(f"  [{action.action_id}] {action.action_type.value}{state_marker}")
         print(f"       {action.rationale}")
     if plan.warnings:

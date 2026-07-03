@@ -189,9 +189,7 @@ def test_iar_init_protects_diverged_config(
 
     assert main(["init"]) == 0
     config_path = repo_path / ".iar.toml"
-    config_path.write_text(
-        config_path.read_text(encoding="utf-8") + "\n# extra", encoding="utf-8"
-    )
+    config_path.write_text(config_path.read_text(encoding="utf-8") + "\n# extra", encoding="utf-8")
 
     assert main(["init"]) == 1
     assert "# extra" in config_path.read_text(encoding="utf-8")
@@ -326,9 +324,7 @@ def test_detect_verification_commands_justfile_without_test_recipe_uses_pytest(
         encoding="utf-8",
     )
     (repo_path / "tests").mkdir()
-    (repo_path / "justfile").write_text(
-        "lint:\n    uv run ruff check .\n", encoding="utf-8"
-    )
+    (repo_path / "justfile").write_text("lint:\n    uv run ruff check .\n", encoding="utf-8")
 
     assert detect_verification_commands(repo_path) == [
         "git diff --check",
@@ -740,9 +736,7 @@ def test_ensure_gitignore_skips_when_opted_out(tmp_path: Path) -> None:
     repo_path = tmp_path / "target"
     repo_path.mkdir()
 
-    result = ensure_gitignore_entries(
-        GitignoreSyncOptions(repo_root_path=repo_path, skip=True)
-    )
+    result = ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path, skip=True))
 
     assert result.skipped is True
     assert result.block_inserted is False
@@ -755,9 +749,7 @@ def test_ensure_gitignore_dry_run_does_not_write(tmp_path: Path) -> None:
     repo_path = tmp_path / "target"
     repo_path.mkdir()
 
-    result = ensure_gitignore_entries(
-        GitignoreSyncOptions(repo_root_path=repo_path, dry_run=True)
-    )
+    result = ensure_gitignore_entries(GitignoreSyncOptions(repo_root_path=repo_path, dry_run=True))
 
     assert result.dry_run is True
     assert result.block_inserted is True
@@ -815,9 +807,7 @@ def test_ensure_gitignore_preserves_postlude_text(tmp_path: Path) -> None:
     assert text.endswith("\n# trailing section\nbar/\n")
 
 
-def test_iar_init_writes_gitignore_block(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_iar_init_writes_gitignore_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``iar init`` should add the iar .gitignore block on a fresh repo."""
     repo_path = _init_git_repository(tmp_path, "target")
     monkeypatch.chdir(repo_path)

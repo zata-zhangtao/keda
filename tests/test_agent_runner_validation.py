@@ -200,9 +200,7 @@ def test_build_issue_validation_section_with_items_and_waiver() -> None:
     assert "## Realistic Validation" in checklist_section
     assert "- [ ] item" in checklist_section
 
-    waiver_section = build_issue_validation_section(
-        checklist_items=[], waiver_reason="docs only"
-    )
+    waiver_section = build_issue_validation_section(checklist_items=[], waiver_reason="docs only")
     assert "iar:validation-waived" in waiver_section
     assert "- [ ]" not in waiver_section
 
@@ -288,9 +286,7 @@ def test_ensure_validation_evidence_ready_passes_with_evidence(
     (evidence_dir / "rv-2-serve.txt").write_text("$ demo serve", encoding="utf-8")
     ensure_validation_evidence_ready(_issue(), tmp_path, config)
 
-    ensure_validation_evidence_ready(
-        _issue(body="no checklist"), tmp_path / "missing", config
-    )
+    ensure_validation_evidence_ready(_issue(body="no checklist"), tmp_path / "missing", config)
 
 
 def test_ensure_validation_evidence_ready_rejects_uncovered_item(
@@ -388,9 +384,7 @@ def test_format_check_disabled_by_issue_marker(tmp_path: Path) -> None:
     with pytest.raises(ValidationEvidenceError):
         ensure_validation_evidence_ready(_issue(), tmp_path, config)
 
-    waived_body = _ISSUE_BODY_WITH_VALIDATION + format_evidence_format_waiver_marker(
-        "局部豁免理由"
-    )
+    waived_body = _ISSUE_BODY_WITH_VALIDATION + format_evidence_format_waiver_marker("局部豁免理由")
     ensure_validation_evidence_ready(_issue(body=waived_body), tmp_path, config)
 
 
@@ -431,9 +425,7 @@ def test_collect_evidence_coverage_problems_matches_items() -> None:
         "- [ ] 帧流登录真实验证：浏览器操作（截图留证）。",
         "- [ ] WebSocket 端点真实验证：pytest 真实入口。",
     ]
-    problems = collect_evidence_coverage_problems(
-        checklist_items, [Path("rv-1-frame.txt")]
-    )
+    problems = collect_evidence_coverage_problems(checklist_items, [Path("rv-1-frame.txt")])
     assert len(problems) == 2
     assert "screenshot" in problems[0]
     assert "item 2" in problems[1]
@@ -749,9 +741,7 @@ def test_publish_validation_evidence_posts_pr_comment(tmp_path: Path) -> None:
     )
 
     assert upload is not None
-    pr_comment_calls = [
-        call for call in fake_client.calls if call["method"] == "comment_pr"
-    ]
+    pr_comment_calls = [call for call in fake_client.calls if call["method"] == "comment_pr"]
     assert len(pr_comment_calls) == 1
     assert pr_comment_calls[0]["pr_number"] == 7
     assert "iar:validation-evidence" in pr_comment_calls[0]["body"]
@@ -784,9 +774,7 @@ def test_publish_changes_appends_checklist_block(tmp_path: Path) -> None:
     """PR bodies gain the marker-wrapped human sign-off checklist."""
     fake_runner = FakeProcessRunner(
         responses={
-            ("git", "branch", "--show-current"): CommandResult(
-                ("git",), 0, "task/42\n", ""
-            ),
+            ("git", "branch", "--show-current"): CommandResult(("git",), 0, "task/42\n", ""),
             ("git", "remote"): CommandResult(("git",), 0, "origin\n", ""),
         }
     )
@@ -800,9 +788,7 @@ def test_publish_changes_appends_checklist_block(tmp_path: Path) -> None:
         fake_runner,
     )
 
-    draft_pr_call = next(
-        call for call in fake_client.calls if call["method"] == "create_draft_pr"
-    )
+    draft_pr_call = next(call for call in fake_client.calls if call["method"] == "create_draft_pr")
     assert "iar:realistic-validation version=1 total=2" in draft_pr_call["body"]
     assert "iar:realistic-validation-end" in draft_pr_call["body"]
 
@@ -811,9 +797,7 @@ def test_publish_changes_skips_checklist_for_waived_issue(tmp_path: Path) -> Non
     """Waived issues publish without the sign-off checklist."""
     fake_runner = FakeProcessRunner(
         responses={
-            ("git", "branch", "--show-current"): CommandResult(
-                ("git",), 0, "task/42\n", ""
-            ),
+            ("git", "branch", "--show-current"): CommandResult(("git",), 0, "task/42\n", ""),
             ("git", "remote"): CommandResult(("git",), 0, "origin\n", ""),
         }
     )
@@ -828,9 +812,7 @@ def test_publish_changes_skips_checklist_for_waived_issue(tmp_path: Path) -> Non
         fake_runner,
     )
 
-    draft_pr_call = next(
-        call for call in fake_client.calls if call["method"] == "create_draft_pr"
-    )
+    draft_pr_call = next(call for call in fake_client.calls if call["method"] == "create_draft_pr")
     assert "iar:realistic-validation" not in draft_pr_call["body"]
 
 
@@ -912,9 +894,7 @@ def test_gate_keeps_pending_while_unchecked(tmp_path: Path) -> None:
         process_runner=FakeProcessRunner(),
     )
 
-    label_calls = [
-        call for call in gate_client.calls if call["method"] == "edit_issue_labels"
-    ]
+    label_calls = [call for call in gate_client.calls if call["method"] == "edit_issue_labels"]
     assert label_calls == [
         {
             "method": "edit_issue_labels",
@@ -936,9 +916,7 @@ def test_gate_passes_and_audits_once(tmp_path: Path) -> None:
         process_runner=FakeProcessRunner(),
     )
 
-    label_calls = [
-        call for call in gate_client.calls if call["method"] == "edit_issue_labels"
-    ]
+    label_calls = [call for call in gate_client.calls if call["method"] == "edit_issue_labels"]
     assert label_calls[0]["add"] == ["validation/passed"]
     audit_comments = [
         call
@@ -978,9 +956,7 @@ def test_gate_resets_stale_sign_off(tmp_path: Path) -> None:
     )
 
     body_updates = [
-        call
-        for call in gate_client.calls
-        if call["method"] == "update_pull_request_body"
+        call for call in gate_client.calls if call["method"] == "update_pull_request_body"
     ]
     assert len(body_updates) == 1
     reset_state = parse_validation_checklist_state(body_updates[0]["body"])
@@ -992,10 +968,33 @@ def test_gate_resets_stale_sign_off(tmp_path: Path) -> None:
         if call["method"] == "comment_pr" and "validation_reset" in call["body"]
     ]
     assert len(reset_comments) == 1
-    label_calls = [
-        call for call in gate_client.calls if call["method"] == "edit_issue_labels"
-    ]
+    label_calls = [call for call in gate_client.calls if call["method"] == "edit_issue_labels"]
     assert label_calls[0]["add"] == ["validation/pending"]
+
+
+def test_gate_resets_verifier_passed_label_on_head_drift(tmp_path: Path) -> None:
+    """Head drift clears `validation/verifier-passed` (stale verdict guard, FR-5/6)."""
+    gate_client, _review_issue = _gate_setup(
+        pr_body=_checklist_pr_body(ticked=True),
+        pr_head="def2222",  # PR head moved on
+        evidence_head="abc1111",  # evidence was captured at old SHA
+        issue_labels=("agent/review", "validation/verifier-passed"),
+    )
+
+    process_validation_gate(
+        repo_path=tmp_path,
+        config=AppConfig(),
+        github_client=gate_client,
+        process_runner=FakeProcessRunner(),
+    )
+
+    remove_calls = [
+        call
+        for call in gate_client.calls
+        if call["method"] == "edit_issue_labels" and call.get("remove")
+    ]
+    removed_labels = {label for call in remove_calls for label in call["remove"]}
+    assert "validation/verifier-passed" in removed_labels
 
 
 def test_gate_skips_issue_without_checklist_block(tmp_path: Path) -> None:
@@ -1126,9 +1125,7 @@ def test_create_issue_materializes_validation_checklist(tmp_path: Path) -> None:
         github_client=fake_client,
     )
 
-    create_call = next(
-        call for call in fake_client.calls if call["method"] == "create_issue"
-    )
+    create_call = next(call for call in fake_client.calls if call["method"] == "create_issue")
     assert "## Realistic Validation" in create_call["body"]
     assert "The executing agent MUST run each item" in create_call["body"]
     assert create_call["body"].count("- [ ] **行为") >= 2
@@ -1151,9 +1148,7 @@ def test_create_issue_materializes_waiver_marker(tmp_path: Path) -> None:
         github_client=fake_client,
     )
 
-    create_call = next(
-        call for call in fake_client.calls if call["method"] == "create_issue"
-    )
+    create_call = next(call for call in fake_client.calls if call["method"] == "create_issue")
     assert "iar:validation-waived" in create_call["body"]
     assert "## Realistic Validation" in create_call["body"]
     body_validation_state = parse_validation_checklist_state(create_call["body"])
@@ -1388,9 +1383,7 @@ def test_validate_evidence_manifest_computes_sha256(
     )
     assert len(report.items) == 2
     assert all(len(item.files) == 1 for item in report.items)
-    assert all(
-        len(file_info.sha256) == 64 for item in report.items for file_info in item.files
-    )
+    assert all(len(file_info.sha256) == 64 for item in report.items for file_info in item.files)
 
 
 def test_validate_evidence_manifest_rejects_missing_negative_control(
@@ -1609,16 +1602,12 @@ def test_ensure_validation_commands_pass_cache_disabled_always_reruns(
     responses = _clean_tree_git_responses("tree-aaa")
 
     first = FakeProcessRunner(responses=responses)
-    ensure_validation_commands_pass(
-        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, config, first
-    )
+    ensure_validation_commands_pass(_issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, config, first)
     assert ["bash", "-lc", "demo run"] in first.raw_calls
     assert not (tmp_path / ".iar" / "rv_reexec_cache.json").exists()
 
     second = FakeProcessRunner(responses=responses)
-    ensure_validation_commands_pass(
-        _issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, config, second
-    )
+    ensure_validation_commands_pass(_issue(body=_STRUCTURED_ISSUE_BODY), tmp_path, config, second)
     assert ["bash", "-lc", "demo run"] in second.raw_calls
 
 
@@ -1759,9 +1748,7 @@ def test_create_issue_materializes_structured_evidence_marker(
         github_client=fake_client,
     )
 
-    create_call = next(
-        call for call in fake_client.calls if call["method"] == "create_issue"
-    )
+    create_call = next(call for call in fake_client.calls if call["method"] == "create_issue")
     assert 'iar:structured-evidence version=1 language="zh-CN"' in create_call["body"]
 
 
@@ -1784,7 +1771,5 @@ def test_create_issue_omits_structured_marker_when_disabled(
         github_client=fake_client,
     )
 
-    create_call = next(
-        call for call in fake_client.calls if call["method"] == "create_issue"
-    )
+    create_call = next(call for call in fake_client.calls if call["method"] == "create_issue")
     assert "iar:structured-evidence" not in create_call["body"]

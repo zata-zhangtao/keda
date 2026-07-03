@@ -88,9 +88,7 @@ def test_retry_failed_flips_labels_and_audits(tmp_path: Path) -> None:
     )
 
     assert action_result.result == "accepted"
-    assert github_client.label_edits == [
-        (19, (config.labels.ready,), (config.labels.failed,))
-    ]
+    assert github_client.label_edits == [(19, (config.labels.ready,), (config.labels.failed,))]
     audits = store.list_recent_audits(limit=10)
     assert audits[0].action == "retry_failed"
     assert audits[0].result == "accepted"

@@ -91,9 +91,7 @@ def test_cli_parser_issue_create_defaults() -> None:
 def test_cli_parser_issue_create_multiple_paths() -> None:
     """issue create should accept multiple PRD paths."""
     parser = build_parser()
-    parsed = parser.parse_args(
-        ["issue", "create", "tasks/a.md", "tasks/b.md", "--ready"]
-    )
+    parsed = parser.parse_args(["issue", "create", "tasks/a.md", "tasks/b.md", "--ready"])
     assert parsed.command == "issue create"
     assert parsed.issue_command == "create"
     assert parsed.prd_paths == ["tasks/a.md", "tasks/b.md"]
@@ -115,9 +113,7 @@ def test_cli_parser_issue_create_publish_prd() -> None:
 def test_cli_parser_issue_create_no_publish_prd() -> None:
     """issue create should allow opting out of the default PRD publishing."""
     parser = build_parser()
-    parsed = parser.parse_args(
-        ["issue", "create", "tasks/example.md", "--no-publish-prd"]
-    )
+    parsed = parser.parse_args(["issue", "create", "tasks/example.md", "--no-publish-prd"])
     assert parsed.command == "issue create"
     assert parsed.issue_command == "create"
     assert parsed.publish_prd is False
@@ -182,9 +178,7 @@ def test_expand_prd_paths_deduplicates(tmp_path: Path) -> None:
     (tmp_path / "tasks" / "pending").mkdir(parents=True)
     (tmp_path / "tasks" / "pending" / "a.md").write_text("# A", encoding="utf-8")
 
-    expanded, skipped = _expand_prd_paths(
-        tmp_path, ["tasks/pending", "tasks/pending/a.md"]
-    )
+    expanded, skipped = _expand_prd_paths(tmp_path, ["tasks/pending", "tasks/pending/a.md"])
 
     assert expanded == ["tasks/pending/a.md"]
     assert skipped == []
@@ -267,9 +261,7 @@ def test_expand_prd_paths_all_linked_in_directory_returns_empty(
 def test_cli_parser_run() -> None:
     """run should accept dry-run and agent flags."""
     parser = build_parser()
-    parsed = parser.parse_args(
-        ["run", "--dry-run", "--agent", "claude", "--max-issues", "5"]
-    )
+    parsed = parser.parse_args(["run", "--dry-run", "--agent", "claude", "--max-issues", "5"])
     assert parsed.command == "run"
     assert parsed.dry_run is True
     assert parsed.agent == "claude"
@@ -374,9 +366,7 @@ def test_cli_parser_daemon() -> None:
 def test_cli_parser_daemon_run_explicit() -> None:
     """daemon run should accept the same options as the legacy daemon form."""
     parser = build_parser()
-    parsed = parser.parse_args(
-        ["daemon", "run", "--interval", "300", "--max-issues", "2"]
-    )
+    parsed = parser.parse_args(["daemon", "run", "--interval", "300", "--max-issues", "2"])
     assert parsed.command == "daemon"
     assert parsed.daemon_command == "run"
     assert parsed.interval == 300
@@ -418,12 +408,15 @@ def test_main_daemon_default_interval_uses_config(monkeypatch) -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon, patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized"
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli.run_agent_daemon") as mock_daemon,
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["daemon", "--all"])
 
     assert exit_code == 0
@@ -441,12 +434,15 @@ def test_main_review_daemon_default_interval_uses_config(monkeypatch) -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli.run_review_daemon") as mock_daemon, patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized"
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli.run_review_daemon") as mock_daemon,
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["review-daemon", "--all"])
 
     assert exit_code == 0
@@ -464,12 +460,15 @@ def test_main_daemon_interval_override(monkeypatch) -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon, patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized"
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli.run_agent_daemon") as mock_daemon,
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["daemon", "--all", "--interval", "300"])
 
     assert exit_code == 0
@@ -521,15 +520,19 @@ def test_main_daemon_status_shows_managed_and_unmanaged(capsys, monkeypatch) -> 
 
     monkeypatch.setenv("COLUMNS", "200")
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=mock_supervisor,
-    ), patch(
-        "backend.api.cli_registry.create_registry_editor",
-        return_value=mock_editor,
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.create_registry_editor",
+            return_value=mock_editor,
+        ),
     ):
         exit_code = main(["daemon", "status", "--repo-id", "repo"])
 
@@ -547,9 +550,7 @@ def test_main_daemon_status_shows_managed_and_unmanaged(capsys, monkeypatch) -> 
     assert "/tmp/log" in output
 
 
-def test_main_daemon_status_shows_dash_for_unmanaged_log_path(
-    capsys, monkeypatch
-) -> None:
+def test_main_daemon_status_shows_dash_for_unmanaged_log_path(capsys, monkeypatch) -> None:
     """Unmanaged processes with empty log_path should show '-' in the table."""
     from backend.api.cli import main
 
@@ -582,15 +583,19 @@ def test_main_daemon_status_shows_dash_for_unmanaged_log_path(
 
     monkeypatch.setenv("COLUMNS", "200")
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=mock_supervisor,
-    ), patch(
-        "backend.api.cli_registry.create_registry_editor",
-        return_value=mock_editor,
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.create_registry_editor",
+            return_value=mock_editor,
+        ),
     ):
         exit_code = main(["daemon", "status", "--repo-id", "repo"])
 
@@ -619,15 +624,19 @@ def test_main_daemon_status_empty(capsys, monkeypatch) -> None:
     mock_editor = MagicMock()
     mock_editor.list_repositories.return_value = []
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=mock_supervisor,
-    ), patch(
-        "backend.api.cli_registry.create_registry_editor",
-        return_value=mock_editor,
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
+        patch(
+            "backend.api.cli_registry.create_registry_editor",
+            return_value=mock_editor,
+        ),
     ):
         exit_code = main(["daemon", "status", "--repo-id", "repo"])
 
@@ -793,14 +802,16 @@ def test_main_passes_all_repositories_selector() -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ) as mock_resolve, patch(
-        "backend.api.cli.run_agent_repositories_once", return_value=0
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ) as mock_resolve,
+        patch("backend.api.cli.run_agent_repositories_once", return_value=0),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["run", "--all", "--dry-run"])
 
     assert exit_code == 0
@@ -816,14 +827,16 @@ def test_main_run_passes_all_repositories_selector() -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ) as mock_resolve, patch(
-        "backend.api.cli.run_agent_repositories_once", return_value=0
-    ) as mock_run, patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ) as mock_resolve,
+        patch("backend.api.cli.run_agent_repositories_once", return_value=0) as mock_run,
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["run", "--all", "--dry-run", "--agent", "codex"])
 
     assert exit_code == 0
@@ -848,25 +861,32 @@ def test_main_daemon_cwd_matches_enabled_single_repo(monkeypatch) -> None:
         "keda-main": MagicMock(path="/tmp/repo", enabled=True),
     }
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized"
-    ), patch("backend.api.cli.require_iar_repository_initialized"), patch(
-        "backend.api.cli_helpers.detect_git_repository_root",
-        return_value=Path("/tmp/repo"),
-    ), patch(
-        "backend.api.cli_helpers.load_fresh_agent_runner_settings",
-        return_value=settings,
-    ), patch(
-        # Isolate from the real ``~/.iar/daemon-locks`` so the test is
-        # deterministic regardless of any daemon actually running on the
-        # machine; this test checks cwd repo resolution, not
-        # single-instance locking.
-        "backend.api.cli.acquire_daemon_locks",
-        return_value=[],
-    ), patch("backend.api.cli.release_daemon_locks"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ) as mock_resolve,
+        patch("backend.api.cli.run_agent_daemon"),
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+        patch(
+            "backend.api.cli_helpers.detect_git_repository_root",
+            return_value=Path("/tmp/repo"),
+        ),
+        patch(
+            "backend.api.cli_helpers.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
+        patch(
+            # Isolate from the real ``~/.iar/daemon-locks`` so the test is
+            # deterministic regardless of any daemon actually running on the
+            # machine; this test checks cwd repo resolution, not
+            # single-instance locking.
+            "backend.api.cli.acquire_daemon_locks",
+            return_value=[],
+        ),
+        patch("backend.api.cli.release_daemon_locks"),
+    ):
         exit_code = main(["daemon"])
 
     assert exit_code == 0
@@ -890,17 +910,22 @@ def test_main_review_daemon_cwd_matches_enabled_single_repo(monkeypatch) -> None
         "keda-main": MagicMock(path="/tmp/repo", enabled=True),
     }
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ) as mock_resolve, patch("backend.api.cli.run_review_daemon"), patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized"
-    ), patch("backend.api.cli.require_iar_repository_initialized"), patch(
-        "backend.api.cli_helpers.detect_git_repository_root",
-        return_value=Path("/tmp/repo"),
-    ), patch(
-        "backend.api.cli_helpers.load_fresh_agent_runner_settings",
-        return_value=settings,
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ) as mock_resolve,
+        patch("backend.api.cli.run_review_daemon"),
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+        patch(
+            "backend.api.cli_helpers.detect_git_repository_root",
+            return_value=Path("/tmp/repo"),
+        ),
+        patch(
+            "backend.api.cli_helpers.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
     ):
         exit_code = main(["review-daemon"])
 
@@ -920,12 +945,15 @@ def test_main_daemon_cwd_disabled_repo_rejected(monkeypatch) -> None:
         "keda-main": MagicMock(path="/tmp/repo", enabled=False),
     }
 
-    with patch(
-        "backend.api.cli_helpers.detect_git_repository_root",
-        return_value=Path("/tmp/repo"),
-    ), patch(
-        "backend.api.cli_helpers.load_fresh_agent_runner_settings",
-        return_value=settings,
+    with (
+        patch(
+            "backend.api.cli_helpers.detect_git_repository_root",
+            return_value=Path("/tmp/repo"),
+        ),
+        patch(
+            "backend.api.cli_helpers.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
     ):
         exit_code = main(["daemon"])
 
@@ -944,12 +972,15 @@ def test_main_daemon_cwd_ambiguous_repo_rejected(monkeypatch) -> None:
         "keda-alias": MagicMock(path="/tmp/repo", enabled=True),
     }
 
-    with patch(
-        "backend.api.cli_helpers.detect_git_repository_root",
-        return_value=Path("/tmp/repo"),
-    ), patch(
-        "backend.api.cli_helpers.load_fresh_agent_runner_settings",
-        return_value=settings,
+    with (
+        patch(
+            "backend.api.cli_helpers.detect_git_repository_root",
+            return_value=Path("/tmp/repo"),
+        ),
+        patch(
+            "backend.api.cli_helpers.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
     ):
         exit_code = main(["daemon"])
 
@@ -967,16 +998,21 @@ def test_main_daemon_cwd_no_match_rejected(monkeypatch) -> None:
         "other-repo": MagicMock(path="/tmp/other", enabled=True),
     }
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized"
-    ), patch("backend.api.cli.require_iar_repository_initialized"), patch(
-        "backend.api.cli_helpers.detect_git_repository_root",
-        return_value=Path("/tmp/repo"),
-    ), patch(
-        "backend.api.cli_helpers.load_fresh_agent_runner_settings",
-        return_value=settings,
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+        ) as mock_resolve,
+        patch("backend.api.cli.run_agent_daemon"),
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+        patch(
+            "backend.api.cli_helpers.detect_git_repository_root",
+            return_value=Path("/tmp/repo"),
+        ),
+        patch(
+            "backend.api.cli_helpers.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
     ):
         exit_code = main(["daemon"])
 
@@ -995,16 +1031,21 @@ def test_main_review_daemon_cwd_no_match_rejected(monkeypatch) -> None:
         "other-repo": MagicMock(path="/tmp/other", enabled=True),
     }
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-    ) as mock_resolve, patch("backend.api.cli.run_review_daemon"), patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized"
-    ), patch("backend.api.cli.require_iar_repository_initialized"), patch(
-        "backend.api.cli_helpers.detect_git_repository_root",
-        return_value=Path("/tmp/repo"),
-    ), patch(
-        "backend.api.cli_helpers.load_fresh_agent_runner_settings",
-        return_value=settings,
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+        ) as mock_resolve,
+        patch("backend.api.cli.run_review_daemon"),
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+        patch(
+            "backend.api.cli_helpers.detect_git_repository_root",
+            return_value=Path("/tmp/repo"),
+        ),
+        patch(
+            "backend.api.cli_helpers.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
     ):
         exit_code = main(["review-daemon"])
 
@@ -1018,11 +1059,15 @@ def test_main_daemon_cwd_not_git_rejected(monkeypatch) -> None:
 
     monkeypatch.setenv("IAR_SKIP_GH_AUTH_CHECK", "1")
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
-        "backend.api.cli_helpers.detect_git_repository_root",
-        side_effect=ValueError("not a git repository"),
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+        ) as mock_resolve,
+        patch("backend.api.cli.run_agent_daemon"),
+        patch(
+            "backend.api.cli_helpers.detect_git_repository_root",
+            side_effect=ValueError("not a git repository"),
+        ),
     ):
         exit_code = main(["daemon"])
 
@@ -1041,19 +1086,25 @@ def test_main_daemon_cwd_uninitialized_repo_rejected(monkeypatch) -> None:
         "keda-main": MagicMock(path="/tmp/repo", enabled=True),
     }
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized",
-        side_effect=IARRepositoryNotInitializedError(
-            Path("/tmp/repo"), Path("/tmp/repo/.iar.toml")
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+        ) as mock_resolve,
+        patch("backend.api.cli.run_agent_daemon"),
+        patch(
+            "backend.api.cli_helpers.require_iar_repository_initialized",
+            side_effect=IARRepositoryNotInitializedError(
+                Path("/tmp/repo"), Path("/tmp/repo/.iar.toml")
+            ),
         ),
-    ), patch(
-        "backend.api.cli_helpers.detect_git_repository_root",
-        return_value=Path("/tmp/repo"),
-    ), patch(
-        "backend.api.cli_helpers.load_fresh_agent_runner_settings",
-        return_value=settings,
+        patch(
+            "backend.api.cli_helpers.detect_git_repository_root",
+            return_value=Path("/tmp/repo"),
+        ),
+        patch(
+            "backend.api.cli_helpers.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
     ):
         exit_code = main(["daemon"])
 
@@ -1077,17 +1128,22 @@ def test_main_daemon_explicit_all_targets_all_repositories(monkeypatch) -> None:
         "other-repo": MagicMock(path="/tmp/other", enabled=True),
     }
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized"
-    ), patch("backend.api.cli.require_iar_repository_initialized"), patch(
-        "backend.api.cli_helpers.detect_git_repository_root",
-        return_value=Path("/tmp/repo"),
-    ), patch(
-        "backend.api.cli_helpers.load_fresh_agent_runner_settings",
-        return_value=settings,
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ) as mock_resolve,
+        patch("backend.api.cli.run_agent_daemon"),
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+        patch(
+            "backend.api.cli_helpers.detect_git_repository_root",
+            return_value=Path("/tmp/repo"),
+        ),
+        patch(
+            "backend.api.cli_helpers.load_fresh_agent_runner_settings",
+            return_value=settings,
+        ),
     ):
         exit_code = main(["daemon", "--all"])
 
@@ -1106,12 +1162,15 @@ def test_main_daemon_with_repo_id_does_not_default_to_all(monkeypatch) -> None:
     mock_context.repo_id = "keda"
     mock_context.display_name = "Keda"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ) as mock_resolve, patch("backend.api.cli.run_agent_daemon"), patch(
-        "backend.api.cli_helpers.require_iar_repository_initialized"
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ) as mock_resolve,
+        patch("backend.api.cli.run_agent_daemon"),
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["daemon", "--repo-id", "keda"])
 
     assert exit_code == 0
@@ -1128,15 +1187,16 @@ def test_main_typer_top_level_repo_selector_is_honored() -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ) as mock_resolve, patch(
-        "backend.api.cli.run_agent_repositories_once", return_value=0
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch("backend.api.cli_helpers.require_iar_repository_initialized"), patch(
-        "backend.api.cli.require_iar_repository_initialized"
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ) as mock_resolve,
+        patch("backend.api.cli.run_agent_repositories_once", return_value=0),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli_helpers.require_iar_repository_initialized"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
     ):
         exit_code = main(["--repo", "/tmp/repo", "run", "--dry-run"])
 
@@ -1155,13 +1215,15 @@ def test_main_labels_sync_iterates_multiple_repos() -> None:
     mock_context_b.repo_path = Path("/tmp/repo-b")
     mock_context_b.config.labels = MagicMock()
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context_a, mock_context_b],
-    ), patch("backend.api.cli.sync_labels") as mock_sync, patch(
-        "backend.api.cli_helpers.create_github_client"
-    ), patch("backend.api.cli.create_github_client"), patch(
-        "backend.api.cli.require_iar_repository_initialized"
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context_a, mock_context_b],
+        ),
+        patch("backend.api.cli.sync_labels") as mock_sync,
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
     ):
         exit_code = main(["labels", "sync"])
         assert exit_code == 0
@@ -1178,14 +1240,16 @@ def test_main_issue_create_defaults_to_cwd() -> None:
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_issue_from_prd",
-        return_value="https://github.com/example/issues/1",
-    ), patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False):
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_issue_from_prd",
+            return_value="https://github.com/example/issues/1",
+        ),
+        patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False),
+    ):
         exit_code = main(["issue", "create", "tasks/example.md"])
         assert exit_code == 0
 
@@ -1200,19 +1264,17 @@ def test_main_issue_create_uses_prd_issue_workflow() -> None:
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_issue_from_prd",
-        return_value="https://github.com/example/issues/1",
-    ) as mock_create, patch(
-        "backend.api.cli._prompt_and_publish_prd_if_needed"
-    ) as mock_prompt:
-        exit_code = main(
-            ["issue", "create", "tasks/example.md", "--publish-prd", "--ready"]
-        )
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_issue_from_prd",
+            return_value="https://github.com/example/issues/1",
+        ) as mock_create,
+        patch("backend.api.cli._prompt_and_publish_prd_if_needed") as mock_prompt,
+    ):
+        exit_code = main(["issue", "create", "tasks/example.md", "--publish-prd", "--ready"])
 
     assert exit_code == 0
     assert mock_create.call_args.kwargs["request"].prd_path == Path("tasks/example.md")
@@ -1244,16 +1306,18 @@ def test_main_issue_create_failure_prints_command_output(capsys) -> None:
         stderr="trailing whitespace\n",
     )
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_issue_from_prd",
-        return_value="https://github.com/example/issues/1",
-    ), patch(
-        "backend.api.cli._prompt_and_publish_prd_if_needed",
-        side_effect=commit_error,
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_issue_from_prd",
+            return_value="https://github.com/example/issues/1",
+        ),
+        patch(
+            "backend.api.cli._prompt_and_publish_prd_if_needed",
+            side_effect=commit_error,
+        ),
     ):
         exit_code = main(["issue", "create", "tasks/example.md", "--no-publish-prd"])
 
@@ -1262,9 +1326,8 @@ def test_main_issue_create_failure_prints_command_output(capsys) -> None:
 
     assert exit_code == 1
     assert "Failed to create Issue from tasks/example.md:" in combined_output
-    assert (
-        "Command: git commit -m 'docs(prd): publish example' -- tasks/example.md"
-        in (combined_output)
+    assert "Command: git commit -m 'docs(prd): publish example' -- tasks/example.md" in (
+        combined_output
     )
     assert "Exit code: 1" in combined_output
     assert "stdout:" in combined_output
@@ -1297,19 +1360,19 @@ def test_main_issue_create_ready_without_publish_defers_label() -> None:
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_issue_from_prd",
-        return_value="https://github.com/example/issues/1",
-    ) as mock_create, patch(
-        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
-    ) as mock_prompt:
-        exit_code = main(
-            ["issue", "create", "tasks/example.md", "--ready", "--no-publish-prd"]
-        )
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_issue_from_prd",
+            return_value="https://github.com/example/issues/1",
+        ) as mock_create,
+        patch(
+            "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
+        ) as mock_prompt,
+    ):
+        exit_code = main(["issue", "create", "tasks/example.md", "--ready", "--no-publish-prd"])
         assert exit_code == 0
         # create_issue_from_prd should be called with queue_ready=False
         assert mock_create.call_args.kwargs["request"].queue_ready is False
@@ -1341,19 +1404,17 @@ def test_main_issue_create_ready_with_publish_keeps_label() -> None:
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_issue_from_prd",
-        return_value="https://github.com/example/issues/1",
-    ) as mock_create, patch(
-        "backend.api.cli._prompt_and_publish_prd_if_needed"
-    ) as mock_prompt:
-        exit_code = main(
-            ["issue", "create", "tasks/example.md", "--publish-prd", "--ready"]
-        )
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_issue_from_prd",
+            return_value="https://github.com/example/issues/1",
+        ) as mock_create,
+        patch("backend.api.cli._prompt_and_publish_prd_if_needed") as mock_prompt,
+    ):
+        exit_code = main(["issue", "create", "tasks/example.md", "--publish-prd", "--ready"])
         assert exit_code == 0
         assert mock_create.call_args.kwargs["request"].queue_ready is True
         # prompt should not be called when --publish-prd is used
@@ -1370,23 +1431,21 @@ def test_main_issue_create_multiple_prds() -> None:
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_issue_from_prd",
-        return_value="https://github.com/example/issues/1",
-    ) as mock_create, patch(
-        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_issue_from_prd",
+            return_value="https://github.com/example/issues/1",
+        ) as mock_create,
+        patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False),
     ):
         exit_code = main(["issue", "create", "tasks/a.md", "tasks/b.md", "--ready"])
 
     assert exit_code == 0
     assert mock_create.call_count == 2
-    created_prd_paths = [
-        call.kwargs["request"].prd_path for call in mock_create.call_args_list
-    ]
+    created_prd_paths = [call.kwargs["request"].prd_path for call in mock_create.call_args_list]
     assert created_prd_paths == [Path("tasks/a.md"), Path("tasks/b.md")]
 
 
@@ -1400,11 +1459,12 @@ def test_main_issue_create_multiple_prds_rejects_shared_title() -> None:
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ) as mock_client, patch("backend.api.cli.create_issue_from_prd") as mock_create:
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client") as mock_client,
+        patch("backend.api.cli.create_issue_from_prd") as mock_create,
+    ):
         exit_code = main(
             [
                 "issue",
@@ -1436,18 +1496,14 @@ def test_main_issue_create_multiple_prds_continues_on_failure() -> None:
             raise ValueError("bad PRD")
         return "https://github.com/example/issues/1"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_issue_from_prd", side_effect=_fake_create
-    ) as mock_create, patch(
-        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.create_issue_from_prd", side_effect=_fake_create) as mock_create,
+        patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False),
     ):
-        exit_code = main(
-            ["issue", "create", "tasks/bad.md", "tasks/good.md", "--ready"]
-        )
+        exit_code = main(["issue", "create", "tasks/bad.md", "tasks/good.md", "--ready"])
 
     assert exit_code == 1
     assert mock_create.call_count == 2
@@ -1476,23 +1532,22 @@ def test_main_issue_create_directory_expansion(
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_issue_from_prd",
-        return_value="https://github.com/example/issues/1",
-    ) as mock_create, patch(
-        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_issue_from_prd",
+            return_value="https://github.com/example/issues/1",
+        ) as mock_create,
+        patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["issue", "create", "tasks/pending", "--ready"])
 
     assert exit_code == 0
     assert mock_create.call_count == 2
-    created_prd_paths = [
-        call.kwargs["request"].prd_path for call in mock_create.call_args_list
-    ]
+    created_prd_paths = [call.kwargs["request"].prd_path for call in mock_create.call_args_list]
     assert created_prd_paths == [
         Path("tasks/pending/a.md"),
         Path("tasks/pending/b.md"),
@@ -1521,23 +1576,22 @@ def test_main_issue_create_directory_skips_linked_prds(
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_issue_from_prd",
-        return_value="https://github.com/example/issues/2",
-    ) as mock_create, patch(
-        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_issue_from_prd",
+            return_value="https://github.com/example/issues/2",
+        ) as mock_create,
+        patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["issue", "create", "tasks/pending", "--ready"])
 
     assert exit_code == 0
     assert mock_create.call_count == 1
-    created_prd_paths = [
-        call.kwargs["request"].prd_path for call in mock_create.call_args_list
-    ]
+    created_prd_paths = [call.kwargs["request"].prd_path for call in mock_create.call_args_list]
     assert created_prd_paths == [Path("tasks/pending/new.md")]
 
     captured = capsys.readouterr()
@@ -1565,13 +1619,14 @@ def test_main_issue_create_all_directory_prds_linked_returns_success(
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
 
-    with patch(
-        "backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch("backend.api.cli.create_issue_from_prd") as mock_create, patch(
-        "backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch("backend.api.cli.resolve_issue_from_prd_target", return_value=mock_context),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.create_issue_from_prd") as mock_create,
+        patch("backend.api.cli._prompt_and_publish_prd_if_needed", return_value=False),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["issue", "create", "tasks/pending"])
 
     assert exit_code == 0
@@ -1683,21 +1738,25 @@ def test_main_deliberate_strict_returns_nonzero_on_failure(tmp_path) -> None:
             ),
         )
 
-    with patch("backend.api.cli.create_process_runner"), patch(
-        "backend.api.cli.get_agent_runner_settings"
-    ), patch(
-        "backend.engines.agent_runner.factory.build_app_config_from_settings",
-        return_value=mock_config,
-    ), patch(
-        "backend.api.cli._resolve_cli_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli.create_transcript_runner"), patch(
-        "backend.api.cli.create_event_sink"
-    ) as mock_event_sink, patch(
-        "backend.api.cli.run_agent_deliberation",
-        side_effect=fake_run_agent_deliberation,
-    ), patch("backend.api.cli.write_deliberation_outputs"), patch(
-        "backend.api.cli.require_iar_repository_initialized"
+    with (
+        patch("backend.api.cli.create_process_runner"),
+        patch("backend.api.cli.get_agent_runner_settings"),
+        patch(
+            "backend.engines.agent_runner.factory.build_app_config_from_settings",
+            return_value=mock_config,
+        ),
+        patch(
+            "backend.api.cli._resolve_cli_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli.create_transcript_runner"),
+        patch("backend.api.cli.create_event_sink") as mock_event_sink,
+        patch(
+            "backend.api.cli.run_agent_deliberation",
+            side_effect=fake_run_agent_deliberation,
+        ),
+        patch("backend.api.cli.write_deliberation_outputs"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
     ):
         mock_event_sink.return_value = MagicMock()
 
@@ -1769,21 +1828,25 @@ def test_main_deliberate_default_returns_zero_with_failed_agents(
             ),
         )
 
-    with patch("backend.api.cli.create_process_runner"), patch(
-        "backend.api.cli.get_agent_runner_settings"
-    ), patch(
-        "backend.engines.agent_runner.factory.build_app_config_from_settings",
-        return_value=mock_config,
-    ), patch(
-        "backend.api.cli._resolve_cli_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli.create_transcript_runner"), patch(
-        "backend.api.cli.create_event_sink"
-    ) as mock_event_sink, patch(
-        "backend.api.cli.run_agent_deliberation",
-        side_effect=fake_run_agent_deliberation,
-    ), patch("backend.api.cli.write_deliberation_outputs"), patch(
-        "backend.api.cli.require_iar_repository_initialized"
+    with (
+        patch("backend.api.cli.create_process_runner"),
+        patch("backend.api.cli.get_agent_runner_settings"),
+        patch(
+            "backend.engines.agent_runner.factory.build_app_config_from_settings",
+            return_value=mock_config,
+        ),
+        patch(
+            "backend.api.cli._resolve_cli_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli.create_transcript_runner"),
+        patch("backend.api.cli.create_event_sink") as mock_event_sink,
+        patch(
+            "backend.api.cli.run_agent_deliberation",
+            side_effect=fake_run_agent_deliberation,
+        ),
+        patch("backend.api.cli.write_deliberation_outputs"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
     ):
         mock_event_sink.return_value = MagicMock()
 
@@ -1847,21 +1910,25 @@ def test_main_deliberate_returns_one_when_all_agents_fail(tmp_path) -> None:
             ),
         )
 
-    with patch("backend.api.cli.create_process_runner"), patch(
-        "backend.api.cli.get_agent_runner_settings"
-    ), patch(
-        "backend.engines.agent_runner.factory.build_app_config_from_settings",
-        return_value=mock_config,
-    ), patch(
-        "backend.api.cli._resolve_cli_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli.create_transcript_runner"), patch(
-        "backend.api.cli.create_event_sink"
-    ) as mock_event_sink, patch(
-        "backend.api.cli.run_agent_deliberation",
-        side_effect=fake_run_agent_deliberation,
-    ), patch("backend.api.cli.write_deliberation_outputs"), patch(
-        "backend.api.cli.require_iar_repository_initialized"
+    with (
+        patch("backend.api.cli.create_process_runner"),
+        patch("backend.api.cli.get_agent_runner_settings"),
+        patch(
+            "backend.engines.agent_runner.factory.build_app_config_from_settings",
+            return_value=mock_config,
+        ),
+        patch(
+            "backend.api.cli._resolve_cli_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli.create_transcript_runner"),
+        patch("backend.api.cli.create_event_sink") as mock_event_sink,
+        patch(
+            "backend.api.cli.run_agent_deliberation",
+            side_effect=fake_run_agent_deliberation,
+        ),
+        patch("backend.api.cli.write_deliberation_outputs"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
     ):
         mock_event_sink.return_value = MagicMock()
 
@@ -1932,21 +1999,25 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     mock_context.repo_path = tmp_path / "repo"
     mock_context.config = mock_config
 
-    with patch("backend.api.cli.create_process_runner"), patch(
-        "backend.api.cli.get_agent_runner_settings"
-    ), patch(
-        "backend.engines.agent_runner.factory.build_app_config_from_settings",
-        return_value=mock_config,
-    ), patch(
-        "backend.api.cli._resolve_cli_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli.create_transcript_runner"), patch(
-        "backend.api.cli.create_event_sink"
-    ) as mock_event_sink, patch(
-        "backend.api.cli.run_agent_deliberation",
-        side_effect=fake_run_agent_deliberation,
-    ), patch("backend.api.cli.write_deliberation_outputs") as mock_write, patch(
-        "backend.api.cli.require_iar_repository_initialized"
+    with (
+        patch("backend.api.cli.create_process_runner"),
+        patch("backend.api.cli.get_agent_runner_settings"),
+        patch(
+            "backend.engines.agent_runner.factory.build_app_config_from_settings",
+            return_value=mock_config,
+        ),
+        patch(
+            "backend.api.cli._resolve_cli_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli.create_transcript_runner"),
+        patch("backend.api.cli.create_event_sink") as mock_event_sink,
+        patch(
+            "backend.api.cli.run_agent_deliberation",
+            side_effect=fake_run_agent_deliberation,
+        ),
+        patch("backend.api.cli.write_deliberation_outputs") as mock_write,
+        patch("backend.api.cli.require_iar_repository_initialized"),
     ):
         mock_event_sink.return_value = MagicMock()
 
@@ -1958,9 +2029,7 @@ def test_main_deliberate_uses_single_session_output_path(tmp_path) -> None:
     mock_event_sink.assert_called_once_with(expected_output_path, ANY)
     mock_write.assert_called_once()
     assert mock_write.call_args.args[2] == expected_output_path
-    assert tuple(
-        profile.profile_id for profile in mock_write.call_args.args[1].profiles
-    ) == (
+    assert tuple(profile.profile_id for profile in mock_write.call_args.args[1].profiles) == (
         "skeptic",
         "architect",
     )
@@ -1975,14 +2044,16 @@ def test_main_review_dispatches_review_workflow() -> None:
     mock_context.config = MagicMock()
     mock_context.repo_id = "repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ) as mock_client, patch(
-        "backend.api.cli.review_once", return_value=0
-    ) as mock_review, patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client") as mock_client,
+        patch("backend.api.cli.review_once", return_value=0) as mock_review,
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["review", "--dry-run", "--agent", "claude"])
 
     assert exit_code == 0
@@ -2030,9 +2101,7 @@ def test_cli_parser_blocked_continue_required_args() -> None:
 def test_cli_parser_blocked_continue_with_agent() -> None:
     """blocked-continue should accept --agent override."""
     parser = build_parser()
-    parsed = parser.parse_args(
-        ["blocked-continue", "--issue", "7", "--agent", "claude"]
-    )
+    parsed = parser.parse_args(["blocked-continue", "--issue", "7", "--agent", "claude"])
     assert parsed.command == "blocked-continue"
     assert parsed.issue == 7
     assert parsed.agent == "claude"
@@ -2056,15 +2125,19 @@ def test_main_blocked_continue_success(capsys) -> None:
     mock_context.config = MagicMock()
     mock_context.config.labels.blocked = "agent/blocked"
 
-    with patch(
-        "backend.api.cli.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.core.use_cases.blocked_continue.blocked_continue_issue",
-        return_value=True,
-    ) as mock_blocked, patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.core.use_cases.blocked_continue.blocked_continue_issue",
+            return_value=True,
+        ) as mock_blocked,
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["blocked-continue", "--issue", "42"])
 
     assert exit_code == 0
@@ -2082,15 +2155,19 @@ def test_main_blocked_continue_already_claimed(capsys) -> None:
     mock_context.repo_path = Path("/tmp/repo")
     mock_context.config = MagicMock()
 
-    with patch(
-        "backend.api.cli.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.core.use_cases.blocked_continue.blocked_continue_issue",
-        return_value=False,
-    ) as mock_blocked, patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.core.use_cases.blocked_continue.blocked_continue_issue",
+            return_value=False,
+        ) as mock_blocked,
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["blocked-continue", "--issue", "42"])
 
     assert exit_code == 0
@@ -2108,15 +2185,19 @@ def test_main_blocked_continue_failure_prints_error(capsys) -> None:
     mock_context.repo_path = Path("/tmp/repo")
     mock_context.config = MagicMock()
 
-    with patch(
-        "backend.api.cli.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.core.use_cases.blocked_continue.blocked_continue_issue",
-        side_effect=BlockedContinueError("Worktree has uncommitted changes."),
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.core.use_cases.blocked_continue.blocked_continue_issue",
+            side_effect=BlockedContinueError("Worktree has uncommitted changes."),
+        ),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["blocked-continue", "--issue", "42"])
 
     assert exit_code == 1
@@ -2135,14 +2216,16 @@ def test_main_run_rebase_conflict_detached_head() -> None:
     mock_context.config = MagicMock()
     mock_context.repo_id = "repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.run_agent_repositories_once", return_value=0
-    ) as mock_run, patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.run_agent_repositories_once", return_value=0) as mock_run,
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["run", "--dry-run", "--agent", "claude"])
 
     assert exit_code == 0
@@ -2223,9 +2306,7 @@ def test_main_ask_plan_only_writes_audit(tmp_path, monkeypatch) -> None:
     mock_context.repo_path = repo_path
     mock_context.config = MagicMock()
     mock_context.config.interactive_decision.default_agent = "codex"
-    mock_context.config.interactive_decision.default_output_dir = str(
-        tmp_path / "decisions"
-    )
+    mock_context.config.interactive_decision.default_output_dir = str(tmp_path / "decisions")
     mock_context.config.labels = MagicMock()
     mock_context.config.git.remote = "origin"
     mock_context.config.git.base_branch = "main"
@@ -2237,16 +2318,19 @@ def test_main_ask_plan_only_writes_audit(tmp_path, monkeypatch) -> None:
         stdout=fake_planner_stdout,
     )
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_planner_runner",
-        return_value=mock_planner,
-    ), patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
-        "backend.api.cli.require_iar_repository_initialized"
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_planner_runner",
+            return_value=mock_planner,
+        ),
+        patch("backend.api.cli._ensure_gh_auth_or_prompt"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
     ):
         exit_code = main(
             [
@@ -2303,15 +2387,19 @@ def test_main_ask_rejects_unknown_action() -> None:
         stdout=fake_planner_stdout,
     )
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_planner_runner",
-        return_value=mock_planner,
-    ), patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_planner_runner",
+            return_value=mock_planner,
+        ),
+        patch("backend.api.cli._ensure_gh_auth_or_prompt"),
+    ):
         exit_code = main(["ask", "push to main", "--plan-only", "--repo", "/tmp/repo"])
 
     assert exit_code == 1
@@ -2356,19 +2444,23 @@ def test_main_ask_run_once_dry_run_dispatches_existing_use_case() -> None:
         stdout=fake_planner_stdout,
     )
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_planner_runner",
-        return_value=mock_planner,
-    ), patch(
-        "backend.core.use_cases.interactive_decision.run_agent_repositories_once",
-        return_value=0,
-    ) as mock_run, patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
-        "backend.api.cli.require_iar_repository_initialized"
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_planner_runner",
+            return_value=mock_planner,
+        ),
+        patch(
+            "backend.core.use_cases.interactive_decision.run_agent_repositories_once",
+            return_value=0,
+        ) as mock_run,
+        patch("backend.api.cli._ensure_gh_auth_or_prompt"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
     ):
         exit_code = main(
             [
@@ -2424,15 +2516,19 @@ def test_main_ask_execute_confirmation_required_for_write_action() -> None:
         stdout=fake_planner_stdout,
     )
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_planner_runner",
-        return_value=mock_planner,
-    ), patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_planner_runner",
+            return_value=mock_planner,
+        ),
+        patch("backend.api.cli._ensure_gh_auth_or_prompt"),
+    ):
         exit_code = main(
             [
                 "ask",
@@ -2485,17 +2581,20 @@ def test_main_ask_execute_confirmation_wrong_input_skips_action(monkeypatch) -> 
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _prompt: "wrong-confirmation")
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch(
-        "backend.api.cli.create_planner_runner",
-        return_value=mock_planner,
-    ), patch(
-        "backend.core.use_cases.interactive_decision.create_issue_from_prd"
-    ) as mock_create, patch("backend.api.cli._ensure_gh_auth_or_prompt"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch(
+            "backend.api.cli.create_planner_runner",
+            return_value=mock_planner,
+        ),
+        patch("backend.core.use_cases.interactive_decision.create_issue_from_prd") as mock_create,
+        patch("backend.api.cli._ensure_gh_auth_or_prompt"),
+    ):
         exit_code = main(
             [
                 "ask",
@@ -2615,9 +2714,7 @@ def test_main_worktree_create_fails_when_repository_not_initialized(
     repo_path = _init_bare_git_repository(tmp_path, "uninitialized")
     monkeypatch.chdir(repo_path)
 
-    exit_code = main(
-        ["worktree", "create", "--branch", "feature-x", "--base-branch", "main"]
-    )
+    exit_code = main(["worktree", "create", "--branch", "feature-x", "--base-branch", "main"])
     captured = capsys.readouterr()
     combined = f"{captured.out}\n{captured.err}"
 
@@ -2692,9 +2789,7 @@ def test_main_registry_sync_dry_run(
 
     assert exit_code == 0
     assert "Would register" in _strip_ansi(captured.out)
-    assert "[agent_runner.repositories.bar]" not in config_path.read_text(
-        encoding="utf-8"
-    )
+    assert "[agent_runner.repositories.bar]" not in config_path.read_text(encoding="utf-8")
 
 
 def test_main_registry_sync_registers_new_repo(
@@ -2818,9 +2913,7 @@ def test_main_registry_reinit_start_daemons_uses_config_directory_cwd(
         )
 
     with (
-        patch(
-            "backend.api.cli_registry.initialize_repository_local_config"
-        ) as mock_init,
+        patch("backend.api.cli_registry.initialize_repository_local_config") as mock_init,
         patch(
             "backend.api.cli_registry.load_fresh_agent_runner_settings",
             return_value=fake_settings,
@@ -2829,9 +2922,7 @@ def test_main_registry_reinit_start_daemons_uses_config_directory_cwd(
             "backend.api.cli_registry.resolve_repository_targets_with_diagnostics",
             return_value=([fake_context], []),
         ),
-        patch(
-            "backend.api.cli_registry.create_process_supervisor"
-        ) as mock_create_supervisor,
+        patch("backend.api.cli_registry.create_process_supervisor") as mock_create_supervisor,
         patch(
             "backend.api.cli_registry.start_runner_process",
             side_effect=_fake_start,
@@ -2915,9 +3006,7 @@ def test_main_registry_remove_delete_removes_directory(
     )
     monkeypatch.setenv("IAR_CONFIG", str(config_path))
 
-    exit_code = main(
-        ["registry", "remove", "--repo-id", "zata-zhangtao-fsense", "--delete"]
-    )
+    exit_code = main(["registry", "remove", "--repo-id", "zata-zhangtao-fsense", "--delete"])
     captured = capsys.readouterr()
 
     assert exit_code == 0, captured.err
@@ -3056,9 +3145,7 @@ def test_cli_parser_registry_start() -> None:
 def test_cli_parser_registry_stop() -> None:
     """registry stop should accept --repo-id, --all, and --no-review-daemon."""
     parser = build_parser()
-    parsed = parser.parse_args(
-        ["registry", "stop", "--repo-id", "keda-main", "--no-review-daemon"]
-    )
+    parsed = parser.parse_args(["registry", "stop", "--repo-id", "keda-main", "--no-review-daemon"])
     assert parsed.command == "registry"
     assert parsed.registry_command == "stop"
     assert parsed.repo_id == "keda-main"
@@ -3227,9 +3314,7 @@ def test_main_registry_start_no_review_daemon(
             side_effect=_fake_start,
         ) as mock_start,
     ):
-        exit_code = main(
-            ["registry", "start", "--repo-id", "keda-main", "--no-review-daemon"]
-        )
+        exit_code = main(["registry", "start", "--repo-id", "keda-main", "--no-review-daemon"])
         captured = capsys.readouterr()
 
     assert exit_code == 0, captured.err
@@ -3526,9 +3611,10 @@ def test_main_workflow_install_unknown_name_exits_nonzero(
     _write_iar_toml(tmp_path, "demo")
     (tmp_path / "config.toml").write_text("", encoding="utf-8")
 
-    with patch(
-        "backend.api.cli_helpers.detect_git_repository_root", return_value=tmp_path
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch("backend.api.cli_helpers.detect_git_repository_root", return_value=tmp_path),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["workflow", "install", "missing"])
 
     assert exit_code == 1
@@ -3670,16 +3756,20 @@ def test_main_takeover_noninteractive_repos(capsys, monkeypatch) -> None:
         ),
     )
 
-    with patch(
-        "backend.api.cli_takeover.create_github_client",
-        return_value=auth_client,
-    ), patch(
-        "backend.api.cli_takeover.select_repositories_interactive",
-        side_effect=AssertionError("should not be called in non-interactive mode"),
-    ), patch(
-        "backend.api.cli_takeover.execute_takeover",
-        return_value=mock_result,
-    ) as mock_execute:
+    with (
+        patch(
+            "backend.api.cli_takeover.create_github_client",
+            return_value=auth_client,
+        ),
+        patch(
+            "backend.api.cli_takeover.select_repositories_interactive",
+            side_effect=AssertionError("should not be called in non-interactive mode"),
+        ),
+        patch(
+            "backend.api.cli_takeover.execute_takeover",
+            return_value=mock_result,
+        ) as mock_execute,
+    ):
         exit_code = main(
             [
                 "takeover",
@@ -3766,12 +3856,15 @@ def test_main_logs_prints_last_n_lines(capsys, monkeypatch) -> None:
     mock_supervisor.read_log.side_effect = _fake_read_log
 
     try:
-        with patch(
-            "backend.api.cli_registry.resolve_repository_targets",
-            return_value=[mock_context],
-        ), patch(
-            "backend.api.cli_registry.create_process_supervisor",
-            return_value=mock_supervisor,
+        with (
+            patch(
+                "backend.api.cli_registry.resolve_repository_targets",
+                return_value=[mock_context],
+            ),
+            patch(
+                "backend.api.cli_registry.create_process_supervisor",
+                return_value=mock_supervisor,
+            ),
         ):
             exit_code = main(["logs", "--repo-id", "repo", "--lines", "5"])
 
@@ -3802,12 +3895,15 @@ def test_main_logs_fallback_no_running_process(capsys, monkeypatch) -> None:
     mock_supervisor.list_processes.return_value = []
     mock_supervisor.list_unmanaged_processes.return_value = []
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=mock_supervisor,
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
     ):
         exit_code = main(["logs", "--repo-id", "repo"])
 
@@ -3845,12 +3941,15 @@ def test_main_logs_fallback_with_historical_log(capsys, monkeypatch) -> None:
     mock_supervisor.list_processes.return_value = [historical_record]
     mock_supervisor.list_unmanaged_processes.return_value = []
 
-    with patch(
-        "backend.api.cli_registry.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch(
-        "backend.api.cli_registry.create_process_supervisor",
-        return_value=mock_supervisor,
+    with (
+        patch(
+            "backend.api.cli_registry.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch(
+            "backend.api.cli_registry.create_process_supervisor",
+            return_value=mock_supervisor,
+        ),
     ):
         exit_code = main(["logs", "--repo-id", "repo"])
 
@@ -3876,14 +3975,16 @@ def test_main_run_passes_transcript_runner_factory(monkeypatch) -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch(
-        "backend.api.cli.run_agent_repositories_once", return_value=0
-    ) as mock_run, patch("backend.api.cli_helpers.create_github_client"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli.run_agent_repositories_once", return_value=0) as mock_run,
+        patch("backend.api.cli_helpers.create_github_client"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["run", "--all"])
 
     assert exit_code == 0
@@ -3902,12 +4003,15 @@ def test_main_daemon_passes_transcript_runner_factory(monkeypatch) -> None:
     mock_context.repo_id = "repo"
     mock_context.display_name = "Repo"
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch("backend.api.cli.run_agent_daemon") as mock_daemon, patch(
-        "backend.api.cli.create_github_client"
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli.run_agent_daemon") as mock_daemon,
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         exit_code = main(["daemon", "--all"])
 
     assert exit_code == 0
@@ -3915,9 +4019,7 @@ def test_main_daemon_passes_transcript_runner_factory(monkeypatch) -> None:
     assert callable(factory)
 
 
-def test_main_run_phase0_deliberation_real_entry_point(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_main_run_phase0_deliberation_real_entry_point(monkeypatch, tmp_path: Path) -> None:
     """A ``agent/deliberate`` Issue encountered by ``iar run`` gets a question list."""
     from backend.api.cli import main
     from backend.core.shared.models.agent_runner import (
@@ -3983,16 +4085,17 @@ def test_main_run_phase0_deliberation_real_entry_point(
                 stderr="",
             )
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch(
-        "backend.api.cli_helpers.create_github_client", return_value=fake_github
-    ), patch("backend.api.cli.create_github_client", return_value=fake_github), patch(
-        "backend.api.cli.create_content_generator"
-    ), patch(
-        "backend.api.cli.create_transcript_runner", return_value=_StubTranscript()
-    ), patch("backend.api.cli.require_iar_repository_initialized"):
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client", return_value=fake_github),
+        patch("backend.api.cli.create_github_client", return_value=fake_github),
+        patch("backend.api.cli.create_content_generator"),
+        patch("backend.api.cli.create_transcript_runner", return_value=_StubTranscript()),
+        patch("backend.api.cli.require_iar_repository_initialized"),
+    ):
         # Exit code may be non-zero (downstream phases may fail in this
         # sandbox), but Phase 0 should still have posted its comment.
         main(["run", "--all"])
@@ -4047,15 +4150,16 @@ def test_main_run_dry_run_skips_deliberation_phase(monkeypatch, tmp_path: Path) 
         config=config,
     )
 
-    with patch(
-        "backend.api.cli_helpers.resolve_repository_targets",
-        return_value=[mock_context],
-    ), patch(
-        "backend.api.cli_helpers.create_github_client", return_value=fake_github
-    ), patch("backend.api.cli.create_github_client", return_value=fake_github), patch(
-        "backend.api.cli.create_content_generator"
-    ), patch("backend.api.cli.create_transcript_runner"), patch(
-        "backend.api.cli.require_iar_repository_initialized"
+    with (
+        patch(
+            "backend.api.cli_helpers.resolve_repository_targets",
+            return_value=[mock_context],
+        ),
+        patch("backend.api.cli_helpers.create_github_client", return_value=fake_github),
+        patch("backend.api.cli.create_github_client", return_value=fake_github),
+        patch("backend.api.cli.create_content_generator"),
+        patch("backend.api.cli.create_transcript_runner"),
+        patch("backend.api.cli.require_iar_repository_initialized"),
     ):
         exit_code = main(["run", "--all", "--dry-run"])
 
@@ -4099,13 +4203,15 @@ def test_main_repl_subcommand_starts_session(monkeypatch, tmp_path: Path) -> Non
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(user_inputs))
 
-    with patch(
-        "backend.api.cli.resolve_repository_targets",
-    ) as mock_resolve, patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch("backend.api.cli.create_content_generator") as mock_content, patch(
-        "backend.api.cli.create_repl_command_executor"
-    ) as mock_executor_factory:
+    with (
+        patch(
+            "backend.api.cli.resolve_repository_targets",
+        ) as mock_resolve,
+        patch("backend.api.cli._ensure_gh_auth_or_prompt"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.create_content_generator") as mock_content,
+        patch("backend.api.cli.create_repl_command_executor") as mock_executor_factory,
+    ):
         mock_context = MagicMock()
         mock_context.repo_path = repo_path
         mock_context.repo_id = "repl-test-repo"
@@ -4150,9 +4256,7 @@ def test_main_repl_subcommand_starts_session(monkeypatch, tmp_path: Path) -> Non
     assert deps_obj.command_executor is mock_executor
 
 
-def test_main_repl_rejects_auto_agent_override(
-    monkeypatch, tmp_path: Path, capsys
-) -> None:
+def test_main_repl_rejects_auto_agent_override(monkeypatch, tmp_path: Path, capsys) -> None:
     """`iar repl --agent auto` should fall back to the config default."""
     from backend.api.cli import main
 
@@ -4161,16 +4265,19 @@ def test_main_repl_rejects_auto_agent_override(
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _prompt="": "/exit")
 
-    with patch(
-        "backend.api.cli.resolve_repository_targets",
-    ) as mock_resolve, patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch("backend.api.cli.create_content_generator"), patch(
-        "backend.api.cli.create_repl_command_executor"
-    ) as mock_executor_factory, patch(
-        "backend.core.use_cases.repl_session.run_repl_session",
-        return_value=0,
-    ) as mock_run:
+    with (
+        patch(
+            "backend.api.cli.resolve_repository_targets",
+        ) as mock_resolve,
+        patch("backend.api.cli._ensure_gh_auth_or_prompt"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.create_content_generator"),
+        patch("backend.api.cli.create_repl_command_executor") as mock_executor_factory,
+        patch(
+            "backend.core.use_cases.repl_session.run_repl_session",
+            return_value=0,
+        ) as mock_run,
+    ):
         mock_context = MagicMock()
         mock_context.repo_path = repo_path
         mock_context.repo_id = "repl-test-repo"
@@ -4213,16 +4320,19 @@ def test_main_no_args_tty_dispatches_repl(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _prompt="": "/exit")
 
-    with patch(
-        "backend.api.cli.resolve_repository_targets",
-    ) as mock_resolve, patch("backend.api.cli._ensure_gh_auth_or_prompt"), patch(
-        "backend.api.cli.create_github_client"
-    ), patch("backend.api.cli.create_content_generator"), patch(
-        "backend.api.cli.create_repl_command_executor"
-    ) as mock_executor_factory, patch(
-        "backend.api.cli.run_repl_session",
-        return_value=0,
-    ) as mock_run:
+    with (
+        patch(
+            "backend.api.cli.resolve_repository_targets",
+        ) as mock_resolve,
+        patch("backend.api.cli._ensure_gh_auth_or_prompt"),
+        patch("backend.api.cli.create_github_client"),
+        patch("backend.api.cli.create_content_generator"),
+        patch("backend.api.cli.create_repl_command_executor") as mock_executor_factory,
+        patch(
+            "backend.api.cli.run_repl_session",
+            return_value=0,
+        ) as mock_run,
+    ):
         mock_context = MagicMock()
         mock_context.repo_path = repo_path
         mock_context.repo_id = "repl-test-repo"
@@ -4239,9 +4349,7 @@ def test_main_no_args_tty_dispatches_repl(monkeypatch, tmp_path: Path) -> None:
     assert inputs_obj.agent == "claude"
 
 
-def test_main_repl_requires_initialized_repo(
-    monkeypatch, tmp_path: Path, capsys
-) -> None:
+def test_main_repl_requires_initialized_repo(monkeypatch, tmp_path: Path, capsys) -> None:
     """Uninitialized repos must show a friendly error."""
     from backend.api.cli import main
     from backend.engines.agent_runner.repository_local import (
@@ -4254,9 +4362,12 @@ def test_main_repl_requires_initialized_repo(
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _prompt="": "/exit")
 
-    with patch(
-        "backend.api.cli.resolve_repository_targets",
-    ) as mock_resolve, patch("backend.api.cli.create_process_runner"):
+    with (
+        patch(
+            "backend.api.cli.resolve_repository_targets",
+        ) as mock_resolve,
+        patch("backend.api.cli.create_process_runner"),
+    ):
         mock_context = MagicMock()
         mock_context.repo_path = repo_path
         mock_resolve.return_value = [mock_context]

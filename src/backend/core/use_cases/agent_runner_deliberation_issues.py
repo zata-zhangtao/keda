@@ -139,8 +139,7 @@ def _build_question_list_synthesis_prompt(
         "either reply with the missing details on this Issue or, once the "
         "scope is clear enough, remove the `agent/deliberate` label and add "
         "`agent/rework-prd` so Phase 1 can draft the canonical PRD.",
-        "Be concise and actionable. Output only the markdown — no extra "
-        "narrative around it.",
+        "Be concise and actionable. Output only the markdown — no extra " "narrative around it.",
     ]
     return "\n".join(sections)
 
@@ -263,14 +262,11 @@ def _process_single_deliberation_issue(
     only has to wrap a single function call in try/except.
     """
     comments = github_client.list_issue_comments(issue.number)
-    marker = parse_latest_event_marker_for_phases(
-        comments, {DELIBERATION_QUESTION_PHASE}
-    )
+    marker = parse_latest_event_marker_for_phases(comments, {DELIBERATION_QUESTION_PHASE})
     is_ai_turn, next_cycle = _resolve_turn(comments, marker)
     if not is_ai_turn:
         _logger.info(
-            "Issue #%d still waiting on user reply (cycle=%s); "
-            "skipping Phase 0 turn.",
+            "Issue #%d still waiting on user reply (cycle=%s); " "skipping Phase 0 turn.",
             issue.number,
             getattr(marker, "cycle", None),
         )
@@ -278,9 +274,7 @@ def _process_single_deliberation_issue(
 
     prompt = _build_deliberation_issue_prompt(issue, comments)
     session_id = f"issue-{issue.number}-cycle-{next_cycle}"
-    output_dir = (
-        Path(config.deliberation.default_output_dir) / "deliberate-issues" / session_id
-    )
+    output_dir = Path(config.deliberation.default_output_dir) / "deliberate-issues" / session_id
     configured_profiles: tuple[str, ...] = tuple(
         profile.profile_id for profile in config.deliberation.profiles
     )

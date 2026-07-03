@@ -76,9 +76,7 @@ def _serialize_monitoring(value: Any) -> Any:
     return value
 
 
-def _get_monitoring_dependencies() -> (
-    tuple[Callable[[Path], IGitHubClient], IProcessRunner]
-):
+def _get_monitoring_dependencies() -> tuple[Callable[[Path], IGitHubClient], IProcessRunner]:
     """Resolve the GitHub client factory and shared process runner."""
     return create_github_client, create_process_runner()
 
@@ -104,9 +102,7 @@ def _warm_overview_cache(delay: int = 5) -> None:
 def _build_overview_response() -> dict:
     """Build the ``/overview`` monitoring response payload."""
     settings = load_fresh_agent_runner_settings()
-    repository_contexts, resolution_failures = (
-        resolve_repository_targets_with_diagnostics(settings)
-    )
+    repository_contexts, resolution_failures = resolve_repository_targets_with_diagnostics(settings)
     github_client_factory, process_runner = _get_monitoring_dependencies()
     try:
         result: MonitoringResult = build_overview(
@@ -142,8 +138,8 @@ def _get_cached_overview_response() -> dict:
 def _build_issue_detail_response(issue_number: int) -> dict:
     """Build the ``/issues/{issue_number}`` monitoring response payload."""
     settings = load_fresh_agent_runner_settings()
-    repository_contexts, _resolution_failures = (
-        resolve_repository_targets_with_diagnostics(settings)
+    repository_contexts, _resolution_failures = resolve_repository_targets_with_diagnostics(
+        settings
     )
     github_client_factory, process_runner = _get_monitoring_dependencies()
 
@@ -182,9 +178,7 @@ def _build_issue_detail_response(issue_number: int) -> dict:
                     repo_path=repository_context.repo_path,
                 )
             except Exception as exc:  # noqa: BLE001
-                _logger.exception(
-                    "Failed to build issue detail for #%d: %s", issue_number, exc
-                )
+                _logger.exception("Failed to build issue detail for #%d: %s", issue_number, exc)
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to build issue detail: {exc}",
@@ -216,9 +210,7 @@ def get_agent_runner_overview() -> dict:
 def get_agent_runner_issue_detail(issue_number: int) -> dict:
     """Return monitoring detail (labels, PR, worktree, timeline, anomalies) for an Issue."""
     if issue_number <= 0:
-        raise HTTPException(
-            status_code=400, detail="issue_number must be a positive integer."
-        )
+        raise HTTPException(status_code=400, detail="issue_number must be a positive integer.")
     return _build_issue_detail_response(issue_number)
 
 

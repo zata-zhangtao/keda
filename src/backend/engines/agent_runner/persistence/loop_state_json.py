@@ -144,14 +144,10 @@ class JsonLoopStateStore(ILoopStateStore):
         with open(self._state_path, encoding="utf-8") as state_file:
             payload = json.load(state_file)
         if not isinstance(payload, dict):
-            raise ValueError(
-                f"Loop state file {self._state_path} is not a JSON object."
-            )
+            raise ValueError(f"Loop state file {self._state_path} is not a JSON object.")
         raw_tasks = payload.get("tasks", [])
         if not isinstance(raw_tasks, list):
-            raise ValueError(
-                f"Loop state file {self._state_path} has non-list 'tasks'."
-            )
+            raise ValueError(f"Loop state file {self._state_path} has non-list 'tasks'.")
         tasks: dict[str, LoopTask] = {}
         for raw_task in raw_tasks:
             if not isinstance(raw_task, dict):
@@ -160,8 +156,7 @@ class JsonLoopStateStore(ILoopStateStore):
                 task = _task_from_dict(raw_task)
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError(
-                    f"Loop state file {self._state_path} contains an invalid "
-                    f"task entry: {exc}"
+                    f"Loop state file {self._state_path} contains an invalid " f"task entry: {exc}"
                 ) from exc
             if task.id:
                 tasks[task.id] = task
@@ -200,9 +195,7 @@ class JsonLoopStateStore(ILoopStateStore):
     def _flush(self) -> None:
         """Write the in-memory cache to disk atomically."""
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        ordered_tasks = [
-            self._tasks_by_id[task_id] for task_id in sorted(self._tasks_by_id)
-        ]
+        ordered_tasks = [self._tasks_by_id[task_id] for task_id in sorted(self._tasks_by_id)]
         payload = {
             "version": 1,
             "generated_at": datetime.now(timezone.utc).isoformat(),

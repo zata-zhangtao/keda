@@ -144,9 +144,7 @@ def claim_blocked_issue(
     if config.labels.blocked not in issue_before.labels:
         return False
 
-    transition_issue_workflow_state(
-        github_client, issue_number, config, config.labels.running
-    )
+    transition_issue_workflow_state(github_client, issue_number, config, config.labels.running)
 
     issue_after = github_client.get_issue(issue_number)
     return (

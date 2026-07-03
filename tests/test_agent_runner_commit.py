@@ -30,9 +30,7 @@ def _make_issue(number: int = 123) -> IssueSummary:
 def _write_commit_request(worktree_path: Path, commit_message: str) -> None:
     request_path = worktree_path / ".agent-runner" / "commit-request.json"
     request_path.parent.mkdir(parents=True, exist_ok=True)
-    request_path.write_text(
-        f'{{"commit_message": "{commit_message}"}}\n', encoding="utf-8"
-    )
+    request_path.write_text(f'{{"commit_message": "{commit_message}"}}\n', encoding="utf-8")
 
 
 def test_commit_requested_changes_raises_on_verification_failure(

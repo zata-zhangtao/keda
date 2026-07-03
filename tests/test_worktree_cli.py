@@ -92,10 +92,7 @@ def test_worktree_create_excludes_worktree_dir_from_index(tmp_path: Path) -> Non
     manager.create(branch="issue-9", base_branch="main")
 
     exclude_path = repo_path / ".git" / "info" / "exclude"
-    assert (
-        f"/{WORKTREE_DIR_NAME}/"
-        in exclude_path.read_text(encoding="utf-8").splitlines()
-    )
+    assert f"/{WORKTREE_DIR_NAME}/" in exclude_path.read_text(encoding="utf-8").splitlines()
 
     _run_git(repo_path, "add", "-A")
     staged_result = _run_git(repo_path, "diff", "--cached", "--name-only")
@@ -126,9 +123,7 @@ def test_iar_worktree_create_cli_real_entry(
     """The ``iar worktree create`` subcommand must succeed against a real repo."""
     repo_path = _init_git_repository(tmp_path, "target")
     monkeypatch.chdir(repo_path)
-    exit_code = main(
-        ["worktree", "create", "--branch", "cli-1", "--base-branch", "main"]
-    )
+    exit_code = main(["worktree", "create", "--branch", "cli-1", "--base-branch", "main"])
     assert exit_code == 0
     worktree_path = repo_path / WORKTREE_DIR_NAME / "cli-1"
     assert worktree_path.exists()
@@ -171,9 +166,7 @@ def test_iar_worktree_create_cli_copies_missing_env_files(
     nested_env_path.write_text("E2E=1\n", encoding="utf-8")
 
     monkeypatch.chdir(repo_path)
-    exit_code = main(
-        ["worktree", "create", "--branch", "cli-env", "--base-branch", "main"]
-    )
+    exit_code = main(["worktree", "create", "--branch", "cli-env", "--base-branch", "main"])
 
     assert exit_code == 0
     worktree_path = repo_path / WORKTREE_DIR_NAME / "cli-env"
@@ -182,9 +175,7 @@ def test_iar_worktree_create_cli_copies_missing_env_files(
         encoding="utf-8"
     ) == "E2E=1\n"
     # The tracked example file comes from git itself, not the copy step.
-    assert (worktree_path / ".env.example").read_text(
-        encoding="utf-8"
-    ) == "EXAMPLE=tracked\n"
+    assert (worktree_path / ".env.example").read_text(encoding="utf-8") == "EXAMPLE=tracked\n"
     # Copied env files are gitignored, so the worktree must stay clean —
     # otherwise `iar worktree cleanup` would refuse to delete it later.
     status_result = _run_git(worktree_path, "status", "--porcelain")
@@ -224,9 +215,7 @@ def test_create_or_reuse_worktree_heals_env_files_on_reuse(
         body="",
         labels=(),
     )
-    resolved_worktree_path = create_or_reuse_worktree(
-        repo_path, issue, config, SubprocessRunner()
-    )
+    resolved_worktree_path = create_or_reuse_worktree(repo_path, issue, config, SubprocessRunner())
 
     assert resolved_worktree_path == worktree_path.resolve()
     assert (worktree_path / ".env").read_text(encoding="utf-8") == "SECRET=1\n"
@@ -272,9 +261,7 @@ def test_create_or_reuse_worktree_links_frontend_node_modules(
         labels=(),
     )
 
-    resolved_worktree_path = create_or_reuse_worktree(
-        repo_path, issue, config, SubprocessRunner()
-    )
+    resolved_worktree_path = create_or_reuse_worktree(repo_path, issue, config, SubprocessRunner())
 
     assert resolved_worktree_path == worktree_path.resolve()
     worktree_node_modules = worktree_path / "frontend" / "node_modules"
@@ -315,9 +302,7 @@ def test_create_or_reuse_worktree_anchors_relative_path_output_to_repo(
         labels=(),
     )
 
-    resolved_worktree_path = create_or_reuse_worktree(
-        repo_path, issue, config, SubprocessRunner()
-    )
+    resolved_worktree_path = create_or_reuse_worktree(repo_path, issue, config, SubprocessRunner())
 
     assert resolved_worktree_path == worktree_path.resolve()
 

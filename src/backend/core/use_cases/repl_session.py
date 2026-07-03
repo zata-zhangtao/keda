@@ -212,9 +212,7 @@ def _build_system_prompt(
     repo_config = context.config
     pending_prd_summary = _build_pending_prd_summary(context.repo_path)
     if github_client is not None:
-        issue_summary = _build_issue_summary(
-            context.repo_path, repo_config, github_client
-        )
+        issue_summary = _build_issue_summary(context.repo_path, repo_config, github_client)
     else:
         issue_summary = "GitHub Issue summary unavailable (no client)."
 
@@ -399,9 +397,7 @@ def run_repl_session(inputs: ReplSessionInputs, deps: ReplSessionDeps) -> int:
     executed_commands: list[dict[str, Any]] = []
 
     started_at = _now_iso()
-    prompt_output = (
-        deps.prompt_output_fn if deps.prompt_output_fn is not None else print
-    )
+    prompt_output = deps.prompt_output_fn if deps.prompt_output_fn is not None else print
     reply_output = deps.reply_output_fn if deps.reply_output_fn is not None else print
 
     system_prompt = _build_system_prompt(
@@ -465,9 +461,7 @@ def run_repl_session(inputs: ReplSessionInputs, deps: ReplSessionDeps) -> int:
             assistant_text = agent_result.stdout
             history.append(ReplTurn(role="assistant", content=assistant_text))
 
-            marker_requests: Sequence[IarExecRequest] = parse_iar_exec_markers(
-                assistant_text
-            )
+            marker_requests: Sequence[IarExecRequest] = parse_iar_exec_markers(assistant_text)
             for exec_request in marker_requests:
                 outcome: ReplExecOutcome = deps.command_executor.execute(
                     exec_request, repo_path=repo_path

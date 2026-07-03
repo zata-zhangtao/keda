@@ -31,9 +31,7 @@ _logger = logging.getLogger(__name__)
 # Marker regexes (same style as agent_runner_events.py)
 # ---------------------------------------------------------------------------
 
-_DEPENDS_ON_MARKER_PATTERN = re.compile(
-    r"<!--\s*iar:depends-on\s+" r"(?P<body>[^>]+?)" r"\s*-->"
-)
+_DEPENDS_ON_MARKER_PATTERN = re.compile(r"<!--\s*iar:depends-on\s+" r"(?P<body>[^>]+?)" r"\s*-->")
 
 _DEPENDENCY_WAIT_MARKER_PATTERN = re.compile(
     r"<!--\s*iar:dependency-wait\s+" r"blockers=(?P<blockers>[^\s>]+)" r"\s*-->"
@@ -83,9 +81,7 @@ def parse_delivery_dependencies(prd_text: str) -> DeliveryDependencyDeclaration:
         re.MULTILINE,
     )
     if next_header_match:
-        section_text = prd_text[
-            section_start : section_start + next_header_match.start()
-        ]
+        section_text = prd_text[section_start : section_start + next_header_match.start()]
     else:
         section_text = prd_text[section_start:]
 
@@ -124,9 +120,7 @@ def parse_delivery_dependencies(prd_text: str) -> DeliveryDependencyDeclaration:
 
     group = _parse_optional_scalar(field_values["group"])
     depends_on_groups = _parse_group_names(field_values["depends_on_groups"])
-    depends_on_issues, depends_on_prds = _parse_issue_or_prd_refs(
-        field_values["depends_on_issues"]
-    )
+    depends_on_issues, depends_on_prds = _parse_issue_or_prd_refs(field_values["depends_on_issues"])
     gate_type = _parse_optional_scalar(field_values["gate_type"]) or "none"
     notes = " ".join(field_values["notes"]).strip()
 
@@ -208,9 +202,7 @@ def _parse_issue_or_prd_refs(values: list[str]) -> tuple[list[int], list[str]]:
     numbers: list[int] = []
     prd_refs: list[str] = []
     for raw_dependency_value in values:
-        for dependency_ref in _extract_dependency_reference_tokens(
-            raw_dependency_value
-        ):
+        for dependency_ref in _extract_dependency_reference_tokens(raw_dependency_value):
             if re.fullmatch(r"#?\d+", dependency_ref):
                 numbers.append(int(dependency_ref.lstrip("#")))
                 continue
@@ -234,9 +226,7 @@ def _extract_dependency_reference_tokens(raw_dependency_value: str) -> list[str]
         for code_span_ref in code_span_refs
         if _looks_like_issue_or_prd_ref(code_span_ref)
     ]
-    value_without_code_spans = _DELIVERY_CODE_SPAN_RE.sub(
-        " ", stripped_dependency_value
-    )
+    value_without_code_spans = _DELIVERY_CODE_SPAN_RE.sub(" ", stripped_dependency_value)
 
     structured_refs = list(dependency_code_span_refs)
     fallback_refs: list[str] = []
@@ -421,19 +411,14 @@ def evaluate_dependencies(
                     current_state=state_upper,
                 )
             )
-        if any(
-            label in upstream.labels
-            for label in (labels_config.failed, labels_config.blocked)
-        ):
+        if any(label in upstream.labels for label in (labels_config.failed, labels_config.blocked)):
             has_failed_or_blocked = True
 
     # Group dependencies
     for group in declaration.groups:
         group_label = f"{labels_config.group_prefix}{group}"
         try:
-            members = github_client.list_issues_by_label(
-                group_label, limit=1000, state="all"
-            )
+            members = github_client.list_issues_by_label(group_label, limit=1000, state="all")
         except Exception as exc:  # noqa: BLE001
             _logger.warning("Failed to query group %s: %s", group_label, exc)
             blockers.append(
@@ -465,8 +450,7 @@ def evaluate_dependencies(
             )
         for member in members:
             if any(
-                label in member.labels
-                for label in (labels_config.failed, labels_config.blocked)
+                label in member.labels for label in (labels_config.failed, labels_config.blocked)
             ):
                 has_failed_or_blocked = True
 
@@ -509,12 +493,8 @@ def build_waiting_comment(
             if blocker.current_state in ("unknown",):
                 lines.append(f"- Issue #{blocker.target}: unable to determine state")
             else:
-                state_emoji = (
-                    "❌" if blocker.current_state.upper() != "CLOSED" else "✅"
-                )
-                lines.append(
-                    f"- Issue #{blocker.target}: {state_emoji} {blocker.current_state}"
-                )
+                state_emoji = "❌" if blocker.current_state.upper() != "CLOSED" else "✅"
+                lines.append(f"- Issue #{blocker.target}: {state_emoji} {blocker.current_state}")
         elif blocker.blocker_type == "group":
             if blocker.current_state == "empty":
                 lines.append(
@@ -522,9 +502,7 @@ def build_waiting_comment(
                     f"(possible typo in ``{labels_config.group_prefix}{blocker.target}`` label)"
                 )
             else:
-                lines.append(
-                    f"- Group ``{blocker.target}``: ❌ {blocker.current_state}"
-                )
+                lines.append(f"- Group ``{blocker.target}``: ❌ {blocker.current_state}")
 
     if verdict.has_failed_or_blocked_upstream:
         lines.extend(
@@ -575,15 +553,10 @@ def _build_resolution_guidance(
             blocker.blocker_type == "issue"
             and blocker.current_state.upper() not in ("CLOSED", "UNKNOWN")
         )
-        or (
-            blocker.blocker_type == "group"
-            and blocker.current_state not in ("empty", "unknown")
-        )
+        or (blocker.blocker_type == "group" and blocker.current_state not in ("empty", "unknown"))
         for blocker in verdict.blockers
     )
-    has_unknown_blocker = any(
-        blocker.current_state == "unknown" for blocker in verdict.blockers
-    )
+    has_unknown_blocker = any(blocker.current_state == "unknown" for blocker in verdict.blockers)
 
     guidance: list[str] = []
     if has_empty_group:

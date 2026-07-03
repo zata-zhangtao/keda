@@ -192,9 +192,7 @@ class LoopTask:
     repo_id: str
     schedule: LoopSchedule
     enabled: bool = True
-    created_at: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_fire_at: str | None = None
     next_fire_at: str | None = None
     fire_count: int = 0

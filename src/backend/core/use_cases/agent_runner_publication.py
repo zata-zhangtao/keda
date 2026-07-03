@@ -365,9 +365,7 @@ def _reuse_existing_local_commit(
     Returns:
         包含验证结果的 AgentCommitResult，或 None（不满足复用条件）
     """
-    local_commit_count = _count_local_commits_since_base(
-        worktree_path, config, process_runner
-    )
+    local_commit_count = _count_local_commits_since_base(worktree_path, config, process_runner)
     if local_commit_count <= 0 or has_changes(worktree_path, process_runner):
         return None
 
@@ -509,11 +507,22 @@ def _finish_implementation_publication(
         issue_number=issue.number,
         add_labels=[config.labels.supervising],
         remove_labels=[
-            label
-            for label in workflow_state_labels(config)
-            if label != config.labels.supervising
+            label for label in workflow_state_labels(config) if label != config.labels.supervising
         ],
         worktree_path=worktree_path,
+        github_client=github_client,
+    )
+
+    # Apply independent-verifier verdict as PR label / comment (pre-PR computed,
+    # post-PR applied). Green → sets ``validation/verifier-passed`` label;
+    # yellow → posts warning comment; None → no-op.
+    from backend.core.use_cases.run_verifier_agent import apply_verifier_verdict_to_pr
+
+    apply_verifier_verdict_to_pr(
+        pr_url=pr_url,
+        verdict=commit_result.verifier_verdict,
+        issue_number=issue.number,
+        verifier_passed_label=config.labels.verifier_passed,
         github_client=github_client,
     )
 
@@ -573,9 +582,7 @@ def _finish_implementation_publication(
             issue_number=issue.number,
             add_labels=[config.labels.review],
             remove_labels=[
-                label
-                for label in workflow_state_labels(config)
-                if label != config.labels.review
+                label for label in workflow_state_labels(config) if label != config.labels.review
             ],
             worktree_path=worktree_path,
             github_client=github_client,
@@ -748,9 +755,7 @@ def _finish_existing_commit_publication(
             issue_number=issue.number,
             add_labels=[config.labels.review],
             remove_labels=[
-                label
-                for label in workflow_state_labels(config)
-                if label != config.labels.review
+                label for label in workflow_state_labels(config) if label != config.labels.review
             ],
             worktree_path=worktree_path,
             github_client=github_client,
