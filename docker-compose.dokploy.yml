@@ -48,13 +48,13 @@ services:
           cpus: "0.25"
           memory: 512M
 
-  frontend:
+  frontend-public:
     build:
-      context: ./frontend
+      context: ./frontend-public
       dockerfile: Dockerfile
-    container_name: app-frontend
+    container_name: app-frontend-public
     expose:
-      - "80"
+      - "3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -66,7 +66,7 @@ services:
       - "traefik.http.routers.app.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.app.entrypoints=websecure"
       - "traefik.http.routers.app.tls.certResolver=letsencrypt"
-      - "traefik.http.services.app.loadbalancer.server.port=80"
+      - "traefik.http.services.app.loadbalancer.server.port=3000"
     deploy:
       resources:
         limits:

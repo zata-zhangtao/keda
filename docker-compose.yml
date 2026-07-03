@@ -54,13 +54,25 @@ services:
       retries: 3
       start_period: 10s
 
-  frontend:
+  frontend-public:
     build:
-      context: ./frontend
+      context: ./frontend-public
       dockerfile: Dockerfile
-    container_name: app-frontend
+    container_name: app-frontend-public
     ports:
-      - "80:80"
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend-admin:
+    build:
+      context: ./frontend-admin
+      dockerfile: Dockerfile
+    container_name: app-frontend-admin
+    ports:
+      - "5173:80"
     depends_on:
       backend:
         condition: service_healthy

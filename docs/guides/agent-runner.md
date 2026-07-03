@@ -1310,7 +1310,7 @@ iar recover --issue 5 --branch issue-5
 ## REPL 入口
 
 直接运行 `iar`（不带任何子命令）会进入交互式 REPL 入口。底层调用
-[`claude` / `codex` / `kimi`](#repl-agent--command-protocol) 等本地
+[`claude` / `codex` / `kimi`](#repl-agent-command-protocol) 等本地
 agent，把仓库上下文与自然语言指令直接转成 IAR 子命令并执行。
 
 ### 行为差异
@@ -2575,7 +2575,7 @@ Claude stream (Issue #23: https://github.com/zata-zhangtao/fsense/issues/23) sti
 
 ## Agent Runner Monitoring Dashboard
 
-Dashboard 路由 `/dashboard`（即 `frontend/src/pages/dashboard-page.tsx`）展示 Agent Runner 的监控视图。运维者打开 Web 就能看到当前队列、PR 状态、事件时间线和异常。监控 API 本身保持只读；写操作（重试 failed、继续 blocked、启停 runner 进程等）由独立的管理终端 API 承载，见下文「Agent Runner 统一管理终端（Operations Console）」一节。
+Dashboard 路由 `/app/dashboard`（即 `frontend-public/app/(app)/app/dashboard/page.tsx`）展示 Agent Runner 的监控视图。运维者打开 Web 就能看到当前队列、PR 状态、事件时间线和异常。监控 API 本身保持只读；写操作（重试 failed、继续 blocked、启停 runner 进程等）由独立的管理终端 API 承载，见下文「Agent Runner 统一管理终端（Operations Console）」一节。
 
 > 历史注记：监控面板最初按"只读、无数据库、无进程管理"交付
 > （`tasks/archive/20260524-162356-prd-agent-runner-operations-console.md`）。

@@ -1,116 +1,22 @@
 # 前端架构
 
-本文档描述 `frontend/` 目录内部的前端结构。它是浏览器端客户端架构，不属于后端四层 Clean Architecture 的内部依赖图。
+本仓库的前端由两个独立的 npm 包组成，分别服务不同场景。本文档是前端架构的**索引页**，不描述任何单个前端的内部细节——各前端的内部架构见其目录下的 README。
 
-## 定位
+## 两个前端
 
-- `frontend/` 是系统边界外的 Web 客户端。
-- 它通过 HTTP 接口调用 `src/backend/api/` 暴露的后端能力。
-- 它负责页面渲染、路由跳转、会话恢复和交互反馈，不承载后端用例编排。
+| 前端 | 目录 | 技术栈 | 场景 |
+|---|---|---|---|
+| 前台官网 | `frontend-public/`（详见其目录下 README） | Next.js 16 App Router + React 19 + Tailwind v4 + shadcn/ui | 营销页（auth-free）+ 登录 + agent-runner 监控控制台 |
+| 管理平台 | `frontend-admin/`（详见其目录下 README） | Vite + React 19 + TanStack Router + Zustand + shadcn/admin | admin 域登录与后台管理骨架 |
 
-## 前端内部架构图
-
-```mermaid
-flowchart TD
-    Browser["Browser"] --> Entry["src/main.tsx"]
-    Entry --> AppRoot["src/app.tsx"]
-    AppRoot --> Router["BrowserRouter"]
-    AppRoot --> SessionProvider["src/auth/SessionProvider.tsx"]
-    AppRoot --> MainApp["src/main-app.tsx"]
-    AppRoot --> Feedback["src/components/ui/sonner.tsx"]
-
-    MainApp --> LoginRoute["/login"]
-    MainApp --> ProtectedRoute["受保护路由"]
-    ProtectedRoute --> RouteGuard["src/auth/RequireSession.tsx"]
-    RouteGuard --> DashboardPage["src/pages/dashboard-page.tsx"]
-    MainApp --> LoginPage["src/pages/login-page.tsx"]
-
-    DashboardPage --> LayoutShell["src/components/\napp-sidebar · site-header · ui/*"]
-    LoginPage --> SessionProvider
-    RouteGuard --> SessionProvider
-
-    SessionProvider --> SessionStore["shared/auth/sessionStore.ts"]
-    SessionProvider --> AuthApi["shared/api/auth.ts"]
-    AuthApi --> ApiClient["shared/api/client.ts"]
-    AuthApi --> ApiTypes["shared/api/types.ts"]
-    ApiClient --> Backend["src/backend/api/ HTTP API"]
-```
-
-## 模块职责
-
-### 应用入口层
-
-路径：
-
-- `src/main.tsx`
-- `src/app.tsx`
-- `src/main-app.tsx`
-
-职责：
-
-- 挂载 React 应用
-- 组装 Router、Provider 与全局提示组件
-- 定义页面路由、懒加载和主布局壳
-
-### 认证与会话层
-
-路径：
-
-- `src/auth/SessionProvider.tsx`
-- `src/auth/RequireSession.tsx`
-- `shared/auth/sessionStore.ts`
-
-职责：
-
-- 恢复当前会话
-- 暴露登录、登出与鉴权状态
-- 在受保护路由前执行访问控制
-
-### 页面层
-
-路径：
-
-- `src/pages/`
-- `src/hooks/`
-
-职责：
-
-- 组织页面级交互
-- 处理页面状态、加载态和错误态
-- 连接认证层与共享组件层
-
-### 共享组件层
-
-路径：
-
-- `src/components/`
-- `src/components/ui/`
-
-职责：
-
-- 提供布局壳、导航组件和基础 UI 原语
-- 复用视觉和交互模式
-- 避免直接承担接口调用与会话编排
-
-### API 适配层
-
-路径：
-
-- `shared/api/client.ts`
-- `shared/api/auth.ts`
-- `shared/api/types.ts`
-
-职责：
-
-- 封装 HTTP 请求和响应解析
-- 统一错误处理
-- 为页面和认证逻辑提供稳定的接口调用入口
+两个前端互不依赖，各自维护 lockfile，与后端仅通过 `/api/*` HTTP 接口通信。包管理器为 pnpm，仓根 `pnpm-workspace.yaml` 声明两个 workspace。
 
 ## 与后端四层的边界
 
 ```mermaid
 flowchart LR
-    Frontend["frontend/ Web Client"] -->|HTTP / WebSocket| Apps["src/backend/api/"]
+    FrontendPublic["frontend-public/ Web Client"] -->|HTTP /api/*| Apps["src/backend/api/"]
+    FrontendAdmin["frontend-admin/ Web Client"] -->|HTTP /api/*| Apps
     Apps --> Core["src/backend/core/"]
     Core --> Capabilities["src/backend/engines/"]
     Core --> Infrastructure["src/backend/infrastructure/"]
@@ -121,4 +27,8 @@ flowchart LR
 
 - 前端只依赖后端暴露的接口契约，不依赖后端 Python 模块。
 - 后端内部如何在 `src/backend/api/`、`src/backend/core/`、`src/backend/engines/`、`src/backend/infrastructure/` 之间拆分，对前端来说应是透明的。
-- 如果后续前端规模扩大，可以继续在本文档下增加路由图、状态图和组件边界约束。
+- 各前端内部的路由图、状态图和组件边界约束，见对应目录的 README，不再在本文档展开。
+
+## 历史说明
+
+本仓库曾有一个单一的 `frontend/` 目录（Vite + Refine + react-router + npm）。它已通过 strangler 迁移被 `frontend-public/` 吸收（7 个 agent-runner 页面 + 5 个组件 + API 客户端）并在收尾阶段删除。迁移细节见 `tasks/archive/P1-FEAT-20260702-140755-frontend-template-migration.md`。

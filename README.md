@@ -73,9 +73,13 @@ cd keda
 uv sync --all-extras
 uv run pre-commit install
 
-# 3. 启动服务（后端 + 前端，分别开两个终端）
+# 3. 启动服务（后端 + 前端，分别开终端）
 uv run python -m backend.main          # 后端（默认 8000 端口）
-cd frontend && npm run dev             # 前端（默认 5173 端口）
+
+# 前端使用 pnpm workspace（frontend-public + frontend-admin）
+pnpm install                            # 安装两个前端的依赖
+pnpm --filter frontend-public dev       # 前台官网（Next.js，默认 3000 端口）
+pnpm --filter frontend-admin dev        # 管理平台（Vite，默认 5173 端口）
 ```
 
 > 项目提供了 `justfile` 作为便捷封装（如 `just dev`、`just run`、`just test`），如果你使用 [just](https://github.com/casey/just)，可以直接调用。下文只列出底层命令。
