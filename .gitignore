@@ -63,4 +63,4 @@ Thumbs.db
 .agent-runner/
 
 # pytest-testmon SQLite cache
-.testmondata
+.testmondata*

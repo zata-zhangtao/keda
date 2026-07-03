@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -333,17 +334,38 @@ def _extract_manifest_string(
 
 
 def _extract_manifest_item_number(raw_block: object, config: AppConfig) -> int:
-    """Extract ``item_number`` from a raw evidence block."""
+    """Extract ``item_number`` from a raw evidence block.
+
+    对 agent 常见笔误做防御性兼容：把 ``\"rv-1\"`` 或 ``\"1\"`` 这类字符串
+    解析为正整数，避免 LLM 因 prompt 理解偏差导致证据门禁反复失败。
+    真正无法解析的值仍然抛 ``ValidationEvidenceError``。
+    """
     if not isinstance(raw_block, dict):
         raise ValidationEvidenceError(
             f"`{config.validation.evidence_dir}/evidence.json` contains a non-object "
             "entry in `items`."
         )
     item_number_value = raw_block.get("item_number")
+
+    if isinstance(item_number_value, str):
+        cleaned = item_number_value.strip().lower()
+        if cleaned.startswith("rv-"):
+            cleaned = cleaned[3:]
+        try:
+            item_number_value = int(cleaned)
+            logging.getLogger(__name__).warning(
+                "Coerced string item_number %r to integer %d; "
+                "update the agent prompt or manifest to use a bare integer.",
+                raw_block.get("item_number"),
+                item_number_value,
+            )
+        except ValueError:
+            pass
+
     if not isinstance(item_number_value, int) or item_number_value < 1:
         raise ValidationEvidenceError(
             f"`{config.validation.evidence_dir}/evidence.json` has invalid "
-            f"`item_number` {item_number_value!r}; must be a positive integer."
+            f"`item_number` {raw_block.get('item_number')!r}; must be a positive integer."
         )
     return item_number_value
 
@@ -694,7 +716,9 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
         return (
             "此外，你必须在 `{evidence_dir}/evidence.json` 中写入结构化证据 manifest，"
             "按 Realistic Validation checklist item 分组。每个证据块必须包含："
-            "`item_number`（序号）、`item_name`（名称）、`command`（可复现命令）、"
+            "`item_number`（序号，必须是正整数，例如 `1` / `2` / `3`；不要加引号，"
+            '不要写成 checklist id 字符串如 `"rv-1"`）、'
+            "`item_name`（名称）、`command`（可复现命令）、"
             "`evidence_files`（关联证据文件列表）、`output_summary`（关键输出摘要）、"
             "`explanation`（为什么该证据能证明检查点成立）、`risks`（潜在风险或不适用说明）、"
             "`negative_control`（能让该项变红的命令或注入的故障）、`expected_fail`（变红时的样子）。"
@@ -708,7 +732,8 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
     return (
         "Additionally, you must write a structured evidence manifest to "
         "`{evidence_dir}/evidence.json`, grouped by Realistic Validation checklist item. "
-        "Each evidence block must include: `item_number`, `item_name`, `command`, "
+        "Each evidence block must include: `item_number` (positive integer, e.g. `1`/`2`/`3`; "
+        'do not quote it or use checklist id strings like `"rv-1"`), `item_name`, `command`, '
         "`evidence_files`, `output_summary`, `explanation` (why the evidence satisfies "
         "the checkpoint), `risks` (potential risks or not-applicable notes), "
         "`negative_control` (a command or injected fault that makes this item go RED), "

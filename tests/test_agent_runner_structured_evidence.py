@@ -127,6 +127,52 @@ def test_build_structured_evidence_prompt_suffix_contains_schema() -> None:
     assert ".iar/evidence/evidence.json" in formatted
 
 
+def test_build_structured_evidence_prompt_suffix_requires_integer_item_number() -> None:
+    """The prompt explicitly requires item_number to be a bare positive integer."""
+    zh_suffix = build_structured_evidence_prompt_suffix("zh-CN")
+    en_suffix = build_structured_evidence_prompt_suffix("en-US")
+
+    assert "正整数" in zh_suffix
+    assert "rv-1" in zh_suffix
+    assert "positive integer" in en_suffix
+    assert "rv-1" in en_suffix
+
+
+def test_load_evidence_manifest_accepts_rv_prefixed_item_number(
+    tmp_path: Path,
+) -> None:
+    """String item numbers like 'rv-1' are coerced to integers for robustness."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "rv-1-run.txt").write_text("ok", encoding="utf-8")
+    manifest = {
+        "version": 1,
+        "language": "zh-CN",
+        "items": [
+            {
+                "item_number": "rv-1",
+                "item_name": "行为 A 真实验证",
+                "command": "uv run pytest tests/test_demo.py -k run -v",
+                "evidence_files": ["rv-1-run.txt"],
+                "output_summary": "demo run 输出 ok。",
+                "explanation": "真实执行了 demo run。",
+                "risks": "无外部依赖。",
+                "negative_control": "改坏被测逻辑后重跑该用例",
+                "expected_fail": "pytest 该用例 FAILED",
+            }
+        ],
+    }
+    (evidence_dir / "evidence.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    result = load_evidence_manifest(tmp_path, AppConfig())
+
+    assert len(result.items) == 1
+    assert result.items[0].item_number == 1
+
+
 def test_build_structured_evidence_prompt_suffix_warns_against_exec_redirection() -> (
     None
 ):

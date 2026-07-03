@@ -489,6 +489,9 @@ class AgentRunnerRunnerSettings(BaseModel):
     transient_retry_attempts: int = 2
     transient_retry_delay_seconds: int = 10
     timeout_seconds: int = 14400
+    # Whether the lightweight Fix Agent runs when staged verification fails.
+    # False escalates staged verification failures straight to full recovery.
+    fix_agent_enabled: bool = True
     fix_timeout_seconds: int | None = None
     recovery_timeout_seconds: int | None = None
     inactivity_timeout_seconds: int = 1200

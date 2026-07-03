@@ -4680,8 +4680,8 @@ def test_run_once_rebase_conflict_detached_head(
     )
 
     fake_client = FakeGitHubClient()
-    fake_client.list_review_candidate_issues = (
-        lambda labels, limit: [issue] if "agent/running" in labels else []
+    fake_client.list_review_candidate_issues = lambda labels, limit: (
+        [issue] if "agent/running" in labels else []
     )
     fake_client.comment_issue(73, rework_comment)
     fake_client._open_prs["issue-73"] = "https://github.com/example/repo/pull/73"
@@ -7142,7 +7142,7 @@ def _transient_command_error() -> CommandFailedError:
         1,
         ["claude", "--dangerously-skip-permissions", "-p", "PROMPT"],
         output=(
-            "[agent error] API Error: The socket connection was closed " "unexpectedly."
+            "[agent error] API Error: The socket connection was closed unexpectedly."
         ),
         stderr="",
     )
@@ -7433,7 +7433,7 @@ def test_run_fix_agent_falls_back_to_timeout_seconds(tmp_path: Path) -> None:
 
 
 def test_run_agent_until_committed_calls_fix_agent_before_recovery(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Staged verification failure should trigger Fix Agent before full recovery."""
     issue = IssueSummary(
@@ -7530,20 +7530,110 @@ def test_run_agent_until_committed_calls_fix_agent_before_recovery(
         )
     )
 
-    result = run_agent_until_committed(
-        selected_agent="claude",
-        issue=issue,
-        worktree_path=worktree_path,
-        config=config,
-        process_runner=fake_runner,
-        before_sha="before-sha",
-        expected_branch="issue-1",
-    )
+    with caplog.at_level(logging.INFO, logger="backend.core.use_cases.run_agent_once"):
+        result = run_agent_until_committed(
+            selected_agent="claude",
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            process_runner=fake_runner,
+            before_sha="before-sha",
+            expected_branch="issue-1",
+        )
 
     assert result.attempt_results[-1].failure_type == FailureType.SUCCESS
     agent_commands = [c for c in fake_runner.calls if tuple(c)[:1] == ("claude",)]
     assert len(agent_commands) == 2
     assert fake_runner.timeouts[1] == 30
+    assert "Starting Fix Agent for Issue #1 (timeout=30s)." in caplog.text
+    assert "Fix Agent repaired staged verification failure for Issue #1" in caplog.text
+
+
+def test_run_agent_until_committed_skips_fix_agent_when_disabled(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """fix_agent_enabled=False should escalate staged failures without a Fix Agent."""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="https://github.com/example/repo/issues/1",
+        body="Body",
+        labels=(),
+    )
+    worktree_path = tmp_path / "issue-1"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: initial")
+
+    class _StagedFailureRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self._verification_calls = 0
+
+        def run(
+            self,
+            command,
+            *,
+            cwd,
+            check=True,
+            timeout=None,
+            inactivity_timeout=None,
+            capture_output=True,
+            input_text=None,
+            label=None,
+        ):
+            command_tuple = tuple(command)
+            self.calls.append(list(command))
+            if command_tuple[:1] == ("claude",):
+                return CommandResult(command_tuple, 0, "", "")
+            if command_tuple == ("git", "rev-parse", "HEAD"):
+                return CommandResult(command_tuple, 0, "before-sha\n", "")
+            if command_tuple == ("git", "branch", "--show-current"):
+                return CommandResult(command_tuple, 0, "issue-1\n", "")
+            if command_tuple == ("git", "status", "--porcelain"):
+                return CommandResult(command_tuple, 0, " M file.txt\n", "")
+            if command_tuple == ("just", "lint") or _is_bash_wrapped_verification_call(
+                command, ("just", "lint")
+            ):
+                self._verification_calls += 1
+                # Pass pre-staging verification (call 1), fail staged
+                # verification inside the commit proxy (call 2).
+                if self._verification_calls == 2:
+                    return CommandResult(command_tuple, 1, "lint stdout\n", "")
+                return CommandResult(command_tuple, 0, "", "")
+            return CommandResult(command_tuple, 0, "", "")
+
+    fake_runner = _StagedFailureRunner()
+    config = AppConfig(
+        runner=RunnerConfig(
+            max_recovery_attempts=0,
+            recovery_retry_delay_seconds=0,
+            timeout_seconds=100,
+            fix_agent_enabled=False,
+            fix_timeout_seconds=30,
+            verification_commands=("just lint",),
+            agent_fallback_order=(),
+        )
+    )
+
+    with caplog.at_level(logging.INFO, logger="backend.core.use_cases.run_agent_once"):
+        with pytest.raises(MaxRetriesExceededError):
+            run_agent_until_committed(
+                selected_agent="claude",
+                issue=issue,
+                worktree_path=worktree_path,
+                config=config,
+                process_runner=fake_runner,
+                before_sha="before-sha",
+                expected_branch="issue-1",
+            )
+
+    agent_commands = [c for c in fake_runner.calls if tuple(c)[:1] == ("claude",)]
+    assert len(agent_commands) == 1
+    assert all(
+        "Fix the verification failure" not in tuple(c)[-1] for c in agent_commands
+    )
+    assert "Fix Agent disabled for Issue #1" in caplog.text
+    assert "Starting Fix Agent" not in caplog.text
 
 
 def test_run_agent_until_committed_recovery_uses_recovery_timeout_seconds(

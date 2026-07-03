@@ -358,6 +358,8 @@ transient_retry_attempts = 2
 transient_retry_delay_seconds = 10
 # 单次 agent 执行的 wall-clock 超时（秒）；超时会 kill 子进程并进入 recovery
 timeout_seconds = 14400
+# 是否启用 Fix Agent 层；false 时 staged 验证失败直接升级完整 Recovery Agent
+fix_agent_enabled = true
 # Fix Agent 阶段的 wall-clock 超时（秒）；未设置时沿用 timeout_seconds
 fix_timeout_seconds = 1800
 # 完整 Recovery Agent 阶段的 wall-clock 超时（秒）；未设置时沿用 timeout_seconds
@@ -405,6 +407,7 @@ Agent command failed for Issue #19; asking agent to recover (1/5).
    - Fix Agent 的 prompt 包含当前 verification 失败信息以及完整的 `verification_commands` 列表，并明确要求：只修导致失败的代码/测试；不要改 evidence、PRD Acceptance Checklist、commit request；不要切换分支或 push。
    - Fix Agent 使用 `fix_timeout_seconds` 作为超时预算，未配置时回退到 `timeout_seconds`。
    - Fix Agent 成功后，runner 会再次验证并尝试通过 commit proxy 提交；失败则进入完整的 Recovery Agent。
+   - 通过 `fix_agent_enabled = false` 可以整体关闭这一层，staged 验证失败会直接升级到完整 Recovery Agent，避免在明显不适合局部修复的仓库里多消耗一次 agent 调用。
 
 2. **完整 Recovery Agent**
    - 只有 Fix Agent 失败后，runner 才会启动完整的 Recovery Agent，基于更完整的上下文重规划实现。
@@ -412,6 +415,8 @@ Agent command failed for Issue #19; asking agent to recover (1/5).
    - Recovery Agent 使用 `recovery_timeout_seconds` 作为超时预算，未配置时回退到 `timeout_seconds`。
 
 这一分层修复的目的是把大量常见的 lint/类型错误（如 agent 遗漏 import、简单单测失败）用更短的超时和更聚焦的 prompt 解决，避免动辄调用一次完整的 recovery agent。
+
+Fix Agent 的每次启动、修复成功、修复失败以及被配置关闭跳过都会写入 runner 日志（`Starting Fix Agent` / `Fix Agent repaired` / `Fix Agent failed` / `Fix Agent disabled`），可以据此统计这一层的实际触发率与成功率，评估是否值得为仓库保留或关闭。
 
 ### WIP checkpoint 不合并
 
