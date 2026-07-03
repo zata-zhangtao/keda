@@ -1,5 +1,7 @@
 # PRD: Agent Runner Memory Persistence & Skill Distillation
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/124
+
 > 本 PRD 分两个 altitude，分别服务不同读者，自上而下阅读：
 >
 > - **Part A · 人审层 (Review Layer)** — 需求方 / 验收人读这部分，决定"该不该做、做得对不对"，并通过风险地图知道**哪些地方必须亲自确认**。Part A 不出现实现机制、文件路径、命令。
