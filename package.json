@@ -1,0 +1,6 @@
+{
+  "name": "keda-frontend-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "pnpm workspace 根：聚合 frontend-admin 与 frontend-public 两个独立前端包。后端仍由 uv 管理，互不干扰。"
+}

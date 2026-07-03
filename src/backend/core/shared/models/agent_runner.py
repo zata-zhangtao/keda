@@ -204,6 +204,9 @@ class RunnerConfig:
         timeout_seconds: Wall-clock timeout for a single agent execution.
         inactivity_timeout_seconds: Kill the agent if it produces no stdout or
             stderr for this many seconds.
+        fix_agent_enabled: Whether the lightweight Fix Agent runs when staged
+            verification fails inside the commit proxy. When ``False``, staged
+            verification failures escalate straight to the full Recovery Agent.
         fix_timeout_seconds: Optional shorter timeout for the Fix Agent phase.
             When ``None``, falls back to ``timeout_seconds``.
         recovery_timeout_seconds: Optional timeout for the full Recovery Agent
@@ -220,6 +223,7 @@ class RunnerConfig:
     transient_retry_attempts: int = 2
     transient_retry_delay_seconds: int = 10
     timeout_seconds: int = 14400
+    fix_agent_enabled: bool = True
     fix_timeout_seconds: int | None = None
     recovery_timeout_seconds: int | None = None
     inactivity_timeout_seconds: int = 1200

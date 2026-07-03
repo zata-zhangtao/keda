@@ -18,7 +18,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # ========================================
-# Frontend (React + npm)
+# Frontend (pnpm workspace: frontend-admin + frontend-public)
 # ========================================
 
 # Dependencies
@@ -33,6 +33,11 @@ site/
 .npm/
 .eslintcache
 *.tsbuildinfo
+
+# Frontend framework artifacts (各前端自带 .gitignore 也覆盖，这里冗余兜底)
+.next/
+.tanstack/
+.vitest-attachments/
 
 # Environment files - ignore all .env* except *.env*.example
 .env*
@@ -62,7 +67,5 @@ Thumbs.db
 .iar
 .agent-runner/
 
-# pytest-testmon SQLite cache (main DB + WAL/SHM sidecar files)
-.testmondata
-.testmondata-shm
-.testmondata-wal
+# pytest-testmon SQLite cache
+.testmondata*

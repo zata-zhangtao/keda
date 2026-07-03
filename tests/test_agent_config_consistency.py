@@ -50,6 +50,28 @@ def test_runner_timeout_settings_match_core() -> None:
     assert settings.inactivity_timeout_seconds == core.inactivity_timeout_seconds
 
 
+def test_factory_maps_fix_agent_enabled() -> None:
+    """fix_agent_enabled must match defaults and survive the factory mapping.
+
+    Uses a non-default value (False) so a dropped mapping cannot be masked by
+    identical defaults on both config classes.
+    """
+    from backend.core.shared.models.agent_runner import RunnerConfig
+    from backend.engines.agent_runner.factory import build_app_config_from_settings
+    from backend.infrastructure.config.settings import AgentRunnerRunnerSettings
+
+    assert (
+        AgentRunnerRunnerSettings().fix_agent_enabled
+        == RunnerConfig().fix_agent_enabled
+    )
+
+    settings = AgentRunnerSettings()
+    settings.runner = AgentRunnerRunnerSettings(fix_agent_enabled=False)
+    app_config = build_app_config_from_settings(settings)
+
+    assert app_config.runner.fix_agent_enabled is False
+
+
 def test_settings_and_core_agent_labels_are_identical() -> None:
     """AgentRunnerLabelSettings must aggregate the same keys as Core LabelConfig."""
     assert AgentRunnerLabelSettings().agent_labels == CoreLabelConfig().agent_labels

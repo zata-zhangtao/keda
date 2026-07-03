@@ -240,6 +240,7 @@ def build_app_config_from_settings(
             transient_retry_attempts=runner_settings.transient_retry_attempts,
             transient_retry_delay_seconds=runner_settings.transient_retry_delay_seconds,
             timeout_seconds=runner_settings.timeout_seconds,
+            fix_agent_enabled=runner_settings.fix_agent_enabled,
             fix_timeout_seconds=runner_settings.fix_timeout_seconds,
             recovery_timeout_seconds=runner_settings.recovery_timeout_seconds,
             inactivity_timeout_seconds=runner_settings.inactivity_timeout_seconds,

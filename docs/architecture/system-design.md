@@ -67,9 +67,9 @@ flowchart TD
 
         subgraph FE_PUBLIC["frontend-public/ 前台官网"]
             FE_PUBLIC_MARKETING["app/(marketing)/\nHome · Pricing · Features"]
-            FE_PUBLIC_APP["app/(app)/\nDashboard · Settings"]
-            FE_PUBLIC_AUTH["lib/auth.tsx"]
-            FE_PUBLIC_API["lib/api.ts"]
+            FE_PUBLIC_APP["app/(app)/\nDashboard · Processes · Repositories\nStats · Roadmap · Ideas"]
+            FE_PUBLIC_AUTH["components/auth/\nSessionProvider · lib/api/auth"]
+            FE_PUBLIC_API["lib/api/\nclient · agentRunner · console · ideaInbox · roadmap"]
             FE_PUBLIC_MARKETING --> FE_PUBLIC_AUTH
             FE_PUBLIC_APP --> FE_PUBLIC_AUTH
             FE_PUBLIC_APP --> FE_PUBLIC_API
@@ -139,10 +139,10 @@ flowchart TD
 
 | 层 | 路径 | 职责 |
 |---|---|---|
-| 营销页面 | `app/(marketing)/` | 首页、功能、定价、FAQ 等落地页 |
-| 应用页面 | `app/(app)/` | 登录后的 Dashboard、Settings、Tasks、Projects |
-| 认证层 | `lib/auth.tsx` | 会话状态、受保护布局 |
-| API 层 | `lib/api.ts` | axios/fetch 封装、环境基址、错误处理 |
+| 营销页面 | `app/(marketing)/` | 首页、功能、定价、Agent 广场等落地页 |
+| 应用页面 | `app/(app)/` | 登录后的 agent-runner 监控控制台：Dashboard、Processes、Repositories、Stats、Roadmap、Ideas |
+| 认证层 | `components/auth/` + `lib/api/auth` | SessionProvider 上下文、路由守卫、会话缓存 |
+| API 层 | `lib/api/` | axios 客户端封装 + agentRunner/console/ideaInbox/roadmap 监控 API，与后端唯一通信入口 |
 
 前端与后端之间**仅通过 `/api/*` HTTP 接口通信**：
 

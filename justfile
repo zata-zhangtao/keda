@@ -35,11 +35,11 @@ run arg1="" arg2="" arg3="" arg4="" arg5="" arg6="": _check-completion
     set -euo pipefail
 
     target="all"
-    frontend_dir="frontend"
+    frontend_dir="frontend-public"
     backend_port=""
     frontend_port=""
     backend_cmd="uv run python -m backend.main"
-    frontend_cmd="npm run dev"
+    frontend_cmd="pnpm dev"
     backend_pid=""
     frontend_pid=""
     run_state_file="$(git rev-parse --git-path vanta-run.env)"
@@ -474,28 +474,62 @@ check-template-drift:
     echo "✅ just test flag updated: $branch_name @ $head_hash"
     echo "✅ just lint --full flag updated: $branch_name @ $head_hash"
 
-# Frontend helper
+# Frontend helpers (pnpm workspace: frontend-admin + frontend-public)
 # Usage:
-#   just frontend dev
-#   just frontend build
-#   just frontend install
-frontend action="dev":
+#   just frontend-public dev
+#   just frontend-public build
+#   just frontend-public typecheck
+#   just frontend-public install
+#   just frontend-admin dev
+#   just frontend-admin build
+#   just frontend-admin install
+frontend-public action="dev":
     #!/usr/bin/env bash
     set -euo pipefail
-    cd "{{justfile_directory()}}/frontend"
+    cd "{{justfile_directory()}}/frontend-public"
     case "{{action}}" in
         dev)
-            npm run dev
+            pnpm dev
             ;;
         build)
-            npm run build
+            pnpm build
+            ;;
+        typecheck)
+            pnpm typecheck
+            ;;
+        lint)
+            pnpm lint
             ;;
         install)
-            npm install
+            pnpm install
             ;;
         *)
             echo "❌ Unknown action: {{action}}"
-            echo "Usage: just frontend [dev|build|install]"
+            echo "Usage: just frontend-public [dev|build|typecheck|lint|install]"
+            exit 1
+            ;;
+    esac
+
+frontend-admin action="dev":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}/frontend-admin"
+    case "{{action}}" in
+        dev)
+            pnpm dev
+            ;;
+        build)
+            pnpm build
+            ;;
+        lint)
+            pnpm lint
+            ;;
+        install)
+            pnpm install
+            ;;
+        *)
+            echo "❌ Unknown action: {{action}}"
+            echo "Usage: just frontend-admin [dev|build|lint|install]"
             exit 1
             ;;
     esac
