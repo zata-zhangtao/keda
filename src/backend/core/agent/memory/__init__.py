@@ -6,7 +6,7 @@
 - skill 蒸馏与草稿维护（``skill_distillation``）
 - skill 注入 catalog 文本生成（``skill_catalog``）
 
-业务规则通过 ``core/shared/interfaces/agent_memory.py`` 定义的协议
+业务规则通过 ``core/agent/memory/protocols.py`` 定义的协议
 访问底层存储；具体文件存储由 ``infrastructure/memory/`` 实现，
 并由 use cases 在 composition root 注入。
 """
