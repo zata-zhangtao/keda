@@ -80,12 +80,15 @@ _DEFAULT_EXECUTION_TEMPLATE = "\n".join(
         "- Check project conventions (naming, dependency direction, file encoding, "
         "max line length, etc.) before requesting a commit.",
         "- Only modify files inside the current worktree.",
-        "- Do not merge main, delete branches, push, or create PRs; "
-        "the runner handles publishing.",
-        "- Do not run `git add` or `git commit`; the runner exposes " "a restricted commit proxy.",
+        "- Do not merge main, delete branches, push, or create PRs; the runner handles publishing.",
+        "- Do not run `git commit`, `git reset`, `git checkout`, or any "
+        "other command that mutates the git index; the runner handles staging and commits.",
         "- After finishing your changes, run the verification commands above "
         "locally if possible, then request a commit by writing "
         "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
+        "- If you run any verification command (e.g. `just test`) and then modify "
+        "any tracked files afterwards, re-run that verification command before "
+        "requesting a commit. The runner may re-verify the staged tree at commit time.",
         "- Do not touch production systems or real business data.",
         "- Implement the requested task with focused tests and docs updates.",
         "- Finish with a concise summary, tests run, and remaining risk.",
@@ -155,7 +158,7 @@ def _build_prd_context_block(
     prd_path = worktree_path / prd_relative_path
     prd_text = _read_prd_text(prd_path)
     if prd_text is None:
-        return f"Also read the canonical PRD at `{prd_relative_path}`. " f"{closeout_instruction}"
+        return f"Also read the canonical PRD at `{prd_relative_path}`. {closeout_instruction}"
 
     if len(prd_text) <= max_chars:
         inline_section = prd_text.rstrip()
@@ -284,6 +287,31 @@ def _format_unchecked_items(
     return "\n".join(f"  - L{line}: {text}" for line, text in unchecked_items)
 
 
+def _validate_prd_checklist(
+    file_content: str,
+    prd_relative_path: str,
+) -> None:
+    """Validate that a PRD has a checklist section and no unchecked items.
+
+    Args:
+        file_content: PRD file text.
+        prd_relative_path: Relative path used in error messages.
+
+    Raises:
+        PrdDeliveryError: When the checklist section is missing or has
+            unchecked items.
+    """
+    checklist_result = parse_prd_checklist(file_content)
+    if not checklist_result.section_found:
+        raise PrdDeliveryError(f"Acceptance Checklist section missing in {prd_relative_path}")
+    if checklist_result.unchecked_items:
+        unchecked_summary = _format_unchecked_items(checklist_result.unchecked_items)
+        raise PrdDeliveryError(
+            f"Acceptance Checklist has unchecked items in {prd_relative_path}:\n"
+            f"{unchecked_summary}"
+        )
+
+
 def ensure_prd_delivery_ready(
     issue: IssueSummary,
     worktree_path: Path,
@@ -301,17 +329,7 @@ def ensure_prd_delivery_ready(
     prd_path = worktree_path / prd_relative_path
     if prd_path.exists():
         file_content = prd_path.read_text(encoding="utf-8")
-        checklist_result = parse_prd_checklist(file_content)
-
-        if not checklist_result.section_found:
-            raise PrdDeliveryError(f"Acceptance Checklist section missing in {prd_relative_path}")
-
-        if checklist_result.unchecked_items:
-            unchecked_summary = _format_unchecked_items(checklist_result.unchecked_items)
-            raise PrdDeliveryError(
-                f"Acceptance Checklist has unchecked items in {prd_relative_path}:\n"
-                f"{unchecked_summary}"
-            )
+        _validate_prd_checklist(file_content, prd_relative_path)
 
         archive_relative_path = resolve_prd_archive_path(prd_relative_path)
         if archive_relative_path:
@@ -349,17 +367,7 @@ def ensure_prd_delivery_ready(
         archive_path = worktree_path / archive_relative_path
         if archive_path.exists():
             file_content = archive_path.read_text(encoding="utf-8")
-            checklist_result = parse_prd_checklist(file_content)
-            if not checklist_result.section_found:
-                raise PrdDeliveryError(
-                    f"Acceptance Checklist section missing in {archive_relative_path}"
-                )
-            if checklist_result.unchecked_items:
-                unchecked_summary = _format_unchecked_items(checklist_result.unchecked_items)
-                raise PrdDeliveryError(
-                    f"Acceptance Checklist has unchecked items in {archive_relative_path}:\n"
-                    f"{unchecked_summary}"
-                )
+            _validate_prd_checklist(file_content, archive_relative_path)
             return
 
     raise PrdDeliveryError(f"Canonical PRD not found: {prd_relative_path}")
@@ -416,16 +424,7 @@ def assert_prd_archived_for_publish(
             raise PrdDeliveryError(f"PRD is still present at pending path: {prd_relative_path}")
 
     file_content = archive_path.read_text(encoding="utf-8")
-    checklist_result = parse_prd_checklist(file_content)
-    if not checklist_result.section_found:
-        raise PrdDeliveryError(f"Acceptance Checklist section missing in {archive_relative_path}")
-
-    if checklist_result.unchecked_items:
-        unchecked_summary = _format_unchecked_items(checklist_result.unchecked_items)
-        raise PrdDeliveryError(
-            f"Acceptance Checklist has unchecked items in {archive_relative_path}:\n"
-            f"{unchecked_summary}"
-        )
+    _validate_prd_checklist(file_content, archive_relative_path)
 
 
 def format_prd_delivery_detail(message: str) -> str:
@@ -514,7 +513,11 @@ def build_fix_prompt(
             "(naming, dependency direction, file encoding, max line length, etc.).",
             "- Do not update evidence files, PRD Acceptance Checklists, or commit requests.",
             "- Do not switch branches, merge main, push, or create PRs.",
-            "- Do not run `git add` or `git commit`; the runner handles commits.",
+            "- Do not run `git add`, `git commit`, `git reset`, `git checkout`, or any "
+            "other command that mutates the git index; the runner handles staging and commits.",
+            "- If your fix requires re-running verification commands (e.g. `just test`) "
+            "because you modified files after the previous run, re-run them before "
+            "requesting a commit.",
             "- After fixing the failure, write or update "
             "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
             "- Finish with a concise summary of the fix.",
@@ -586,7 +589,10 @@ def build_recovery_prompt(
             "- Before requesting a commit, re-check project conventions "
             "(naming, dependency direction, file encoding, max line length, etc.).",
             "- Do not switch branches, merge main, push, or create PRs.",
-            "- Do not run `git add` or `git commit`; the runner handles commits.",
+            "- Do not run `git commit`, `git reset`, `git checkout`, or any "
+            "other command that mutates the git index; the runner handles staging and commits.",
+            "- If the failure involves a stale verification/test flag, re-run the relevant "
+            "verification commands after any file changes and before requesting a commit.",
             "- After fixing the issue, write or update "
             "`.agent-runner/commit-request.json` as JSON with `commit_message`.",
             "- Finish with a concise summary, tests run, and remaining risk.",
@@ -622,7 +628,7 @@ def build_progress_continuation_prompt(
 
     failure_section = ""
     if failure_summary:
-        failure_section = "The previous attempt failed with:\n" f"{failure_summary}\n"
+        failure_section = f"The previous attempt failed with:\n{failure_summary}\n"
 
     verification_section = ""
     if verification_results:

@@ -223,6 +223,7 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "runner.transient_retry_attempts": ("瞬时网络错误（socket 断开 / 5xx / 超时）的就地重试次数"),
     "runner.transient_retry_delay_seconds": "瞬时错误每次重试前等待的秒数",
     "runner.verification_commands": "提交前自动运行的验证命令；任一命令失败会进入 recovery",
+    "runner.pre_commit_verification_command": "git add 后、git commit 前额外运行的 pre-commit 命令；失败转 Fix Agent",
     "safety.auto_merge": "是否允许自动合并 PR（强烈建议保持 false）",
     "safety.forbidden_path_patterns": "提交前禁止变更的路径通配模式",
     "validation.enabled": "是否启用 Realistic Validation 证据门禁",
@@ -519,6 +520,13 @@ def _has_just_test_recipe(repo_root_path: Path) -> bool:
     return False
 
 
+def _build_precommit_run_command(pyproject_data: dict[str, Any], skip_check_test_flag: bool) -> str:
+    """Return a ``uv run pre-commit run --all-files`` invocation string."""
+    precommit_flag = _uv_dependency_flag(pyproject_data, "pre-commit") or ""
+    skip_prefix = "SKIP=check-test-flag " if skip_check_test_flag else ""
+    return f"{skip_prefix}uv run{precommit_flag} pre-commit run --all-files"
+
+
 def _detect_precommit_verification_command(
     repo_root_path: Path, pyproject_data: dict[str, Any]
 ) -> str | None:
@@ -536,15 +544,10 @@ def _detect_precommit_verification_command(
       ``just test`` recipe was detected, so a bare ``pre-commit run`` would
       deadlock on the stale marker. Skip it and let pytest stand alone.
     """
-    precommit_config_path = repo_root_path / ".pre-commit-config.yaml"
-    if not precommit_config_path.is_file():
+    precommit_config_path, precommit_config_text = _read_precommit_config(repo_root_path)
+    if precommit_config_path is None:
         return None
-    precommit_flag = _uv_dependency_flag(pyproject_data, "pre-commit")
-    if precommit_flag is None:
-        return None
-    try:
-        precommit_config_text = precommit_config_path.read_text(encoding="utf-8")
-    except OSError:
+    if _uv_dependency_flag(pyproject_data, "pre-commit") is None:
         return None
     if "check-test-flag" in precommit_config_text:
         _logger.warning(
@@ -555,7 +558,52 @@ def _detect_precommit_verification_command(
             repo_root_path,
         )
         return None
-    return f"uv run{precommit_flag} pre-commit run --all-files"
+    return _build_precommit_run_command(pyproject_data, skip_check_test_flag=False)
+
+
+def _read_precommit_config(repo_root_path: Path) -> tuple[Path, str] | tuple[None, str]:
+    """Return the pre-commit config path and text, or ``(None, "")`` if absent."""
+    precommit_config_path = repo_root_path / ".pre-commit-config.yaml"
+    if not precommit_config_path.is_file():
+        return None, ""
+    try:
+        return precommit_config_path, precommit_config_path.read_text(encoding="utf-8")
+    except OSError:
+        return None, ""
+
+
+def detect_pre_commit_verification_command(repo_root_path: Path) -> str | None:
+    """Return the command runner should run before ``git commit``.
+
+    When the repository has ``.pre-commit-config.yaml`` and declares
+    ``pre-commit`` as a dependency, the runner can execute the hooks against
+    the staged tree before committing. This surfaces hook failures (including
+    the ``check-test-flag`` marker gate) as ``VerificationFailedError`` so the
+    Fix Agent can repair them, instead of letting them surface as a raw
+    ``CalledProcessError`` from ``git commit``.
+
+    If the config contains ``check-test-flag`` the command skips that specific
+    hook during the explicit runner verification; the runner's own commit step
+    still runs it via ``git commit``. Skipping here prevents a deadlock where
+    the hook requires a marker that only ``just test`` writes, while still
+    running all other format/lint hooks early.
+    """
+    pyproject_path = repo_root_path / "pyproject.toml"
+    if not pyproject_path.is_file():
+        return None
+    try:
+        with open(pyproject_path, "rb") as pyproject_file:
+            pyproject_data: dict[str, Any] = tomllib.load(pyproject_file)
+    except tomllib.TOMLDecodeError:
+        return None
+
+    precommit_config_path, precommit_config_text = _read_precommit_config(repo_root_path)
+    if precommit_config_path is None:
+        return None
+    if _uv_dependency_flag(pyproject_data, "pre-commit") is None:
+        return None
+    skip_check_test_flag = "check-test-flag" in precommit_config_text
+    return _build_precommit_run_command(pyproject_data, skip_check_test_flag)
 
 
 def detect_verification_commands(repo_root_path: Path) -> list[str]:
@@ -641,6 +689,7 @@ def build_repository_local_config_text(
     )
 
     verification_commands = detect_verification_commands(repo_root_path)
+    pre_commit_verification_command = detect_pre_commit_verification_command(repo_root_path)
     settings = AgentRunnerLocalSettings(
         repository=AgentRunnerRepositoryMetadataSettings(
             id=selected_repo_id,
@@ -652,7 +701,10 @@ def build_repository_local_config_text(
             base_branch=selected_base_branch,
         ),
         worktree=AgentRunnerWorktreeSettings(),
-        runner=AgentRunnerRunnerSettings(verification_commands=verification_commands),
+        runner=AgentRunnerRunnerSettings(
+            verification_commands=verification_commands,
+            pre_commit_verification_command=pre_commit_verification_command,
+        ),
         safety=AgentRunnerSafetySettings(),
         validation=AgentRunnerValidationSettings(),
         prompts=AgentRunnerPromptSettings(),

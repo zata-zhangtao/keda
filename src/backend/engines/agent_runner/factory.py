@@ -240,6 +240,7 @@ def build_app_config_from_settings(
             recovery_timeout_seconds=runner_settings.recovery_timeout_seconds,
             inactivity_timeout_seconds=runner_settings.inactivity_timeout_seconds,
             verification_commands=tuple(runner_settings.verification_commands),
+            pre_commit_verification_command=runner_settings.pre_commit_verification_command,
         ),
         safety=SafetyConfig(
             auto_merge=safety_settings.auto_merge,
@@ -1281,8 +1282,7 @@ def create_event_sink(
             with open(events_path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
         summary = (
-            f"[{event.session_id}] round={event.round} agent={event.agent} "
-            f"event={event.event_type}"
+            f"[{event.session_id}] round={event.round} agent={event.agent} event={event.event_type}"
         )
         if output_view is not None:
             output_view.log(summary)

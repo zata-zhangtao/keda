@@ -406,7 +406,8 @@ def test_build_prompt_uses_commit_request_proxy() -> None:
     )
     prompt = build_prompt(issue, Path("/worktree"), PromptConfig())
     assert "Do not merge main, delete branches, push, or create PRs" in prompt
-    assert "Do not run `git add` or `git commit`" in prompt
+    assert "Do not run `git commit`, `git reset`, `git checkout`" in prompt
+    assert "mutates the git index" in prompt
     assert ".agent-runner/commit-request.json" in prompt
     assert "commit_message" in prompt
 
@@ -493,7 +494,8 @@ def test_build_recovery_prompt_includes_failure_context() -> None:
     assert "Verification after runner staged changes with git add -A failed" in prompt
     assert "failing stdout" in prompt
     assert "failing stderr" in prompt
-    assert "Do not run `git add` or `git commit`" in prompt
+    assert "Do not run `git commit`, `git reset`, `git checkout`" in prompt
+    assert "mutates the git index" in prompt
     assert ".agent-runner/commit-request.json" in prompt
 
 

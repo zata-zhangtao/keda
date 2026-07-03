@@ -185,7 +185,7 @@ class WorktreeConfig:
     """
 
     create_command: str = (
-        "iar worktree create --branch issue-{issue_number} " "--base-branch {base_branch}"
+        "iar worktree create --branch issue-{issue_number} --base-branch {base_branch}"
     )
     reuse_command: str = "iar worktree path --branch issue-{issue_number}"
     path_command: str = "iar worktree path --branch issue-{issue_number}"
@@ -239,6 +239,7 @@ class RunnerConfig:
         "git diff --check",
         "uv run mkdocs build",
     )
+    pre_commit_verification_command: str | None = None
 
 
 @dataclass(frozen=True)

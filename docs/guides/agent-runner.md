@@ -271,22 +271,24 @@ uv run --project /path/to/keda iar init
 
 `iar init` 成功写入本地配置后，还会自动把当前仓库注册（或更新路径）到全局 `config.toml` 的 `[agent_runner.repositories]` 中，使 `iar daemon` 默认即可在当前仓库启动。如果该 `repo_id` 已在 registry 中但指向不同路径，init 会自动更新 registry 路径到当前位置。
 
-### `verification_commands` 自动探测
+### 提交前验证命令自动探测
 
-`iar init` 不会写死验证命令，而是按目标仓库实际情况探测 `[agent_runner.runner].verification_commands`（实现见 `src/backend/engines/agent_runner/repository_local.py` 的 `detect_verification_commands`）：
+`iar init` 不会写死验证命令，而是按目标仓库实际情况探测 `[agent_runner.runner].verification_commands` 与 `pre_commit_verification_command`（实现见 `src/backend/engines/agent_runner/repository_local.py`）：
 
-- 基线始终包含 `git diff --check`；
-- 声明了 `mkdocs` 依赖且存在 `mkdocs.yml` → 追加 `uv run mkdocs build`；
-- 存在 `just test` 配方（含经 `import 'justfile.shared'` 等导入的配方，以及 `@test` quiet 前缀）→ 追加 `just test`，并**优先选它**：`just test` 跑的就是 `git commit` 时 pre-commit 强制的同一组 lint/format/test 钩子，并刷新 `.last_tested_commit` 标记，因此 runner 验证通过后提交不会再被 pre-commit 挡下；
-- 否则走通用回退：声明了 `pre-commit` 依赖且有 `.pre-commit-config.yaml` → 追加 `uv run pre-commit run --all-files`；声明了 `pytest` 且有 `tests/` → 追加 `uv run pytest -q`。
+- `verification_commands` 在 agent 请求 commit 后、staging 完成时运行；
+  - 基线始终包含 `git diff --check`；
+  - 声明了 `mkdocs` 依赖且存在 `mkdocs.yml` → 追加 `uv run mkdocs build`；
+  - 存在 `just test` 配方（含经 `import 'justfile.shared'` 等导入的配方，以及 `@test` quiet 前缀）→ 追加 `just test`，并**优先选它**：`just test` 跑的就是 `git commit` 时 pre-commit 强制的同一组 lint/format/test 钩子，并刷新 `.last_tested_commit` 标记，因此 runner 验证通过后提交不会再被 pre-commit 挡下；
+  - 否则走通用回退：声明了 `pre-commit` 依赖且有 `.pre-commit-config.yaml` → 追加 `uv run pre-commit run --all-files`；声明了 `pytest` 且有 `tests/` → 追加 `uv run pytest -q`。
+- `pre_commit_verification_command` 在 `git add -A` 之后、`git commit` 之前单独运行。它的作用是把 `git commit` 时才会触发的 pre-commit 钩子提前到 runner 可控阶段执行：失败会转成 `VerificationFailedError`，由 Fix Agent 修复，而不是以裸 `CalledProcessError` 退出。只有仓库同时声明 `pre-commit` 依赖且存在 `.pre-commit-config.yaml` 时才会被写入；配置里包含 `check-test-flag` 时命令会带 `SKIP=check-test-flag` 前缀，避免在没有 `just test` 的仓库里死锁。
 
 代码层面的默认值只有 `git diff --check`（避免在未 `iar init` 的仓库里因缺少 mkdocs/pytest 而直接失败）。`iar init` 会按上述规则生成更完整的项目专属命令列表。
 
 探测出的命令列表会被 runner 写入首次实现 prompt、Fix Agent prompt 和 Recovery Agent prompt，让 Agent 在编码和修复阶段都能看到完整的交付门禁。所有 prompt 都会提醒 Agent 在请求 commit 前检查项目规范（AGENTS.md、命名、依赖方向、文件编码、行长度限制等）。
 
-> **check-test-flag 护栏**：若仓库装了 `check-test-flag` 钩子却没有可探测的 `just test` 配方，`iar init` 会**跳过** `pre-commit run --all-files` 并打印告警——该钩子只认 `just test` 写入的 `.last_tested_commit` 标记，bare `pre-commit run` 会触发它并让 runner 代提交死锁。这类仓库应补一个 `just test` 配方，或移除 check-test-flag。
+> **check-test-flag 护栏**：若仓库装了 `check-test-flag` 钩子却没有可探测的 `just test` 配方，`iar init` 会**跳过** `verification_commands` 里的 `pre-commit run --all-files`（工作区级别的 bare pre-commit 会死锁）；而 `pre_commit_verification_command` 会带 `SKIP=check-test-flag` 前缀写入，这样 git add 后仍提前运行其余 lint/format 钩子，同时避免 check-test-flag 在 `just test` 标记未刷新时失败。`git commit` 本身仍会运行完整 pre-commit（含 check-test-flag）。这类仓库最佳做法仍是补一个 `just test` 配方或移除 check-test-flag。
 >
-> 探测只在 `iar init` 时发生：已存在的 `.iar.toml` 不会自动更新，需重跑 `iar init --force` 或手改 `verification_commands` 才会采用新探测结果。
+> 探测只在 `iar init` 时发生：已存在的 `.iar.toml` 不会自动更新，需重跑 `iar init --force` 或手改 `verification_commands` / `pre_commit_verification_command` 才会采用新探测结果。
 
 > **init 后务必复核 verification_commands / Please review verification_commands after init**
 >
@@ -370,6 +372,9 @@ inactivity_timeout_seconds = 1200
 verification_commands = [
     "git diff --check",
 ]
+# git add 后、git commit 前额外运行的 pre-commit 命令；失败转 Fix Agent
+# 仅当仓库声明 pre-commit 依赖且存在 .pre-commit-config.yaml 时 iar init 才会写入
+pre_commit_verification_command = "uv run pre-commit run --all-files"
 
 ### Agent 执行超时
 

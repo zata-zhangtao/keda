@@ -484,6 +484,12 @@ class AgentRunnerRunnerSettings(BaseModel):
             "git diff --check",
         ]
     )
+    # Optional command to run after `git add -A` and before `git commit`.
+    # When configured, the runner executes this command against the staged
+    # tree and treats a non-zero exit as a VerificationFailedError, so the
+    # Fix Agent receives the output and can repair pre-commit failures
+    # without the runner needing to know the specific hooks involved.
+    pre_commit_verification_command: str | None = Field(default=None)
 
 
 class AgentRunnerSafetySettings(BaseModel):

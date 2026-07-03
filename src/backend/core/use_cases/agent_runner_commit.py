@@ -123,7 +123,7 @@ def _verification_left_tracked_worktree_changes(
     if diff_result.return_code == 1:
         return True
     raise RuntimeError(
-        "Unable to inspect worktree changes after verification: " f"{diff_result.stderr.strip()}"
+        f"Unable to inspect worktree changes after verification: {diff_result.stderr.strip()}"
     )
 
 
@@ -214,6 +214,21 @@ def commit_requested_changes(
     except VerificationFailedError:
         # Let the Fix Agent / Recovery Agent handle verification failures.
         raise
+    # 如果目标仓库配置了额外的 pre-commit 检查命令（如完整 pre-commit run），
+    # 在 git commit 前主动执行一次。这样 pre-commit hook 失败会作为
+    # VerificationFailedError 进入 Fix Agent，而不是裸的 CalledProcessError。
+    if config.runner.pre_commit_verification_command:
+        _logger.info(
+            "Running configured pre-commit verification command for Issue #%d",
+            issue.number,
+        )
+        pre_commit_result = process_runner.run(
+            ["bash", "-lc", config.runner.pre_commit_verification_command],
+            cwd=worktree_path,
+            check=False,
+        )
+        if pre_commit_result.return_code != 0:
+            raise VerificationFailedError([pre_commit_result])
     if _verification_left_tracked_worktree_changes(worktree_path, process_runner):
         # Imported locally to avoid a circular dependency with agent_runner_publish.
         from backend.core.use_cases.agent_runner_publish import validate_safe_changes

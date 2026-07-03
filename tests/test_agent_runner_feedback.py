@@ -23,6 +23,21 @@ def _make_issue(number: int = 42) -> IssueSummary:
     )
 
 
+def _assert_forbids_git_index_mutation_and_flag_reruns(
+    prompt: str, *, recovery: bool = False
+) -> None:
+    assert "git reset" in prompt
+    assert "git checkout" in prompt
+    assert "mutates the git index" in prompt
+    if recovery:
+        assert "stale verification/test flag" in prompt
+    else:
+        assert (
+            "re-running verification commands" in prompt
+            or "re-run that verification command" in prompt
+        )
+
+
 def test_build_fix_prompt_includes_verification_failure() -> None:
     """Fix prompt should contain the failed command and output."""
     issue = _make_issue()
@@ -62,6 +77,24 @@ def test_build_fix_prompt_forbids_global_deliverables() -> None:
     assert "Do not update evidence files" in prompt
     assert "PRD Acceptance Checklists" in prompt
     assert "commit requests" in prompt
+
+
+def test_build_fix_prompt_forbids_git_index_mutation() -> None:
+    """Fix prompt must forbid git index mutations and remind about verification flags."""
+    issue = _make_issue()
+    worktree_path = Path("/worktree")
+    verification_results = [
+        CommandResult(
+            command=("ruff", "check"),
+            return_code=1,
+            stdout="E501\n",
+            stderr="",
+        )
+    ]
+
+    prompt = build_fix_prompt(issue, worktree_path, verification_results=verification_results)
+
+    _assert_forbids_git_index_mutation_and_flag_reruns(prompt)
 
 
 def test_build_fix_prompt_does_not_include_prd_closeout() -> None:
@@ -156,6 +189,22 @@ def test_build_recovery_prompt_includes_verification_results() -> None:
     assert "project conventions" in prompt
 
 
+def test_build_recovery_prompt_forbids_git_index_mutation_and_flag_reruns() -> None:
+    """Recovery prompt must forbid git index mutations and remind about verification flags."""
+    issue = _make_issue()
+    worktree_path = Path("/worktree")
+
+    prompt = build_recovery_prompt(
+        issue,
+        worktree_path,
+        recovery_attempt=1,
+        max_recovery_attempts=2,
+        failure_summary="tests failed",
+    )
+
+    _assert_forbids_git_index_mutation_and_flag_reruns(prompt, recovery=True)
+
+
 def test_build_prompt_includes_verification_commands_summary() -> None:
     """Initial execution prompt should list verification commands and project conventions reminder."""
     issue = _make_issue()
@@ -175,6 +224,24 @@ def test_build_prompt_includes_verification_commands_summary() -> None:
     assert "just test" in prompt
     assert "git diff --check" in prompt
     assert "project conventions" in prompt
+
+
+def test_build_prompt_forbids_git_index_mutation_and_flag_reruns() -> None:
+    """Execution prompt must forbid git index mutations and remind about verification flags."""
+    issue = _make_issue()
+    worktree_path = Path("/worktree")
+
+    class _FakePromptConfig:
+        phases = {}
+
+    prompt = build_prompt(
+        issue,
+        worktree_path,
+        _FakePromptConfig(),  # type: ignore[arg-type]
+        verification_commands_summary="- `just test`\n- `git diff --check`",
+    )
+
+    _assert_forbids_git_index_mutation_and_flag_reruns(prompt)
 
 
 def test_build_progress_continuation_prompt_includes_failure_context() -> None:

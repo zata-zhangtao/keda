@@ -494,6 +494,73 @@ def test_iar_init_renders_detected_commands_and_validation_section(
     ]
 
 
+def test_iar_init_renders_pre_commit_verification_command(tmp_path: Path) -> None:
+    """When pre-commit is declared and safe, the rendered config carries the command."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "target"',
+                'version = "0.1.0"',
+                'dependencies = ["pre-commit>=3.7.0", "pytest>=8.3.0"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_path / ".pre-commit-config.yaml").write_text(
+        "repos:\n  - repo: local\n    hooks:\n      - id: ruff\n        name: ruff\n",
+        encoding="utf-8",
+    )
+
+    _, config_text, _ = build_repository_local_config_text(
+        RepositoryInitOptions(cwd=repo_path, dry_run=True)
+    )
+
+    assert 'pre_commit_verification_command = "uv run pre-commit run --all-files"' in config_text
+
+
+def test_iar_init_skips_check_test_flag_in_pre_commit_verification_command(
+    tmp_path: Path,
+) -> None:
+    """When check-test-flag is present the explicit command skips that hook."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    (repo_path / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "target"',
+                'version = "0.1.0"',
+                'dependencies = ["pre-commit>=3.7.0", "pytest>=8.3.0"]',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (repo_path / ".pre-commit-config.yaml").write_text(
+        "\n".join(
+            [
+                "repos:",
+                "  - repo: local",
+                "    hooks:",
+                "      - id: check-test-flag",
+                "        name: Check just test flag",
+                "        entry: bash scripts/shared/hooks/check_test_flag.sh",
+                "        language: system",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    _, config_text, _ = build_repository_local_config_text(
+        RepositoryInitOptions(cwd=repo_path, dry_run=True)
+    )
+
+    assert (
+        'pre_commit_verification_command = "SKIP=check-test-flag uv run pre-commit run --all-files"'
+        in config_text
+    )
+
+
 def test_iar_init_renders_interactive_decision_and_deliberation_sections(
     tmp_path: Path,
 ) -> None:

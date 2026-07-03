@@ -67,3 +67,88 @@ def test_commit_requested_changes_raises_on_verification_failure(
             fake_runner,
             expected_branch="issue-123",
         )
+
+
+def test_commit_requested_changes_runs_pre_commit_verification_command(
+    tmp_path: Path,
+) -> None:
+    """Configured pre-commit verification command runs after staging and before commit."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: implement example")
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                ("git", "branch", "--show-current"), 0, "issue-123\n", ""
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                ("git", "status", "--porcelain"), 0, " M src/example.py\n", ""
+            ),
+            ("pre-commit", "run", "--all-files"): CommandResult(
+                ("pre-commit", "run", "--all-files"), 0, "All checks passed\n", ""
+            ),
+        }
+    )
+    config = AppConfig(
+        runner=RunnerConfig(
+            verification_commands=(),
+            pre_commit_verification_command="pre-commit run --all-files",
+        )
+    )
+
+    commit_requested_changes(
+        _make_issue(),
+        worktree_path,
+        config,
+        fake_runner,
+        expected_branch="issue-123",
+    )
+
+    assert ["pre-commit", "run", "--all-files"] in fake_runner.calls
+
+
+def test_commit_requested_changes_raises_when_pre_commit_verification_fails(
+    tmp_path: Path,
+) -> None:
+    """Pre-commit verification failure raises VerificationFailedError for Fix Agent."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: implement example")
+
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                ("git", "branch", "--show-current"), 0, "issue-123\n", ""
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                ("git", "status", "--porcelain"), 0, " M src/example.py\n", ""
+            ),
+            ("pre-commit", "run", "--all-files"): CommandResult(
+                ("pre-commit", "run", "--all-files"),
+                1,
+                "",
+                "check-test-flag failed\n",
+            ),
+        }
+    )
+    config = AppConfig(
+        runner=RunnerConfig(
+            verification_commands=(),
+            pre_commit_verification_command="pre-commit run --all-files",
+        )
+    )
+
+    with pytest.raises(VerificationFailedError) as exc_info:
+        commit_requested_changes(
+            _make_issue(),
+            worktree_path,
+            config,
+            fake_runner,
+            expected_branch="issue-123",
+        )
+
+    failed_results = exc_info.value.verification_results
+    assert len(failed_results) == 1
+    assert failed_results[0].return_code == 1
+    assert "check-test-flag failed" in failed_results[0].stderr
