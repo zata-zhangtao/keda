@@ -141,3 +141,12 @@ SIGKILL (kill -9)/崩溃/断电    强杀    ⚠️ 永远无法捕获,只能靠
 
 那就不管， 但是你可以记录到inbox里面， 说考虑过就不管了
 ```
+
+## 2026-07-03 · 每夜自动整理 loop (CI 修复 / 重复代码 / 文档 / 依赖)
+
+> **已升级为 PRD**：见 `tasks/archive/P1-FEAT-20260702-134625-nightly-cleanup-loop.md`（对应 GitHub Issue #120，2026-07-03 合并到 archive）。
+> 落地形式：在 `tasks/loops/` 新增 `nightly-cleanup-keda.md` 与 `nightly-cleanup-product.md` 两份 recipe，
+> 每晚 02:00 / 02:30 各 fire 1 次，PRD body 内置 4 类 scope 的 triage 决策树
+> (CI > refactor > docs > deps)，agent 在 worktree 内按决策树选 1 个 scope 出 draft PR。
+> 零新代码，全部经由既有 iar-loop 子系统（`fire_loop` / `parse_loop_recipe` /
+> `run_agent_repositories_once`）承载。
