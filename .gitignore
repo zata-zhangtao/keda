@@ -62,5 +62,7 @@ Thumbs.db
 .iar
 .agent-runner/
 
-# pytest-testmon SQLite cache
+# pytest-testmon SQLite cache (main DB + WAL/SHM sidecar files)
 .testmondata
+.testmondata-shm
+.testmondata-wal
