@@ -170,6 +170,28 @@ verification_commands = [
   "uv run mkdocs build --strict",
 ]
 
+# =============================================================================
+# Agent Runner Memory Persistence
+# =============================================================================
+# 控制 runner 的短期/长期记忆与 skill 蒸馏功能。记忆文件保存在 worktree 内
+# .iar/memory/，skill 草稿保存在 .iar/skills/drafts/，默认被 .gitignore 排除，
+# 不进版本控制。
+[agent_runner.memory]
+enabled = true
+base_dir = ".iar/memory"
+skill_drafts_dir = ".iar/skills/drafts"
+# 已晋升 skill 的扫描目录；可配置多个项目级 skills 目录。
+promoted_skills_dirs = [".iar/skills"]
+# 注入 prompt 时最多选用的 skill / 长期记忆条目数。
+top_k_skills = 3
+top_k_facts = 5
+# 是否自动将满足条件的 skill 草稿晋升到 promoted_skills_dirs。
+# 默认开启：当 usage_count >= auto_promote_threshold 且 success_rate >=
+# auto_promote_min_success_rate 时自动晋升；设为 false 则改为人工审查后移动。
+auto_promote = true
+auto_promote_threshold = 3
+auto_promote_min_success_rate = 1.0
+
 [agent_runner.safety]
 auto_merge = false
 forbidden_path_patterns = [

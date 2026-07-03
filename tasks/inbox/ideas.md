@@ -213,3 +213,7 @@ Traceback (most recent call last):
   File "/Users/zata/code/keda/.iar-worktrees/issue-119/.venv/lib/python3.13/site-packages/anyio/_backends/_asyncio.py", line 2502, in run_sync_in_worker_thread
     return await future
 ```
+
+## 2026-07-03 16:17
+
+> .iar/memory 完成之后 还要做记忆分层的功能
