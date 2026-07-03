@@ -108,11 +108,7 @@ def main() -> int:
             )
             for marker in ("usage_count:", "success_count:"):
                 line = next(
-                    (
-                        ln
-                        for ln in content.splitlines()
-                        if ln.strip().startswith(marker)
-                    ),
+                    (ln for ln in content.splitlines() if ln.strip().startswith(marker)),
                     "",
                 )
                 value = line.split(":", 1)[1].strip() if line else "0"

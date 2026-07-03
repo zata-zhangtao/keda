@@ -122,9 +122,7 @@ class ShortTermMemoryStore:
 def _safe_segment(value: str) -> str:
     """Coerce a string to a safe filesystem segment."""
     cleaned = (value or "").strip() or "default"
-    return "".join(
-        char if char.isalnum() or char in ("-", "_", ".") else "_" for char in cleaned
-    )
+    return "".join(char if char.isalnum() or char in ("-", "_", ".") else "_" for char in cleaned)
 
 
 __all__ = [

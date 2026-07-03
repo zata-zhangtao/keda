@@ -9,9 +9,7 @@ from types import ModuleType
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PRD_ACCEPTANCE_CHECKLIST_SCRIPT_PATH = (
-    REPO_ROOT / "hooks" / "shared" / "check_prd_acceptance_checklist.py"
-)
+PRD_ACCEPTANCE_CHECKLIST_SCRIPT_PATH = REPO_ROOT / "hooks" / "check_prd_acceptance_checklist.py"
 
 
 def load_prd_acceptance_checklist_module() -> ModuleType:

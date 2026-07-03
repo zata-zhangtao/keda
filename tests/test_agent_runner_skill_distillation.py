@@ -34,9 +34,7 @@ def _make_store(tmp_path: Path):
     return build_memory_stores().skill(paths["skill_drafts_dir"])
 
 
-def _make_config(
-    tmp_path: Path, *, auto_promote: bool = True, threshold: int = 3
-) -> MemoryConfig:
+def _make_config(tmp_path: Path, *, auto_promote: bool = True, threshold: int = 3) -> MemoryConfig:
     return MemoryConfig(
         enabled=True,
         base_dir=str(tmp_path / "memory"),

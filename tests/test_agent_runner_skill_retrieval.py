@@ -43,9 +43,7 @@ def _make_stores(tmp_path: Path, config: AppConfig):
         promoted_skills_dirs=config.memory.promoted_skills_dirs,
     )
     bundle = build_memory_stores()
-    return bundle.long_term(paths["long_term_base"]), bundle.skill(
-        paths["skill_drafts_dir"]
-    )
+    return bundle.long_term(paths["long_term_base"]), bundle.skill(paths["skill_drafts_dir"])
 
 
 def test_load_relevant_memory_returns_empty_when_disabled(tmp_path: Path) -> None:

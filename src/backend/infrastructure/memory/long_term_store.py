@@ -59,9 +59,7 @@ class LongTermMemoryStore:
         path.write_text(payload, encoding="utf-8")
         return path
 
-    def load_by_tags(
-        self, tags: Iterable[str], *, limit: int | None = None
-    ) -> list[LongTermFact]:
+    def load_by_tags(self, tags: Iterable[str], *, limit: int | None = None) -> list[LongTermFact]:
         """Load all facts whose tag set intersects with ``tags``."""
         target_tags = {tag.strip() for tag in tags if tag and tag.strip()}
         if not target_tags:
@@ -91,12 +89,7 @@ class LongTermMemoryStore:
         return facts
 
     def _fact_path(self, category: str, topic: str) -> Path:
-        return (
-            self._base_dir
-            / "long_term"
-            / _safe_segment(category)
-            / f"{_safe_segment(topic)}.md"
-        )
+        return self._base_dir / "long_term" / _safe_segment(category) / f"{_safe_segment(topic)}.md"
 
     def _read_existing(self, path: Path) -> _ExistingFact:
         if not path.is_file():
@@ -207,9 +200,7 @@ def _parse_fact(path: Path) -> LongTermFact | None:
 
 def _safe_segment(value: str) -> str:
     cleaned = (value or "").strip() or "default"
-    return "".join(
-        char if char.isalnum() or char in ("-", "_", ".") else "_" for char in cleaned
-    )
+    return "".join(char if char.isalnum() or char in ("-", "_", ".") else "_" for char in cleaned)
 
 
 __all__ = [

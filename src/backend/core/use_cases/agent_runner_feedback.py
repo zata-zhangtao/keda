@@ -170,7 +170,7 @@ def _build_prd_context_block(
     prd_path = worktree_path / prd_relative_path
     prd_text = _read_prd_text(prd_path)
     if prd_text is None:
-        return f"Also read the canonical PRD at `{prd_relative_path}`. {closeout_instruction}"
+        return f"Also read the canonical PRD at `{prd_relative_path}`. " f"{closeout_instruction}"
 
     if len(prd_text) <= max_chars:
         inline_section = prd_text.rstrip()
@@ -611,9 +611,7 @@ def _build_memory_block(
         )
     catalog = format_skill_catalog(
         relevant_memory.promoted_skills,
-        header=(
-            "Available skills (read the file when relevant; " "do not inline the body):"
-        ),
+        header=("Available skills (read the file when relevant; " "do not inline the body):"),
     )
     if catalog:
         sections.append(catalog)

@@ -129,9 +129,7 @@ class SkillDraftStore:
         )
         return self.save_draft(merged)
 
-    def load_promoted_skills(
-        self, skills_dirs: Iterable[str | Path]
-    ) -> list[SkillDraft]:
+    def load_promoted_skills(self, skills_dirs: Iterable[str | Path]) -> list[SkillDraft]:
         """Load all promoted (non-draft) skills from the given directories."""
         results: list[SkillDraft] = []
         for skills_dir in skills_dirs:
@@ -304,9 +302,7 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 
 def _safe_segment(value: str) -> str:
     cleaned = (value or "").strip() or "default"
-    return "".join(
-        char if char.isalnum() or char in ("-", "_", ".") else "_" for char in cleaned
-    )
+    return "".join(char if char.isalnum() or char in ("-", "_", ".") else "_" for char in cleaned)
 
 
 __all__ = [

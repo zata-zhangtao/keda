@@ -226,14 +226,7 @@ def test_persist_short_term_memory_swallows_errors(tmp_path: Path) -> None:
         attempt=attempt,
         repo_id="keda-main",
     )
-    target = (
-        tmp_path
-        / config.memory.base_dir
-        / "short_term"
-        / "keda-main"
-        / "2"
-        / "context.json"
-    )
+    target = tmp_path / config.memory.base_dir / "short_term" / "keda-main" / "2" / "context.json"
     assert target.is_file()
 
 

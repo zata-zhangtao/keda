@@ -57,15 +57,7 @@ def main() -> int:
             repo_id="keda-main",
         )
 
-        target = (
-            worktree
-            / ".iar"
-            / "memory"
-            / "short_term"
-            / "keda-main"
-            / "124"
-            / "context.json"
-        )
+        target = worktree / ".iar" / "memory" / "short_term" / "keda-main" / "124" / "context.json"
         payload = {
             "target_exists": target.exists(),
             "repo_id": "keda-main",

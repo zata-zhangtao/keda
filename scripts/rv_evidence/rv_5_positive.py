@@ -84,9 +84,7 @@ def main() -> int:
         )
 
         short_term = (worktree / ".iar" / "memory" / "short_term").exists()
-        drafts = (
-            (worktree / "drafts").glob("*.md") if (worktree / "drafts").exists() else []
-        )
+        drafts = (worktree / "drafts").glob("*.md") if (worktree / "drafts").exists() else []
         payload = {
             "short_term_exists": short_term,
             "drafts_exists": bool(list(drafts)),

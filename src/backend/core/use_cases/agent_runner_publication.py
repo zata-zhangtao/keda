@@ -433,9 +433,7 @@ def _try_distill_skill_after_success(
     if not commit_result.attempt_results:
         return
     successful_attempts = [
-        attempt
-        for attempt in commit_result.attempt_results
-        if attempt.recovered or attempt.detail
+        attempt for attempt in commit_result.attempt_results if attempt.recovered or attempt.detail
     ]
     if not successful_attempts:
         return
@@ -487,9 +485,7 @@ def _try_distill_skill_after_success(
     if not config.memory.auto_promote:
         return
     try:
-        existing = find_similar_draft(
-            candidate, config.memory, worktree_path, skill_store
-        )
+        existing = find_similar_draft(candidate, config.memory, worktree_path, skill_store)
         if existing is None:
             return
         if not should_auto_promote(existing, config.memory):

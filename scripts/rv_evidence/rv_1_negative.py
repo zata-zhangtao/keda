@@ -53,15 +53,7 @@ def main() -> int:
             repo_id="keda-main",
         )
 
-        target = (
-            worktree
-            / ".iar"
-            / "memory"
-            / "short_term"
-            / "keda-main"
-            / "124"
-            / "context.json"
-        )
+        target = worktree / ".iar" / "memory" / "short_term" / "keda-main" / "124" / "context.json"
         payload = {
             "target_exists": target.exists(),
             "expected_fail": "no context.json was written when memory is disabled",

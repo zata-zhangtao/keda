@@ -644,6 +644,14 @@ No external validation required; repository evidence was sufficient.
 - `evidence.json` 现已包含全部 7 个 item 的 `negative_control` / `expected_fail`（rv-4/rv-5/rv-6 补齐）；`version=1` 与 `language="zh-CN"` 不变。
 - `just lint --full` 与 `uv run --no-sync pytest -o addopts=""` 均绿，无回归。
 
+#### Recovery Attempt 3 (2026-07-03) — pre-commit ruff-format 修复
+
+- 上一轮 repair commit 前的 `SKIP=check-test-flag uv run pre-commit run --all-files --show-diff-on-failure` 以 exit=1 失败：ruff-format 想要把 208 个文件中无 magic trailing comma 的多行调用折叠成单行。
+- 根因：本地 pre-commit 缓存中并存 v0.4.8（pin 版本）与 v0.7.4（旧缓存），committed 代码中有大量被新版 ruff 展开的多行调用，pin 版本 v0.4.8 会把它们折叠回单行。这是 [[ruff-precommit-cache-version-mismatch]] 描述的版本错配现象；v0.4.8 是 pin 版本且 CI 使用它，所以折叠后的形态才是 CI 会接受的正确形态。
+- 修复：让 ruff-format（v0.4.8）把这 208 个文件折叠到位（仅格式化，无逻辑改动；`git diff --shortstat` = 2073 insertions / 4301 deletions，全部是行合并）。复跑 `SKIP=check-test-flag uv run pre-commit run --all-files` 全部 14 个 hook Passed。
+- 重新生成 11 个 `.iar/evidence/rv-<N>-<slug>.txt` 证据文件（逐脚本 `uv run --no-sync python scripts/rv_evidence/rv_<N>_{positive,negative}.py > <file>`，每个文件只含对应 item 的输出，未使用全局 stdout 重定向）；修复 `evidence.json` 中 `rv-6` output_summary 的 `rgsrv-6-positive` 拼写为 `rv-6-positive`。
+- `uv run --no-sync pytest -o addopts=""` = 1590 passed in 89.54s，无回归。
+
 ### Delivery Readiness
 - [x] 所有 Change Impact Tree 中的文件改动已完成并符合目标态。
 - [x] 无未解决的回归或上线阻塞项。

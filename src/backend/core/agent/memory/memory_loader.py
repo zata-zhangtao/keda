@@ -86,9 +86,7 @@ def load_relevant_memory(
         if score > 0:
             scored_facts.append((score, fact))
     scored_facts.sort(key=lambda pair: pair[0], reverse=True)
-    top_facts = tuple(
-        fact for _score, fact in scored_facts[: max(0, memory_config.top_k_facts)]
-    )
+    top_facts = tuple(fact for _score, fact in scored_facts[: max(0, memory_config.top_k_facts)])
     scored_skills: list[tuple[float, SkillRecord]] = []
     issue_token_set = set(issue_tokens)
     for skill in promoted_skills:

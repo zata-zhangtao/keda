@@ -57,9 +57,7 @@ def distill_skill(
     body = _build_skill_body(issue, diff_summary, recovery_history)
     if not body or not body.strip():
         return None
-    if _contains_project_specific_marker(body) or _contains_project_specific_marker(
-        diff_summary
-    ):
+    if _contains_project_specific_marker(body) or _contains_project_specific_marker(diff_summary):
         _logger.info(
             "Skipping skill distillation for Issue #%d: project-specific marker found.",
             issue.number,
@@ -163,9 +161,7 @@ def should_auto_promote(skill: SkillRecord, memory_config: MemoryConfig) -> bool
         return False
     if skill.success_count <= 0 or skill.usage_count <= 0:
         return False
-    if (
-        skill.success_count / skill.usage_count
-    ) < memory_config.auto_promote_min_success_rate:
+    if (skill.success_count / skill.usage_count) < memory_config.auto_promote_min_success_rate:
         return False
     return True
 

@@ -965,9 +965,7 @@ def run_agent_until_committed(
                         inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                     )
             else:
-                long_term_store, skill_store = _resolve_memory_stores(
-                    worktree_path, config.memory
-                )
+                long_term_store, skill_store = _resolve_memory_stores(worktree_path, config.memory)
                 recovery_prompt = build_recovery_prompt(
                     issue,
                     worktree_path,

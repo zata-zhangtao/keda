@@ -493,13 +493,7 @@ class AgentRunnerRunnerSettings(BaseModel):
 
 
 class AgentRunnerMemorySettings(BaseModel):
-    """Local memory persistence and skill distillation configuration.
-
-    Mirrors ``MemoryConfig`` in ``core/``. ``enabled = false`` keeps the
-    existing runner path untouched: no memory files are read or written,
-    no skill drafts are produced, and ``build_prompt`` receives no
-    extra context.
-    """
+    """Pydantic mirror of ``MemoryConfig``; ``enabled = false`` disables memory I/O and drafts."""
 
     enabled: bool = True
     base_dir: str = ".iar/memory"

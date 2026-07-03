@@ -74,9 +74,7 @@ class IShortTermMemoryStore(Protocol):
         payload: ShortTermContextPayload,
     ) -> Path: ...
 
-    def load(
-        self, repo_id: str, issue_number: int
-    ) -> ShortTermContextPayload | None: ...
+    def load(self, repo_id: str, issue_number: int) -> ShortTermContextPayload | None: ...
 
 
 class ILongTermMemoryStore(Protocol):
@@ -133,9 +131,7 @@ class ISkillStore(Protocol):
         draft: bool = True,
     ) -> Path: ...
 
-    def load_promoted_skills(
-        self, skills_dirs: Iterable[str | Path]
-    ) -> list[SkillRecord]: ...
+    def load_promoted_skills(self, skills_dirs: Iterable[str | Path]) -> list[SkillRecord]: ...
 
     def promote_draft(
         self,
