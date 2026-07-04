@@ -259,6 +259,96 @@ install_frontend_dependencies_in_directory() {
     return 0
 }
 
+# 判断某个前端目录是否是其祖先 workspace 的成员（pnpm / npm / yarn workspaces）。
+# 如果是，说明祖先目录的 install 已经覆盖该目录，无需重复安装。
+# 参数:
+#   $1: 待检查目录
+#   $2: worktree 根目录（向上遍历的边界）
+is_workspace_member_of_ancestor() {
+    local target_dir="$1"
+    local worktree_root="$2"
+
+    if [ -z "$target_dir" ] || [ -z "$worktree_root" ]; then
+        return 1
+    fi
+
+    python3 - "$target_dir" "$worktree_root" <<'PY'
+import fnmatch
+import json
+import os
+import sys
+
+
+def _match_pattern(rel, pattern):
+    """支持 trailing slash 与简单 glob 的 workspace 路径匹配。"""
+    rel = rel.rstrip('/')
+    pattern = pattern.strip().rstrip('/')
+    if not pattern:
+        return False
+    if fnmatch.fnmatch(rel, pattern):
+        return True
+    return fnmatch.fnmatch(rel + '/', pattern)
+
+
+def _pnpm_workspace_members(pnpm_workspace_path):
+    """从 pnpm-workspace.yaml 中解析 packages 列表。"""
+    members = []
+    try:
+        with open(pnpm_workspace_path, encoding='utf-8') as f:
+            in_packages = False
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith('packages:'):
+                    in_packages = True
+                    continue
+                if in_packages:
+                    if stripped.startswith('- '):
+                        members.append(stripped[2:].strip().strip('"').strip("'"))
+                    elif stripped and not stripped.startswith('#'):
+                        # 新的顶层键，说明 packages 段结束
+                        in_packages = False
+    except Exception:
+        pass
+    return members
+
+
+def _npm_workspace_members(package_json_path):
+    """从 package.json 的 workspaces 字段解析 packages 列表。"""
+    try:
+        with open(package_json_path, encoding='utf-8') as f:
+            config = json.load(f)
+        workspaces = config.get('workspaces', [])
+        if isinstance(workspaces, dict):
+            workspaces = workspaces.get('packages', [])
+        return workspaces
+    except Exception:
+        return []
+
+
+target_dir = os.path.abspath(sys.argv[1])
+worktree_root = os.path.abspath(sys.argv[2])
+current = target_dir
+while current != worktree_root and current != os.path.dirname(current):
+    parent = os.path.dirname(current)
+    rel = os.path.relpath(target_dir, parent)
+
+    pnpm_workspace = os.path.join(parent, 'pnpm-workspace.yaml')
+    if os.path.exists(pnpm_workspace):
+        for pattern in _pnpm_workspace_members(pnpm_workspace):
+            if _match_pattern(rel, pattern):
+                sys.exit(0)
+
+    package_json = os.path.join(parent, 'package.json')
+    if os.path.exists(package_json):
+        for pattern in _npm_workspace_members(package_json):
+            if _match_pattern(rel, pattern):
+                sys.exit(0)
+
+    current = parent
+sys.exit(1)
+PY
+}
+
 install_frontend_dependencies_for_worktree() {
     local worktree_root_path="$1"
     local discovered_project_count=0
@@ -276,6 +366,11 @@ install_frontend_dependencies_for_worktree() {
         frontend_display_path="."
         if [ "$frontend_project_path" != "$worktree_root_path" ]; then
             frontend_display_path="$relative_frontend_path"
+        fi
+
+        if is_workspace_member_of_ancestor "$frontend_project_path" "$worktree_root_path"; then
+            echo "ℹ️ 跳过 workspace 成员目录（已由祖先 workspace install 覆盖）: $frontend_display_path"
+            continue
         fi
 
         if ! install_frontend_dependencies_in_directory "$frontend_project_path" "$frontend_display_path"; then
