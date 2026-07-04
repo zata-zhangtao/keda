@@ -5,7 +5,7 @@
 运行时获取具体 store 实现，以避开静态 AST 检查。
 
 由于 ``importlib.import_module`` 调用在 AST 中只显示为一次普通
-``Call`` 节点，``hooks/check_architecture.py`` 不会将其误判为
+``Call`` 节点，``hooks/shared/check_architecture.py`` 不会将其误判为
 ``from backend.infrastructure import ...`` 导入。
 """
 

@@ -190,7 +190,7 @@
 - **密切相关（进行中/已归档）**：
   - `tasks/archive/20260521-143000-prd-surgical-failure-recovery.md` —— 已落地 failure classification + recovery loop，本 PRD 在其基础上沉淀 recovery 经验。
   - `tasks/archive/P1-FEAT-20260618-000726-rework-prd-worktree-pr-and-skill-source.md` —— 已落地 worktree 与 checkpoint 机制，短期记忆可复用其状态快照。
-  - `tasks/pending/P1-FEAT-20260626-093939-agent-runner-session-persistence.md` —— 会话持久化可帮助 runner 在崩溃后续作，本 PRD 与它软相关：记忆持久化可从会话持久化中受益，但两者独立可交付。
+  - `tasks/archive/P1-FEAT-20260626-093939-agent-runner-session-persistence.md` —— 会话持久化预研 PRD，已归档；记忆持久化从工程上覆盖了其 Option C（上下文重放）目标。
 - **结论**：本 PRD 是独立增量，与 recovery 相关 PRD 互补，无硬门禁。
 
 ### Potential Redundancy Risks
@@ -585,7 +585,7 @@ No external validation required; repository evidence was sufficient.
 - Depends on groups:
   - none
 - Depends on tasks/issues:
-  - `tasks/pending/P1-FEAT-20260626-093939-agent-runner-session-persistence.md`（软相关；记忆持久化可从会话持久化受益，但独立可交付）
+  - `tasks/archive/P1-FEAT-20260626-093939-agent-runner-session-persistence.md`（软相关；已归档，记忆持久化已覆盖其上下文重放目标）
 - Gate type: soft
 - Notes: 本 PRD 只修改 runner 内部逻辑与本地文件存储，不依赖外部 IAR 工具发版。使用工具无关的依赖名，不在此处放置工具特定隐藏标记。
 

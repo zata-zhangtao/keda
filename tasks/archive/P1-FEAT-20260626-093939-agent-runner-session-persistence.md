@@ -3,6 +3,8 @@
 - GitHub Issue: （待创建，关联 freshai #23 runner 多次失败复盘）
 - 阶段：**Research / Exploration**（本 PRD 不强制要求完整实现验收）
 
+> **归档注记（2026-07-04）**：本 PRD 为 2026-06-26 创建的研究型预研任务，目标是通过调研 Claude/Codex/Kimi 的原生会话延续能力，决定 runner 是否应采用长驻进程、API thread/session ID 或上下文重放等方案。调研交付物（Claude/Codex/Kimi 会话笔记、ADR）未实际产出。随后于 2026-07-04 落地的 `Agent Runner Memory Persistence & Skill Distillation`（PR #125，commit `19bab70`）通过短期记忆、长期记忆与 skill 注入，在每次 recovery prompt 中重放历史尝试与项目约定，实质上以 **Option C（上下文重放 / enhanced prompt injection）** 解决了本 PRD 描述的信息断层问题。原生 thread/session 复用（Option A/B）仍可作为未来降本/保真方向的独立 spike 重新提出，但本 PRD 的研究目标已被覆盖，故归档为 `superseded-by-memory-system`。
+
 
 ## 1. Introduction & Goals
 
@@ -286,25 +288,27 @@ No interactive prototype file changes in this PRD.
 
 ## 7. Acceptance Checklist
 
+> 以下条目均标记为 `[~]`（未执行即终止）：本 PRD 于 2026-07-04 以 `superseded-by-memory-system` 归档（见文首归档注记），调研目标已被 PR #125 的记忆系统覆盖，研究交付物未产出。若未来重启 Option A/B（原生 thread/session 复用）spike，应新开 PRD 而非复用本清单。
+
 ### Research Acceptance
-- [ ] Claude 调研笔记存在，明确回答“第二次调用能否延续第一次对话”。
-- [ ] Codex 调研笔记存在，明确回答“第二次调用能否延续第一次对话”。
-- [ ] Kimi 调研笔记存在，明确回答“第二次调用能否延续第一次对话”。
-- [ ] 每份笔记包含：最小命令/参数/API 字段、环境变量、限制与 blocker。
-- [ ] ADR 存在，且从 Option A/B/C 中选择了推荐方向（或明确选择暂缓）。
+- [~] Claude 调研笔记存在，明确回答“第二次调用能否延续第一次对话”。**未执行——superseded。**
+- [~] Codex 调研笔记存在，明确回答“第二次调用能否延续第一次对话”。**未执行——superseded。**
+- [~] Kimi 调研笔记存在，明确回答“第二次调用能否延续第一次对话”。**未执行——superseded。**
+- [~] 每份笔记包含：最小命令/参数/API 字段、环境变量、限制与 blocker。**未执行——superseded。**
+- [~] ADR 存在，且从 Option A/B/C 中选择了推荐方向（或明确选择暂缓）。**未产出正式 ADR；归档注记记录了事实上的方向选择（Option C 由记忆系统覆盖）。**
 
 ### Architecture Acceptance
-- [ ] ADR 中说明推荐方向如何适配现有 `engines` 层抽象。
-- [ ] ADR 中说明推荐方向不破坏依赖方向 `api → core → engines/infra`。
-- [ ] 若推荐方向涉及切换 API 调用，评估对现有 CLI 配置与沙箱的影响。
+- [~] ADR 中说明推荐方向如何适配现有 `engines` 层抽象。**未执行——superseded。**
+- [~] ADR 中说明推荐方向不破坏依赖方向 `api → core → engines/infra`。**未执行——superseded。**
+- [~] 若推荐方向涉及切换 API 调用，评估对现有 CLI 配置与沙箱的影响。**未执行——superseded。**
 
 ### Documentation Acceptance
-- [ ] 调研笔记存放在项目约定目录（如 `docs/research/agent-runner-session-persistence/`）。
-- [ ] ADR 引用所有三份调研笔记。
+- [~] 调研笔记存放在项目约定目录（如 `docs/research/agent-runner-session-persistence/`）。**未执行——superseded。**
+- [~] ADR 引用所有三份调研笔记。**未执行——superseded。**
 
 ### Validation Acceptance
-- [ ] 调研命令可被复现（笔记中包含完整输入输出示例）。
-- [ ] ADR 经过维护者评审并通过。
+- [~] 调研命令可被复现（笔记中包含完整输入输出示例）。**未执行——superseded。**
+- [~] ADR 经过维护者评审并通过。**未执行——superseded。**
 
 
 ## 8. Functional Requirements

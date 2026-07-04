@@ -359,7 +359,7 @@ src/backend/
   infrastructure/ → 基础设施层（模型、存储、HTTP、配置、日志）
 ```
 
-依赖方向严格向下：`api → core → engines → infrastructure`，由 `hooks/check_architecture.py` 在 pre-commit 强制校验。
+依赖方向严格向下：`api → core → engines → infrastructure`，由 `hooks/shared/check_architecture.py` 在 pre-commit 强制校验。
 
 ## Docker 部署
 

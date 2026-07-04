@@ -143,7 +143,7 @@
 
 - `tasks/pending/P1-FEAT-20260626-015233-agent-runner-recovery-friction-reduction.md`：关注 Fix Agent 与 timeout 分层，与本 PRD 独立。
 - `tasks/pending/P1-FEAT-20260626-093933-agent-runner-memory-persistence.md`：关注长期记忆与 skill 蒸馏，与本 PRD 独立。
-- `tasks/pending/P1-FEAT-20260626-093939-agent-runner-session-persistence.md`：研究性 PRD，关注 agent 会话延续，与本 PRD 独立。
+- `tasks/archive/P1-FEAT-20260626-093939-agent-runner-session-persistence.md`：研究性 PRD，关注 agent 会话延续，与本 PRD 独立；已归档。
 - 本 PRD 不重复、不依赖、不阻塞上述 PRD。
 
 
