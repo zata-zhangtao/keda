@@ -6,10 +6,21 @@ import re
 import shlex
 from pathlib import Path
 
+from backend.core.agent.memory import (
+    RelevantMemory,
+    format_skill_catalog,
+    load_relevant_memory,
+    match_skills_and_memory,
+)
+from backend.core.agent.memory.protocols import (
+    ILongTermMemoryStore,
+    ISkillStore,
+)
 from backend.core.shared.interfaces.agent_runner import IProcessRunner
 from backend.core.shared.models.agent_runner import (
     CommandResult,
     IssueSummary,
+    MemoryConfig,
     PromptConfig,
 )
 from backend.core.shared.prd_checklist import parse_prd_checklist
@@ -68,6 +79,7 @@ _DEFAULT_EXECUTION_TEMPLATE = "\n".join(
         "Worktree: {worktree_path}",
         "{prd_line}",
         "{validation_line}",
+        "{memory_block}",
         "",
         "Issue body:",
         "{issue_body}",
@@ -158,7 +170,7 @@ def _build_prd_context_block(
     prd_path = worktree_path / prd_relative_path
     prd_text = _read_prd_text(prd_path)
     if prd_text is None:
-        return f"Also read the canonical PRD at `{prd_relative_path}`. {closeout_instruction}"
+        return f"Also read the canonical PRD at `{prd_relative_path}`. " f"{closeout_instruction}"
 
     if len(prd_text) <= max_chars:
         inline_section = prd_text.rstrip()
@@ -187,6 +199,10 @@ def build_prompt(
     *,
     validation_line: str = "",
     verification_commands_summary: str = "",
+    memory_config: MemoryConfig | None = None,
+    relevant_memory: RelevantMemory | None = None,
+    long_term_store: ILongTermMemoryStore | None = None,
+    skill_store: ISkillStore | None = None,
 ) -> str:
     """Build the prompt sent to the local AI agent from a template.
 
@@ -199,9 +215,24 @@ def build_prompt(
             Issue 传空字符串。仅当模板含 ``{validation_line}`` 占位符时生效。
         verification_commands_summary: 当前 runner 会执行的 verification
             命令列表说明；传给 agent 让它提前了解交付门禁。
+        memory_config: Memory configuration; when provided and enabled the
+            runner loads the relevant long-term memory + promoted skills
+            and inlines them into the prompt as separate context sections.
+        relevant_memory: Pre-loaded :class:`RelevantMemory`; when supplied
+            the loader is skipped (used in tests and recursive prompts).
+        long_term_store: Optional injected long-term store.
+        skill_store: Optional injected skill store.
     """
     template = prompt_config.phases.get(phase, _DEFAULT_EXECUTION_TEMPLATE)
     prd_line = _build_prd_context_block(issue, worktree_path)
+    memory_block = _build_memory_block(
+        issue,
+        worktree_path,
+        memory_config=memory_config,
+        relevant_memory=relevant_memory,
+        long_term_store=long_term_store,
+        skill_store=skill_store,
+    )
     return template.format(
         issue_number=issue.number,
         issue_title=issue.title,
@@ -211,6 +242,7 @@ def build_prompt(
         prd_line=prd_line,
         validation_line=validation_line,
         verification_commands_summary=verification_commands_summary,
+        memory_block=memory_block,
     )
 
 
@@ -525,6 +557,93 @@ def build_fix_prompt(
     )
 
 
+def _build_memory_block(
+    issue: IssueSummary,
+    worktree_path: Path,
+    *,
+    memory_config: MemoryConfig | None,
+    relevant_memory: RelevantMemory | None,
+    long_term_store: ILongTermMemoryStore | None = None,
+    skill_store: ISkillStore | None = None,
+) -> str:
+    """Render the long-term memory + skill catalog block for a prompt.
+
+    When ``memory_config`` is missing or disabled, or no relevant memory
+    exists on disk, an empty string is returned. Otherwise the block lists
+    long-term facts (one per line) and the skill catalog (name + path only,
+    no full body) so the agent knows which skills are available and where
+    to read them.
+
+    When ``long_term_store`` / ``skill_store`` are not provided, the
+    composition-root factory from ``infrastructure/memory`` is invoked
+    lazily. This keeps the historical 3-argument call sites (tests) working
+    while letting the use cases inject pre-built stores to avoid redundant
+    disk I/O on the recovery path.
+    """
+    if (
+        relevant_memory is None
+        and memory_config is not None
+        and memory_config.enabled
+        and worktree_path is not None
+    ):
+        long_term_store, skill_store = _ensure_memory_stores(
+            worktree_path, memory_config, long_term_store, skill_store
+        )
+        if long_term_store is not None and skill_store is not None:
+            relevant_memory = load_relevant_memory(
+                issue,
+                worktree_path,
+                memory_config,
+                long_term_store=long_term_store,
+                skill_store=skill_store,
+            )
+    if relevant_memory is None or relevant_memory.is_empty:
+        return ""
+    sections: list[str] = []
+    if relevant_memory.long_term_facts:
+        fact_lines = [
+            f"- [{fact.category}/{fact.topic}] {fact.content}"
+            for fact in relevant_memory.long_term_facts
+        ]
+        sections.append(
+            "Project conventions / long-term memory (from .iar/memory/long_term/):\n"
+            + "\n".join(fact_lines)
+        )
+    catalog = format_skill_catalog(
+        relevant_memory.promoted_skills,
+        header=("Available skills (read the file when relevant; " "do not inline the body):"),
+    )
+    if catalog:
+        sections.append(catalog)
+    return "\n\n".join(sections)
+
+
+def _ensure_memory_stores(
+    worktree_path: Path,
+    memory_config: MemoryConfig,
+    long_term_store: ILongTermMemoryStore | None,
+    skill_store: ISkillStore | None,
+) -> tuple[ILongTermMemoryStore | None, ISkillStore | None]:
+    """Resolve long-term + skill stores for prompt injection.
+
+    When the caller has already injected them, return as-is. Otherwise build
+    them on demand via ``core/agent/memory/_composition.py`` which
+    dynamically loads the ``infrastructure/`` implementations, preserving
+    the strict ``core -> infrastructure`` ban. Returns ``(None, None)``
+    when memory is disabled.
+    """
+    if not memory_config.enabled:
+        return None, None
+    if long_term_store is not None and skill_store is not None:
+        return long_term_store, skill_store
+    from backend.core.agent.memory._composition import (
+        build_default_memory_services,
+    )
+
+    services = build_default_memory_services(worktree_path, memory_config)
+    return services.long_term, services.skill
+
+
 def build_recovery_prompt(
     issue: IssueSummary,
     worktree_path: Path,
@@ -533,6 +652,10 @@ def build_recovery_prompt(
     max_recovery_attempts: int,
     failure_summary: str,
     verification_results: list[CommandResult] | None = None,
+    memory_config: MemoryConfig | None = None,
+    failure_type: str | None = None,
+    long_term_store: ILongTermMemoryStore | None = None,
+    skill_store: ISkillStore | None = None,
 ) -> str:
     """Build a prompt that asks the agent to repair a failed attempt."""
     prd_path = extract_prd_path(issue.body)
@@ -569,6 +692,35 @@ def build_recovery_prompt(
                 f"{formatted_failures}"
             )
 
+    memory_section = ""
+    if (
+        memory_config is not None
+        and memory_config.enabled
+        and long_term_store is not None
+        and skill_store is not None
+    ):
+        relevant = match_skills_and_memory(
+            issue,
+            failure_type or "verification_failed",
+            worktree_path,
+            memory_config,
+            long_term_store=long_term_store,
+            skill_store=skill_store,
+        )
+        memory_section = _build_memory_block(
+            issue,
+            worktree_path,
+            memory_config=memory_config,
+            relevant_memory=relevant,
+            long_term_store=long_term_store,
+            skill_store=skill_store,
+        )
+        if memory_section:
+            memory_section = (
+                "Relevant memory from past runs (apply when useful, "
+                "do not parrot verbatim):\n" + memory_section
+            )
+
     return "\n".join(
         [
             f"Repair GitHub Issue #{issue.number}: {issue.title}",
@@ -583,6 +735,7 @@ def build_recovery_prompt(
             "",
             verification_section,
             structured_evidence_line,
+            memory_section,
             "Recovery rules:",
             "- Inspect the current worktree and fix the failure.",
             "- Only modify files inside the current worktree.",

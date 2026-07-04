@@ -2487,6 +2487,7 @@ validation_passed = "validation/passed"
 - `items` 必须覆盖 Realistic Validation checklist 的全部 item，每个 item 出现一次。
 - 每个 item 必填字段：`item_number`、`item_name`、`command`、`evidence_files`、`output_summary`、`explanation`、`risks`。
 - `evidence_files` 可有多个文件；每个文件必须存在于 `.iar/evidence/`，且文件名匹配 `rv-<item_number>-*` 或 `rv-<item_number>.*`。
+- `command` 必须是可独立复现、自终止的检查命令。如果命令涉及多行 Python 或复杂 setup，应将其落到仓库已跟踪的独立脚本（例如 `scripts/rv_evidence/` 下按 item 命名的文件）并在 `command` 中引用；避免把内联 `python -c "..."` 写进 manifest，否则 runner 复跑时难以维护，也容易被 keda 判定为不可复现。脚本本身不会被 runner 修改，每次复跑覆盖的是 `.iar/evidence/` 下的证据产物。
 - runner 在渲染 PR comment 时重新计算每个证据文件的 SHA-256，展示短 hash 与完整 hash。
 
 ### Reviewer 验收流程
@@ -3097,3 +3098,35 @@ PRD 的 `Delivery Dependencies` 小节会解析为三种依赖边：
 - 草稿 AI 生成复用 `IContentGenerator` / `generated_content.py` 模式，不新增 LLM SDK；当 generator 不可用时草稿退化为带原话摘录的 fallback 模板，待人补全。
 - Idea → Draft → Pending 三段是单向流：草稿不会自动跑 runner，必须等人在 `/ideas` 确认才进入 pending。
 - 飞书自定义机器人 webhook 主要用于向群发送消息，不应被当作入站通道；事件订阅或自建通用 inbound 才是正确路径。
+
+## 本地记忆持久化与 Skill 蒸馏（Memory Persistence & Skill Distillation）
+
+Agent Runner 默认开启两层**本地**记忆与 skill 蒸馏循环，用于把同类 Issue 的成功修复经验沉淀给后续 Issue 复用。所有数据保存在 worktree 的 `.iar/memory/` 与 `.iar/skills/` 下（默认被 `.gitignore` 排除），不引入外部数据库或服务。
+
+### 数据落点
+
+| 用途 | 路径 | 格式 |
+|---|---|---|
+| 短期记忆（每个 Issue 的执行轨迹） | `<worktree>/.iar/memory/short_term/<repo_id>/<issue_number>/context.json` | JSON |
+| 长期记忆（项目约定 / 模式） | `<worktree>/.iar/memory/long_term/<category>/<topic>.md` | Markdown + YAML front matter |
+| Skill 草稿 | `<worktree>/.iar/skills/drafts/<name>.md` | Markdown + YAML front matter (`draft: true`) |
+| 已晋升 skill | `<worktree>/.iar/skills/<name>.md`（默认；可配置） | Markdown + YAML front matter (`draft: false`) |
+
+### 触发点
+
+- `iar run <issue>` 启动：`build_prompt` 通过 `core/agent/memory/memory_loader.load_relevant_memory` 检索与当前 Issue 标签/标题/正文相关的长期记忆和已晋升 skills，以**目录形式**（name / description / 路径，不含全文）注入 prompt。
+- `run_agent_until_committed` 每轮尝试结束：调用 `core/agent/memory/short_term_memory.save_short_term_memory` 写入 `context.json`，记录尝试序号、失败类型、详情摘要。
+- `run_agent_until_committed` 成功返回、`_finish_implementation_publication` 开头：调用 `core/agent/memory/skill_distillation.distill_skill` 与 `save_skill_draft`。**蒸馏失败不阻塞**后续 push / pre-PR review / Draft PR 创建。
+- 草稿满足 `usage_count >= auto_promote_threshold` 且 `success_rate >= auto_promote_min_success_rate` 时，runner 自动移动草稿到 `promoted_skills_dirs` 并清除 `draft` 标记。
+
+### 关闭与降级
+
+- `config.toml` 的 `[agent_runner.memory] enabled = false` 完全关闭记忆读写与 skill 蒸馏；现有 runner 路径无回归。
+- `auto_promote = false` 时草稿不会自动晋升到 `.iar/skills/`，维护者手动移动文件并（可选）编辑 description。
+- 维护者可手工创建 `<worktree>/.iar/memory/long_term/facts/<topic>.md` 写入项目约定，runner 会在相关 Issue 的 prompt 中自动引用。
+
+### 与已有机制的关系
+
+- **不替换** checkpoint / WIP commit 机制：短期记忆只存上下文摘要，文件状态仍由 git 与 checkpoint 负责。
+- **不替换** hooks（如 `check_guidelines_consistency.py`）：hooks 负责静态检查，记忆 / skill 负责从执行历史中提取可复用知识。
+- **不修改** 外部 agent CLI 协议：所有注入通过 runner 侧 `build_prompt` 完成。

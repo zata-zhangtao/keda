@@ -25,6 +25,9 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.core.agent.memory import (
+    save_short_term_memory,
+)
 from backend.core.shared.interfaces.agent_runner import (
     IGitHubClient,
     IProcessRunner,
@@ -369,6 +372,20 @@ def create_or_reuse_worktree(
     return worktree_path
 
 
+def _resolve_repo_id(issue: IssueSummary, worktree_path: Path) -> str:
+    """Derive a stable per-repository identifier for short-term memory paths.
+
+    Uses the worktree directory name as a stable stand-in when no registry
+    lookup is available. Kept dependency-light on purpose: this function
+    lives in the ``core/`` layer and must not reach into ``engines/`` or
+    ``infrastructure/`` to read the registry.
+    """
+    try:
+        return worktree_path.resolve().name or "default"
+    except OSError:
+        return "default"
+
+
 def _build_claude_command(prompt: str, worktree_path: Path) -> list[str]:  # noqa: ARG001
     return [
         "claude",
@@ -462,6 +479,7 @@ def run_agent(
     inactivity_timeout_seconds: int | None = None,
 ) -> CommandResult:
     """Run Codex or Claude Code in non-interactive mode."""
+    long_term_store, skill_store = _resolve_memory_stores(worktree_path, config.memory)
     prompt = build_prompt(
         issue,
         worktree_path,
@@ -469,6 +487,9 @@ def run_agent(
         phase="execution",
         validation_line=build_validation_prompt_line(issue, config),
         verification_commands_summary=_build_verification_commands_summary(config),
+        memory_config=config.memory,
+        long_term_store=long_term_store,
+        skill_store=skill_store,
     )
     return run_agent_with_prompt_resilient(
         agent_name,
@@ -802,6 +823,60 @@ def _append_attempt_and_notify(
             )
 
 
+def _resolve_memory_stores(worktree_path: Path, memory_config):
+    """Construct the long-term + skill stores for prompt injection.
+
+    Returns ``(None, None)`` when memory is disabled so callers can fall
+    back to non-injecting behaviour without sprinkling the same guard
+    everywhere. The actual composition lives in
+    ``core/agent/memory/_composition.py`` which dynamically loads the
+    ``infrastructure/`` implementations, preserving the strict
+    ``core -> infrastructure`` ban.
+    """
+    from backend.core.agent.memory._composition import (
+        build_default_memory_services,
+    )
+
+    services = build_default_memory_services(worktree_path, memory_config)
+    return services.long_term, services.skill
+
+
+def _persist_short_term_memory(
+    *,
+    config: AppConfig,
+    issue: IssueSummary,
+    worktree_path: Path,
+    attempt: AttemptResult,
+    repo_id: str,
+) -> None:
+    """Best-effort save of a single attempt into the short-term memory store."""
+    if not config.memory.enabled:
+        return
+    try:
+        from backend.core.agent.memory._composition import (
+            build_default_memory_services,
+        )
+
+        services = build_default_memory_services(worktree_path, config.memory)
+        if services.short_term is None:
+            return
+        save_short_term_memory(
+            repo_id=repo_id,
+            issue=issue,
+            attempt_result=attempt,
+            worktree_path=worktree_path,
+            memory_config=config.memory,
+            store=services.short_term,
+        )
+    except Exception as exc:  # noqa: BLE001 - memory side-channel must not break runner.
+        _logger.warning(
+            "Failed to record short-term memory for Issue #%d attempt %d: %s",
+            issue.number,
+            attempt.attempt_number,
+            exc,
+        )
+
+
 def run_agent_until_committed(
     *,
     selected_agent: str,
@@ -845,6 +920,7 @@ def run_agent_until_committed(
     max_recovery_attempts = max(0, config.runner.max_recovery_attempts)
     recovery_retry_delay_seconds = max(0, config.runner.recovery_retry_delay_seconds)
     recovery_failure_summary = ""
+    recovery_failure_type: str = "verification_failed"
     final_verification_results: list[CommandResult] = []
     attempt_results: list[AttemptResult] = []
     verifier_verdict = None  # set by Phase 3.6 when the independent verifier runs
@@ -861,6 +937,7 @@ def run_agent_until_committed(
 
         attempt_started_mono = time.monotonic()
         attempt_started_iso = datetime.now(timezone.utc).isoformat()
+        repo_id = _resolve_repo_id(issue, worktree_path)
 
         # Phase 1: 运行 agent 或 recovery prompt
         try:
@@ -888,6 +965,7 @@ def run_agent_until_committed(
                         inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
                     )
             else:
+                long_term_store, skill_store = _resolve_memory_stores(worktree_path, config.memory)
                 recovery_prompt = build_recovery_prompt(
                     issue,
                     worktree_path,
@@ -895,6 +973,10 @@ def run_agent_until_committed(
                     max_recovery_attempts=max_recovery_attempts,
                     failure_summary=recovery_failure_summary,
                     verification_results=final_verification_results,
+                    memory_config=config.memory,
+                    failure_type=recovery_failure_type,
+                    long_term_store=long_term_store,
+                    skill_store=skill_store,
                 )
                 recovery_timeout = (
                     config.runner.recovery_timeout_seconds or config.runner.timeout_seconds
@@ -929,18 +1011,28 @@ def run_agent_until_committed(
                 exc=exc,
                 detect_provider_errors=True,
             )
-            _append_attempt_and_notify(
-                attempt_results,
-                _make_attempt_result(
-                    attempt_number=attempt_index + 1,
-                    failure_type=failure_type,
-                    recovered=False,
-                    detail=format_agent_execution_failure(exc),
-                    agent=selected_agent,
-                    started_mono=attempt_started_mono,
-                    started_iso=attempt_started_iso,
+            (
+                _append_attempt_and_notify(
+                    attempt_results,
+                    _make_attempt_result(
+                        attempt_number=attempt_index + 1,
+                        failure_type=failure_type,
+                        recovered=False,
+                        detail=format_agent_execution_failure(exc),
+                        agent=selected_agent,
+                        started_mono=attempt_started_mono,
+                        started_iso=attempt_started_iso,
+                    ),
+                    on_attempt_recorded,
                 ),
-                on_attempt_recorded,
+            )
+
+            _persist_short_term_memory(
+                config=config,
+                issue=issue,
+                worktree_path=worktree_path,
+                attempt=attempt_results[-1],
+                repo_id=repo_id,
             )
             if failure_type == FailureType.UNRECOVERABLE:
                 raise UnrecoverableError(str(exc), attempt_results) from exc
@@ -952,6 +1044,8 @@ def run_agent_until_committed(
                 raise ProviderCapacityError(str(exc), attempt_results) from exc
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
+            recovery_failure_summary = format_agent_execution_failure(exc)
+            recovery_failure_type = failure_type.value
             recovery_failure_summary = format_agent_execution_failure(exc)
             _logger.warning(
                 "Agent command failed for Issue #%d; " "asking agent to recover (%d/%d).",
@@ -976,24 +1070,35 @@ def run_agent_until_committed(
                 verification_results=exc.verification_results,
                 exc=None,
             )
-            _append_attempt_and_notify(
-                attempt_results,
-                _make_attempt_result(
-                    attempt_number=attempt_index + 1,
-                    failure_type=failure_type,
-                    recovered=False,
-                    detail=format_recovery_failure_summary(
-                        "Verification before staging failed.",
-                        exc.verification_results,
+            (
+                _append_attempt_and_notify(
+                    attempt_results,
+                    _make_attempt_result(
+                        attempt_number=attempt_index + 1,
+                        failure_type=failure_type,
+                        recovered=False,
+                        detail=format_recovery_failure_summary(
+                            "Verification before staging failed.",
+                            exc.verification_results,
+                        ),
+                        agent=selected_agent,
+                        started_mono=attempt_started_mono,
+                        started_iso=attempt_started_iso,
                     ),
-                    agent=selected_agent,
-                    started_mono=attempt_started_mono,
-                    started_iso=attempt_started_iso,
+                    on_attempt_recorded,
                 ),
-                on_attempt_recorded,
+            )
+
+            _persist_short_term_memory(
+                config=config,
+                issue=issue,
+                worktree_path=worktree_path,
+                attempt=attempt_results[-1],
+                repo_id=repo_id,
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
+            recovery_failure_type = failure_type.value
             recovery_failure_summary = format_recovery_failure_summary(
                 "Verification before staging failed.",
                 exc.verification_results,
@@ -1019,21 +1124,33 @@ def run_agent_until_committed(
                 verification_results=verification_results,
                 exc=exc,
             )
-            _append_attempt_and_notify(
-                attempt_results,
-                _make_attempt_result(
-                    attempt_number=attempt_index + 1,
-                    failure_type=failure_type,
-                    recovered=False,
-                    detail=format_prd_delivery_detail(str(exc)),
-                    agent=selected_agent,
-                    started_mono=attempt_started_mono,
-                    started_iso=attempt_started_iso,
+            (
+                _append_attempt_and_notify(
+                    attempt_results,
+                    _make_attempt_result(
+                        attempt_number=attempt_index + 1,
+                        failure_type=failure_type,
+                        recovered=False,
+                        detail=format_prd_delivery_detail(str(exc)),
+                        agent=selected_agent,
+                        started_mono=attempt_started_mono,
+                        started_iso=attempt_started_iso,
+                    ),
+                    on_attempt_recorded,
                 ),
-                on_attempt_recorded,
+            )
+
+            _persist_short_term_memory(
+                config=config,
+                issue=issue,
+                worktree_path=worktree_path,
+                attempt=attempt_results[-1],
+                repo_id=repo_id,
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
+            recovery_failure_summary = format_prd_delivery_failure(str(exc))
+            recovery_failure_type = failure_type.value
             recovery_failure_summary = format_prd_delivery_failure(str(exc))
             _logger.warning(
                 "PRD delivery check failed for Issue #%d; " "asking agent to recover (%d/%d).",
@@ -1065,21 +1182,33 @@ def run_agent_until_committed(
                 verification_results=verification_results,
                 exc=exc,
             )
-            _append_attempt_and_notify(
-                attempt_results,
-                _make_attempt_result(
-                    attempt_number=attempt_index + 1,
-                    failure_type=failure_type,
-                    recovered=False,
-                    detail=format_validation_evidence_detail(str(exc)),
-                    agent=selected_agent,
-                    started_mono=attempt_started_mono,
-                    started_iso=attempt_started_iso,
+            (
+                _append_attempt_and_notify(
+                    attempt_results,
+                    _make_attempt_result(
+                        attempt_number=attempt_index + 1,
+                        failure_type=failure_type,
+                        recovered=False,
+                        detail=format_validation_evidence_detail(str(exc)),
+                        agent=selected_agent,
+                        started_mono=attempt_started_mono,
+                        started_iso=attempt_started_iso,
+                    ),
+                    on_attempt_recorded,
                 ),
-                on_attempt_recorded,
+            )
+
+            _persist_short_term_memory(
+                config=config,
+                issue=issue,
+                worktree_path=worktree_path,
+                attempt=attempt_results[-1],
+                repo_id=repo_id,
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
+            recovery_failure_summary = format_validation_evidence_failure(str(exc))
+            recovery_failure_type = failure_type.value
             recovery_failure_summary = format_validation_evidence_failure(str(exc))
             _logger.warning(
                 "Validation evidence check failed for Issue #%d; "
@@ -1171,24 +1300,35 @@ def run_agent_until_committed(
                         verification_results=exc.verification_results,
                         exc=None,
                     )
-                    _append_attempt_and_notify(
-                        attempt_results,
-                        _make_attempt_result(
-                            attempt_number=attempt_index + 1,
-                            failure_type=failure_type,
-                            recovered=False,
-                            detail=format_recovery_failure_summary(
-                                "Verification after runner staged changes with git add -A failed.",
-                                exc.verification_results,
+                    (
+                        _append_attempt_and_notify(
+                            attempt_results,
+                            _make_attempt_result(
+                                attempt_number=attempt_index + 1,
+                                failure_type=failure_type,
+                                recovered=False,
+                                detail=format_recovery_failure_summary(
+                                    "Verification after runner staged changes with git add -A failed.",
+                                    exc.verification_results,
+                                ),
+                                agent=selected_agent,
+                                started_mono=attempt_started_mono,
+                                started_iso=attempt_started_iso,
                             ),
-                            agent=selected_agent,
-                            started_mono=attempt_started_mono,
-                            started_iso=attempt_started_iso,
+                            on_attempt_recorded,
                         ),
-                        on_attempt_recorded,
+                    )
+
+                    _persist_short_term_memory(
+                        config=config,
+                        issue=issue,
+                        worktree_path=worktree_path,
+                        attempt=attempt_results[-1],
+                        repo_id=repo_id,
                     )
                     if attempt_index >= max_recovery_attempts:
                         raise MaxRetriesExceededError(attempt_results) from exc
+                    recovery_failure_type = failure_type.value
                     recovery_failure_summary = format_recovery_failure_summary(
                         "Verification after runner staged changes with git add -A failed.",
                         exc.verification_results,
@@ -1218,18 +1358,28 @@ def run_agent_until_committed(
                         verification_results=final_verification_results,
                         exc=exc,
                     )
-                    _append_attempt_and_notify(
-                        attempt_results,
-                        _make_attempt_result(
-                            attempt_number=attempt_index + 1,
-                            failure_type=failure_type,
-                            recovered=False,
-                            detail=str(exc),
-                            agent=selected_agent,
-                            started_mono=attempt_started_mono,
-                            started_iso=attempt_started_iso,
+                    (
+                        _append_attempt_and_notify(
+                            attempt_results,
+                            _make_attempt_result(
+                                attempt_number=attempt_index + 1,
+                                failure_type=failure_type,
+                                recovered=False,
+                                detail=str(exc),
+                                agent=selected_agent,
+                                started_mono=attempt_started_mono,
+                                started_iso=attempt_started_iso,
+                            ),
+                            on_attempt_recorded,
                         ),
-                        on_attempt_recorded,
+                    )
+
+                    _persist_short_term_memory(
+                        config=config,
+                        issue=issue,
+                        worktree_path=worktree_path,
+                        attempt=attempt_results[-1],
+                        repo_id=repo_id,
                     )
                     if failure_type == FailureType.UNRECOVERABLE:
                         raise UnrecoverableError(str(exc), attempt_results) from exc
@@ -1246,21 +1396,32 @@ def run_agent_until_committed(
                     verification_results=final_verification_results,
                     exc=None,
                 )
-                _append_attempt_and_notify(
-                    attempt_results,
-                    _make_attempt_result(
-                        attempt_number=attempt_index + 1,
-                        failure_type=failure_type,
-                        recovered=False,
-                        detail=f"The runner could not process the commit request.\n{exc}",
-                        agent=selected_agent,
-                        started_mono=attempt_started_mono,
-                        started_iso=attempt_started_iso,
+                (
+                    _append_attempt_and_notify(
+                        attempt_results,
+                        _make_attempt_result(
+                            attempt_number=attempt_index + 1,
+                            failure_type=failure_type,
+                            recovered=False,
+                            detail=f"The runner could not process the commit request.\n{exc}",
+                            agent=selected_agent,
+                            started_mono=attempt_started_mono,
+                            started_iso=attempt_started_iso,
+                        ),
+                        on_attempt_recorded,
                     ),
-                    on_attempt_recorded,
+                )
+
+                _persist_short_term_memory(
+                    config=config,
+                    issue=issue,
+                    worktree_path=worktree_path,
+                    attempt=attempt_results[-1],
+                    repo_id=repo_id,
                 )
                 if attempt_index >= max_recovery_attempts:
                     raise MaxRetriesExceededError(attempt_results) from exc
+                recovery_failure_type = failure_type.value
                 recovery_failure_summary = "\n".join(
                     [
                         "The runner could not process the commit request.",
@@ -1279,18 +1440,36 @@ def run_agent_until_committed(
         # Phase 5: 检查 agent 是否实际产生了 commit
         after_sha = get_head_sha(worktree_path, process_runner)
         if before_sha != after_sha:
-            _append_attempt_and_notify(
-                attempt_results,
-                _make_attempt_result(
-                    attempt_number=attempt_index + 1,
-                    failure_type=FailureType.SUCCESS,
-                    recovered=attempt_index > 0,
-                    detail="Agent produced commits and passed verification.",
-                    agent=selected_agent,
-                    started_mono=attempt_started_mono,
-                    started_iso=attempt_started_iso,
+            success_attempt = _make_attempt_result(
+                attempt_number=attempt_index + 1,
+                failure_type=FailureType.SUCCESS,
+                recovered=attempt_index > 0,
+                detail="Agent produced commits and passed verification.",
+                agent=selected_agent,
+                started_mono=attempt_started_mono,
+                started_iso=attempt_started_iso,
+            )
+            (
+                _append_attempt_and_notify(
+                    attempt_results,
+                    success_attempt,
+                    on_attempt_recorded,
                 ),
-                on_attempt_recorded,
+            )
+
+            _persist_short_term_memory(
+                config=config,
+                issue=issue,
+                worktree_path=worktree_path,
+                attempt=attempt_results[-1],
+                repo_id=repo_id,
+            )
+            _persist_short_term_memory(
+                config=config,
+                issue=issue,
+                worktree_path=worktree_path,
+                attempt=success_attempt,
+                repo_id=repo_id,
             )
             return AgentCommitResult(final_verification_results, attempt_results, verifier_verdict)
 
@@ -1304,21 +1483,32 @@ def run_agent_until_committed(
             verification_results=verification_results,
             exc=None,
         )
-        _append_attempt_and_notify(
-            attempt_results,
-            _make_attempt_result(
-                attempt_number=attempt_index + 1,
-                failure_type=failure_type,
-                recovered=False,
-                detail="Agent produced no git commits.",
-                agent=selected_agent,
-                started_mono=attempt_started_mono,
-                started_iso=attempt_started_iso,
+        (
+            _append_attempt_and_notify(
+                attempt_results,
+                _make_attempt_result(
+                    attempt_number=attempt_index + 1,
+                    failure_type=failure_type,
+                    recovered=False,
+                    detail="Agent produced no git commits.",
+                    agent=selected_agent,
+                    started_mono=attempt_started_mono,
+                    started_iso=attempt_started_iso,
+                ),
+                on_attempt_recorded,
             ),
-            on_attempt_recorded,
+        )
+
+        _persist_short_term_memory(
+            config=config,
+            issue=issue,
+            worktree_path=worktree_path,
+            attempt=attempt_results[-1],
+            repo_id=repo_id,
         )
         if attempt_index >= max_recovery_attempts:
             raise MaxRetriesExceededError(attempt_results)
+        recovery_failure_type = failure_type.value
         recovery_failure_summary = "\n".join(
             [
                 "The previous attempt produced no git commits.",

@@ -35,6 +35,7 @@ keda 的 agent runner 会把 PRD 的 Realistic Validation oracle 物化到 Issue
 
 - runner **优先确定性解析** skill 产出的 **YAML oracle 块**；无则回退旧式 `### Realistic Validation` 复选框（向后兼容）。
 - 证据缺失 / 不达标会打回 runner 重跑（recovery 循环）。
+- 当 keda 配置 `validation.reexecute_commands = true` 时，runner 会复跑 `evidence.json` 中每个 item 的 `command`。为保证命令可维护、可复跑，agent 应把复杂验证逻辑落到仓库已跟踪的独立脚本（例如 `scripts/rv_evidence/` 下按 item 命名的文件），而不是把多行内联 `python -c "..."` 写进 manifest。脚本位置与命名是项目约定，runner 只要求命令可执行；每次复跑覆盖的是 `.iar/evidence/` 里的证据产物，不是脚本本身。
 - 进一步的"负控 + keda 复跑命令 + 独立 verifier agent"门禁,见 `tasks/pending/` 中对应的 Realistic Validation 门禁 PRD。
 
 #### 证据形态与"产物健全性"提示（v1.2 跟进）

@@ -492,6 +492,20 @@ class AgentRunnerRunnerSettings(BaseModel):
     pre_commit_verification_command: str | None = Field(default=None)
 
 
+class AgentRunnerMemorySettings(BaseModel):
+    """Pydantic mirror of ``MemoryConfig``; ``enabled = false`` disables memory I/O and drafts."""
+
+    enabled: bool = True
+    base_dir: str = ".iar/memory"
+    skill_drafts_dir: str = ".iar/skills/drafts"
+    promoted_skills_dirs: list[str] = Field(default_factory=lambda: [".iar/skills"])
+    top_k_skills: int = 3
+    top_k_facts: int = 5
+    auto_promote: bool = True
+    auto_promote_threshold: int = 3
+    auto_promote_min_success_rate: float = 1.0
+
+
 class AgentRunnerSafetySettings(BaseModel):
     """Safety boundaries enforced before publishing."""
 
@@ -814,6 +828,7 @@ class _AgentRunnerRepositoryOverrideSettings(BaseModel):
     git: AgentRunnerGitSettings | None = None
     worktree: AgentRunnerWorktreeSettings | None = None
     runner: AgentRunnerRunnerSettings | None = None
+    memory: AgentRunnerMemorySettings | None = None
     safety: AgentRunnerSafetySettings | None = None
     validation: AgentRunnerValidationSettings | None = None
     prompts: AgentRunnerPromptSettings | None = None
@@ -934,6 +949,7 @@ class AgentRunnerSettings(BaseSettings):
     git: AgentRunnerGitSettings = Field(default_factory=AgentRunnerGitSettings)
     worktree: AgentRunnerWorktreeSettings = Field(default_factory=AgentRunnerWorktreeSettings)
     runner: AgentRunnerRunnerSettings = Field(default_factory=AgentRunnerRunnerSettings)
+    memory: AgentRunnerMemorySettings = Field(default_factory=AgentRunnerMemorySettings)
     safety: AgentRunnerSafetySettings = Field(default_factory=AgentRunnerSafetySettings)
     validation: AgentRunnerValidationSettings = Field(default_factory=AgentRunnerValidationSettings)
     console: AgentRunnerConsoleSettings = Field(default_factory=AgentRunnerConsoleSettings)

@@ -185,7 +185,7 @@ class WorktreeConfig:
     """
 
     create_command: str = (
-        "iar worktree create --branch issue-{issue_number} --base-branch {base_branch}"
+        "iar worktree create --branch issue-{issue_number} " "--base-branch {base_branch}"
     )
     reuse_command: str = "iar worktree path --branch issue-{issue_number}"
     path_command: str = "iar worktree path --branch issue-{issue_number}"
@@ -240,6 +240,44 @@ class RunnerConfig:
         "uv run mkdocs build",
     )
     pre_commit_verification_command: str | None = None
+
+
+@dataclass(frozen=True)
+class MemoryConfig:
+    """Local memory and skill distillation configuration.
+
+    Attributes:
+        enabled: Master switch — when ``False`` the runner skips every memory
+            read/write and skill distillation step. Existing happy-path
+            behaviour must not change in that mode.
+        base_dir: Worktree-relative base directory for short-term and
+            long-term memory. Always written as ``<worktree>/<base_dir>``.
+        skill_drafts_dir: Worktree-relative directory for skill drafts
+            awaiting promotion.
+        promoted_skills_dirs: Ordered list of worktree-relative directories
+            that contain already-promoted skills. The first existing entry
+            wins when the runner reads a skill by name.
+        top_k_skills: Maximum number of promoted skills to surface per
+            ``build_prompt`` invocation.
+        top_k_facts: Maximum number of long-term facts to surface per
+            ``build_prompt`` invocation.
+        auto_promote: Whether the runner may auto-move drafts to a
+            promoted-skills directory once thresholds are met.
+        auto_promote_threshold: Minimum ``usage_count`` required to
+            auto-promote a draft.
+        auto_promote_min_success_rate: Minimum ``success_count /
+            usage_count`` ratio required to auto-promote a draft.
+    """
+
+    enabled: bool = True
+    base_dir: str = ".iar/memory"
+    skill_drafts_dir: str = ".iar/skills/drafts"
+    promoted_skills_dirs: tuple[str, ...] = (".iar/skills",)
+    top_k_skills: int = 3
+    top_k_facts: int = 5
+    auto_promote: bool = True
+    auto_promote_threshold: int = 3
+    auto_promote_min_success_rate: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -495,6 +533,7 @@ class AppConfig:
     git: GitConfig = GitConfig()
     worktree: WorktreeConfig = WorktreeConfig()
     runner: RunnerConfig = RunnerConfig()
+    memory: MemoryConfig = MemoryConfig()
     safety: SafetyConfig = SafetyConfig()
     validation: ValidationConfig = ValidationConfig()
     prompts: PromptConfig = field(default_factory=PromptConfig)
