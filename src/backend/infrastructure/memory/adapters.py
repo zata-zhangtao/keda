@@ -57,7 +57,27 @@ def resolve_memory_paths(
     skill_drafts_dir: str,
     promoted_skills_dirs: Iterable[str],
 ) -> dict[str, object]:
-    """Resolve the absolute memory-related paths under the worktree."""
+    """Resolve the absolute memory-related paths.
+
+    锚点语义在 :class:`backend.core.shared.models.agent_runner.MemoryConfig`
+    docstring 中说明：
+
+    - ``worktree_path`` 在生产路径下仅是兜底"锚点"——engines 层已经在
+      构建 :class:`RepositoryRunContext` 时把相对目录绝对化到目标仓库
+      主检出根；本函数对绝对路径原样返回，``worktree_path`` 不起作用。
+    - 任何仍以相对路径形式传入的字符串（主要是直接构造 ``MemoryConfig``
+      的单元测试）依然按 ``worktree_path`` 解析，行为兼容。
+
+    Args:
+        worktree_path: 兜底锚点；当任一目录仍为相对路径时挂到这里。
+        base_dir: 已绝对化的短期/长期记忆目录，或相对路径。
+        skill_drafts_dir: 已绝对化的 skill 草稿目录，或相对路径。
+        promoted_skills_dirs: 已绝对化的晋升 skill 扫描目录列表。
+
+    Returns:
+        字典 ``{"short_term_base", "long_term_base", "skill_drafts_dir",
+        "promoted_skills_dirs"}``，所有路径都是 :class:`pathlib.Path`。
+    """
 
     def anchor(rel: str) -> Path:
         if Path(rel).is_absolute():

@@ -957,6 +957,47 @@ def _load_enabled_repository_local_settings(
     return local_settings
 
 
+def _anchor_memory_config(
+    memory: MemoryConfig,
+    repo_root_path: Path,
+) -> MemoryConfig:
+    """把 ``MemoryConfig`` 中的相对路径解析到 ``repo_root_path`` 下。
+
+    由 :func:`_build_merged_repository_context` 在构造
+    :class:`RepositoryRunContext` 前调用，确保任何运行时会按"主仓库
+    根"解析相对路径，并把``~`` 展开为绝对路径。
+
+    语义：
+
+    - 先对每个字符串调用 :meth:`Path.expanduser`（处理 ``~``）。
+    - 剩余为相对路径者，与 ``repo_root_path`` 拼接形成绝对路径。
+    - 已经是绝对路径（含 ``expanduser`` 产物）的字符串原样保留。
+
+    ``MemoryConfig`` 是 frozen dataclass，构造替换通过
+    :func:`dataclasses.replace` 完成。
+    """
+    resolved_base = _resolve_anchor_path(memory.base_dir, repo_root_path)
+    resolved_drafts = _resolve_anchor_path(memory.skill_drafts_dir, repo_root_path)
+    resolved_promoted = tuple(
+        _resolve_anchor_path(directory, repo_root_path) for directory in memory.promoted_skills_dirs
+    )
+    return dataclasses.replace(
+        memory,
+        base_dir=resolved_base,
+        skill_drafts_dir=resolved_drafts,
+        promoted_skills_dirs=resolved_promoted,
+    )
+
+
+def _resolve_anchor_path(raw_path: str, repo_root_path: Path) -> str:
+    """Expand ``~`` and resolve relative paths against ``repo_root_path``."""
+
+    expanded = Path(str(raw_path)).expanduser()
+    if expanded.is_absolute():
+        return str(expanded)
+    return str(repo_root_path / expanded)
+
+
 def _build_repository_context_from_settings(
     global_config: AppConfig,
     repo_settings: AgentRunnerRepositorySettings,
@@ -1011,6 +1052,9 @@ def _build_merged_repository_context(
             effective_repo_id = repo_settings.id
         if repo_settings.display_name:
             effective_display_name = repo_settings.display_name
+
+    anchored_memory = _anchor_memory_config(effective_config.memory, effective_repo_path)
+    effective_config = dataclasses.replace(effective_config, memory=anchored_memory)
 
     return RepositoryRunContext(
         repo_id=effective_repo_id,

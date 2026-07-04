@@ -246,17 +246,28 @@ class RunnerConfig:
 class MemoryConfig:
     """Local memory and skill distillation configuration.
 
+    Anchor semantics for ``base_dir`` / ``skill_drafts_dir`` /
+    ``promoted_skills_dirs``:
+
+    - 相对路径由 :mod:`backend.engines.agent_runner.factory` 在构建
+      :class:`RepositoryRunContext` 时解析到目标仓库主检出根，并在
+      该点展开 ``~``。
+    - 绝对路径（含 ``expanduser`` 后变绝对者）保持原样，不再挂到任何
+      锚点下；运营者把目录移出仓库外（防 ``git clean -fdx`` 误删或
+      多机共享）只需把相对路径改为绝对路径即可。
+    - ``worktree_path`` 在组装 store 时仍作为实参传入，但只要上述
+      目录已是绝对路径就不会被使用——是 Zero-signature-disturbance
+      修复路径的副作用。
+
     Attributes:
         enabled: Master switch — when ``False`` the runner skips every memory
             read/write and skill distillation step. Existing happy-path
             behaviour must not change in that mode.
-        base_dir: Worktree-relative base directory for short-term and
-            long-term memory. Always written as ``<worktree>/<base_dir>``.
-        skill_drafts_dir: Worktree-relative directory for skill drafts
-            awaiting promotion.
-        promoted_skills_dirs: Ordered list of worktree-relative directories
-            that contain already-promoted skills. The first existing entry
-            wins when the runner reads a skill by name.
+        base_dir: 短期/长期记忆的相对或绝对目录；详见上方"锚点语义"。
+        skill_drafts_dir: 等待晋升的 skill 草稿目录；锚点语义同上。
+        promoted_skills_dirs: 已晋升 skill 的扫描目录列表（有序），
+            同样遵循上述锚点语义；第一个存在的目录在按名查找 skill
+            时胜出。
         top_k_skills: Maximum number of promoted skills to surface per
             ``build_prompt`` invocation.
         top_k_facts: Maximum number of long-term facts to surface per

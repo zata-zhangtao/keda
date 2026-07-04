@@ -173,9 +173,16 @@ verification_commands = [
 # =============================================================================
 # Agent Runner Memory Persistence
 # =============================================================================
-# 控制 runner 的短期/长期记忆与 skill 蒸馏功能。记忆文件保存在 worktree 内
-# .iar/memory/，skill 草稿保存在 .iar/skills/drafts/，默认被 .gitignore 排除，
-# 不进版本控制。
+# 控制 runner 的短期/长期记忆与 skill 蒸馏功能。锚点语义：
+# - 下面 ``base_dir`` / ``skill_drafts_dir`` / ``promoted_skills_dirs`` 的
+#   相对路径相对**目标仓库主检出根**解析，而不是相对每个 Issue 的临时
+#   工作副本。绝对路径与 ``~`` 会被原样使用（运营者把目录移出仓库外
+#   ——例如防 ``git clean -fdx`` 误删、或多机共享——仅需将下方的相对路径
+#   改成绝对路径）。
+# - 记忆文件默认被 ``.gitignore`` 排除，不进版本控制。
+# - 跨副本累积由
+#   ``backend.engines.agent_runner.factory._anchor_memory_config``
+#   一次性绝对化；本节只关心值，不关心解析位置。
 [agent_runner.memory]
 enabled = true
 base_dir = ".iar/memory"

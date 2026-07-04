@@ -1,4 +1,8 @@
-"""长期记忆文件存储实现（按主题/类别组织的 markdown）。"""
+"""长期记忆文件存储实现（按主题/类别组织的 markdown）。
+
+所有写入通过共享的 ``infrastructure/memory/_atomic_io.atomic_write_text``
+完成 ``tmp + os.replace`` 原子落盘，避免并发 save 时产生半写损坏文件。
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+from ._atomic_io import atomic_write_text
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(?P<body>.*?)\n---\s*(?:\n|$)", re.DOTALL)
 
@@ -45,9 +51,13 @@ class LongTermMemoryStore:
         content: str,
         tags: Iterable[str] = (),
     ) -> Path:
-        """Append or create a fact file. Existing tag union is preserved."""
+        """Append or create a fact file. Existing tag union is preserved.
+
+        通过 ``atomic_write_text`` 原子落盘：先写入临时文件再用
+        ``os.replace`` 替换，确保并发 save 时目标文件始终是完整可解析
+        的 markdown，不出现半写损坏的中间状态。
+        """
         path = self._fact_path(category, topic)
-        path.parent.mkdir(parents=True, exist_ok=True)
         existing = self._read_existing(path)
         merged_tags = _merge_tags(existing.tags, tags)
         payload = _build_markdown(
@@ -56,8 +66,7 @@ class LongTermMemoryStore:
             content=content,
             tags=merged_tags,
         )
-        path.write_text(payload, encoding="utf-8")
-        return path
+        return atomic_write_text(path, payload)
 
     def load_by_tags(self, tags: Iterable[str], *, limit: int | None = None) -> list[LongTermFact]:
         """Load all facts whose tag set intersects with ``tags``."""

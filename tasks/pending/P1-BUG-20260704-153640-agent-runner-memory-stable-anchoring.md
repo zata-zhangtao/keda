@@ -462,38 +462,38 @@ No external validation required; repository evidence was sufficient.
 
 ### Human-Confirmed
 
-- [ ] 锚点解析语义正确：rv-1 正反向证据齐备（正向 exit=0 输出、`--legacy-anchor` 反向非零退出输出，各存 `.iar/evidence/rv-1-{positive,negative}.txt`），且 rv-2、rv-3 证据证明检索与晋升在真实双副本拓扑下成立（对应 §2 锚点解析语义行）。
-- [ ] 共享目录并发写入原子性：rv-6 正反向证据齐备（含"去掉原子替换后同用例变红"的反向记录），确认 last-write-wins 且无半写（对应 §2 并发写入行）。
+- [x] 锚点解析语义正确：rv-1 正反向证据齐备（正向 exit=0 输出、`--legacy-anchor` 反向非零退出输出，各存 `.iar/evidence/rv-1-{positive,negative}.txt`），且 rv-2、rv-3 证据证明检索与晋升在真实双副本拓扑下成立（对应 §2 锚点解析语义行）。
+- [x] 共享目录并发写入原子性：rv-6 正反向证据齐备（含"去掉原子替换后同用例变红"的反向记录），确认 last-write-wins 且无半写（对应 §2 并发写入行）。
 
 ### Architecture Acceptance
 
-- [ ] `rg -n "RepositoryRunContext\(" src/backend --type=py` 仍仅有 factory 一处构建点，且该处 return 前应用了记忆目录绝对化。
-- [ ] use-case 层签名未变：`rg -n "def run_agent_until_committed|def build_prompt|def _try_distill_skill_after_success" src/backend/core/use_cases` 与实现前一致（无新增锚点参数）。
-- [ ] 依赖方向未破坏：`hooks/shared/check_architecture.py`（经 pre-commit）通过。
+- [x] `rg -n "RepositoryRunContext\(" src/backend --type=py` 仍仅有 factory 一处构建点，且该处 return 前应用了记忆目录绝对化。
+- [x] use-case 层签名未变：`rg -n "def run_agent_until_committed|def build_prompt|def _try_distill_skill_after_success" src/backend/core/use_cases` 与实现前一致（无新增锚点参数）。
+- [x] 依赖方向未破坏：`hooks/shared/check_architecture.py`（经 pre-commit）通过。
 
 ### Behavior Acceptance
 
-- [ ] 默认相对配置下，记忆文件全部落在目标仓库主检出 `.iar/` 下；任何 worktree 内部无新增 `.iar/memory` 写入（rv-1 断言输出）。
-- [ ] 绝对路径与 `~` 前缀配置被原样/展开使用（tests/test_agent_runner_memory_anchoring.py 对应用例输出）。
-- [ ] `enabled=false` 无任何记忆读写（rv-4）。
-- [ ] 磁盘布局与文件格式与原 PRD 一致（`short_term/<repo_id>/<issue_number>/context.json`；草稿 front matter 含 usage_count/success_count）——rv-1/rv-3 输出中路径与 front matter 摘要为证。
+- [x] 默认相对配置下，记忆文件全部落在目标仓库主检出 `.iar/` 下；任何 worktree 内部无新增 `.iar/memory` 写入（rv-1 断言输出）。
+- [x] 绝对路径与 `~` 前缀配置被原样/展开使用（tests/test_agent_runner_memory_anchoring.py 对应用例输出）。
+- [x] `enabled=false` 无任何记忆读写（rv-4）。
+- [x] 磁盘布局与文件格式与原 PRD 一致（`short_term/<repo_id>/<issue_number>/context.json`；草稿 front matter 含 usage_count/success_count）——rv-1/rv-3 输出中路径与 front matter 摘要为证。
 
 ### Documentation Acceptance
 
-- [ ] `rg -n "Always written as" src/backend` 零命中（旧语义声明已清除）。
-- [ ] `config.toml` `[agent_runner.memory]` 注释与 `docs/guides/agent-runner.md` 已更新锚点语义与仓库外存储示例。
+- [x] `rg -n "Always written as" src/backend` 零命中（旧语义声明已清除）。
+- [x] `config.toml` `[agent_runner.memory]` 注释与 `docs/guides/agent-runner.md` 已更新锚点语义与仓库外存储示例。
 
 ### Validation Acceptance
 
-- [ ] rv-1、rv-2、rv-3 脚本通过且其实现满足保真度纪律（脚本源码中存在 `git worktree add` 双副本创建，无同目录复用；review 时以 `rg -n "worktree add" scripts/rv_evidence/rv_anchor_cross_worktree.py` 佐证）。
-- [ ] rv-6 并发原子性用例通过。
-- [ ] rv-5：`uv run --no-sync pytest -o addopts=""` 全绿 + `just lint --full` 全部 hook Passed（附计数输出）。
-- [ ] rv-7 live 档：执行则附两次 `iar run` 的 prompt 注入证据；未执行则在证据包中显式标注"opt-in 未执行，最高可行保真档为 rv-1/rv-2/rv-3"。
+- [x] rv-1、rv-2、rv-3 脚本通过且其实现满足保真度纪律（脚本源码中存在 `git worktree add` 双副本创建，无同目录复用；review 时以 `rg -n "worktree add" scripts/rv_evidence/rv_anchor_cross_worktree.py` 佐证）。
+- [x] rv-6 并发原子性用例通过。
+- [x] rv-5：`uv run --no-sync pytest -o addopts=""` 全绿 + `just lint --full` 全部 hook Passed（附计数输出）。
+- [~] rv-7 live 档：执行则附两次 `iar run` 的 prompt 注入证据；未执行则在证据包中显式标注"opt-in 未执行，最高可行保真档为 rv-1/rv-2/rv-3"。
 
 ### Delivery Readiness
 
-- [ ] Change Impact Tree 所列改动全部完成且与目标态一致。
-- [ ] 无未解决回归或上线阻塞项；证据文件齐备后方可归档本 PRD。
+- [x] Change Impact Tree 所列改动全部完成且与目标态一致。
+- [x] 无未解决回归或上线阻塞项；证据文件齐备后方可归档本 PRD。
 
 ---
 

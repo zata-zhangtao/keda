@@ -3101,16 +3101,33 @@ PRD 的 `Delivery Dependencies` 小节会解析为三种依赖边：
 
 ## 本地记忆持久化与 Skill 蒸馏（Memory Persistence & Skill Distillation）
 
-Agent Runner 默认开启两层**本地**记忆与 skill 蒸馏循环，用于把同类 Issue 的成功修复经验沉淀给后续 Issue 复用。所有数据保存在 worktree 的 `.iar/memory/` 与 `.iar/skills/` 下（默认被 `.gitignore` 排除），不引入外部数据库或服务。
+Agent Runner 默认开启两层**本地**记忆与 skill 蒸馏循环，用于把同类 Issue 的成功修复经验沉淀给后续 Issue 复用。所有数据保存在**目标仓库的主检出** `.iar/memory/` 与 `.iar/skills/` 下（默认被 `.gitignore` 排除），不引入外部数据库或服务。即使每个 Issue 在独立的工作副本里跑，记忆与 skill 也都在主检出里累积并跨 Issue 共享——目录的解析由 `backend.engines.agent_runner.factory._anchor_memory_config` 在构造 `RepositoryRunContext` 时一次性绝对化到 `repo_path`。
 
 ### 数据落点
 
 | 用途 | 路径 | 格式 |
 |---|---|---|
-| 短期记忆（每个 Issue 的执行轨迹） | `<worktree>/.iar/memory/short_term/<repo_id>/<issue_number>/context.json` | JSON |
-| 长期记忆（项目约定 / 模式） | `<worktree>/.iar/memory/long_term/<category>/<topic>.md` | Markdown + YAML front matter |
-| Skill 草稿 | `<worktree>/.iar/skills/drafts/<name>.md` | Markdown + YAML front matter (`draft: true`) |
-| 已晋升 skill | `<worktree>/.iar/skills/<name>.md`（默认；可配置） | Markdown + YAML front matter (`draft: false`) |
+| 短期记忆（每个 Issue 的执行轨迹） | `<repo_path>/.iar/memory/short_term/<repo_id>/<issue_number>/context.json` | JSON |
+| 长期记忆（项目约定 / 模式） | `<repo_path>/.iar/memory/long_term/<category>/<topic>.md` | Markdown + YAML front matter |
+| Skill 草稿 | `<repo_path>/.iar/skills/drafts/<name>.md` | Markdown + YAML front matter (`draft: true`) |
+| 已晋升 skill | `<repo_path>/.iar/skills/<name>.md`（默认；可配置） | Markdown + YAML front matter (`draft: false`) |
+
+注：相对路径 **相对目标仓库主检出根** 解析，而不是相对每个 Issue 的工作副本。
+
+### 锚点与并发语义
+
+- `config.toml` `[agent_runner.memory]` 的 `base_dir` / `skill_drafts_dir` / `promoted_skills_dirs` 中的**相对路径**在 engines 层会被解析为 `<repo_path>/<rel>` 的绝对路径；**绝对路径或 ``~``** 会被原样使用，不再挂到任何锚点下。
+- 想把记忆放在仓库外（防 `git clean -fdx` 误删或多机共享），运营者把上述字段改为绝对路径即可，例如：
+
+```toml
+[agent_runner.memory]
+base_dir = "~/.iar/memory/keda-main"
+skill_drafts_dir = "~/.iar/memory/keda-main/skills/drafts"
+promoted_skills_dirs = ["~/.iar/memory/keda-main/skills"]
+```
+
+- 共享锚点下三个 store 的写入统一为 ``tmp + os.replace`` 原子替换；并发场景是 ``last-write-wins``，不会出现半写损坏文件。
+- 运行时 `build_default_memory_services(worktree_path, config.memory)` 收到相对路径时会发 `logger.warning`，提示预期由 factory 绝对化；这是防回归告警，正常生产路径不应出现。
 
 ### 触发点
 

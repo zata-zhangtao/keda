@@ -1,4 +1,9 @@
-"""Skill 草稿与已晋升 skill 的本地文件系统持久化。"""
+"""Skill 草稿与已晋升 skill 的本地文件系统持久化。
+
+所有 save / update / 晋升后的写回通过
+``infrastructure/memory/_atomic_io.atomic_write_text`` 完成原子落盘，
+避免并发 save 时产生半写损坏文件。
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+
+from ._atomic_io import atomic_write_text
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(?P<body>.*?)\n---\s*(?:\n|$)", re.DOTALL)
 
@@ -61,13 +68,14 @@ class SkillDraftStore:
         return self._drafts_dir
 
     def save_draft(self, draft: SkillDraftUpdate) -> Path:
-        """Persist a new or updated draft to the drafts directory."""
+        """Persist a new or updated draft to the drafts directory.
+
+        通过 ``atomic_write_text`` 原子落盘，避免并发 save 时出现半写
+        损坏文件。
+        """
         self._drafts_dir.mkdir(parents=True, exist_ok=True)
         path = self._drafts_dir / f"{_safe_segment(draft.name)}.md"
-        path.write_text(
-            _build_skill_markdown(draft),
-            encoding="utf-8",
-        )
+        atomic_write_text(path, _build_skill_markdown(draft))
         return path
 
     def find_similar_draft(
@@ -159,7 +167,10 @@ class SkillDraftStore:
                 shutil.move(str(draft.path), str(destination))
             except OSError:
                 continue
-            promoted_text = destination.read_text(encoding="utf-8")
+            try:
+                promoted_text = destination.read_text(encoding="utf-8")
+            except OSError:
+                continue
             promoted_text = re.sub(
                 r"^draft:\s*true\s*$",
                 "draft: false",
@@ -167,7 +178,7 @@ class SkillDraftStore:
                 count=1,
                 flags=re.MULTILINE,
             )
-            destination.write_text(promoted_text, encoding="utf-8")
+            atomic_write_text(destination, promoted_text)
             return destination
         return None
 
