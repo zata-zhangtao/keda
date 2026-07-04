@@ -557,6 +557,10 @@ class AgentRunnerDaemonSettings(BaseModel):
     run_interval_seconds: int = 120
     max_deliberation_issues: int = 1
     reclaim_stale_running: bool = True
+    # TTL reclaim 阈值(秒):claim marker 含 ``started_at`` 且距 now 超过此值
+    # 即便 PID 仍存活也视为 stale。仅当 ``reclaim_stale_running=True`` 时生效。
+    # 默认 3 小时,覆盖"daemon 自身持锁 claim 但已卡死"的死锁场景。
+    reclaim_ttl_seconds: int = 10800
 
 
 class AgentRunnerPromptSettings(BaseModel):
@@ -834,6 +838,7 @@ class _AgentRunnerRepositoryOverrideSettings(BaseModel):
     prompts: AgentRunnerPromptSettings | None = None
     pre_pr_review: AgentRunnerPrePrReviewSettings | None = None
     post_pr_supervisor: AgentRunnerPostPrSupervisorSettings | None = None
+    daemon: AgentRunnerDaemonSettings | None = None
     generated_content: AgentRunnerGeneratedContentSettings | None = None
     interactive_decision: AgentRunnerInteractiveDecisionSettings | None = None
     deliberation: AgentRunnerDeliberationSettings | None = None
@@ -931,6 +936,7 @@ def load_agent_runner_local_settings(
         prompts=local_settings.prompts,
         pre_pr_review=local_settings.pre_pr_review,
         post_pr_supervisor=local_settings.post_pr_supervisor,
+        daemon=local_settings.daemon,
         generated_content=local_settings.generated_content,
         interactive_decision=local_settings.interactive_decision,
         deliberation=local_settings.deliberation,

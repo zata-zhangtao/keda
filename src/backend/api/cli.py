@@ -800,6 +800,7 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
                     concurrency=daemon_concurrency,
                     output_view=daemon_output_view,
                     reclaim_stale_running=runner_settings.daemon.reclaim_stale_running,
+                    reclaim_ttl_seconds=runner_settings.daemon.reclaim_ttl_seconds,
                 )
             finally:
                 release_daemon_locks(acquired_daemon_locks)

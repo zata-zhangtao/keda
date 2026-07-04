@@ -44,6 +44,7 @@ def run_agent_daemon(
     concurrency: int = 1,
     output_view: IRunnerLiveView | None = None,
     reclaim_stale_running: bool = False,
+    reclaim_ttl_seconds: int | None = None,
 ) -> None:
     """Run the queue poller forever across all target repositories.
 
@@ -92,7 +93,9 @@ def run_agent_daemon(
             if reclaim_stale_running:
                 try:
                     reclaimed = reclaim_stale_running_issues(
-                        config=context.config, github_client=github_client
+                        config=context.config,
+                        github_client=github_client,
+                        ttl_seconds=reclaim_ttl_seconds,
                     )
                     if reclaimed:
                         _logger.info(

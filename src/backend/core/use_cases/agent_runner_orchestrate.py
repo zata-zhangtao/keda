@@ -442,13 +442,15 @@ def _process_ready_issue(
     transition_issue_workflow_state(github_client, issue.number, config, config.labels.running)
     claim_host = socket.gethostname()
     claim_pid = os.getpid()
+    claim_started_at = datetime.now(timezone.utc)
     github_client.comment_issue(
         issue.number,
         "## Agent Runner Claimed\n\n"
         f"- Host: `{claim_host}`\n"
         f"- PID: `{claim_pid}`\n"
-        f"- Agent: `{selected_agent}`\n\n"
-        f"{format_claim_marker(claim_host, claim_pid)}",
+        f"- Agent: `{selected_agent}`\n"
+        f"- Started at: `{claim_started_at.isoformat()}`\n\n"
+        f"{format_claim_marker(claim_host, claim_pid, started_at=claim_started_at)}",
     )
 
     # 步骤 2: 准备 worktree
