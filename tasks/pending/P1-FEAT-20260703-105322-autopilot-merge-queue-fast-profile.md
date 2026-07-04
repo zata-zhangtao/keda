@@ -1,5 +1,7 @@
 # PRD: Autopilot 快速档：合并队列消费 auto_merge 与签核自动化
 
+- GitHub Issue: https://github.com/zata-zhangtao/keda/issues/126
+
 > 本 PRD 分两个阅读高度：Part A 供人审（判断要不要做、哪里必须人工确认），Part B 供执行器（怎么做）。人审只需读 Part A，按 Human Review Map 指到的点再下钻 Part B。
 
 # Part A · 人审层 (Review Layer)
@@ -12,7 +14,7 @@ runner 流水线（Issue → worktree → 构建 → 验证 → draft PR → sup
 
 ### Interpretation (解读回显)
 
-我把需求读成：**新增一种按仓库开启的无人值守"快速档"（autopilot）：supervisor approve 之后不再停在人工 Review，而是进入一条串行合并队列——独立 verifier 的绿灯（`validation/verifier-passed`）替代人工勾选 sign-off、rebase 到最新 base、在 worktree 里全量重跑验证、禁改路径终扫，然后 squash 合并；`safety.auto_merge` 从死开关变成该行为的硬同意位。** 这不是取消门禁，而是把"人工确认"替换为"交叉 agent 证据评估 + 机器门禁"；快速档默认关闭，严格档（现状）行为零变化。签核评估用的"别的 agent"由已排队的 independent-verifier-gate PRD 提供（verifier 默认换 agent/model、干净 worktree），本 PRD 不重造评估器。合并方式锁定 squash。PRD 归档仍由执行 agent 在分支内完成（现状），合并队列不接管归档。——若你想要的是"绕过 verifier 和验证直接合并"或"keda 主仓也默认开快速档"，这条解读就偏了，请纠正（第一次人类触点）。
+我把需求读成：**新增一种按仓库开启的无人值守"快速档"（autopilot）：supervisor approve 之后不再停在人工 Review，而是进入一条串行合并队列——独立 verifier 的绿灯（`validation/verifier-passed`）替代人工勾选 sign-off、rebase 到最新 base、在 worktree 里全量重跑验证、禁改路径终扫，然后 squash 合并；`safety.auto_merge` 从死开关变成该行为的硬同意位。** 这不是取消门禁，而是把"人工确认"替换为"交叉 agent 证据评估 + 机器门禁"；快速档默认关闭，严格档（现状）行为零变化。签核评估用的"别的 agent"由已交付的 independent-verifier-gate PRD 提供（verifier 默认换 agent/model、干净 worktree），本 PRD 不重造评估器。合并方式锁定 squash。PRD 归档仍由执行 agent 在分支内完成（现状），合并队列不接管归档。——若你想要的是"绕过 verifier 和验证直接合并"或"keda 主仓也默认开快速档"，这条解读就偏了，请纠正（第一次人类触点）。
 
 ### What The User Gets
 
@@ -106,8 +108,10 @@ uv run iar review-daemon
 
 - `src/backend/core/use_cases/review_once.py`：review pass 编排（supervisor 循环入口），合并队列阶段挂在这里。
 - `src/backend/core/use_cases/pr_supervisor.py`：`approve_for_human_review` 终态、`execute_rebase`、conflict-resolution、`is_sign_off_gate_only_failure`（sign-off check 名常量 `REALISTIC_VALIDATION_SIGN_OFF_CHECK`）。
-- `src/backend/core/use_cases/agent_runner_validation.py`：`ValidationChecklistState` 解析、`validation_required`、sign-off 清单的构造来源。
+- `src/backend/core/use_cases/agent_runner_validation.py`：`ValidationChecklistState` 解析、`validation_required`、sign-off 清单的构造来源；head 漂移时会清除 `validation/verifier-passed` label，防止 autopilot 误判。
 - `src/backend/core/use_cases/agent_runner_events.py`：`iar:event` 事件评论惯例。
+- `src/backend/core/use_cases/agent_runner_publish.py`：`is_forbidden_path(...)` 可直接用于禁改路径终扫。
+- `src/backend/core/use_cases/agent_runner_git.py`：`run_verification(...)` 可直接用于 worktree 全量验证重跑。
 - `src/backend/core/shared/interfaces/agent_runner.py`：`IGitHubClient`（现有 `find_open_pr_by_head` / `get_pull_request_context` / `update_pull_request_body` / `comment_pr` 等，**无 merge 方法**）。
 - `src/backend/infrastructure/github_client.py`：gh CLI 实现。
 - 配置三件套：`src/backend/infrastructure/config/settings.py`（pydantic）、`src/backend/core/shared/models/agent_runner.py`（domain dataclass，含从未被消费的 `auto_merge: bool = False`）、`src/backend/engines/agent_runner/factory.py`（映射 + `_merge_optional_model` 仓库级覆盖）、`src/backend/engines/agent_runner/repository_local.py`（`.iar.toml` 键描述，已有 `"safety.auto_merge"` 条目）。
@@ -118,7 +122,7 @@ uv run iar review-daemon
 
 **相关 PRD（已检查 `tasks/pending/` 与 `tasks/archive/`）**：
 
-- **依赖（archive）**：`P1-FEAT-20260628-041733-realistic-validation-independent-verifier-gate`——它交付 T3 独立 verifier（默认换 agent、干净 worktree、对抗性验证）与 `validation/verifier-passed` 标签。本 PRD 的"交叉 agent 评估"**直接复用该门禁**而不重造评估器；快速档把该 PRD 的"verifier + 人工双门禁"中的人工一侧替换为自动勾选。硬依赖。
+- **依赖（archive · 已交付）**：`P1-FEAT-20260628-041733-realistic-validation-independent-verifier-gate`——它已归档并交付 T3 独立 verifier（默认换 agent、干净 worktree、对抗性验证）与 `validation/verifier-passed` 标签。本 PRD 的"交叉 agent 评估"**直接复用该门禁**而不重造评估器；快速档把"verifier + 人工双门禁"中的人工一侧替换为自动勾选。依赖状态：已可用。
 - **相关（archive，机制复用）**：`20260523-...-rebase-conflict-agent-resolution-...`（rebase/冲突机器）、`20260527-234531-...-pr-context-approval-gate`（approve 语义）、`20260522-143103-...-two-stage-agent-review-pr-supervisor`（supervisor 结构）。
 - **无重复**：pending 中的 nightly-cleanup-loop / memory-persistence / session-persistence / frontend-template-migration 与本 PRD 正交。
 - **被依赖**：同组 PRD `roadmap-continuous-scheduling`（20260703-105330）依赖本 PRD 的 autopilot 配置段。
@@ -133,14 +137,16 @@ uv run iar review-daemon
 
 **拒绝的冗余抽象**：不建独立 merge-daemon 进程（review daemon 已有轮询壳）；不建合并队列表（标签即队列）；不在 merge 时新建交叉评估 agent（verifier PRD 已是"换一个 agent 的对抗性评估"，正好满足"必须用别的 agent 评"的要求）。
 
+**复用已有 helper**：禁改路径终扫直接调用 `backend.core.use_cases.agent_runner_publish.is_forbidden_path(...)`；全量验证直接调用 `backend.core.use_cases.agent_runner_git.run_verification(...)`。二者分别是 commit 阶段与 run/recovery 阶段已在使用的稳定 helper。
+
 ### Proposed Solution Summary (实现机制)
 
 - **核心机制**：`process_merge_queue(...)`（新 use case）在每个 review pass 末尾执行：列出 `labels.review` 标签的 open Issue，按 Issue 号升序（FIFO）**串行**处理每条：
   1. **verifier 门禁**：该 Issue 需要 validation（`validation_required`）且 `autopilot.require_verifier_pass=true` 时，检查 Issue 标签含 `validation/verifier-passed`；缺失则本轮跳过（留给 verifier/repair 流程），记 log。
   2. **自动签核**：解析 PR body 的 sign-off 清单（复用 `ValidationChecklistState` 解析），有未勾项则把 Realistic Validation sign-off 区块内的 `- [ ]` 全部置为 `- [x]`（`update_pull_request_body`），并发一条含 `<!-- iar:auto-sign-off ... -->` marker 的评论（记录 verifier verdict 来源）；已全勾则幂等跳过。
   3. **rebase**：复用 `pr_supervisor.execute_rebase` 把 PR 分支 rebase 到最新 remote base；冲突走既有 conflict-resolution agent 路径；rebase 失败→交回 supervisor 修复（`agent/supervising`），本 PR 跳过。
-  4. **全量验证**：在该 Issue 的 worktree 内重跑 `runner.verification_commands`（复用 run/recovery 使用的验证执行 helper）；红→转既有验证修复路径，本 PR 跳过不合并。
-  5. **禁改路径终扫**：取 PR diff 文件清单，对 `safety.forbidden_path_patterns` 做最终匹配（复用 commit staging 的禁改判定 helper）；命中→打 `agent/blocked` + 评论，永不自动合并。
+  4. **全量验证**：在该 Issue 的 worktree 内调用 `backend.core.use_cases.agent_runner_git.run_verification(...)` 重跑 `runner.verification_commands`；红→转既有验证修复路径，本 PR 跳过不合并。注意：这不包含 2026-07-04 引入的 `runner.pre_commit_verification_command`，后者只在 commit 阶段经 `agent_runner_commit` 执行。
+  5. **禁改路径终扫**：取 PR diff 文件清单，对 `safety.forbidden_path_patterns` 做最终匹配（直接调用 `backend.core.use_cases.agent_runner_publish.is_forbidden_path(...)`）；命中→打 `agent/blocked` + 评论，永不自动合并。
   6. **等 checks**：轮询 `get_pull_request_context` 直到 checks 全绿（自动签核后 sign-off check 应翻绿），超时上限 `autopilot.merge_check_timeout_seconds`。
   7. **合并**：调用新增的 `IGitHubClient.merge_pull_request(pr_number, method="squash")`（gh 实现 `gh pr merge <n> --squash`；对"已被合并"返回幂等成功）；成功后发 `iar:event`（auto-merged）评论、摘除 `agent/review` 标签。
 - **谁供给配置**：操作者在 `.iar.toml` / `config.toml` 显式声明 `[autopilot]`；系统只消费显式配置，不做推断。
@@ -209,11 +215,11 @@ uv run iar review-daemon
 # 1. supervisor 终态与 sign-off check 常量（merge queue 的上游信号）
 rg -n "approve_for_human_review|REALISTIC_VALIDATION_SIGN_OFF_CHECK" src/backend/core/use_cases/
 
-# 2. 验证命令执行 helper 的真实名字（run/recovery 复用的那个）
-rg -n "verification_commands" src/backend/core/use_cases/ --type py
+# 2. 验证命令执行 helper（run/recovery 复用的那个；merge queue 直接调用）
+rg -n "def run_verification" src/backend/core/use_cases/agent_runner_git.py
 
-# 3. 禁改路径判定 helper（commit staging 侧）
-rg -n "forbidden_path_patterns|forbidden" src/backend/core/use_cases/ --type py
+# 3. 禁改路径判定 helper（commit staging 侧；merge queue 直接调用）
+rg -n "def is_forbidden_path" src/backend/core/use_cases/agent_runner_publish.py
 
 # 4. 配置双类陷阱：三处映射站点 + 覆盖集合（漏一处会被相同默认值掩盖）
 rg -n "auto_merge|SafetySettings|_merge_optional_model" src/backend/engines/agent_runner/factory.py src/backend/infrastructure/config/settings.py
@@ -225,7 +231,7 @@ rg -n "iar:event" src/backend/core/use_cases/agent_runner_events.py
 rg -n "def review_once" -A 20 src/backend/core/use_cases/review_once.py
 ```
 
-若 `review_once` 当前签名缺少 merge queue 需要的依赖（如 worktree 路径解析），沿既有参数注入模式扩展，不要在 core 内直接构造 infrastructure 对象。
+> **2026-07-04 刷新提示**：本 PRD 写就后，仓库有两次相关提交——memory persistence & skill distillation (#125) 与 pre-commit verification command 支持。执行前请用上方 `rg` 重新确认 `review_once` 签名、`run_verification` 位置、以及 `is_forbidden_path` 实现未发生破坏性变更；`review_once` 若新增依赖（如 worktree 路径解析）请沿既有参数注入模式扩展，不要在 core 内直接构造 infrastructure 对象。
 
 ### Flow Diagram
 
@@ -331,9 +337,9 @@ No external validation required; repository evidence was sufficient.
 - Depends on groups:
   - none
 - Depends on tasks/issues:
-  - P1-FEAT-20260628-041733-realistic-validation-independent-verifier-gate
+  - P1-FEAT-20260628-041733-realistic-validation-independent-verifier-gate（已归档交付）
 - Gate type: hard
-- Notes: 自动签核以 verifier PRD 交付的 `validation/verifier-passed` 标签为唯一绿灯来源（用户要求"必须用别的 agent 评"由 verifier 的换 agent 设计满足）；该 PRD 未交付前本 PRD 的签核步骤无信号可消费。
+- Notes: 自动签核以 verifier PRD 交付的 `validation/verifier-passed` 标签为唯一绿灯来源（用户要求"必须用别的 agent 评"由 verifier 的换 agent 设计满足）。该依赖 PRD 已归档并代码落地，签名可用。
 
 ## 9. Acceptance Checklist
 
@@ -351,7 +357,7 @@ No external validation required; repository evidence was sufficient.
 
 ### Dependency Acceptance
 
-- [ ] verifier PRD 已交付且 `validation/verifier-passed` 标签语义可用（`rg -n "verifier-passed" src/backend/` 命中非测试代码）
+- [x] verifier PRD 已交付且 `validation/verifier-passed` 标签语义可用（`rg -n "verifier-passed" src/backend/` 命中非测试代码，如 `run_verifier_agent.py`、`agent_runner_validation.py`）
 - [ ] 本 PRD 未引入新存储/新表/新 daemon 进程（`rg -n "CREATE TABLE|IRoadmapStore" src/backend/core/use_cases/agent_runner_merge_queue.py` 零命中）
 
 ### Behavior Acceptance
@@ -406,7 +412,7 @@ No external validation required; repository evidence was sufficient.
 | ID | 决策问题 | Chosen | Rejected | Rationale |
 |---|---|---|---|---|
 | D-01 | 合并队列挂载点 | `review_once` pass 末尾 | `run_agent_daemon` 新阶段 | PR 上下文/rebase/checks/supervisor 修复回路全在 review 侧，构建侧挂载需重复拉取 PR 状态 |
-| D-02 | 交叉 agent 评估来源 | 复用 pending verifier PRD 的 `validation/verifier-passed` | merge 时新建评估 agent | 避免第二个评估抽象；verifier 默认换 agent 恰好满足"必须别的 agent 评"的用户要求 |
+| D-02 | 交叉 agent 评估来源 | 复用已交付的 verifier PRD 的 `validation/verifier-passed` | merge 时新建评估 agent | 避免第二个评估抽象；verifier 默认换 agent 恰好满足"必须别的 agent 评"的用户要求 |
 | D-03 | 合并方式 | squash（唯一支持） | merge commit / rebase merge | 用户锁定 squash；单提交便于 revert |
 | D-04 | 开关设计 | 双同意（autopilot.enabled AND safety.auto_merge） | 单开关直接消费 auto_merge | 激活遗留死开关有误开风险，新键 + 旧键同时为真才生效，防呆 |
 | D-05 | 队列状态存储 | GitHub 标签/PR 状态（无新存储） | 新增合并队列表 | 与 runner"GitHub 即状态机"一致；崩溃重入靠标签幂等即可 |
