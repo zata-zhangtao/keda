@@ -2487,6 +2487,7 @@ validation_passed = "validation/passed"
 - `items` 必须覆盖 Realistic Validation checklist 的全部 item，每个 item 出现一次。
 - 每个 item 必填字段：`item_number`、`item_name`、`command`、`evidence_files`、`output_summary`、`explanation`、`risks`。
 - `evidence_files` 可有多个文件；每个文件必须存在于 `.iar/evidence/`，且文件名匹配 `rv-<item_number>-*` 或 `rv-<item_number>.*`。
+- `command` 必须是可独立复现、自终止的检查命令。如果命令涉及多行 Python 或复杂 setup，应将其落到仓库已跟踪的独立脚本（例如 `scripts/rv_evidence/` 下按 item 命名的文件）并在 `command` 中引用；避免把内联 `python -c "..."` 写进 manifest，否则 runner 复跑时难以维护，也容易被 keda 判定为不可复现。脚本本身不会被 runner 修改，每次复跑覆盖的是 `.iar/evidence/` 下的证据产物。
 - runner 在渲染 PR comment 时重新计算每个证据文件的 SHA-256，展示短 hash 与完整 hash。
 
 ### Reviewer 验收流程

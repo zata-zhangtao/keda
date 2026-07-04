@@ -5,7 +5,7 @@
 - Root-level scripts should be reserved for stable entrypoints that are safe to reference from docs, `just`, tests, and agent instructions.
 - `hooks/` keeps agent session hook contract paths stable.
 - `codex/` holds Codex CLI helper integrations such as macOS Shortcut notifications.
-- `worktree/`, `template/`, `secrets/`, `release/`, `just/`, and `diagnostics/` hold implementation files grouped by responsibility.
+- `worktree/`, `template/`, `secrets/`, `release/`, `just/`, `diagnostics/`, and `rv_evidence/` hold implementation files grouped by responsibility.
 
 When adding a new script:
 
