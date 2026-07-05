@@ -82,6 +82,15 @@ def main(argv: list[str] | None = None) -> int:
         help="目录递归时的 glob 过滤模式（例如 '*.py'）。",
     )
     parser.add_argument(
+        "--allow-list-file",
+        default=None,
+        help=(
+            "可选的白名单文件路径；每行一个相对仓库根的文件路径。"
+            "命中白名单的文件即使超过 --max-lines 也只产生 WARNING，不会"
+            "导致非零退出码。用于标记存量超额文件同时仍对新文件保持硬门禁。"
+        ),
+    )
+    parser.add_argument(
         "files",
         nargs="+",
         help="待检查的文件或目录路径列表。",
@@ -93,16 +102,47 @@ def main(argv: list[str] | None = None) -> int:
     for error_message in errors:
         print(f"[ERROR] {error_message}")
 
+    allowed_paths: set[str] = set()
+    if args.allow_list_file is not None:
+        allow_list_path = Path(args.allow_list_file)
+        if not allow_list_path.is_file():
+            print(
+                f"[ERROR] Allow-list file does not exist: {allow_list_path}",
+            )
+            errors.append(f"Allow-list file does not exist: {allow_list_path}")
+        else:
+            for raw_line in allow_list_path.read_text(encoding="utf-8").splitlines():
+                stripped_line = raw_line.strip()
+                if not stripped_line or stripped_line.startswith("#"):
+                    continue
+                allowed_paths.add(stripped_line)
+
     violations: list[tuple[Path, int]] = []
+    whitelisted_violations: list[tuple[Path, int]] = []
     for file_path in files_to_check:
         line_count = count_non_empty_lines(file_path)
-        if line_count > args.max_lines:
+        if line_count <= args.max_lines:
+            continue
+        try:
+            relative_label = file_path.resolve().relative_to(Path.cwd()).as_posix()
+        except ValueError:
+            relative_label = file_path.as_posix()
+        if relative_label in allowed_paths:
+            whitelisted_violations.append((file_path, line_count))
+        else:
             violations.append((file_path, line_count))
 
     if violations:
-        level = "WARNING" if args.warn_only else "ERROR"
         for file_path, line_count in violations:
-            print(f"[{level}] {file_path}: {line_count} 非空行，" f"超过上限 {args.max_lines} 行。")
+            print(
+                f"[ERROR] {file_path}: {line_count} 非空行，" f"超过上限 {args.max_lines} 行。",
+            )
+    if whitelisted_violations:
+        for file_path, line_count in whitelisted_violations:
+            print(
+                f"[WARNING] {file_path}: {line_count} 非空行，"
+                f"超过上限 {args.max_lines} 行 (allow-listed)。",
+            )
 
     if errors and not args.warn_only:
         return 1

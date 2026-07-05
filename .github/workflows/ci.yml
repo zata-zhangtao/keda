@@ -19,30 +19,44 @@ env:
 
 jobs:
   frontend-build:
-    name: Frontend Build
+    name: Frontend Build (${{ matrix.project }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - frontend-admin
+          - frontend-public
     defaults:
       run:
-        working-directory: frontend
+        working-directory: ${{ matrix.project }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
+          cache: "pnpm"
+          cache-dependency-path: ${{ matrix.project }}/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Type check
-        run: npm run typecheck
+        # frontend-admin 的 `build` 已自带 `tsc -b`；frontend-public 有独立
+        # `typecheck` 脚本。用 --if-present 让缺失脚本时无声跳过，且不破坏
+        # 矩阵中已有 typecheck 的项目。
+        run: pnpm run --if-present typecheck
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
   validate-template:
     name: Validate Template
@@ -66,7 +80,15 @@ jobs:
         run: uv run pre-commit run --all-files --show-diff-on-failure
 
       - name: Check max file lines (hard limit)
-        run: uv run python hooks/shared/check_max_file_lines.py --max-lines 1000 --glob "*.py" src/backend
+        # 模板硬门禁:新文件 / 修改文件非空行 ≤ 1000。存量超额文件落在
+        # hooks/shared/max_file_lines.allowlist.txt 中,只产生 WARNING。
+        # 清零进度由拆分 PRD 推动,见 tasks/pending/ 下对应的 P0-DEBT PRD。
+        run: >-
+          uv run python hooks/shared/check_max_file_lines.py
+          --max-lines 1000
+          --glob '*.py'
+          src/backend
+          --allow-list-file hooks/shared/max_file_lines.allowlist.txt
 
       - name: Run local test suite
         run: uv run pytest tests/ -v -m "not expensive"

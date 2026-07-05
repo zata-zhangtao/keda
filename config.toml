@@ -38,7 +38,6 @@ traefik_network = "traefik"
 # Use `just sync-template --all` to include these paths for a one-off sync.
 project_skip_paths = [
     "src/backend/",
-    "frontend/",
     "docs/",
     "tests/",
     "apps/",
