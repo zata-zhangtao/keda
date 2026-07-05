@@ -149,12 +149,18 @@ def _diff_paths(
     config: AppConfig,
     process_runner: IProcessRunner,
     worktree_path: Path,
-) -> list[str]:
-    """Return the list of files changed on the PR branch.
+) -> tuple[list[str], bool]:
+    """Return the ``(paths, diff_unavailable)`` tuple for the PR diff.
 
-    Falls back to ``git diff --name-only base...head`` from the worktree so
-    path matching does not depend on a specific PR provider field.
+    ``diff_unavailable`` is True when neither the cross-branch diff nor the
+    working-tree fallback produced a usable file list. Callers must treat
+    that as "forbidden-path check cannot run" and fail closed (block) —
+    falling back to ``list_changed_paths`` is *only* used to surface files
+    when the diff itself succeeds but produces an empty list, so the
+    forbidden-path scan never silently passes when the canonical diff is
+    unavailable.
     """
+    diff_unavailable = True
     try:
         result = process_runner.run(
             [
@@ -168,18 +174,23 @@ def _diff_paths(
         )
     except subprocess.CalledProcessError as exc:  # noqa: BLE001
         _logger.warning(
-            "git diff failed for PR head %s; falling back to listing worktree changes: %s",
+            "git diff failed for PR head %s; forbidden-path scan cannot run: %s",
             pr_context.head_sha,
             exc,
         )
-        result = None
+        return [], True
     paths: list[str] = []
-    if result is not None and result.return_code == 0:
+    if result.return_code == 0:
         paths.extend(line.strip() for line in result.stdout.splitlines() if line.strip())
+        diff_unavailable = False
     if not paths:
-        # Fallback to local working tree changes when diff fails or returns empty.
-        paths = list_changed_paths(worktree_path, process_runner)
-    return paths
+        # Diff produced an empty list (e.g. branch == base). Surface uncommitted
+        # changes as a tie-breaker — they cannot exist on a clean post-rebase
+        # worktree, so the caller still sees an authoritative empty list.
+        working_paths = list_changed_paths(worktree_path, process_runner)
+        if working_paths:
+            return working_paths, False
+    return paths, diff_unavailable
 
 
 def _wait_for_checks_green(
@@ -408,7 +419,25 @@ def _process_one(
         return MergeQueueOutcome(issue_number=issue.number, action="verification_failed")
 
     # Step 5: forbidden-path final scan against the PR diff
-    diff_paths = _diff_paths(pr_context, config, process_runner, worktree_path)
+    diff_paths, diff_unavailable = _diff_paths(pr_context, config, process_runner, worktree_path)
+    if diff_unavailable:
+        # Fail closed: cannot determine forbidden-path safety without a real
+        # PR diff, so we must not auto-merge — operator / repair agent should
+        # investigate why the worktree cannot diff against the base ref.
+        _logger.error(
+            "Forbidden-path scan unavailable for Issue #%d PR #%d; blocking.",
+            issue.number,
+            pr_number,
+        )
+        github_client.edit_issue_labels(issue.number, add=[config.labels.blocked])
+        github_client.comment_issue(
+            issue.number,
+            "## Agent Runner Merge Queue — Diff Unavailable\n\n"
+            "无法解析 PR 相对 base 的 diff（base ref 未 fetch、head 漂移或 "
+            "worktree 异常）。为安全起见 **永不自动合并**，已打 "
+            "``agent/blocked``；请人工核查后重试。\n",
+        )
+        return MergeQueueOutcome(issue_number=issue.number, action="blocked_diff_unavailable")
     forbidden_hits = sorted({path for path in diff_paths if is_forbidden_path(path, config)})
     if forbidden_hits:
         github_client.edit_issue_labels(issue.number, add=[config.labels.blocked])

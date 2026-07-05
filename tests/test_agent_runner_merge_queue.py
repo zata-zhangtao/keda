@@ -267,7 +267,9 @@ def test_verifier_passed_then_full_path_merges(tmp_path, worktree_path, monkeypa
 
     monkeypatch.setattr(merge_queue_module, "run_verification", fake_run_verification)
     monkeypatch.setattr(merge_queue_module, "execute_rebase", lambda **kwargs: [])
-    monkeypatch.setattr(merge_queue_module, "_diff_paths", lambda *args, **kwargs: ["src/main.py"])
+    monkeypatch.setattr(
+        merge_queue_module, "_diff_paths", lambda *args, **kwargs: (["src/main.py"], False)
+    )
 
     exit_code, outcomes = process_merge_queue(
         repo_path=tmp_path,
@@ -321,7 +323,9 @@ def test_idempotent_no_duplicate_sign_off_comment(tmp_path, worktree_path, monke
 
     monkeypatch.setattr(merge_queue_module, "run_verification", lambda *a, **kw: [])
     monkeypatch.setattr(merge_queue_module, "execute_rebase", lambda **kw: [])
-    monkeypatch.setattr(merge_queue_module, "_diff_paths", lambda *args, **kwargs: ["src/main.py"])
+    monkeypatch.setattr(
+        merge_queue_module, "_diff_paths", lambda *args, **kwargs: (["src/main.py"], False)
+    )
 
     process_merge_queue(
         repo_path=tmp_path,
@@ -367,7 +371,7 @@ def test_forbidden_path_blocks_and_comments(tmp_path, worktree_path, monkeypatch
 
     monkeypatch.setattr(merge_queue_module, "run_verification", lambda *a, **kw: [])
     monkeypatch.setattr(merge_queue_module, "execute_rebase", lambda **kw: [])
-    monkeypatch.setattr(merge_queue_module, "_diff_paths", lambda *a, **kw: [".env"])
+    monkeypatch.setattr(merge_queue_module, "_diff_paths", lambda *a, **kw: ([".env"], False))
 
     process_merge_queue(
         repo_path=tmp_path,
@@ -447,3 +451,55 @@ def test_tick_sign_off_checklist_helper() -> None:
     assert _tick_sign_off_checklist(_TICKED_BODY) is None
     # No checklist → returns None.
     assert _tick_sign_off_checklist("") is None
+
+
+def test_diff_unavailable_fails_closed(tmp_path, worktree_path, monkeypatch) -> None:
+    """When ``_diff_paths`` reports ``diff_unavailable``, the merge queue must
+    NOT proceed to the merge call. This is the security guarantee that
+    forbidden-path scanning cannot silently pass when the canonical
+    ``base...head`` diff cannot be computed (e.g. un-fetched base ref)."""
+    cfg = _make_config(merge_check_timeout_seconds=0)
+    github = FakeGitHubClient()
+    runner = FakeProcessRunner()
+    branch = "issue-44"
+    pr = PullRequestContext(
+        pr_url="https://github.com/example/repo/pull/44",
+        branch=branch,
+        head_sha="head-sha",
+        base_sha="base-sha",
+        mergeable=True,
+        checks_state="SUCCESS",
+        number=44,
+        body="",
+    )
+    github.set_pr_context(branch, pr)
+    issue = _make_issue(number=44, labels=("agent/review",))
+    github._issue_labels[44] = issue.labels
+    github._issue_comments[44] = ["Build complete on PR Branch: `issue-44`."]
+    github._issue_comment_entries[44] = [(1, "Build complete on PR Branch: `issue-44`.")]
+    github.set_list_issues_by_label_result([issue])
+
+    monkeypatch.setattr(merge_queue_module, "run_verification", lambda *a, **kw: [])
+    monkeypatch.setattr(merge_queue_module, "execute_rebase", lambda **kw: [])
+    # Empty path list AND diff_unavailable=True — must block, not silently pass.
+    monkeypatch.setattr(merge_queue_module, "_diff_paths", lambda *a, **kw: ([], True))
+
+    exit_code, outcomes = process_merge_queue(
+        repo_path=tmp_path,
+        config=cfg,
+        github_client=github,
+        process_runner=runner,
+        supervisor_agent="auto",
+    )
+
+    assert exit_code == 0  # fail-closed is not a queue crash
+    assert len(outcomes) == 1
+    assert outcomes[0].action == "blocked_diff_unavailable"
+
+    merge_calls = [c for c in github.calls if c["method"] == "merge_pull_request"]
+    assert merge_calls == []
+    label_calls = [c for c in github.calls if c["method"] == "edit_issue_labels"]
+    blocked_adds = [c for c in label_calls if "agent/blocked" in c.get("add", [])]
+    assert any(c["issue_number"] == 44 for c in blocked_adds)
+    comments = github._issue_comments.get(44, [])
+    assert any("Diff Unavailable" in body for body in comments)
