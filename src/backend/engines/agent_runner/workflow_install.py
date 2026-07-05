@@ -38,7 +38,7 @@ TEMPLATE_PACKAGE_NAME = "backend.engines.agent_runner.templates"
 """Package holding bundled workflow templates; see ``pyproject.toml``."""
 
 _PREVIEW_SECTION_HEADER = (
-    "Preview deployment (placeholder values — see " "deploy/vps-traefik/README.md)"
+    "Preview deployment (placeholder values — see deploy/vps-traefik/README.md)"
 )
 
 _EXECUTABLE_RELATIVE_PATHS: frozenset[str] = frozenset({"deploy/vps-traefik/deploy-preview.sh"})

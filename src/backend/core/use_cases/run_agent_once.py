@@ -207,7 +207,7 @@ def format_command(
     if "{base_branch}" in template:
         if base_branch is None:
             raise ValueError(
-                "Command template references {base_branch} but no base_branch " "was provided."
+                "Command template references {base_branch} but no base_branch was provided."
             )
         return shlex.split(template.format(issue_number=issue_number, base_branch=base_branch))
     return shlex.split(template.format(issue_number=issue_number))
@@ -660,7 +660,7 @@ def run_agent_with_prompt_resilient(
             if retry_index >= max_retries or not is_transient_failure(exc):
                 raise
             _logger.warning(
-                "Transient error from agent '%s' for Issue #%d; " "retrying (%d/%d): %s",
+                "Transient error from agent '%s' for Issue #%d; retrying (%d/%d): %s",
                 agent_name,
                 issue_number,
                 retry_index + 1,
@@ -1048,7 +1048,7 @@ def run_agent_until_committed(
             recovery_failure_type = failure_type.value
             recovery_failure_summary = format_agent_execution_failure(exc)
             _logger.warning(
-                "Agent command failed for Issue #%d; " "asking agent to recover (%d/%d).",
+                "Agent command failed for Issue #%d; asking agent to recover (%d/%d).",
                 issue.number,
                 attempt_index + 1,
                 max_recovery_attempts,
@@ -1104,7 +1104,7 @@ def run_agent_until_committed(
                 exc.verification_results,
             )
             _logger.warning(
-                "Verification failed for Issue #%d; " "asking agent to recover (%d/%d).",
+                "Verification failed for Issue #%d; asking agent to recover (%d/%d).",
                 issue.number,
                 attempt_index + 1,
                 max_recovery_attempts,
@@ -1153,7 +1153,7 @@ def run_agent_until_committed(
             recovery_failure_type = failure_type.value
             recovery_failure_summary = format_prd_delivery_failure(str(exc))
             _logger.warning(
-                "PRD delivery check failed for Issue #%d; " "asking agent to recover (%d/%d).",
+                "PRD delivery check failed for Issue #%d; asking agent to recover (%d/%d).",
                 issue.number,
                 attempt_index + 1,
                 max_recovery_attempts,
@@ -1211,8 +1211,7 @@ def run_agent_until_committed(
             recovery_failure_type = failure_type.value
             recovery_failure_summary = format_validation_evidence_failure(str(exc))
             _logger.warning(
-                "Validation evidence check failed for Issue #%d; "
-                "asking agent to recover (%d/%d).",
+                "Validation evidence check failed for Issue #%d; asking agent to recover (%d/%d).",
                 issue.number,
                 attempt_index + 1,
                 max_recovery_attempts,
@@ -1222,8 +1221,7 @@ def run_agent_until_committed(
         # Phase 4: Commit proxy — agent 通过 commit-request 文件请求提交
         if has_changes(worktree_path, process_runner):
             _logger.warning(
-                "Agent left uncommitted changes for Issue #%d; "
-                "runner processing commit request.",
+                "Agent left uncommitted changes for Issue #%d; runner processing commit request.",
                 issue.number,
             )
             try:
@@ -1257,7 +1255,7 @@ def run_agent_until_committed(
                         )
                         if fix_agent_result.return_code != 0:
                             raise RuntimeError(
-                                "Fix Agent exited with code " f"{fix_agent_result.return_code}"
+                                f"Fix Agent exited with code {fix_agent_result.return_code}"
                             )
                         post_fix_verification = run_verification(
                             worktree_path, config, process_runner
@@ -1430,7 +1428,7 @@ def run_agent_until_committed(
                     ]
                 )
                 _logger.warning(
-                    "Commit request failed for Issue #%d; " "asking agent to recover (%d/%d).",
+                    "Commit request failed for Issue #%d; asking agent to recover (%d/%d).",
                     issue.number,
                     attempt_index + 1,
                     max_recovery_attempts,
@@ -1516,7 +1514,7 @@ def run_agent_until_committed(
             ]
         )
         _logger.warning(
-            "Agent produced no git commits for Issue #%d; " "asking agent to recover (%d/%d).",
+            "Agent produced no git commits for Issue #%d; asking agent to recover (%d/%d).",
             issue.number,
             attempt_index + 1,
             max_recovery_attempts,

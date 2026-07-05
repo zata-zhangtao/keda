@@ -123,7 +123,7 @@ def _verification_left_tracked_worktree_changes(
     if diff_result.return_code == 1:
         return True
     raise RuntimeError(
-        "Unable to inspect worktree changes after verification: " f"{diff_result.stderr.strip()}"
+        f"Unable to inspect worktree changes after verification: {diff_result.stderr.strip()}"
     )
 
 

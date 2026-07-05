@@ -92,7 +92,7 @@ def run_recovery_after_verification_failure(
         )
     if has_changes(worktree_path, process_runner):
         raise RuntimeError(
-            "Recovery agent changed files without writing " ".agent-runner/commit-request.json."
+            "Recovery agent changed files without writing .agent-runner/commit-request.json."
         )
     return run_verification(worktree_path, config, process_runner)
 

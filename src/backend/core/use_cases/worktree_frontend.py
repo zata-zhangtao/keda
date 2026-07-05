@@ -397,7 +397,7 @@ def exclude_frontend_node_modules_from_git(
         exclude_path = worktree_path / exclude_path
     if exclude_path.is_dir():
         _logger.warning(
-            "Resolved info/exclude path is a directory (%s); skipping " "node_modules exclusion.",
+            "Resolved info/exclude path is a directory (%s); skipping node_modules exclusion.",
             exclude_path,
         )
         return

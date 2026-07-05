@@ -170,7 +170,7 @@ def _build_prd_context_block(
     prd_path = worktree_path / prd_relative_path
     prd_text = _read_prd_text(prd_path)
     if prd_text is None:
-        return f"Also read the canonical PRD at `{prd_relative_path}`. " f"{closeout_instruction}"
+        return f"Also read the canonical PRD at `{prd_relative_path}`. {closeout_instruction}"
 
     if len(prd_text) <= max_chars:
         inline_section = prd_text.rstrip()
@@ -339,8 +339,7 @@ def _validate_prd_checklist(
     if checklist_result.unchecked_items:
         unchecked_summary = _format_unchecked_items(checklist_result.unchecked_items)
         raise PrdDeliveryError(
-            f"Acceptance Checklist has unchecked items in {prd_relative_path}:\n"
-            f"{unchecked_summary}"
+            f"Acceptance Checklist has unchecked items in {prd_relative_path}:\n{unchecked_summary}"
         )
 
 
@@ -611,7 +610,7 @@ def _build_memory_block(
         )
     catalog = format_skill_catalog(
         relevant_memory.promoted_skills,
-        header=("Available skills (read the file when relevant; " "do not inline the body):"),
+        header=("Available skills (read the file when relevant; do not inline the body):"),
     )
     if catalog:
         sections.append(catalog)

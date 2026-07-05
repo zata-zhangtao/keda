@@ -445,7 +445,7 @@ class AgentRunnerWorktreeSettings(BaseModel):
     """
 
     create_command: str = (
-        "iar worktree create --branch issue-{issue_number} " "--base-branch {base_branch}"
+        "iar worktree create --branch issue-{issue_number} --base-branch {base_branch}"
     )
     reuse_command: str = "iar worktree path --branch issue-{issue_number}"
     path_command: str = "iar worktree path --branch issue-{issue_number}"
@@ -845,7 +845,7 @@ class AgentRunnerRepositoryMetadataSettings(BaseModel):
             return None
         if not isinstance(value, str) or not value.strip():
             raise ValueError(
-                "Invalid github_repo: must be a non-empty 'owner/name' " "string or null."
+                "Invalid github_repo: must be a non-empty 'owner/name' string or null."
             )
         if "/" not in value or value.startswith("/") or value.endswith("/"):
             raise ValueError(f"Invalid github_repo {value!r}; expected 'owner/name' format.")
@@ -897,7 +897,7 @@ class AgentRunnerRepositorySettings(_AgentRunnerRepositoryOverrideSettings):
             return None
         if not isinstance(value, str) or not value.strip():
             raise ValueError(
-                "Invalid github_repo: must be a non-empty 'owner/name' " "string or null."
+                "Invalid github_repo: must be a non-empty 'owner/name' string or null."
             )
         if "/" not in value or value.startswith("/") or value.endswith("/"):
             raise ValueError(f"Invalid github_repo {value!r}; expected 'owner/name' format.")
@@ -943,7 +943,7 @@ def load_agent_runner_local_settings(
     agent_runner_section = local_toml_data.get("agent_runner")
     if not isinstance(agent_runner_section, dict):
         raise ValueError(
-            f"Invalid IAR local config at {local_config_path}: " "missing [agent_runner] section."
+            f"Invalid IAR local config at {local_config_path}: missing [agent_runner] section."
         )
 
     try:

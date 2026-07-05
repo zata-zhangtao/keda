@@ -788,7 +788,7 @@ def initialize_repository_local_config(
         existing_text = config_path.read_text(encoding="utf-8")
         if existing_text != config_text:
             raise ValueError(
-                f"IAR local config already exists at {config_path}. " "Use --force to overwrite it."
+                f"IAR local config already exists at {config_path}. Use --force to overwrite it."
             )
         return _make_result(wrote_file=False)
     if options.dry_run:

@@ -735,7 +735,7 @@ def run_pre_pr_review(
 
         elapsed_seconds = time.monotonic() - attempt_started_at
         _logger.info(
-            "Pre-PR review cycle %d/%d for Issue #%d: reviewer exited " "with code %d after %.1fs.",
+            "Pre-PR review cycle %d/%d for Issue #%d: reviewer exited with code %d after %.1fs.",
             cycle,
             max_attempts,
             issue.number,
@@ -816,7 +816,7 @@ def run_pre_pr_review(
                 action_summary = f"reviewer patch failed to commit: {exc}"
                 last_failure_summary = action_summary
                 _logger.exception(
-                    "Pre-PR review cycle %d/%d for Issue #%d: reviewer " "commit request failed.",
+                    "Pre-PR review cycle %d/%d for Issue #%d: reviewer commit request failed.",
                     cycle,
                     max_attempts,
                     issue.number,
@@ -936,7 +936,7 @@ def run_pre_pr_review(
         )
     if last_cycle_verdict == "approved":
         _logger.info(
-            "Pre-PR review accepted final approval for Issue #%d on the " "last cycle.",
+            "Pre-PR review accepted final approval for Issue #%d on the last cycle.",
             issue.number,
         )
         return current_head, current_verification
@@ -948,5 +948,5 @@ def run_pre_pr_review(
         last_failure_summary,
     )
     raise RuntimeError(
-        "Pre-PR review did not approve after " f"{max_attempts} attempt(s): {last_failure_summary}"
+        f"Pre-PR review did not approve after {max_attempts} attempt(s): {last_failure_summary}"
     )

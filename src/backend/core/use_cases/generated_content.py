@@ -753,7 +753,7 @@ def _build_prd_agent_prompt(skill_spec: str, context: PrdContext, max_context_ch
             "",
             "Output rules:",
             "- Write the PRD in the same language as the Issue title.",
-            "- The PRD MUST start with `# PRD: <title>` and include a " "`- GitHub Issue:` line.",
+            "- The PRD MUST start with `# PRD: <title>` and include a `- GitHub Issue:` line.",
             "- Output only the PRD markdown, with no extra commentary.",
         ]
     )

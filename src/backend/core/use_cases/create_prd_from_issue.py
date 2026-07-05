@@ -294,9 +294,7 @@ def _commit_and_publish_prd(
     """
     config = request.config
     expected_branch = f"issue-{issue.number}"
-    commit_message = (
-        f"docs(prd): {'update' if is_rewrite else 'add'} PRD for issue " f"#{issue.number}"
-    )
+    commit_message = f"docs(prd): {'update' if is_rewrite else 'add'} PRD for issue #{issue.number}"
     committed_sha = commit_runner_authored_paths(
         worktree_path,
         [relative_prd_path],

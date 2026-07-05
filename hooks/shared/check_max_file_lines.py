@@ -133,9 +133,10 @@ def main(argv: list[str] | None = None) -> int:
             violations.append((file_path, line_count))
 
     if violations:
+        level = "WARNING" if args.warn_only else "ERROR"
         for file_path, line_count in violations:
             print(
-                f"[ERROR] {file_path}: {line_count} 非空行，" f"超过上限 {args.max_lines} 行。",
+                f"[{level}] {file_path}: {line_count} 非空行，" f"超过上限 {args.max_lines} 行。",
             )
     if whitelisted_violations:
         for file_path, line_count in whitelisted_violations:

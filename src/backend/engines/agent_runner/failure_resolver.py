@@ -69,8 +69,7 @@ class AgentFailureResolver:
             return None
 
         lines = [
-            f"\n[round failure] agent={failed_profile.profile_id} "
-            f"provider={failed_profile.agent}",
+            f"\n[round failure] agent={failed_profile.profile_id} provider={failed_profile.agent}",
             "",
             "The agent failed. Available fallback models:",
         ]

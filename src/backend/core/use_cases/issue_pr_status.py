@@ -194,8 +194,7 @@ def _normalise_state_filter(state_filter: str) -> str:
     normalised = state_filter.strip().lower()
     if normalised not in _VALID_ISSUE_STATES:
         raise ValueError(
-            f"Invalid --state {state_filter!r}; expected one of "
-            f"{', '.join(_VALID_ISSUE_STATES)}."
+            f"Invalid --state {state_filter!r}; expected one of {', '.join(_VALID_ISSUE_STATES)}."
         )
     return normalised
 

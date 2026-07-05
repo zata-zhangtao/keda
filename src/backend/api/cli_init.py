@@ -173,8 +173,7 @@ def _print_gitignore_plan(result: GitignoreSyncResult) -> None:
     else:
         joined_skipped = ", ".join(result.entries_skipped_external) or "(none)"
         console.print(
-            f"[cyan]Would leave .gitignore block unchanged:[/] "
-            f"skipped_external={joined_skipped}",
+            f"[cyan]Would leave .gitignore block unchanged:[/] skipped_external={joined_skipped}",
             markup=False,
         )
     _print_info_exclude_hint_if_needed(result)
@@ -188,16 +187,14 @@ def _print_gitignore_summary(result: GitignoreSyncResult) -> None:
     """
     if result.skipped:
         console.print(
-            f"[dim]Skipped .gitignore update (--no-update-gitignore):[/] "
-            f"{result.gitignore_path}"
+            f"[dim]Skipped .gitignore update (--no-update-gitignore):[/] {result.gitignore_path}"
         )
         _print_info_exclude_hint_if_needed(result)
         return
     if result.block_inserted:
         joined = ", ".join(result.entries_added)
         console.print(
-            f"[green]Updated .gitignore with IAR patterns:[/] {joined} "
-            f"-> {result.gitignore_path}"
+            f"[green]Updated .gitignore with IAR patterns:[/] {joined} -> {result.gitignore_path}"
         )
     elif result.block_updated:
         joined_added = ", ".join(result.entries_added) or "(none)"

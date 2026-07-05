@@ -136,7 +136,7 @@ def _validate_branch_for_publish(
         raise RuntimeError("Refusing to publish: worktree is in detached HEAD state.")
     if expected_branch is not None and branch != expected_branch:
         raise RuntimeError(
-            f"Refusing to publish from unexpected branch: {branch} " f"(expected {expected_branch})"
+            f"Refusing to publish from unexpected branch: {branch} (expected {expected_branch})"
         )
     return branch
 

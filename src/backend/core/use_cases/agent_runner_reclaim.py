@@ -58,7 +58,7 @@ def format_claim_marker(
     if started_at is None:
         return f'<!-- iar:claim host="{host}" pid="{pid}" -->'
     iso_started_at = started_at.astimezone(timezone.utc).isoformat()
-    return f'<!-- iar:claim host="{host}" pid="{pid}" ' f'started_at="{iso_started_at}" -->'
+    return f'<!-- iar:claim host="{host}" pid="{pid}" started_at="{iso_started_at}" -->'
 
 
 def parse_claim_marker(comment_body: str) -> tuple[str, int] | None:

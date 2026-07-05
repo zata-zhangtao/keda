@@ -345,8 +345,7 @@ def _process_blocked_resolution(
     current_branch = get_current_branch(worktree_path, process_runner)
     if current_branch != expected_branch:
         raise RuntimeError(
-            f"Blocked resolution aborted: on branch {current_branch}, "
-            f"expected {expected_branch}"
+            f"Blocked resolution aborted: on branch {current_branch}, expected {expected_branch}"
         )
 
     # worktree 必须是 clean 的

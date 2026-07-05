@@ -273,9 +273,7 @@ def _verify_signature(
     if not secret:
         raise HTTPException(
             status_code=503,
-            detail=(
-                f"inbound endpoint 未配置共享 secret " f"({INBOUND_SECRET_ENV} 为空)，拒绝接收。"
-            ),
+            detail=(f"inbound endpoint 未配置共享 secret ({INBOUND_SECRET_ENV} 为空)，拒绝接收。"),
         )
     if not signature_header:
         raise HTTPException(status_code=401, detail="缺少签名 header。")

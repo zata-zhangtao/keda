@@ -483,7 +483,7 @@ def detect_anomalies(context: AnomalyDetectionContext) -> tuple[Anomaly, ...]:
             Anomaly(
                 type="dirty_worktree_mismatch",
                 severity="warning",
-                message=("Worktree has uncommitted changes but Issue is not in " "running state."),
+                message=("Worktree has uncommitted changes but Issue is not in running state."),
                 suggested_cli=("iar run --dry-run", "git status"),
             )
         )
@@ -499,9 +499,7 @@ def detect_anomalies(context: AnomalyDetectionContext) -> tuple[Anomaly, ...]:
                 Anomaly(
                     type="event_label_mismatch",
                     severity="warning",
-                    message=(
-                        "Latest event marker suggests a different state than " "current label."
-                    ),
+                    message=("Latest event marker suggests a different state than current label."),
                     suggested_cli=("iar labels sync",),
                 )
             )

@@ -181,7 +181,7 @@ class ReplCommandExecutor(IReplCommandExecutor):
                     stderr="",
                     rejected=True,
                     rejection_reason=(
-                        "No interactive input available for confirmation; " "command refused."
+                        "No interactive input available for confirmation; command refused."
                     ),
                     confirmation_prompted=True,
                     confirmation_granted=False,

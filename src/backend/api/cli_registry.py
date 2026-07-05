@@ -87,9 +87,7 @@ def _run_registry_reinit_command(parsed: argparse.Namespace, process_runner: IPr
         error_console.print(f"[red]Failed to reinitialize repository:[/] {exc}")
         return 1
 
-    console.print(
-        f"[green]Reinitialized[/] {repo_id} " f"(remote={parsed.remote}, path={repo_path})"
-    )
+    console.print(f"[green]Reinitialized[/] {repo_id} (remote={parsed.remote}, path={repo_path})")
 
     if parsed.start_daemons:
         return _restart_daemons(repo_id, repo_path, process_runner)
@@ -243,8 +241,7 @@ def _run_registry_start_command(parsed: argparse.Namespace, process_runner: IPro
     if failures:
         for failure in failures:
             error_console.print(
-                f"[yellow]Skipping unresolvable repository '{failure.repo_id}': "
-                f"{failure.error}[/]"
+                f"[yellow]Skipping unresolvable repository '{failure.repo_id}': {failure.error}[/]"
             )
 
     kinds = [RunnerProcessKind.DAEMON]
@@ -273,8 +270,7 @@ def _run_registry_start_command(parsed: argparse.Namespace, process_runner: IPro
                     spawn_cwd=spawn_cwd,
                 )
                 console.print(
-                    f"[green]Started {kind.value}[/] for {repo_id} "
-                    f"(process {record.process_id})"
+                    f"[green]Started {kind.value}[/] for {repo_id} (process {record.process_id})"
                 )
             except Exception as exc:  # noqa: BLE001 - best effort start.
                 repo_success = False
@@ -390,7 +386,7 @@ def _restart_daemons(repo_id: str, repo_path: Path, process_runner) -> int:
                 spawn_cwd=spawn_cwd,
             )
             console.print(
-                f"[green]Started {kind.value}[/] for {repo_id} " f"(process {record.process_id})"
+                f"[green]Started {kind.value}[/] for {repo_id} (process {record.process_id})"
             )
         except Exception as exc:  # noqa: BLE001 - daemon start is best effort.
             error_console.print(f"[yellow]Failed to start {kind.value} for {repo_id}:[/] {exc}")

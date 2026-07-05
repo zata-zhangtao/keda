@@ -384,7 +384,7 @@ def build_validation_prompt_line(issue: IssueSummary, config: AppConfig) -> str:
             "suffix is required. "
         )
     else:
-        enforcement_text = "The runner refuses to publish when the evidence directory is " "empty. "
+        enforcement_text = "The runner refuses to publish when the evidence directory is empty. "
     prompt_parts = [
         "Realistic Validation is MANDATORY for this Issue: actually execute "
         "every item of the Realistic Validation checklist through the real "
@@ -463,7 +463,7 @@ def ensure_evidence_dir_excluded(
         exclude_path = worktree_path / exclude_path
     if exclude_path.is_dir():
         _logger.warning(
-            "Resolved info/exclude path is a directory (%s); skipping " "evidence exclusion.",
+            "Resolved info/exclude path is a directory (%s); skipping evidence exclusion.",
             exclude_path,
         )
         return

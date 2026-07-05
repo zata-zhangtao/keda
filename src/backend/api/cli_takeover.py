@@ -56,7 +56,7 @@ def _start_daemons_for_repo(repo_id: str, _repo_path: Path) -> None:
                 spawn_cwd=spawn_cwd,
             )
             console.print(
-                f"[green]Started {kind.value}[/] for {repo_id} " f"(process {record.process_id})"
+                f"[green]Started {kind.value}[/] for {repo_id} (process {record.process_id})"
             )
         except Exception as exc:  # noqa: BLE001 - daemon start is best effort.
             logger.warning("Failed to start %s for %s: %s", kind.value, repo_id, exc)

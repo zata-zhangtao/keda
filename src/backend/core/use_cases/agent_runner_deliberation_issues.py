@@ -139,7 +139,7 @@ def _build_question_list_synthesis_prompt(
         "either reply with the missing details on this Issue or, once the "
         "scope is clear enough, remove the `agent/deliberate` label and add "
         "`agent/rework-prd` so Phase 1 can draft the canonical PRD.",
-        "Be concise and actionable. Output only the markdown — no extra " "narrative around it.",
+        "Be concise and actionable. Output only the markdown — no extra narrative around it.",
     ]
     return "\n".join(sections)
 
@@ -266,7 +266,7 @@ def _process_single_deliberation_issue(
     is_ai_turn, next_cycle = _resolve_turn(comments, marker)
     if not is_ai_turn:
         _logger.info(
-            "Issue #%d still waiting on user reply (cycle=%s); " "skipping Phase 0 turn.",
+            "Issue #%d still waiting on user reply (cycle=%s); skipping Phase 0 turn.",
             issue.number,
             getattr(marker, "cycle", None),
         )

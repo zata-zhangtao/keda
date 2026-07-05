@@ -98,8 +98,8 @@ jobs:
             dockerfile: src/backend/Dockerfile
             image_var: BACKEND_IMAGE
           - name: frontend
-            context: ./frontend
-            dockerfile: frontend/Dockerfile
+            context: ./frontend-admin
+            dockerfile: frontend-admin/Dockerfile
             image_var: FRONTEND_IMAGE
     steps:
       - name: Checkout repository
@@ -194,12 +194,14 @@ jobs:
           echo "PREVIEW_URL=${PREVIEW_URL_SCHEME:-https}://${PREVIEW_DOMAIN}" >> "$GITHUB_OUTPUT"
 
       - name: Add SSH key
+        if: ${{ secrets.SERVER_SSH_KEY != '' && secrets.SERVER_HOST != '' && secrets.SERVER_USER != '' }}
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
           log-public-key: false
 
       - name: Deploy to preview server
+        if: ${{ secrets.SERVER_HOST != '' && secrets.SERVER_USER != '' }}
         id: deploy
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -290,12 +292,14 @@ jobs:
             --sha "00000000" >> "$GITHUB_ENV"
 
       - name: Add SSH key
+        if: ${{ secrets.SERVER_SSH_KEY != '' && secrets.SERVER_HOST != '' && secrets.SERVER_USER != '' }}
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
           log-public-key: false
 
       - name: Tear down preview stack
+        if: ${{ secrets.SERVER_HOST != '' && secrets.SERVER_USER != '' }}
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_USER: ${{ secrets.SERVER_USER }}

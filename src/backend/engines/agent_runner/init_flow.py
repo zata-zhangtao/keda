@@ -249,7 +249,7 @@ def copy_bundled_skills(
     for skill_name in requested_names:
         if skill_name not in bundled_names:
             raise UnknownBundledSkillError(
-                f"Bundled skill '{skill_name}' not found in " f"{SKILL_PACKAGE_NAME}"
+                f"Bundled skill '{skill_name}' not found in {SKILL_PACKAGE_NAME}"
             )
 
     effective_names = tuple(requested_names)
@@ -389,7 +389,7 @@ def format_skill_copy_summary(skill_result: BundledSkillCopyResult) -> list[str]
     for skill_name in skill_result.overwritten_skills:
         lines.append(f"Overwrote skill: {skill_name} -> {target_root / skill_name}")
     for skill_name in skill_result.diverged_skills:
-        lines.append(f"Skill diverged; kept local copy: {skill_name} " "(use --force to overwrite)")
+        lines.append(f"Skill diverged; kept local copy: {skill_name} (use --force to overwrite)")
     return lines
 
 

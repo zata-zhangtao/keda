@@ -880,8 +880,7 @@ def execute_repair(
         else:
             if has_changes(worktree_path, process_runner):
                 raise RuntimeError(
-                    "Repair agent changed files without writing "
-                    ".agent-runner/commit-request.json."
+                    "Repair agent changed files without writing .agent-runner/commit-request.json."
                 )
             # Agent 未修改时仍需验证当前代码
             verification_results = run_verification(worktree_path, config, process_runner)
@@ -1018,7 +1017,7 @@ def run_post_pr_supervisor_cycle(
                 )
                 if backoff_seconds > 0:
                     _logger.info(
-                        "Waiting %d seconds before supervisor retry %d/%d " "for Issue #%d.",
+                        "Waiting %d seconds before supervisor retry %d/%d for Issue #%d.",
                         backoff_seconds,
                         attempt + 1,
                         max_attempts,

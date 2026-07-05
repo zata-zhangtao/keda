@@ -183,7 +183,7 @@ def validate_branch_safety(
     # 游离 HEAD（detached HEAD）下没有可推送的分支名，无法安全发布。
     if not current_branch:
         raise PublishRecoveryError(
-            "Cannot recover from detached HEAD state. " "Checkout a valid branch first."
+            "Cannot recover from detached HEAD state. Checkout a valid branch first."
         )
 
     # 严禁从基线分支（如 main）直接发布，否则会把 Issue 提交污染主干。
@@ -440,7 +440,7 @@ def recover_publish_issue(
             )
         except Exception as evidence_exc:  # noqa: BLE001 - recovery must not abort here.
             _logger.warning(
-                "Failed to publish validation evidence during recovery for " "Issue #%d: %s",
+                "Failed to publish validation evidence during recovery for Issue #%d: %s",
                 issue_number,
                 evidence_exc,
             )

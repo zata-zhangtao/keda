@@ -55,9 +55,7 @@ def add_registry_repository(
             仓库或 ID 已存在。
     """
     if not _REPO_ID_PATTERN.match(repo_id):
-        raise RegistryValidationError(
-            "repo_id must match ^[a-z0-9][a-z0-9-]*$ " f"(got '{repo_id}')."
-        )
+        raise RegistryValidationError(f"repo_id must match ^[a-z0-9][a-z0-9-]*$ (got '{repo_id}').")
     resolved_path = Path(path).expanduser().resolve()
     if not resolved_path.exists():
         raise RegistryValidationError(f"Path '{resolved_path}' does not exist.")

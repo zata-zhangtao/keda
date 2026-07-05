@@ -203,7 +203,7 @@ def execute_issue_action(
 ) -> ConsoleActionResult:
     """执行一个 Issue 级动作（retry_failed / blocked_continue）。"""
     params_json = (
-        f'{{"action": "{action}", "repo_id": "{repo_id}", ' f'"issue_number": {issue_number}}}'
+        f'{{"action": "{action}", "repo_id": "{repo_id}", "issue_number": {issue_number}}}'
     )
 
     def _reject(detail: str) -> ConsoleActionError:

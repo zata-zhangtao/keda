@@ -73,13 +73,11 @@ def _print_worktree_cleanup_result(cleanup_result: WorktreeCleanupResult) -> Non
             )
         elif branch_result.status is WorktreeCleanupStatus.FAILED:
             console.print(
-                f"[red]Failed:[/] {branch_result.branch}{worktree_suffix} - "
-                f"{branch_result.reason}"
+                f"[red]Failed:[/] {branch_result.branch}{worktree_suffix} - {branch_result.reason}"
             )
         else:
             console.print(
-                f"[dim]Skipped:[/] {branch_result.branch}{worktree_suffix} - "
-                f"{branch_result.reason}"
+                f"[dim]Skipped:[/] {branch_result.branch}{worktree_suffix} - {branch_result.reason}"
             )
 
     console.print(

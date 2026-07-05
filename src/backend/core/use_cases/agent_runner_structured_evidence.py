@@ -237,8 +237,7 @@ def _load_manifest_json(worktree_path: Path, config: AppConfig) -> dict[str, obj
             manifest_data = json.load(manifest_file)
     except json.JSONDecodeError as decode_error:
         raise ValidationEvidenceError(
-            f"`{config.validation.evidence_dir}/evidence.json` is not valid JSON: "
-            f"{decode_error}"
+            f"`{config.validation.evidence_dir}/evidence.json` is not valid JSON: {decode_error}"
         ) from decode_error
     if not isinstance(manifest_data, dict):
         raise ValidationEvidenceError(
@@ -308,7 +307,7 @@ def _extract_evidence_files(block_data: dict[str, object], item_number: int) -> 
     for file_name in raw_files:
         if not isinstance(file_name, str) or not file_name.strip():
             raise ValidationEvidenceError(
-                f"Item {item_number}: `evidence_files` contains an empty " "or non-string entry."
+                f"Item {item_number}: `evidence_files` contains an empty or non-string entry."
             )
         evidence_files.append(file_name.strip())
     return tuple(evidence_files)
@@ -334,7 +333,7 @@ def _extract_expected_artifacts(
     for index, entry in enumerate(raw):
         if not isinstance(entry, dict):
             raise ValidationEvidenceError(
-                f"Item {item_number}: `expected_artifacts[{index}]` must be a " "JSON object."
+                f"Item {item_number}: `expected_artifacts[{index}]` must be a JSON object."
             )
         path = _extract_nonempty_string(entry, "path", item_number)
         mime = _extract_nonempty_string(entry, "mime", item_number)

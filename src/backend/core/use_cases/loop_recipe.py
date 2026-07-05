@@ -165,7 +165,7 @@ def _validate_recipe_fields(data: dict[str, Any]) -> None:
     agent_name = data.get("agent", "auto")
     if agent_name not in _VALID_AGENTS:
         raise ValueError(
-            f"Loop recipe agent must be one of {sorted(_VALID_AGENTS)}; " f"got {agent_name!r}."
+            f"Loop recipe agent must be one of {sorted(_VALID_AGENTS)}; got {agent_name!r}."
         )
 
 

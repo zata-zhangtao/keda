@@ -133,7 +133,7 @@ def _format_idea_block(
         IdeaInboxSource.FEISHU: "feishu",
         IdeaInboxSource.MANUAL: "manual",
     }[source]
-    header = f"## {occurred_at} · {source_label}" f" · {author or 'anonymous'} ({entry_id})"
+    header = f"## {occurred_at} · {source_label} · {author or 'anonymous'} ({entry_id})"
     quoted_lines = "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
     # 块前留一个空行，确保相邻 ## 段落之间有视觉间距。
     return f"\n{header}\n\n{quoted_lines}\n"

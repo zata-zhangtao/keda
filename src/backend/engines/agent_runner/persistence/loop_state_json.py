@@ -156,7 +156,7 @@ class JsonLoopStateStore(ILoopStateStore):
                 task = _task_from_dict(raw_task)
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError(
-                    f"Loop state file {self._state_path} contains an invalid " f"task entry: {exc}"
+                    f"Loop state file {self._state_path} contains an invalid task entry: {exc}"
                 ) from exc
             if task.id:
                 tasks[task.id] = task
