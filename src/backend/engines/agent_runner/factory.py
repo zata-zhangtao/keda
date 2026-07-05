@@ -27,6 +27,7 @@ from backend.core.shared.models.agent_decision import (
 )
 from backend.core.shared.models.agent_runner import (
     AppConfig,
+    AutopilotConfig,
     CommandResult,
     GeneratedContentConfig,
     GeneratedContentTargetConfig,
@@ -207,6 +208,7 @@ def build_app_config_from_settings(
     runner_settings = agent_runner_settings.runner
     memory_settings = agent_runner_settings.memory
     safety_settings = agent_runner_settings.safety
+    autopilot_settings = agent_runner_settings.autopilot
     validation_settings = agent_runner_settings.validation
     prompt_settings = agent_runner_settings.prompts
 
@@ -266,6 +268,13 @@ def build_app_config_from_settings(
         safety=SafetyConfig(
             auto_merge=safety_settings.auto_merge,
             forbidden_path_patterns=tuple(safety_settings.forbidden_path_patterns),
+        ),
+        autopilot=AutopilotConfig(
+            enabled=autopilot_settings.enabled,
+            merge_method=autopilot_settings.merge_method,
+            require_verifier_pass=autopilot_settings.require_verifier_pass,
+            auto_sign_off=autopilot_settings.auto_sign_off,
+            merge_check_timeout_seconds=autopilot_settings.merge_check_timeout_seconds,
         ),
         validation=ValidationConfig(
             enabled=validation_settings.enabled,
@@ -383,6 +392,13 @@ def get_agent_runner_status_data() -> dict:
             "remote": app_config.git.remote,
             "auto_merge": app_config.safety.auto_merge,
             "forbidden_path_patterns": list(app_config.safety.forbidden_path_patterns),
+            "autopilot_enabled": app_config.autopilot.enabled,
+            "autopilot_merge_method": app_config.autopilot.merge_method,
+            "autopilot_require_verifier_pass": app_config.autopilot.require_verifier_pass,
+            "autopilot_auto_sign_off": app_config.autopilot.auto_sign_off,
+            "autopilot_merge_check_timeout_seconds": (
+                app_config.autopilot.merge_check_timeout_seconds
+            ),
             "pre_pr_review_enabled": app_config.pre_pr_review.enabled,
             "post_pr_supervisor_enabled": app_config.post_pr_supervisor.enabled,
         },
@@ -597,6 +613,7 @@ def merge_repository_config(
     runner = _merge_optional_model(global_config.runner, repo_settings.runner)
     memory = _merge_optional_model(global_config.memory, repo_settings.memory)
     safety = _merge_optional_model(global_config.safety, repo_settings.safety)
+    autopilot = _merge_optional_model(global_config.autopilot, repo_settings.autopilot)
     validation = _merge_optional_model(global_config.validation, repo_settings.validation)
     prompts = _merge_prompt_config(global_config.prompts, repo_settings.prompts)
     pre_pr_review = _merge_optional_model(global_config.pre_pr_review, repo_settings.pre_pr_review)
@@ -627,6 +644,7 @@ def merge_repository_config(
         runner=runner,
         memory=memory,
         safety=safety,
+        autopilot=autopilot,
         validation=validation,
         prompts=prompts,
         pre_pr_review=pre_pr_review,

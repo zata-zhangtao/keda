@@ -209,6 +209,32 @@ forbidden_path_patterns = [
 ]
 
 # =============================================================================
+# Autopilot 快速档（合并队列）
+# =============================================================================
+# 启用后，supervisor approve 的 PR 不再停在"等人合并"，而是被一条串行
+# 合并队列消费：verifier 门禁 → 自动签核 → rebase → 全量验证 → 禁改终扫 →
+# checks 全绿 → squash 合并。两个开关同时为真才生效（"双同意"），保证
+# 历史上的 `safety.auto_merge = true` 不会单独触发自动合并，需仓库
+# 显式在本段开启 ``enabled = true``。
+#
+# 迁移提示：本段首次落地后，任何已设为 ``safety.auto_merge = true`` 的环境
+# 若不同时把下面 ``enabled`` 设为 ``true``，仍然回到"等人工合并"的现状——
+# 自动签核 / 自动合并都不会发生。但 ``enabled`` 本段是全新键，既往配置不会
+# 意外激活快速档。
+[agent_runner.autopilot]
+enabled = false
+# 仅支持 "squash"；非法值在配置加载期直接拒绝。
+merge_method = "squash"
+# 当 Issue 需要 validation 时，是否要求 validation/verifier-passed 标签先存在；
+# 缺失则本轮跳过，留给 verifier/repair 流程。
+require_verifier_pass = true
+# verifier 绿灯后自动替人工勾选 PR body 的 Realistic Validation sign-off 清单
+# （与 marker 评论均幂等）。
+auto_sign_off = true
+# 等 PR checks 全绿的最大秒数；超时则放弃本轮合并（不阻塞后续 PR）。
+merge_check_timeout_seconds = 1800
+
+# =============================================================================
 # Realistic Validation 证据门禁
 # =============================================================================
 # 证据写入 worktree 内 evidence_dir（runner 通过 info/exclude 本地排除，

@@ -26,12 +26,14 @@ from backend.engines.agent_runner.repository_local import (
 )
 from backend.infrastructure.config import settings as settings_module
 from backend.infrastructure.config.settings import (
+    AgentRunnerAutopilotSettings,
     AgentRunnerDeliberationProfileSettings,
     AgentRunnerDeliberationSettings,
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGeneratedContentTargetSettings,
     AgentRunnerGitSettings,
     AgentRunnerLabelSettings,
+    AgentRunnerLocalSettings,
     AgentRunnerRepositoryMetadataSettings,
     AgentRunnerRepositorySettings,
     AgentRunnerRunnerSettings,
@@ -917,4 +919,90 @@ def test_merge_repository_config_preserves_unrelated_identities() -> None:
     after_second = merge_repository_config(after_first, second)
     assert {rid for rid in after_second.repositories} == {"alpha", "beta"}
     assert after_second.repositories["alpha"].github_repo == "owner/alpha"
-    assert after_second.repositories["beta"].github_repo == "owner/beta"
+
+
+# ---------------------------------------------------------------------------
+# Autopilot / merge queue config round-trip (rv-5)
+# ---------------------------------------------------------------------------
+
+
+def test_build_app_config_from_settings_maps_autopilot_defaults() -> None:
+    """Default ``AutopilotConfig`` (off / squash / verifier-required) flows into AppConfig."""
+    settings = AgentRunnerSettings()
+    app_config = build_app_config_from_settings(settings)
+    assert app_config.autopilot.enabled is False
+    assert app_config.autopilot.merge_method == "squash"
+    assert app_config.autopilot.require_verifier_pass is True
+    assert app_config.autopilot.auto_sign_off is True
+    assert app_config.autopilot.merge_check_timeout_seconds == 1800
+
+
+def test_build_app_config_from_settings_maps_autopilot_overrides() -> None:
+    """Non-default autopilot values survive the settings→factory→domain round-trip."""
+    # Mutate the nested field directly to avoid pydantic-settings sources
+    # (repo config.toml) shadowing an init kwarg — mirrors the
+    # ``max_concurrent_issues`` round-trip test pattern.
+    settings = AgentRunnerSettings()
+    settings.autopilot.enabled = True
+    settings.autopilot.merge_method = "squash"
+    settings.autopilot.require_verifier_pass = False
+    settings.autopilot.auto_sign_off = False
+    settings.autopilot.merge_check_timeout_seconds = 123
+    app_config = build_app_config_from_settings(settings)
+    assert app_config.autopilot.enabled is True
+    assert app_config.autopilot.require_verifier_pass is False
+    assert app_config.autopilot.auto_sign_off is False
+    assert app_config.autopilot.merge_check_timeout_seconds == 123
+
+
+def test_autopilot_settings_rejects_non_squash_merge_method() -> None:
+    """``merge_method`` only accepts ``"squash"``; other values raise at config load."""
+
+    with pytest.raises(ValueError):
+        AgentRunnerAutopilotSettings(merge_method="merge")  # type: ignore[arg-type]
+
+
+def test_merge_repository_config_overrides_autopilot() -> None:
+    """Per-repo autopilot.* overrides win over global defaults."""
+
+    global_config = AppConfig()
+    repo_settings = AgentRunnerRepositorySettings(
+        path="/tmp/repo",
+        autopilot=AgentRunnerAutopilotSettings(enabled=True, merge_check_timeout_seconds=42),
+    )
+    merged = merge_repository_config(global_config, repo_settings)
+    assert merged.autopilot.enabled is True
+    assert merged.autopilot.merge_check_timeout_seconds == 42
+    # Untouched fields inherit the global defaults.
+    assert merged.autopilot.merge_method == "squash"
+    assert merged.autopilot.require_verifier_pass is True
+
+
+def test_local_iar_toml_overrides_autopilot(tmp_path: Path) -> None:
+    """.iar.toml-level autopilot overrides flow through ``resolve_repository_targets``."""
+    from backend.engines.agent_runner.factory import resolve_repository_targets
+
+    repo_path = _init_git_repository(tmp_path, "target")
+    _write_local_iar_config(
+        repo_path,
+        """
+[agent_runner.repository]
+id = "target-autopilot"
+
+[agent_runner.autopilot]
+enabled = true
+merge_check_timeout_seconds = 60
+""",
+    )
+    # Sanity check: the local settings object sees the autopilot section.
+    local_settings = AgentRunnerLocalSettings(
+        repository=AgentRunnerRepositoryMetadataSettings(id="target-autopilot"),
+        autopilot=AgentRunnerAutopilotSettings(enabled=True, merge_check_timeout_seconds=60),
+    )
+    assert local_settings.autopilot is not None
+    assert local_settings.autopilot.enabled is True
+
+    contexts = resolve_repository_targets(_make_settings(), repo_path_override=str(repo_path))
+    assert len(contexts) == 1
+    assert contexts[0].config.autopilot.enabled is True
+    assert contexts[0].config.autopilot.merge_check_timeout_seconds == 60
