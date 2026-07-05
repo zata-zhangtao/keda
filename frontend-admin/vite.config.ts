@@ -27,7 +27,7 @@ export default defineConfig({
   server: {
     port: frontendPort,
     proxy: {
-      // keda 后端路由注册在 /api 前缀下（如 /api/admin/auth/*、/api/v1/...），
+      // keda 后端路由统一注册在 /api 前缀下（/api/auth/*、/api/v1/...），
       // 必须原样透传，不能像模板原状那样剥掉 /api。
       '/api': {
         target: `http://localhost:${backendPort}`,

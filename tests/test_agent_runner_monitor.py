@@ -544,8 +544,9 @@ def test_api_overview_returns_serialized_payload(
 
     captured: dict[str, Any] = {}
 
-    def _fake_build_overview_response() -> dict:
+    def _fake_build_overview_response(repo_ids: list[str] | None = None) -> dict:
         captured["called"] = True
+        captured["repo_ids"] = repo_ids
         return {
             "repositories": [
                 {
@@ -595,6 +596,8 @@ def test_api_overview_returns_serialized_payload(
     assert response.status_code == 200
     body = response.json()
     assert captured.get("called") is True
+    # No repo_ids filter on the request -> builder invoked with None.
+    assert captured.get("repo_ids") is None
     assert body["repositories"][0]["repo_id"] == "zata/keda-test"
 
 
