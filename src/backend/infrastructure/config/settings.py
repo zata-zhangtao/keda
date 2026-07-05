@@ -520,6 +520,36 @@ class AgentRunnerSafetySettings(BaseModel):
     )
 
 
+class AgentRunnerAutopilotSettings(BaseModel):
+    """Autopilot / merge queue configuration.
+
+    与 ``AgentRunnerSafetySettings.auto_merge`` 组成"双开关"——只有两者同时
+    为真时合并队列阶段才会被激活。这是历史上 ``safety.auto_merge`` 死开关被
+    真正消费时的防呆保险：早前误设为 ``true`` 的旧环境若未同时打开本段
+    ``enabled``，仍不会开始自动合并。
+
+    Attributes:
+        enabled: 主开关；为 ``False`` 时合并队列整段 no-op（严格档行为）。
+        merge_method: 唯一接受的合并方式：``"squash"``；其它值在配置加载期
+            由 :class:`AgentRunnerAutopilotSettings` 的 field_validator 拒
+            绝。这是用户锁定的设计决策——单提交便于 ``git revert`` 回退。
+        require_verifier_pass: 当该 Issue 需要 validation 时，是否要求
+            ``validation/verifier-passed`` 标签先存在才进入合并流程；缺失
+            则本轮跳过，留给 verifier / repair。
+        auto_sign_off: 是否在 verifier 绿灯后自动勾选 PR body 的 Realistic
+            Validation sign-off 清单；勾选与 marker 评论均幂等。
+        merge_check_timeout_seconds: 等 PR checks 全绿的最大秒数；超时则
+            放弃本轮合并（不阻塞后续 PR）。
+    """
+
+    enabled: bool = False
+    # 仅接受 "squash"；非法值在加载期直接报错，避免下游用错方法调用 gh。
+    merge_method: Literal["squash"] = "squash"
+    require_verifier_pass: bool = True
+    auto_sign_off: bool = True
+    merge_check_timeout_seconds: int = 1800
+
+
 class AgentRunnerValidationSettings(BaseModel):
     """Realistic Validation evidence gate configuration."""
 
@@ -834,6 +864,7 @@ class _AgentRunnerRepositoryOverrideSettings(BaseModel):
     runner: AgentRunnerRunnerSettings | None = None
     memory: AgentRunnerMemorySettings | None = None
     safety: AgentRunnerSafetySettings | None = None
+    autopilot: AgentRunnerAutopilotSettings | None = None
     validation: AgentRunnerValidationSettings | None = None
     prompts: AgentRunnerPromptSettings | None = None
     pre_pr_review: AgentRunnerPrePrReviewSettings | None = None
@@ -932,6 +963,7 @@ def load_agent_runner_local_settings(
         worktree=local_settings.worktree,
         runner=local_settings.runner,
         safety=local_settings.safety,
+        autopilot=local_settings.autopilot,
         validation=local_settings.validation,
         prompts=local_settings.prompts,
         pre_pr_review=local_settings.pre_pr_review,
@@ -957,6 +989,7 @@ class AgentRunnerSettings(BaseSettings):
     runner: AgentRunnerRunnerSettings = Field(default_factory=AgentRunnerRunnerSettings)
     memory: AgentRunnerMemorySettings = Field(default_factory=AgentRunnerMemorySettings)
     safety: AgentRunnerSafetySettings = Field(default_factory=AgentRunnerSafetySettings)
+    autopilot: AgentRunnerAutopilotSettings = Field(default_factory=AgentRunnerAutopilotSettings)
     validation: AgentRunnerValidationSettings = Field(default_factory=AgentRunnerValidationSettings)
     console: AgentRunnerConsoleSettings = Field(default_factory=AgentRunnerConsoleSettings)
     daemon: AgentRunnerDaemonSettings = Field(default_factory=AgentRunnerDaemonSettings)
@@ -1139,6 +1172,7 @@ config.ensure_log_directory()
 _ensure_no_proxy_for_local_services()
 
 __all__ = [
+    "AgentRunnerAutopilotSettings",
     "AgentRunnerLocalSettings",
     "AgentRunnerRepositoryMetadataSettings",
     "AgentRunnerConsoleSettings",

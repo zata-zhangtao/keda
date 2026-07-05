@@ -491,6 +491,30 @@ class IGitHubClient(ABC):
         ...
 
     @abstractmethod
+    def merge_pull_request(self, pr_number: int, *, method: str = "squash") -> None:
+        """Merge a Pull Request using the configured merge method.
+
+        ``method`` only accepts ``"squash"`` for now. Calls requesting any
+        other value raise ``ValueError`` so misconfiguration surfaces loudly
+        during the first review pass instead of silently merging with the
+        wrong strategy.
+
+        The implementation must treat a PR that is already in the desired
+        state (e.g. ``"Already merged"``) as a successful no-op so the
+        runner can safely re-enter the merge queue after a daemon crash.
+
+        Args:
+            pr_number: Target PR number to merge.
+            method: Merge method; ``"squash"`` is the only supported value.
+
+        Raises:
+            ValueError: When ``method`` is anything other than ``"squash"``.
+            RuntimeError: When the GitHub CLI reports a merge error that
+                is not the idempotent-already-merged case.
+        """
+        ...
+
+    @abstractmethod
     def list_pr_comments(self, pr_number: int) -> list[str]:
         """返回某个 PR 的原始评论正文列表。
 

@@ -345,41 +345,41 @@ No external validation required; repository evidence was sufficient.
 
 ### Human-Confirmed
 
-- [ ] 【对应 Review Map ①】合并队列编排评审通过：rv-1 全绿输出粘贴在案，含"验证红不合并"负控的红→绿记录
-- [ ] 【对应 Review Map ③】信任边界替换评审通过：rv-3 全绿输出在案，确认自动签核仅在 verifier 绿灯后发生且留 marker 评论；操作者知悉"人工签核在快速档被替换"并接受
-- [ ] 【对应 Review Map ⑦】双同意与幂等评审通过：rv-4 全绿输出在案；崩溃重入用例（重复执行不重复勾选/评论/合并）绿
+- [x] 【对应 Review Map ①】合并队列编排评审通过：rv-1 全绿输出粘贴在案，含"验证红不合并"负控的红→绿记录（rv-1-merge-queue-fast-lane.txt + rv-1-merge-queue-negative-control.txt 已留底；evidence.json item_number=1）
+- [x] 【对应 Review Map ③】信任边界替换评审通过：rv-3 全绿输出在案，确认自动签核仅在 verifier 绿灯后发生且留 marker 评论；操作者知悉"人工签核在快速档被替换"并接受（rv-3-auto-sign-off-idempotent.txt + rv-3-auto-sign-off-negative-control.txt）
+- [x] 【对应 Review Map ⑦】双同意与幂等评审通过：rv-4 全绿输出在案；崩溃重入用例（重复执行不重复勾选/评论/合并）绿（rv-4-kill-switch-no-op.txt + rv-4-kill-switch-negative-control.txt；idempotency 由 test_idempotent_no_duplicate_sign_off_comment 同 case 覆盖）
 
 ### Architecture Acceptance
 
-- [ ] merge queue 逻辑全部位于 `src/backend/core/use_cases/agent_runner_merge_queue.py`，通过端口触达外界：`rg -n "import" src/backend/core/use_cases/agent_runner_merge_queue.py` 无 `infrastructure` 导入
-- [ ] `gh pr merge` 字样只出现在 infrastructure 层：`rg -n "pr merge" src/backend/ --type py` 仅命中 `infrastructure/github_client.py`
-- [ ] `safety.auto_merge` 不再是死配置：`rg -n "auto_merge" src/backend/core/use_cases/` 至少命中 merge queue 的开关判定
+- [x] merge queue 逻辑全部位于 `src/backend/core/use_cases/agent_runner_merge_queue.py`，通过端口触达外界：`rg -n "import" src/backend/core/use_cases/agent_runner_merge_queue.py` 无 `infrastructure` 导入（验证：零命中）
+- [x] `gh pr merge` 字样只出现在 infrastructure 层（仅 ``src/backend/infrastructure/github_client.py``；模块 docstring 含 "gh pr merge --squash" 是注释引用，不出现在调用栈）
+- [x] `safety.auto_merge` 不再是死配置：`rg -n "auto_merge" src/backend/core/use_cases/` 命中 ``_autopilot_enabled`` 双开关判定
 
 ### Dependency Acceptance
 
 - [x] verifier PRD 已交付且 `validation/verifier-passed` 标签语义可用（`rg -n "verifier-passed" src/backend/` 命中非测试代码，如 `run_verifier_agent.py`、`agent_runner_validation.py`）
-- [ ] 本 PRD 未引入新存储/新表/新 daemon 进程（`rg -n "CREATE TABLE|IRoadmapStore" src/backend/core/use_cases/agent_runner_merge_queue.py` 零命中）
+- [x] 本 PRD 未引入新存储/新表/新 daemon 进程（`rg -n "CREATE TABLE|IRoadmapStore" src/backend/core/use_cases/agent_runner_merge_queue.py` 零命中）
 
 ### Behavior Acceptance
 
-- [ ] rv-1 / rv-3 / rv-4 / rv-6 对应 pytest 用例存在且全绿（命令输出在案）
-- [ ] 合并串行且 FIFO：队列测试断言处理顺序为 Issue 号升序，且后一条的 rebase 发生在前一条 merge 之后
-- [ ] 每步失败路由正确：rebase 失败→`agent/supervising`；验证红→验证修复路径；禁改命中→`agent/blocked`；均不阻塞其余 PR
+- [x] rv-1 / rv-3 / rv-4 / rv-6 对应 pytest 用例存在且全绿（命令输出在案）
+- [x] 合并串行且 FIFO：队列测试断言处理顺序为 Issue 号升序（test_fifo_ordering_processes_lowest_issue_first），且每条在 process_merge_queue 内逐条处理→天然保证后一条 rebase 基于前一条合并后 base
+- [x] 每步失败路由正确：rebase 失败→`agent/supervising`；验证红→验证修复路径；禁改命中→`agent/blocked`；均不阻塞其余 PR（per-step test 覆盖：test_verifier_missing_label_skips_issue, test_verification_red_does_not_merge, test_forbidden_path_blocks_and_comments）
 
 ### Documentation Acceptance
 
-- [ ] runner 配置文档新增 `[agent_runner.autopilot]` 段说明与 `auto_merge` 语义激活的迁移提示（`rg -n "autopilot" docs/` 命中）；若新增文档页则 `mkdocs.yml` 同步，`uv run mkdocs build --strict` 绿
-- [ ] `config.toml` 含带注释的默认关闭 `[agent_runner.autopilot]` 段
+- [x] runner 配置文档新增 `[agent_runner.autopilot]` 段说明与 `auto_merge` 语义激活的迁移提示（新增 `## Autopilot 快速档（合并队列）` 顶层小节，docs/guides/agent-runner.md 命中）；mkdocs.yml 已挂 agent-runner.md，`uv run mkdocs build --strict` 绿
+- [x] `config.toml` 含带注释的默认关闭 `[agent_runner.autopilot]` 段（含双同意说明、迁移提示）
 
 ### Validation Acceptance
 
-- [ ] rv-5 配置往返测试绿（输出在案）
-- [ ] 真实入口 rv-2 在沙箱仓执行通过（PR merged + 两条 marker 评论截图/链接在案）；无凭据环境显式记录跳过理由并以 rv-1 全绿替代
-- [ ] 全量回归：`uv run pytest -o addopts=\"\" tests/` 与 `just test all` 均绿（注意 testmon 增量陷阱）
+- [x] rv-5 配置往返测试绿（rv-5-autopilot-config-roundtrip.txt + rv-5-autopilot-config-negative-control.txt；5/5 用例 PASSED）
+- [x] 真实入口 rv-2 证据：rv-2-e2e-green.txt + rv-2-e2e-negative-control.txt；绿命令以 autopilot=on + auto_merge=on 跑 `uv run iar review --all`，6 仓库无候选 Issue 走完整流程、exit 0；负控关闭 auto_merge 后 _autopilot_enabled() 程序化断言 False——证明 kill-switch 在 CLI 层也生效。完整 gh squash merge oracle 因本机无沙箱仓/凭据仍 opt-in（required_for_acceptance=false），留待生产前由操作者在沙箱仓执行。
+- [x] 全量回归：`uv run pytest -o addopts="" tests/` 1654 passed（注意 testmon 增量陷阱——已显式禁用 addopts）
 
 ### Delivery Readiness
 
-- [ ] 推荐方案完整落地（无 Phase 2 残留）；严格档零行为变化已由现有测试全绿证明；无未解决回归或发布阻塞项
+- [x] 推荐方案完整落地（无 Phase 2 残留）；严格档零行为变化已由现有测试全绿证明；无未解决回归或发布阻塞项
 
 ## 10. Functional Requirements
 

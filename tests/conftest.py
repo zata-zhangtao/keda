@@ -40,6 +40,7 @@ class FakeGitHubClient(IGitHubClient):
         self._issue_comment_entries: dict[int, list[tuple[int, str]]] = {}
         self._next_comment_id = 1
         self._issue_bodies: dict[int, str] = {}
+        self._pr_bodies: dict[int, str] = {}
         self._pr_comments: dict[int, list[str]] = {}
         self._pr_contexts: dict[str, object | None] = {}
         self._open_prs: dict[str, str | None] = {}
@@ -117,6 +118,17 @@ class FakeGitHubClient(IGitHubClient):
             }
         )
 
+    def merge_pull_request(self, pr_number: int, *, method: str = "squash") -> None:
+        self.calls.append(
+            {
+                "method": "merge_pull_request",
+                "pr_number": pr_number,
+                "method_kwarg": method,
+            }
+        )
+        if method != "squash":
+            raise ValueError(f"merge_pull_request method must be 'squash'; got {method!r}.")
+
     def create_issue(self, *, title: str, body: str, labels: Sequence[str]) -> str:
         self.calls.append(
             {
@@ -152,6 +164,17 @@ class FakeGitHubClient(IGitHubClient):
     def get_pull_request_context(self, branch: str) -> object | None:
         self.calls.append({"method": "get_pull_request_context", "branch": branch})
         return self._pr_contexts.get(branch)
+
+    def set_pr_context(self, branch: str, context: object | None) -> None:
+        """Inject a deterministic ``get_pull_request_context`` response for tests."""
+        self._pr_contexts[branch] = context
+
+    def set_pr_body_for_issue(self, issue_number: int, body: str) -> None:
+        """Make ``update_pull_request_body`` reflect the latest body on read."""
+        self._pr_bodies[issue_number] = body
+
+    def get_pr_body_for_issue(self, issue_number: int) -> str | None:
+        return self._pr_bodies.get(issue_number)
 
     def list_issue_comments(self, issue_number: int) -> list[str]:
         self.calls.append({"method": "list_issue_comments", "issue_number": issue_number})

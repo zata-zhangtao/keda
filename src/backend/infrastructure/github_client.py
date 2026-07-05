@@ -927,6 +927,46 @@ class GitHubCliClient:
                 cwd=self.repo_path,
             )
 
+    def merge_pull_request(self, pr_number: int, *, method: str = "squash") -> None:
+        """Merge a Pull Request using ``gh pr merge`` with the requested method.
+
+        ``method`` only accepts ``"squash"`` for now. Squashing gives a single
+        revert-friendly commit on the base branch and matches the merge queue
+        PRD's hard requirement.
+
+        Already-merged responses are treated as idempotent success so the
+        merge queue can safely re-enter after a daemon crash without throwing.
+
+        Args:
+            pr_number: Target Pull Request number.
+            method: Merge method; must be ``"squash"``.
+
+        Raises:
+            ValueError: When ``method`` is not ``"squash"``.
+            RuntimeError: When ``gh pr merge`` exits non-zero with anything
+                other than the idempotent-already-merged case.
+        """
+        if method != "squash":
+            raise ValueError(f"merge_pull_request method must be 'squash'; got {method!r}.")
+        try:
+            self._run_with_retry(
+                ["gh", "pr", "merge", str(pr_number), "--squash"],
+                cwd=self.repo_path,
+                check=False,
+            )
+        except subprocess.CalledProcessError as exc:
+            combined_output = (exc.stdout or "") + "\n" + (exc.stderr or "")
+            if "Already merged" in combined_output or "already merged" in combined_output:
+                _logger.info(
+                    "PR #%d is already merged; treating merge request as no-op.",
+                    pr_number,
+                )
+                return
+            raise RuntimeError(
+                f"gh pr merge failed for PR #{pr_number}: "
+                f"{(exc.stderr or '').strip() or (exc.stdout or '').strip()}"
+            ) from exc
+
     def list_pr_comments(self, pr_number: int) -> list[str]:
         """Return raw comment bodies for a PR."""
         result = self._run_with_retry(

@@ -443,7 +443,8 @@ runner **不在 publish 前对 WIP checkpoint 做 squash**：
 
 # 发布前安全边界：自动合并开关、禁止提交的路径模式
 [agent_runner.safety]
-# 是否允许自动合并 PR（强烈建议保持 false）
+# 是否允许自动合并 PR（强烈建议保持 false）；
+# 与 agent_runner.autopilot.enabled 同时为 true 才会真正生效（合并队列）。
 auto_merge = false
 # 提交前禁止变更的路径通配模式
 forbidden_path_patterns = [
@@ -452,6 +453,33 @@ forbidden_path_patterns = [
     "secrets/*",
     "docker-compose.prod.yml",
 ]
+
+# Autopilot 快速档（合并队列）
+# ---------------------------------------------------------------------------
+# 启用后，supervisor approve 的 PR 不再停在"等人合并"，而是被一条串行
+# 合并队列消费：verifier 门禁 → 自动签核 → rebase → 全量验证 → 禁改终扫
+# → 等 checks 全绿 → squash 合并。
+#
+# 两个开关同时为真才生效（"双同意"），保证历史上 `safety.auto_merge = true`
+# 不会单独触发自动合并：新仓必须显式在本段开启 ``enabled = true``。
+#
+# 迁移提示：本段首次落地后，任何已设为 ``safety.auto_merge = true`` 的环境
+# 若不同时把下面 ``enabled`` 设为 ``true``，仍然回到"等人工合并"的现状——
+# 自动签核 / 自动合并都不会发生。但 ``enabled`` 本段是全新键，既往配置不会
+# 意外激活快速档。
+[agent_runner.autopilot]
+# 主开关。false（默认）时合并队列整段 no-op，严格档行为零变化。
+enabled = false
+# 仅支持 "squash"。非法值在配置加载期直接拒绝。
+merge_method = "squash"
+# 当 Issue 需要 validation 时，是否要求 validation/verifier-passed 标签先存在；
+# 缺失则本轮跳过，留给 verifier / repair 流程。
+require_verifier_pass = true
+# verifier 绿灯后自动替人工勾选 PR body 的 Realistic Validation sign-off 清单
+# （与 marker 评论均幂等）。
+auto_sign_off = true
+# 等 PR checks 全绿的最大秒数；超时则放弃本轮合并（不阻塞后续 PR）。
+merge_check_timeout_seconds = 1800
 
 # Realistic Validation 证据门禁配置
 [agent_runner.validation]
@@ -2909,6 +2937,56 @@ Agent Runner 的代码分布在四层架构中：
 - `infrastructure/github_client.py` / `infrastructure/process_runner.py` — 外部系统实现
 - `api/cli.py` — CLI 入口
 - `api/routes/agent_runner.py` — FastAPI 只读路由
+
+## Autopilot 快速档（合并队列）
+
+默认（严格档）下，supervisor approve 的 PR 永远停在 `agent/review` 阶段——等待人工来合并。`autopilot.enabled = true` 切换到 **快速档**：review pass 末尾追加一个"合并队列"阶段，对该仓所有待合并的 PR 串行、自动执行 7 步门禁链后 `squash` 合并进 base 分支。
+
+### 双同意开关
+
+合并队列只在 **两个开关同时为真** 时激活——这是"防呆"设计，也是 `safety.auto_merge` 这个历史死配置第一次真正消费：
+
+```toml
+[safety]
+auto_merge = true            # 历史开关：现在真正生效
+
+[autopilot]
+enabled = true               # 新键：仓库级显式打开
+```
+
+任一为假时合并队列整段 **no-op**——supervisor 仍按现状停在 `agent/review`。这意味着历史上即便误把 `safety.auto_merge` 设成 `true`，只要 `[autopilot] enabled` 没显式打开，就**不会**开始自动合并（过往误设的环境零风险）。
+
+> 迁移注意：升级时检查所有仓库；如有 `safety.auto_merge = true` 残留，本 PRD 会把它激活。新键 `autopilot.enabled` 是显式的客户确认入口。
+
+### 7 步门禁链
+
+每条进入合并队列的 PR 都按下列顺序执行；任一步失败则**该 PR 转入既有失败/修复路径**，不阻塞队列中其余 PR：
+
+1. **verifier 门禁**：若 Issue 需要 validation（`validation_required`）且 `autopilot.require_verifier_pass = true`，要求 Issue 已带 `validation/verifier-passed` 标签；缺失则本轮跳过，留给 verifier / repair。
+2. **自动签核**：解析 PR body 的 Realistic Validation sign-off 清单区块，把 `- [ ]` 置 `- [x]` 后 `update_pull_request_body`；若已全勾则幂等跳过。同步发一条 `<!-- iar:auto-sign-off ... -->` 审计评论（带 `iar:event` marker），记录 verifier verdict 来源。
+3. **rebase**：复用 `pr_supervisor.execute_rebase` 把 PR 分支 rebase 到最新 remote base；冲突走既有 conflict-resolution agent 路径。失败→转 `agent/supervising`，本 PR 跳过。
+4. **全量验证**：在该 Issue 的 worktree 内调用 `agent_runner_git.run_verification(...)` 重跑 `runner.verification_commands`；红→转验证修复路径，本 PR 跳过不合并。
+5. **禁改路径终扫**：取 PR diff 文件清单，用 `safety.forbidden_path_patterns` 做最终匹配（复用 `agent_runner_publish.is_forbidden_path(...)`）；命中→打 `agent/blocked` + 评论，永不自动合并。
+6. **等 checks**：轮询 `get_pull_request_context` 直到 checks 全绿（自动签核后 sign-off check 应翻绿），超时上限 `autopilot.merge_check_timeout_seconds`。
+7. **合并**：调用 `IGitHubClient.merge_pull_request(pr_number, method="squash")`（gh 实现 `gh pr merge <n> --squash`）；对"already merged"响应归一为幂等成功。成功后发 `iar:event (auto-merged)` 评论、摘除 `agent/review` 标签。
+
+### 崩溃重入幂等
+
+- **勾选幂等**：解析 `ValidationChecklistState`，已全勾则不改 body、不发评论。
+- **评论幂等**：发评论前查 `iar:auto-sign-off` marker，避免重复评论。
+- **合并幂等**：`gh pr merge --squash` 对已合并 PR 视为 no-op（基础设施层归一化）。
+- **跨 pass**：已合并的 Issue 失去 open PR，下一轮 `find_open_pr_by_head` 返回空，自动跳过收尾。
+
+### 串行与 FIFO
+
+合并队列在同一 `iar review` / `iar review-daemon` pass 内按 **Issue 号升序** 串行处理；后一条的 rebase 天然基于前一条合并后的 base 推进。Repository 内没有并发合并——符合 GitHub 的 fast-forward 假设，单 PR 失败不外溢。
+
+### 不在范围内
+
+- 不做 GitHub 原生 auto-merge / merge queue / 分支保护配置。
+- 不支持 squash 以外的合并方式（`merge_method` 在配置加载期仅接受 `"squash"`）。
+- 不改变 PRD 归档、worktree 清理、Issue 关闭等既有职责。
+- 不新建交叉评估 agent（复用已交付的 `independent-verifier-gate` PRD）；不引入新存储。
 
 ## 运行日志
 

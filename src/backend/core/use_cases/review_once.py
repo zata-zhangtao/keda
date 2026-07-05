@@ -15,6 +15,10 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_runner_events import (
     parse_latest_event_marker,
 )
+from backend.core.use_cases.agent_runner_merge_queue import (
+    _autopilot_enabled,
+    process_merge_queue,
+)
 from backend.core.use_cases.pr_supervisor import (
     build_rework_intent_comment,
     guard_supervisor_action_for_pr_state,
@@ -357,4 +361,25 @@ def review_once(
                 f"## Agent Runner Review Failed\n\n```text\n{exc}\n```\n",
             )
             _logger.error("Review failed for Issue #%d: %s", issue.number, exc)
+
+    # Autopilot 快速档激活时（双开关同时为真），supervisor approve 的 PR 在
+    # supervisor 循环结束后进入合并队列，由 ``process_merge_queue`` 串行
+    # 处理 verifier 门禁、自动签核、rebase、全量验证、禁改终扫、checks
+    # 等待、squash 合并；任一步失败走既有失败/修复路径并不阻塞其余 PR。
+    # 严格档（任一开关为假）整段 no-op，现有行为零变化。
+    if _autopilot_enabled(config) and not dry_run:
+        try:
+            merge_exit_code, _outcomes = process_merge_queue(
+                repo_path=repo_path,
+                config=config,
+                github_client=github_client,
+                process_runner=process_runner,
+                supervisor_agent=agent,
+            )
+            if merge_exit_code != 0:
+                exit_code = merge_exit_code
+        except Exception as exc:  # noqa: BLE001 - merge queue failures must not crash review.
+            _logger.error("Merge queue crashed: %s", exc)
+            exit_code = 1
+
     return exit_code
