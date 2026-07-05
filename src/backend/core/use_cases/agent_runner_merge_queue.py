@@ -38,7 +38,10 @@ from backend.core.shared.models.agent_runner import (
     IssueSummary,
     PullRequestContext,
 )
-from backend.core.use_cases.agent_runner_events import format_event_marker
+from backend.core.use_cases.agent_runner_events import (
+    format_event_marker,
+    parse_latest_event_marker,
+)
 from backend.core.use_cases.agent_runner_git import (
     list_changed_paths,
     run_verification,
@@ -73,8 +76,18 @@ def _autopilot_enabled(config: AppConfig) -> bool:
 
 
 def _extract_pr_branch_from_comments(comments: list[str]) -> str | None:
-    """Extract the latest known PR branch from Issue comments."""
+    """Extract the latest known PR branch from Issue comments.
+
+    Mirrors :func:`backend.core.use_cases.review_once._extract_pr_branch_from_comments`
+    so the merge queue and the supervisor cycle agree on which branches are
+    recognized — both parse ``iar:event`` markers first, then fall back to the
+    ``PR Branch: \\`…\\``` / ``Branch: \\`…\\``` plaintext patterns.
+    """
     for comment_body in reversed(comments):
+        marker = parse_latest_event_marker([comment_body])
+        if marker is not None and marker.pr_branch:
+            return marker.pr_branch
+
         branch_patterns = (
             r"PR Branch:\s*`([^`]+)`",
             r"Branch:\s*`([^`]+)`",
@@ -479,39 +492,6 @@ def _ensure_worktree(
     process_runner: IProcessRunner,
     pr_branch: str,
 ) -> Path | None:
-    """Deprecated shim — kept only because callers may still link to it.
-
-    The merge queue now uses :func:`create_or_reuse_worktree` directly; this
-    function is no longer called from :func:`_process_one`. It remains as a
-    thin convenience wrapper around ``create_or_reuse_worktree`` for any
-    future caller that prefers a None-return-on-failure shape.
-    """
-    del pr_branch  # pragma: no cover - retained for API symmetry.
-    try:
-        return create_or_reuse_worktree(repo_path, issue, config, process_runner)
-    except Exception:  # noqa: BLE001 - soft skip.
-        return None
-
-
-def _safe_head_sha(worktree_path: Path, process_runner: IProcessRunner) -> str | None:
-    """Return the current HEAD SHA in a worktree, or None on failure."""
-    try:
-        result = process_runner.run(["git", "rev-parse", "HEAD"], cwd=worktree_path, check=False)
-    except subprocess.CalledProcessError:
-        return None
-    if result.return_code != 0:
-        return None
-    head_text = result.stdout.strip()
-    return head_text or None
-
-
-def _ensure_worktree(
-    repo_path: Path,
-    issue: IssueSummary,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-    pr_branch: str,
-) -> Path | None:
     """Return the worktree path for an Issue, creating if needed.
 
     This is a thin convenience wrapper around
@@ -535,3 +515,15 @@ def _ensure_worktree(
         return create_or_reuse_worktree(repo_path, issue, config, process_runner)
     except Exception:  # noqa: BLE001 - soft skip.
         return None
+
+
+def _safe_head_sha(worktree_path: Path, process_runner: IProcessRunner) -> str | None:
+    """Return the current HEAD SHA in a worktree, or None on failure."""
+    try:
+        result = process_runner.run(["git", "rev-parse", "HEAD"], cwd=worktree_path, check=False)
+    except subprocess.CalledProcessError:
+        return None
+    if result.return_code != 0:
+        return None
+    head_text = result.stdout.strip()
+    return head_text or None
