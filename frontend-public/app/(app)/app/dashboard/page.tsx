@@ -448,7 +448,7 @@ export default function DashboardPage() {
         return slot.repository.repo_id;
       }
     }
-    return readySlots[0]?.repo_id ?? null;
+    return readySlots[0]?.repository.repo_id ?? null;
   }, [state, selectedIssueNumber, readySlots]);
 
   const statsByRepoId = useMemo(() => {
@@ -753,13 +753,13 @@ function RepoCard({
             <span className="text-xs text-slate-500">扫描中…</span>
           </CardContent>
         </Card>
-      ) : (
+      ) : slot.kind === "error" ? (
         <Card className="border-red-300 dark:border-red-700">
           <CardContent className="py-4 text-xs text-red-700 dark:text-red-300">
             加载失败：{slot.message}
           </CardContent>
         </Card>
-      )}
+      ) : null}
     </div>
   );
 }

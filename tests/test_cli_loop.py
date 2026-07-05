@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +16,11 @@ from backend.api.cli_typer import app as typer_app
 from backend.engines.agent_runner.persistence.loop_state_json import JsonLoopStateStore
 from backend.engines.agent_runner.scheduler.loop_clock import FixedClock
 from tests.conftest import FakeGitHubClient, FakeProcessRunner
+
+# Click 8.2+ 在 CliRunner 中根据环境变量(FORCE_COLOR 等)插入 ANSI 颜色码,
+# 会把 `--recipe` 拆成 `-\x1b[0m\x1b[1;36m-recipe\x1b[0m`,使连续字符串断言失败。
+# help 内容测试只关心文本本身,与颜色无关,因此断言前先剥离 ANSI 转义码。
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 # ---------------------------------------------------------------------------
@@ -78,23 +84,26 @@ runner = CliRunner()
 def test_typer_loop_create_help_matches_argparse() -> None:
     result = runner.invoke(typer_app, ["loop", "create", "--help"])
     assert result.exit_code == 0
-    assert "--recipe" in result.stdout
-    assert "--cron" in result.stdout
-    assert "--every" in result.stdout
+    stdout = _ANSI_ESCAPE_RE.sub("", result.stdout)
+    assert "--recipe" in stdout
+    assert "--cron" in stdout
+    assert "--every" in stdout
 
 
 def test_typer_loop_run_help_matches_argparse() -> None:
     result = runner.invoke(typer_app, ["loop", "run", "--help"])
     assert result.exit_code == 0
-    assert "--now" in result.stdout
-    assert "--dry-run" in result.stdout
+    stdout = _ANSI_ESCAPE_RE.sub("", result.stdout)
+    assert "--now" in stdout
+    assert "--dry-run" in stdout
 
 
 def test_typer_loop_daemon_help_matches_argparse() -> None:
     result = runner.invoke(typer_app, ["loop-daemon", "--help"])
     assert result.exit_code == 0
-    assert "--interval" in result.stdout
-    assert "--dry-run" in result.stdout
+    stdout = _ANSI_ESCAPE_RE.sub("", result.stdout)
+    assert "--interval" in stdout
+    assert "--dry-run" in stdout
 
 
 # ---------------------------------------------------------------------------
