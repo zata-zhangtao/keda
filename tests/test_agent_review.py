@@ -1715,3 +1715,139 @@ def test_run_pre_pr_review_escalates_provider_capacity(tmp_path: Path) -> None:
     # Capacity is not retried in place: exactly one reviewer invocation.
     reviewer_calls = [c for c in fake_runner.calls if c[:1] == ["codex"]]
     assert len(reviewer_calls) == 1
+
+
+def test_build_review_packet_includes_previous_commit_failure() -> None:
+    """提供 previous_commit_failure 时，其命令与输出应出现在评审包内。"""
+    issue = IssueSummary(
+        number=7,
+        title="Feed failure back",
+        url="https://github.com/example/repo/issues/7",
+        body="Do something.",
+        labels=(),
+    )
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "diff", "main...abc123"): CommandResult(
+                command=("git", "diff", "main...abc123"),
+                return_code=0,
+                stdout="+added line\n",
+                stderr="",
+            ),
+            ("git", "status", "--short"): CommandResult(
+                command=("git", "status", "--short"),
+                return_code=0,
+                stdout=" M settings/page.tsx\n",
+                stderr="",
+            ),
+        }
+    )
+    packet = build_review_packet(
+        issue=issue,
+        worktree_path=Path("."),
+        config=AppConfig(),
+        process_runner=fake_runner,
+        verification_results=[],
+        head_sha="abc123",
+        previous_commit_failure=(
+            "Command failed: bash -lc 'just lint --reuse'\n"
+            "jscpd found duplication that touches changed lines of candidate files:"
+        ),
+    )
+    assert "Previous reviewer patch was REJECTED by the commit gate" in packet
+    assert "do NOT resubmit the same patch" in packet
+    assert "just lint --reuse" in packet
+    assert "jscpd found duplication" in packet
+
+
+def test_run_pre_pr_review_feeds_commit_failure_to_next_cycle(tmp_path: Path) -> None:
+    """提交门禁失败时应 unstage，并把失败输出投喂给下一轮 reviewer。"""
+    import json
+
+    issue = IssueSummary(number=1, title="T", url="U", body="B", labels=())
+    fake_client = FakeGitHubClient()
+    worktree_path = tmp_path / "fake-worktree"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    class _CommitAlwaysFailsRunner(FakeProcessRunner):
+        def __init__(self) -> None:
+            super().__init__(
+                responses={
+                    ("git", "branch", "--show-current"): CommandResult(
+                        command=("git", "branch", "--show-current"),
+                        return_code=0,
+                        stdout="issue-1\n",
+                        stderr="",
+                    ),
+                    ("git", "status", "--porcelain"): CommandResult(
+                        command=("git", "status", "--porcelain"),
+                        return_code=0,
+                        stdout=" M settings/page.tsx\n",
+                        stderr="",
+                    ),
+                    # pre_commit_verification_command 复跑失败（jscpd 重复）
+                    ("just", "lint", "--reuse"): CommandResult(
+                        command=("bash", "-lc", "just lint --reuse"),
+                        return_code=1,
+                        stdout="jscpd found duplication that touches changed lines of candidate files:",
+                        stderr="",
+                    ),
+                }
+            )
+            self.review_prompts: list[str] = []
+
+        def run(self, command, *, cwd, check=True, timeout=None, capture_output=True, label=None):
+            command_tuple = tuple(command)
+            if command_tuple[:1] == ("codex",):
+                self.calls.append(list(command))
+                self.review_prompts.append(" ".join(command))
+                # 每轮都写一份 commit-request，触发提交代理走到失败的门禁
+                request_path = cwd / ".agent-runner" / "commit-request.json"
+                request_path.parent.mkdir(parents=True, exist_ok=True)
+                request_path.write_text(
+                    json.dumps({"commit_message": "reviewer fix"}),
+                    encoding="utf-8",
+                )
+                return CommandResult(
+                    command=command_tuple,
+                    return_code=0,
+                    stdout='{"verdict": "changes_requested", "summary": "needs work"}',
+                    stderr="",
+                )
+            return super().run(
+                command,
+                cwd=cwd,
+                check=check,
+                timeout=timeout,
+                capture_output=capture_output,
+            )
+
+    fake_runner = _CommitAlwaysFailsRunner()
+    config = AppConfig(
+        pre_pr_review=PrePrReviewConfig(enabled=True, max_attempts=2),
+        runner=RunnerConfig(
+            verification_commands=("just test",),
+            pre_commit_verification_command="just lint --reuse",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Pre-PR review repair failed"):
+        run_pre_pr_review(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            github_client=fake_client,
+            process_runner=fake_runner,
+            selected_agent="codex",
+            head_sha_before="before-sha",
+            expected_branch="issue-1",
+            verification_results=[],
+        )
+
+    # 失败补丁被 unstage（git reset --mixed）
+    assert ["git", "reset", "--mixed"] in fake_runner.calls
+    # 两轮 reviewer；第二轮的提示词包含上一轮的门禁失败输出
+    assert len(fake_runner.review_prompts) == 2
+    assert "jscpd found duplication" not in fake_runner.review_prompts[0]
+    assert "jscpd found duplication" in fake_runner.review_prompts[1]
+    assert "just lint --reuse" in fake_runner.review_prompts[1]

@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Iterable, Sequence
+
+# 匹配 unified diff 的 hunk 头,仅捕获新侧(+ 侧)的起始行与行数
+_DIFF_HUNK_HEADER_PATTERN = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
 def repo_root_from_hook(script_file: Path) -> Path:
@@ -96,8 +100,16 @@ def _expand_explicit_paths(
     return selected_paths
 
 
-def _git_relative_paths(repo_root: Path, git_args: Sequence[str]) -> list[Path]:
-    """Return repository-relative paths from a git path listing command."""
+def _run_git_capture(repo_root: Path, git_args: Sequence[str]) -> str:
+    """运行只读 git 命令并返回其 stdout；命令失败时返回空字符串。
+
+    Args:
+        repo_root: 仓库根目录。
+        git_args: 传给 ``git`` 的参数序列（不含 ``git`` 本身）。
+
+    Returns:
+        命令 stdout；返回码非 0 时返回空字符串，让调用方按“无输出”降级处理。
+    """
 
     git_process = subprocess.run(
         ["git", *git_args],
@@ -108,15 +120,70 @@ def _git_relative_paths(repo_root: Path, git_args: Sequence[str]) -> list[Path]:
         encoding="utf-8",
     )
     if git_process.returncode != 0:
-        return []
+        return ""
+    return git_process.stdout
+
+
+def _git_relative_paths(repo_root: Path, git_args: Sequence[str]) -> list[Path]:
+    """Return repository-relative paths from a git path listing command."""
 
     repository_relative_paths: list[Path] = []
-    for raw_path_text in git_process.stdout.splitlines():
+    for raw_path_text in _run_git_capture(repo_root, git_args).splitlines():
         stripped_path_text = raw_path_text.strip()
         if not stripped_path_text:
             continue
         repository_relative_paths.append(Path(stripped_path_text))
     return repository_relative_paths
+
+
+def _parse_new_side_line_ranges(diff_text: str) -> list[tuple[int, int]]:
+    """从 unified diff 文本解析出新侧(+ 侧)的改动行区间。
+
+    Args:
+        diff_text: ``git diff -U0`` 产出的 unified diff 文本。
+
+    Returns:
+        新侧改动行区间列表（1-based 闭区间）。纯删除 hunk 在新侧不占行，跳过。
+    """
+
+    new_side_ranges: list[tuple[int, int]] = []
+    for diff_line in diff_text.splitlines():
+        hunk_match = _DIFF_HUNK_HEADER_PATTERN.match(diff_line)
+        if hunk_match is None:
+            continue
+        new_side_start = int(hunk_match.group(1))
+        new_side_count = int(hunk_match.group(2)) if hunk_match.group(2) is not None else 1
+        if new_side_count <= 0:
+            continue
+        new_side_ranges.append((new_side_start, new_side_start + new_side_count - 1))
+    return new_side_ranges
+
+
+def changed_line_ranges(repo_root: Path, relative_path: Path) -> list[tuple[int, int]]:
+    """返回候选文件相对 HEAD 的新增/修改行区间。
+
+    优先比较工作树与 HEAD；HEAD 无差异时回退到已暂存差异，与
+    :func:`select_incremental_paths` 的候选判定保持同一坐标系（均以当前文件内容
+    的行号为准）。
+
+    Args:
+        repo_root: 仓库根目录。
+        relative_path: 仓库相对文件路径。
+
+    Returns:
+        新侧改动行区间列表（1-based 闭区间）。返回空列表表示无法解析出行级差异
+        （例如全新未跟踪文件），调用方应据此按“整文件均视为改动”处理，避免漏判
+        新文件里的重复。
+    """
+
+    for diff_args in (
+        ["diff", "-U0", "HEAD", "--", relative_path.as_posix()],
+        ["diff", "-U0", "--cached", "--", relative_path.as_posix()],
+    ):
+        new_side_ranges = _parse_new_side_line_ranges(_run_git_capture(repo_root, diff_args))
+        if new_side_ranges:
+            return new_side_ranges
+    return []
 
 
 def _collect_changed_paths(

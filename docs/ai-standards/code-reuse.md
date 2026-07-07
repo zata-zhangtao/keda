@@ -92,7 +92,7 @@ cost_values = fetch_costs("2026-01-01", "2026-01-31", True)
 - `jscpd`：跨 Python / TypeScript / JavaScript 的复制粘贴级重复检测
 - `pylint duplicate-code`：Python 结构级重复检测，只启用 `duplicate-code`
 
-这些 hook 使用候选文件和比较语料分离的策略：候选文件来自当前变更，`jscpd` 比较 `src/backend/`、`frontend-admin/` 与 `frontend-public/`，`pylint duplicate-code` 比较 `src/backend/`。`src/backend/core/`、`frontend-admin/src/lib/`、`frontend-admin/src/api/` 和 `frontend-public/lib/` 必须始终作为优先复用目录参与判断。历史重复不会因为全量 lint 被一次性阻断，但新增或修改文件触达重复时必须修复。
+这些 hook 使用候选文件和比较语料分离的策略：候选文件来自当前变更，`jscpd` 比较 `src/backend/`、`frontend-admin/` 与 `frontend-public/`，`pylint duplicate-code` 比较 `src/backend/`。`src/backend/core/`、`frontend-admin/src/lib/`、`frontend-admin/src/api/` 和 `frontend-public/lib/` 必须始终作为优先复用目录参与判断。历史重复不会因为全量 lint 被一次性阻断；`jscpd` 进一步只在**本次改动的代码行**落入重复片段时才判失败——改动未触碰的历史骨架重复（如各页面共用的框架样板）会被放过，改动真正引入或触达的重复仍必须修复。据此，仅给某个文件追加与重复片段无关的新代码不会再唤醒该文件里早已存在的历史重复。
 
 ## AI 编码自检清单
 

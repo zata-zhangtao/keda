@@ -28,11 +28,14 @@ from backend.core.use_cases.agent_runner_failure import (
 )
 from backend.core.use_cases.run_agent_once import (
     EmptyCommitRequestError,
+    VerificationFailedError,
     commit_requested_changes,
     extract_agent_response_text,
     extract_prd_path,
+    format_verification_failure,
     get_head_sha,
     run_agent_with_prompt_resilient,
+    unstage_changes,
 )
 
 _logger = logging.getLogger(__name__)
@@ -129,8 +132,14 @@ def build_review_packet(
     process_runner: IProcessRunner,
     verification_results: list[CommandResult],
     head_sha: str,
+    previous_commit_failure: str | None = None,
 ) -> str:
-    """Build the context packet sent to the pre-PR reviewer."""
+    """Build the context packet sent to the pre-PR reviewer.
+
+    当上一轮 reviewer 补丁在提交门禁（如 ``just lint --reuse`` / 验证命令）上失败时，
+    通过 ``previous_commit_failure`` 把失败命令与输出回喂给本轮 reviewer，使其能针对
+    真正的门禁失败调整做法，而不是蒙着眼重复同样的改动。
+    """
     prd_path = extract_prd_path(issue.body)
     prd_line = (
         f"Canonical PRD: `{prd_path}`"
@@ -159,6 +168,18 @@ def build_review_packet(
 
     review_rules = "\n".join(_resolve_review_prompt_template(config))
 
+    previous_failure_lines: list[str] = []
+    if previous_commit_failure:
+        previous_failure_lines = [
+            "",
+            "Previous reviewer patch was REJECTED by the commit gate. Its changes remain in "
+            "the worktree (unstaged) for you to revise. Address the gate failure below, or "
+            "change approach if it cannot be satisfied — do NOT resubmit the same patch:",
+            "```",
+            previous_commit_failure,
+            "```",
+        ]
+
     return "\n".join(
         [
             f"Pre-PR Review for Issue #{issue.number}: {issue.title}",
@@ -181,6 +202,7 @@ def build_review_packet(
             "",
             "Verification results:",
             verification_lines,
+            *previous_failure_lines,
             "",
             "Review rules:",
             review_rules,
@@ -624,6 +646,8 @@ def run_pre_pr_review(
     last_action_summary = last_failure_summary
     last_cycle_verdict = "changes_requested"
     last_cycle_applied_patch = False
+    # 上一轮补丁在提交门禁上失败时的命令与输出，回喂给下一轮 reviewer；成功或首轮为 None
+    pending_commit_failure: str | None = None
     _logger.info(
         "Starting pre-PR review for Issue #%d with reviewer '%s' "
         "(max_attempts=%d, timeout=%ds, head=%s).",
@@ -650,7 +674,10 @@ def run_pre_pr_review(
             process_runner=process_runner,
             verification_results=current_verification,
             head_sha=current_head,
+            previous_commit_failure=pending_commit_failure,
         )
+        # 反馈只投喂给紧接着的这一轮；若本轮再次失败，except 分支会重新填充
+        pending_commit_failure = None
         max_inner_attempts = max(0, review_config.commit_request_reminder_attempts)
         for inner_attempt in range(max_inner_attempts + 1):
             _logger.info(
@@ -815,6 +842,14 @@ def run_pre_pr_review(
             except Exception as exc:  # noqa: BLE001
                 action_summary = f"reviewer patch failed to commit: {exc}"
                 last_failure_summary = action_summary
+                # 把门禁失败(命令+输出)回喂给下一轮 reviewer,并把失败补丁 unstage,
+                # 让下一轮在干净索引上按反馈修订,而不是让残留的 staged 内容被 git
+                # add -A 原样重提、无限撞同一堵墙。
+                if isinstance(exc, VerificationFailedError):
+                    pending_commit_failure = format_verification_failure(exc.verification_results)
+                else:
+                    pending_commit_failure = str(exc)
+                unstage_changes(worktree_path, process_runner)
                 _logger.exception(
                     "Pre-PR review cycle %d/%d for Issue #%d: reviewer commit request failed.",
                     cycle,
