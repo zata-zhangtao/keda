@@ -103,8 +103,8 @@ reexecute_commands = true
 reexecute_timeout_seconds = 300
 # 命中代码树指纹(HEAD^{tree})时跳过该项 RV 命令复跑,避免 blocked-continue/换 agent 重复跑（默认开;工作区脏则不缓存、照常复跑）
 reexecute_cache_enabled = true
-# 是否启用独立 verifier agent 复验（默认关;开启后在开 PR 前换一个 agent 对抗复验,red 自动打回 builder）
-verifier_enabled = false
+# 是否启用独立 verifier agent 复验（默认开;开启后在开 PR 前换一个 agent 对抗复验,red 自动打回 builder）
+verifier_enabled = true
 # verifier 用哪个 agent（auto=自动挑一个≠builder 的）
 verifier_agent = "auto"
 # verifier agent 运行超时秒数（默认 1800）
