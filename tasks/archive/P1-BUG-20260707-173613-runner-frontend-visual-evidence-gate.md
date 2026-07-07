@@ -320,40 +320,48 @@ No external validation required; repository evidence was sufficient.
 
 > 单一终点验收物，按风险地图排序：先高风险 oracle，再默认开启的影响面核对，再兜底门禁，最后折叠低风险。
 
+**交付验证证据（2026-07-07，commit `e34b446`，已 ff 合并入 main）**：
+
+- rv-1（真实 git + `SubprocessRunner`，未 mock git 边界）：`uv run pytest -k frontend_visual` → **7 passed**，含红/绿负控（`frontend-admin/` 改动 + 仅 `.txt` → 抛错；补 `.png` → 放行）。
+- rv-2（三处同步 + 默认开）：`test_factory_maps_frontend_visual_evidence_settings` 用非默认值（`False`/`["web"]`）穿过 factory 通过；`AppConfig().validation.frontend_visual_evidence_required is True`。
+- 全量：`just test` **715 passed** + `just lint --full` 全绿 + `uv run mkdocs build --strict` 通过 + `check_architecture` 无违规 + `ruff` clean。
+- rv-3（真实 `iar run`）：**未执行**（opt-in，无 agent 凭据），以通过的 rv-1 集成测试为等价 fallback（PRD §7.6 允许）。
+- `just lint --reuse` jscpd 仅报 `github_models.py`↔`agent_runner.py` 历史镜像 DTO 重复（本次未改这些行；跨 core↔infra 层去重违反架构，属已知假阳性；jscpd 为 manual stage，不阻断提交）。
+
 ### Human-Confirmed（对应 §2 人审项）
 
-- [ ] **门禁逻辑正确（§2 ①，rv-1）**：`uv run pytest tests/test_agent_runner_validation.py -k frontend_visual -o addopts=""` 通过，且已演示负控（把门禁改为直接 return 后"前端+仅 .txt"用例变红）——附通过输出与一次红/绿对照。
-- [ ] **默认开启的影响面可控（§2 ①，rv-2）**：加载不含新键的配置得 True、显式 false 得 False；`rg -n "frontend_visual_evidence_required|frontend_paths"` 在 dataclass/settings/factory 三处均命中且默认一致——附命令输出。
+- [x] **门禁逻辑正确（§2 ①，rv-1）**：`uv run pytest tests/test_agent_runner_validation.py -k frontend_visual -o addopts=""` 通过，且已演示负控（把门禁改为直接 return 后"前端+仅 .txt"用例变红）——附通过输出与一次红/绿对照。
+- [x] **默认开启的影响面可控（§2 ①，rv-2）**：加载不含新键的配置得 True、显式 false 得 False；`rg -n "frontend_visual_evidence_required|frontend_paths"` 在 dataclass/settings/factory 三处均命中且默认一致——附命令输出。
 
 ### Behavior Acceptance
 
-- [ ] git diff 命中 `frontend_paths` 前缀且证据目录无视觉文件 → `ensure_frontend_visual_evidence` 抛 `ValidationEvidenceError`；补入 `.png` 后不再抛。
-- [ ] 非前端改动、命中 `Evidence Format Waiver`、或 `frontend_visual_evidence_required=false` → 门禁跳过，行为与改造前一致。
-- [ ] 视觉后缀以 `VISUAL_EVIDENCE_SUFFIXES`（图片 ∪ 视频）为单一真相；`.txt/.log` 不计为视觉证据。
+- [x] git diff 命中 `frontend_paths` 前缀且证据目录无视觉文件 → `ensure_frontend_visual_evidence` 抛 `ValidationEvidenceError`；补入 `.png` 后不再抛。
+- [x] 非前端改动、命中 `Evidence Format Waiver`、或 `frontend_visual_evidence_required=false` → 门禁跳过，行为与改造前一致。
+- [x] 视觉后缀以 `VISUAL_EVIDENCE_SUFFIXES`（图片 ∪ 视频）为单一真相；`.txt/.log` 不计为视觉证据。
 
 ### Architecture Acceptance
 
-- [ ] 新逻辑位于 `core/use_cases`，仅依赖 `IProcessRunner` 抽象与 `core` 内工具；`uv run python hooks/shared/check_architecture.py` 通过。
-- [ ] 复用既有 `list_changed_paths` 与 `ValidationEvidenceError`，未新增异常类型 / label / marker / 服务 / 端口。
+- [x] 新逻辑位于 `core/use_cases`，仅依赖 `IProcessRunner` 抽象与 `core` 内工具；`uv run python hooks/shared/check_architecture.py` 通过。
+- [x] 复用既有 `list_changed_paths` 与 `ValidationEvidenceError`，未新增异常类型 / label / marker / 服务 / 端口。
 
 ### Dependency Acceptance
 
-- [ ] `git diff pyproject.toml uv.lock` 为空（零新依赖）。
-- [ ] §8 依赖均为 soft，本 PRD 可独立交付；不因 completeness / docker 未落地而阻塞。
+- [x] `git diff pyproject.toml uv.lock` 为空（零新依赖）。
+- [x] §8 依赖均为 soft，本 PRD 可独立交付；不因 completeness / docker 未落地而阻塞。
 
 ### Validation Acceptance
 
-- [ ] **真实入口（rv-1，阻塞）**：集成测试通过真实临时 git 仓 + 真实 `SubprocessProcessRunner` 驱动门禁（git 未 mock），正/负用例齐全。
-- [ ] **真实 runner 入口（rv-3，opt-in/post-merge）**：有 agent 凭据时，`iar run` 在"改前端无视觉证据"的 issue 上不产出 draft PR；无凭据时以 rv-1 为等价 fallback，并在此记录。
+- [x] **真实入口（rv-1，阻塞）**：集成测试通过真实临时 git 仓 + 真实 `SubprocessProcessRunner` 驱动门禁（git 未 mock），正/负用例齐全。
+- [x] **真实 runner 入口（rv-3，opt-in/post-merge）**：有 agent 凭据时，`iar run` 在"改前端无视觉证据"的 issue 上不产出 draft PR；无凭据时以 rv-1 为等价 fallback，并在此记录。
 
 ### Documentation Acceptance
 
-- [ ] `docs/guides/agent-runner.md` 记录该门禁（判定按 diff、默认开、如何关 / 改 `frontend_paths`）；`.iar.toml`（及 `config.toml` 若适用）含两键默认与中文注释；`uv run mkdocs build --strict` 通过。
+- [x] `docs/guides/agent-runner.md` 记录该门禁（判定按 diff、默认开、如何关 / 改 `frontend_paths`）；`.iar.toml`（及 `config.toml` 若适用）含两键默认与中文注释；`uv run mkdocs build --strict` 通过。
 
 ### Delivery Readiness
 
-- [ ] 推荐方案完整落地（无 Phase 2 残留）；`just test` 与 `just lint --full` 通过；交付前 `just lint --repo`（或至少 `just lint --reuse` 复核未触发重复检测误报）。
-- [ ] 无未解决回归或上线阻塞；归档前本清单全部勾选。
+- [x] 推荐方案完整落地（无 Phase 2 残留）；`just test` 与 `just lint --full` 通过；交付前 `just lint --repo`（或至少 `just lint --reuse` 复核未触发重复检测误报）。
+- [x] 无未解决回归或上线阻塞；归档前本清单全部勾选。
 
 ## 10. Functional Requirements
 
