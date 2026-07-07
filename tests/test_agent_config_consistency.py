@@ -370,3 +370,33 @@ def test_app_config_repl_propagates_from_pydantic_settings() -> None:
     assert isinstance(app_config.repl, ReplConfig)
     assert app_config.repl.default_agent == "kimi"
     assert app_config.repl.agent_timeout_seconds == 45
+
+
+def test_factory_maps_frontend_visual_evidence_settings() -> None:
+    """frontend 视觉证据两键：默认一致，且非默认值能穿过 factory 映射。
+
+    用非默认值（False / 自定义目录）确保 dropped mapping 不会被两侧相同默认
+    掩盖，与 ``test_factory_maps_fix_agent_enabled`` 同型。
+    """
+    from backend.core.shared.models.agent_runner import ValidationConfig
+    from backend.engines.agent_runner.factory import build_app_config_from_settings
+    from backend.infrastructure.config.settings import AgentRunnerValidationSettings
+
+    assert AgentRunnerValidationSettings().frontend_visual_evidence_required is True
+    assert (
+        AgentRunnerValidationSettings().frontend_visual_evidence_required
+        == ValidationConfig().frontend_visual_evidence_required
+    )
+    assert list(AgentRunnerValidationSettings().frontend_paths) == list(
+        ValidationConfig().frontend_paths
+    )
+
+    settings = AgentRunnerSettings()
+    settings.validation = AgentRunnerValidationSettings(
+        frontend_visual_evidence_required=False,
+        frontend_paths=["web"],
+    )
+    app_config = build_app_config_from_settings(settings)
+
+    assert app_config.validation.frontend_visual_evidence_required is False
+    assert app_config.validation.frontend_paths == ("web",)

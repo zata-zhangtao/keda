@@ -224,6 +224,8 @@ def build_app_config_from_settings(
             verifier_agent=validation_settings.verifier_agent,
             verifier_timeout_seconds=validation_settings.verifier_timeout_seconds,
             artifact_health_enabled=validation_settings.artifact_health_enabled,
+            frontend_visual_evidence_required=validation_settings.frontend_visual_evidence_required,
+            frontend_paths=tuple(validation_settings.frontend_paths),
         ),
         prompts=PromptConfig(
             default_phase=prompt_settings.default_phase,

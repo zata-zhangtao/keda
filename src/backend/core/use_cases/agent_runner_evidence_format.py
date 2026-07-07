@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 IMAGE_EVIDENCE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+# 视觉证据 = 图片 ∪ 视频。前端改动强制视觉证据门禁以此为单一真相。
+VISUAL_EVIDENCE_SUFFIXES = IMAGE_EVIDENCE_SUFFIXES | frozenset({".mp4", ".mov", ".webm"})
 
 _EVIDENCE_ITEM_FILE_PATTERN = re.compile(r"^rv-(?P<item>\d+)[-.]", re.IGNORECASE)
 _MAX_ITEM_SUMMARY_CHARS = 120

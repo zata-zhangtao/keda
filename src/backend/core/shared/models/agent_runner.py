@@ -368,6 +368,12 @@ class ValidationConfig:
     ``require_negative_control`` (default on) makes the gate reject any
     structured-evidence item lacking a ``negative_control`` (red→green proof);
     set it off to opt out per repository.
+
+    ``frontend_visual_evidence_required`` (default on) makes the gate reject a
+    delivery whose git changes touch any ``frontend_paths`` prefix unless the
+    evidence directory holds at least one visual file (image/video). It is
+    driven by the diff, not by checklist keywords, and is independent of
+    ``verifier_enabled``; set it off to opt out per repository.
     """
 
     enabled: bool = True
@@ -385,6 +391,8 @@ class ValidationConfig:
     verifier_agent: str = "auto"
     verifier_timeout_seconds: int = 1800
     artifact_health_enabled: bool = True
+    frontend_visual_evidence_required: bool = True
+    frontend_paths: tuple[str, ...] = ("frontend-admin", "frontend-public")
 
 
 @dataclass(frozen=True)

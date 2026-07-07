@@ -255,6 +255,10 @@ parse_evidence_format_with_agent = true
 language = "zh-CN"
 # 是否为带 iar:structured-evidence marker 的新 Issue 要求 evidence.json manifest。
 structured_evidence = true
+# 前端改动（git diff 命中 frontend_paths）强制证据目录含真实视觉文件(图片/视频),否则门禁失败。
+# 判定按 diff 而非清单关键字,独立于 verifier;设为 false 按仓库关闭。
+frontend_visual_evidence_required = true
+frontend_paths = ["frontend-admin", "frontend-public"]
 
 [agent_runner.pre_pr_review]
 # Draft PR 创建前的 AI review 门禁（push 之后、PR 之前）

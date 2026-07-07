@@ -249,6 +249,8 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "validation.verifier_enabled": "是否启用独立 verifier agent 复验（默认开;开启后在开 PR 前换一个 agent 对抗复验,red 自动打回 builder）",
     "validation.verifier_agent": "verifier 用哪个 agent（auto=自动挑一个≠builder 的）",
     "validation.verifier_timeout_seconds": "verifier agent 运行超时秒数（默认 1800）",
+    "validation.frontend_visual_evidence_required": "前端改动（git diff 命中 frontend_paths）是否强制证据目录含真实视觉文件(图片/视频),否则门禁失败(默认开;独立于 verifier)",
+    "validation.frontend_paths": "判定为前端的目录前缀列表(默认 frontend-admin/frontend-public);runner 用它识别目标仓库的前端改动",
     "prompts.default_phase": "默认使用的 prompt 阶段",
     "prompts.phases": "自定义阶段模板，值为字符串或字符串列表",
     "pre_pr_review.enabled": "是否启用 Draft PR 创建前的 AI review",

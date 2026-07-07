@@ -109,6 +109,10 @@ verifier_enabled = true
 verifier_agent = "auto"
 # verifier agent 运行超时秒数（默认 1800）
 verifier_timeout_seconds = 1800
+# 前端改动（git diff 命中 frontend_paths）强制证据目录含真实视觉文件(图片/视频),否则门禁失败(默认开;独立于 verifier)
+frontend_visual_evidence_required = true
+# 判定为前端的目录前缀(默认模板约定的两个前端 app);runner 用它识别目标仓库前端改动
+frontend_paths = ["frontend-admin", "frontend-public"]
 
 # 实现 Agent 的 prompt 模板；默认 phase 与自定义阶段模板
 [agent_runner.prompts]

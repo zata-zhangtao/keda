@@ -25,6 +25,7 @@ from backend.core.use_cases.agent_runner_validation import (
     cleanup_closed_issue_evidence_branches,
     collect_evidence_coverage_problems,
     ensure_evidence_dir_excluded,
+    ensure_frontend_visual_evidence,
     ensure_no_evidence_paths_in_changes,
     ensure_validation_commands_pass,
     ensure_validation_evidence_ready,
@@ -1773,3 +1774,77 @@ def test_create_issue_omits_structured_marker_when_disabled(
 
     create_call = next(call for call in fake_client.calls if call["method"] == "create_issue")
     assert "iar:structured-evidence" not in create_call["body"]
+
+
+# ---------------------------------------------------------------------------
+# 前端改动强制视觉证据门禁（fail-closed）
+# ---------------------------------------------------------------------------
+
+
+def _init_git_worktree_with_change(worktree: Path, changed_rel_path: str) -> Path:
+    """在 worktree 建真实 git 仓并制造一个未提交的 <changed_rel_path> 改动。"""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=worktree, check=True, capture_output=True)
+    changed_file = worktree / changed_rel_path
+    changed_file.parent.mkdir(parents=True, exist_ok=True)
+    changed_file.write_text("export const x = 1\n", encoding="utf-8")
+    return worktree
+
+
+def _write_evidence_file(worktree: Path, filename: str, data: bytes = b"x") -> None:
+    """在 .iar/evidence 写入一个证据文件。"""
+    evidence_dir = worktree / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    (evidence_dir / filename).write_bytes(data)
+
+
+def test_frontend_visual_gate_raises_without_visual_evidence(tmp_path: Path) -> None:
+    """前端改动 + 证据仅 .txt → fail-closed 抛错（复现 issue-49 逃逸场景）。"""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    worktree = _init_git_worktree_with_change(tmp_path, "frontend-admin/src/x.tsx")
+    _write_evidence_file(worktree, "rv-1-public-locale.txt", b"scraped source")
+    with pytest.raises(ValidationEvidenceError, match="no visual evidence"):
+        ensure_frontend_visual_evidence(_issue(), worktree, AppConfig(), SubprocessRunner())
+
+
+def test_frontend_visual_gate_passes_with_screenshot(tmp_path: Path) -> None:
+    """前端改动 + 有 .png → 放行（上一条的红→绿负控对照）。"""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    worktree = _init_git_worktree_with_change(tmp_path, "frontend-public/app/page.tsx")
+    _write_evidence_file(worktree, "rv-1-home.png", b"\x89PNG\r\n")
+    ensure_frontend_visual_evidence(_issue(), worktree, AppConfig(), SubprocessRunner())
+
+
+def test_frontend_visual_gate_ignores_non_frontend_change(tmp_path: Path) -> None:
+    """改动不碰前端目录 → 门禁不介入，无视觉证据也放行。"""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    worktree = _init_git_worktree_with_change(tmp_path, "src/backend/x.py")
+    _write_evidence_file(worktree, "rv-1-cli.txt", b"log")
+    ensure_frontend_visual_evidence(_issue(), worktree, AppConfig(), SubprocessRunner())
+
+
+def test_frontend_visual_gate_opt_out_by_config(tmp_path: Path) -> None:
+    """frontend_visual_evidence_required=False → 跳过（opt-out 负控）。"""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    worktree = _init_git_worktree_with_change(tmp_path, "frontend-admin/src/x.tsx")
+    _write_evidence_file(worktree, "rv-1.txt", b"log")
+    config = AppConfig(validation=ValidationConfig(frontend_visual_evidence_required=False))
+    ensure_frontend_visual_evidence(_issue(), worktree, config, SubprocessRunner())
+
+
+def test_frontend_visual_gate_skips_without_process_runner(tmp_path: Path) -> None:
+    """process_runner 为 None（旧调用方未接线）→ 跳过，保持兼容。"""
+    worktree = _init_git_worktree_with_change(tmp_path, "frontend-admin/src/x.tsx")
+    _write_evidence_file(worktree, "rv-1.txt", b"log")
+    ensure_frontend_visual_evidence(_issue(), worktree, AppConfig(), None)
+
+
+def test_frontend_visual_gate_defaults_on() -> None:
+    """默认开：既有无此键的配置自动获得门禁，前缀默认两前端目录。"""
+    assert AppConfig().validation.frontend_visual_evidence_required is True
+    assert AppConfig().validation.frontend_paths == ("frontend-admin", "frontend-public")

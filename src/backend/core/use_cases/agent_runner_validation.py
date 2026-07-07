@@ -48,6 +48,7 @@ from backend.core.use_cases.agent_runner_events import (
 from backend.core.use_cases.agent_runner_evidence_format import (
     EvidenceKindRule as EvidenceKindRule,
     IMAGE_EVIDENCE_SUFFIXES,
+    VISUAL_EVIDENCE_SUFFIXES,
     collect_evidence_coverage_problems,
     demanded_evidence_kinds as demanded_evidence_kinds,
     extract_evidence_format_markers as extract_evidence_format_markers,
@@ -485,6 +486,85 @@ def ensure_evidence_dir_excluded(
     exclude_path.write_text(appended_text, encoding="utf-8")
 
 
+def _path_touches_frontend(changed_path: str, frontend_paths: tuple[str, ...]) -> bool:
+    """判断变更路径是否落在任一前端目录前缀下（按路径段匹配，非裸子串）。
+
+    Args:
+        changed_path (str): git status 报出的单个仓库相对路径。
+        frontend_paths (tuple[str, ...]): 前端目录前缀列表。
+
+    Returns:
+        bool: 命中任一前端前缀返回 True。
+    """
+    normalized_path = changed_path.strip()
+    for raw_prefix in frontend_paths:
+        prefix = raw_prefix.strip().strip("/")
+        if prefix and (normalized_path == prefix or normalized_path.startswith(prefix + "/")):
+            return True
+    return False
+
+
+def ensure_frontend_visual_evidence(
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner | None = None,
+) -> None:
+    """前端改动强制真实视觉证据的 fail-closed 门禁。
+
+    当 worktree 的 git 变更命中 ``config.validation.frontend_paths`` 中任一
+    目录前缀时，证据目录（第一层）必须至少有一个视觉证据文件（图片/视频，
+    见 ``VISUAL_EVIDENCE_SUFFIXES``），否则抛 ``ValidationEvidenceError``，
+    由既有 recovery 循环接管。
+
+    判定依据是"改了什么"（git diff）而非清单文本关键字，因此覆盖"前端 RV
+    条目文本不含'截图'导致逐项检查漏判"的盲区；本门禁独立于
+    ``verifier_enabled``。``process_runner`` 为 ``None`` 时（旧调用方未接线）
+    跳过，避免破坏兼容。
+
+    Args:
+        issue (IssueSummary): 当前处理的 Issue。
+        worktree_path (Path): worktree 根目录。
+        config (AppConfig): 运行配置。
+        process_runner (IProcessRunner | None): 命令执行端口；None 时跳过。
+
+    Raises:
+        ValidationEvidenceError: 前端改动但证据目录缺少视觉证据文件。
+    """
+    if process_runner is None:
+        return
+    if not config.validation.frontend_visual_evidence_required:
+        return
+    if not validation_required(issue.body, config):
+        return
+    frontend_paths = tuple(config.validation.frontend_paths)
+    if not frontend_paths:
+        return
+    changed_paths = list_changed_paths(worktree_path, process_runner)
+    touched_frontend_paths = [
+        changed_path
+        for changed_path in changed_paths
+        if _path_touches_frontend(changed_path, frontend_paths)
+    ]
+    if not touched_frontend_paths:
+        return
+    evidence_files = list_evidence_files(worktree_path, config)
+    if any(
+        evidence_file.suffix.lower() in VISUAL_EVIDENCE_SUFFIXES for evidence_file in evidence_files
+    ):
+        return
+    accepted_suffixes_text = "/".join(sorted(VISUAL_EVIDENCE_SUFFIXES))
+    touched_preview = ", ".join(sorted(touched_frontend_paths)[:5])
+    raise ValidationEvidenceError(
+        "Frontend changes were made but no visual evidence "
+        f"({accepted_suffixes_text}) exists in "
+        f"`{config.validation.evidence_dir}/`. Changed frontend paths: "
+        f"{touched_preview}. Run the target repo's UI/e2e entry point and save "
+        "at least one real screenshot or screen recording into the evidence "
+        "directory; a text log does not prove a UI change."
+    )
+
+
 def ensure_validation_evidence_ready(
     issue: IssueSummary,
     worktree_path: Path,
@@ -512,6 +592,8 @@ def ensure_validation_evidence_ready(
     """
     if not validation_required(issue.body, config):
         return
+    # 前端改动强制视觉证据（fail-closed，按 diff 判定，独立于 verifier）。
+    ensure_frontend_visual_evidence(issue, worktree_path, config, process_runner)
     evidence_files = list_evidence_files(worktree_path, config)
     if not evidence_files:
         raise ValidationEvidenceError(
