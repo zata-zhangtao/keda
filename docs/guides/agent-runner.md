@@ -3228,3 +3228,112 @@ promoted_skills_dirs = ["~/.iar/memory/keda-main/skills"]
 - **不替换** checkpoint / WIP commit 机制：短期记忆只存上下文摘要，文件状态仍由 git 与 checkpoint 负责。
 - **不替换** hooks（如 `check_guidelines_consistency.py`）：hooks 负责静态检查，记忆 / skill 负责从执行历史中提取可复用知识。
 - **不修改** 外部 agent CLI 协议：所有注入通过 runner 侧 `build_prompt` 完成。
+
+## 容器化运行（Containerized Runner）
+
+iar 默认跑在本机，需要本机预先安装 claude / codex / kimi 三个 agent CLI 以及 gh / Node / uv / just / git 等工具链。当本机还同时用于交互式 AI 编程（例如通过 cc-switch 切换多个 claude 账号）时，daemon 进程会与本机共享 `~/.claude`、`~/.codex`、`~/.kimi-code` 配置，账号切换会污染正在跑的任务。
+
+`iar container` 子命令组提供"把 runner 跑进 Docker 容器"的纯 opt-in 能力：
+
+- 容器内预装全套工具链（claude / codex / kimi / gh / Node / uv / just / git + iar 自身）。
+- 认证通过 `iar container auth import` 一次性快照到 `~/.iar/container-auth/`，与本机 cc-switch 当前 profile 隔离；本机 cc-switch 后续切换不影响容器。
+- 目标仓库挂载进容器，agent 在挂载目录的 `.iar-worktrees/` 建 worktree，宿主机可直接 `iar worktree open` 接管。
+- 单仓库先跑通（一个容器跑一个仓库的 daemon）。
+
+### 一次性导入认证
+
+在 cc-switch 切到要给容器用的账号后：
+
+```bash
+iar container auth import
+```
+
+产出 `~/.iar/container-auth/{claude,codex,kimi-code}/`，每个子目录含：
+
+- claude: `settings.json`（含 `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`）+ `skills/`
+- codex: `auth.json`（`OPENAI_API_KEY`）+ `skills/`
+- kimi: `config.toml` + `credentials/` + `oauth/` + `device_id` + `skills/`
+
+运行时状态（`history.jsonl`、`sessions/`、`cache/`、`paste-cache/`、`file-history/` 等）**不会**复制进容器。目标根目录权限 0700，仅宿主用户可读。
+
+想换容器用的账号？本机 cc-switch 切过去再跑一次 `iar container auth import`（覆盖）。
+
+### 准备 GitHub Token
+
+`gh` 在 macOS 用 keychain 存 token，容器读不到。导出 token 到 `.env`：
+
+```bash
+gh auth token | pbcopy
+echo "GH_TOKEN=$(pbpaste)" >> /path/to/your-repo/.env.local
+```
+
+### 启动容器 Runner
+
+```bash
+iar container up --repo /absolute/path/to/your-repo --repo-id keda
+```
+
+- `--repo` 指定目标仓库绝对路径（也可用环境变量 `REPO_PATH`）
+- `--repo-id` 是 `config.toml` 里 `[agent_runner.repositories.<id>]` 的 id；传入后 iar 会先检查同 id 的本机 daemon lock，若已有活 daemon 则拒绝启动并提示先停本机 daemon（避免两个 daemon 抢同一个 `agent/running` Issue）
+- `GH_TOKEN` 自动从环境变量（或 `--gh-token`）注入到容器内 `gh` CLI
+
+容器内 `iar daemon` 走与本机完全一致的执行路径：轮询 Issue → 建 worktree → 调 agent CLI → 验证 → commit → push → 开 PR。
+
+### 本机可见 Worktree
+
+agent 在容器内建的 worktree 落在挂载目录的 `<repo>/.iar-worktrees/issue-<N>/`，宿主 IDE 可直接打开：
+
+```bash
+iar worktree open
+ls /path/to/your-repo/.iar-worktrees/
+```
+
+容器以宿主机 `os.getuid()`/`os.getgid()` 运行，worktree 文件属主 = 宿主当前用户，非 root。
+
+### 查看日志与停止
+
+```bash
+# streaming 容器日志
+iar container logs
+
+# 停止容器（保留容器外的工作目录、container-auth 快照）
+iar container down
+```
+
+### 容器资产定位
+
+runner 容器资产（`Dockerfile.runner`、`docker-compose.runner.yml`、`.env.example`、`entrypoint.sh`）随 keda 包发布在 `backend.engines.agent_runner.templates.runner_container/`，由 `iar container up` 通过 `importlib.resources` 自动定位。无需克隆 keda 源码，全局安装 `iar` 后即可使用。
+
+资产路径解析：
+
+```bash
+uv run python -c "from importlib.resources import files; print(files('backend.engines.agent_runner.templates').joinpath('runner_container/docker-compose.runner.yml'))"
+```
+
+> **entrypoint.sh**：容器以 root 启动（不在 compose 顶层设 user），entrypoint 把 `/home/runner` chown 到 `RUNNER_UID:RUNNER_GID`，再用 `gosu` 切到目标 UID 跑 `CMD`。`gosu` 切用户时会按 `/etc/passwd` 重置 `HOME`（无对应记录时回退到 `/`）；宿主映射的 UID（macOS 501）在容器内通常没有 passwd 记录，entrypoint 会用 `gosu UID:GID env HOME=/home/runner IAR_HOME=... PATH=... "$@"` 显式注入关键环境变量，让 `gh` / `claude` / `codex` / `kimi` 在 `RUNNER_UID != 1000` 的宿主机（如 macOS 当前用户 UID 通常是 501）上也能正常创建 `~/.config` / `~/.cache` 子目录。
+
+### 排障速查
+
+| 症状 | 可能原因 | 排查 |
+|---|---|---|
+| `docker: command not found` | Docker 未装 | `brew install --cask docker` 或装 Docker Desktop |
+| 容器内 `claude --version` 失败 | kimi 安装脚本不可达 / npm 包镜像问题 | `docker compose -f <compose> run --rm iar-runner sh -c 'which claude; echo $PATH'` |
+| 容器内 `gh auth status` 401 | `GH_TOKEN` 未传或过期 | `.env.local` 里确认 `GH_TOKEN=<有效 token>` |
+| worktree 属主变 root | `RUNNER_UID`/`RUNNER_GID` 未对齐宿主 | `id -u` / `id -g` 与 `.env.local` 校对 |
+| `iar container up` 拒绝启动 | 同 repo_id 的本机 daemon 已活 | `iar daemon stop --repo-id <id>` 后重试 |
+| `iar run --dry-run` 在容器内失败 | 挂载仓库未 `iar init` | 进容器：`docker compose exec iar-runner iar init` |
+
+### 架构边界
+
+`iar container` 子命令严格遵循 `api → core → engines` 依赖方向：
+
+- `cli_typer_container.py` 只做 Typer 参数解析；不直接 import `backend.engines.*`。
+- `core/use_cases/agent_runner_container.py` 作为薄 facade，编排 daemon lock 互斥、env 注入、engines 调用。
+- `engines/agent_runner/container_auth.py` + `container_ops.py` 是实现层，前者负责认证复制，后者负责 `docker compose` 子进程封装。
+
+未引入 docker SDK 依赖；`container_ops` 仅通过 `subprocess.run(["docker", "compose", ...])` 调用 docker CLI。`dry-run` 模式完全跳过 docker 调用，便于 CI 验证。
+
+### 与已有 `iar daemon` 的关系
+
+- `iar container up` 与 `iar daemon` 是**互斥**选项：同一仓库不能同时跑本机 daemon 和容器 daemon。
+- 不装 Docker 的用户零影响：`iar container` 全部子命令都是 opt-in。

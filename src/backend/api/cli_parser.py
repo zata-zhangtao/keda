@@ -559,6 +559,84 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_options(workflow_install_parser)
 
+    container_parser = subparsers.add_parser(
+        "container",
+        help="Manage the iar runner container (auth import, up, down, logs).",
+    )
+    container_subparsers = container_parser.add_subparsers(dest="container_command", required=True)
+
+    container_auth_parser = container_subparsers.add_parser(
+        "auth",
+        help="Manage the container-side authentication snapshot.",
+    )
+    container_auth_subparsers = container_auth_parser.add_subparsers(
+        dest="container_auth_command", required=True
+    )
+    container_auth_import_parser = container_auth_subparsers.add_parser(
+        "import",
+        help=(
+            "Snapshot the host's claude / codex / kimi CLI auth + skills into "
+            "~/.iar/container-auth/ for the runner container to mount."
+        ),
+    )
+    container_auth_import_parser.set_defaults(command="container auth import")
+
+    container_up_parser = container_subparsers.add_parser(
+        "up",
+        help="Start the iar runner container for the target repository.",
+    )
+    container_up_parser.set_defaults(command="container up")
+    container_up_parser.add_argument(
+        "--repo",
+        default=None,
+        help="Absolute path to the target Git repository to mount.",
+    )
+    container_up_parser.add_argument(
+        "--repo-id",
+        default=None,
+        help=(
+            "Repository registry id. When set, refuses to start if a host "
+            "iar daemon is already serving this repo."
+        ),
+    )
+    container_up_parser.add_argument(
+        "--gh-token",
+        default=None,
+        help="GitHub token for the container's `gh` CLI. Falls back to $GH_TOKEN.",
+    )
+    container_up_parser.add_argument(
+        "--build",
+        action="store_true",
+        help="Pass --build to `docker compose up` to rebuild the runner image.",
+    )
+    container_up_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the docker compose plan without invoking Docker.",
+    )
+
+    container_down_parser = container_subparsers.add_parser(
+        "down",
+        help="Stop and remove the iar runner container.",
+    )
+    container_down_parser.set_defaults(command="container down")
+    container_down_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the docker compose plan without invoking Docker.",
+    )
+
+    container_logs_parser = container_subparsers.add_parser(
+        "logs",
+        help="Stream the iar runner container's logs to the terminal.",
+    )
+    container_logs_parser.set_defaults(command="container logs")
+    container_logs_parser.add_argument(
+        "--no-follow",
+        action="store_true",
+        help="Dump existing logs and exit instead of streaming.",
+    )
+
     takeover_parser = subparsers.add_parser(
         "takeover",
         help="Take over GitHub repositories: clone, init, register, and start daemons.",

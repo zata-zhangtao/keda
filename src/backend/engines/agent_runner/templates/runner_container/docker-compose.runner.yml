@@ -1,0 +1,61 @@
+# -----------------------------------------------------------------------------
+# iar Runner docker-compose
+#
+# 单仓库 runner 服务：把目标仓库、容器专用认证目录、iar 全局状态挂载进容器，
+# 以宿主 UID/GID 运行（避免污染宿主文件属主）。运行命令为 ``iar daemon``，
+# 走与本机 iar 完全一致的执行路径；agent 在挂载目录下建 worktree，本地可见。
+#
+# 使用：
+#   cp .env.example .env   # 然后按需填 REPO_PATH / GH_TOKEN / REPO_ID
+#   docker compose -f docker-compose.runner.yml up -d
+#   docker compose -f docker-compose.runner.yml logs -f
+#   docker compose -f docker-compose.runner.yml down
+#
+# 通常无需直接调本文件：由 ``iar container up`` 自动注入环境变量并启动。
+# -----------------------------------------------------------------------------
+
+services:
+  iar-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.runner
+    image: iar-runner:latest
+    container_name: iar-runner
+    restart: unless-stopped
+    # 注意：不在 compose 顶层设 user。entrypoint 需要以 root 身份 chown
+    # /home/runner 与 .iar 全局目录对齐到 RUNNER_UID/RUNNER_GID，再用
+    # gosu 切到目标 UID 跑 CMD。这样 gh/claude/codex/kimi 在 ``RUNNER_UID
+    # != 1000`` 的宿主机上也能正常创建 ~/.config / ~/.cache 子目录。
+    working_dir: /workspace/repo
+    environment:
+      # iar daemon 入口参数
+      IAR_HOME: /home/runner/.iar
+      HOME: /home/runner
+      # 仓库定位（必须由 .env 显式提供或由 iar container up 注入）
+      REPO_PATH: "${REPO_PATH}"
+      IAR_REPO_ID: "${IAR_REPO_ID:-}"
+      # gh 认证走 GH_TOKEN 环境变量（macOS keychain 容器读不到）
+      GH_TOKEN: "${GH_TOKEN:-}"
+      # 宿主 UID/GID 供 entrypoint.sh 把 /home/runner chown 到目标用户后
+      # 用 gosu 切过去；不传则走 entrypoint 默认 1000:1000。compose 显式
+      # environment 段会覆盖宿主 shell 的 env,所以这两个变量必须显式列出。
+      RUNNER_UID: "${RUNNER_UID:-1000}"
+      RUNNER_GID: "${RUNNER_GID:-1000}"
+      # 不要让 docker 注入的 PATH 覆盖 agent CLI 路径
+      PATH: "/opt/keda/.venv/bin:/home/runner/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    volumes:
+      # 目标仓库挂载为 /workspace/repo
+      - "${REPO_PATH}:/workspace/repo"
+      # 容器专用认证（由 ``iar container auth import`` 预先生成）
+      - "${HOME}/.iar/container-auth/claude:/home/runner/.claude:ro"
+      - "${HOME}/.iar/container-auth/codex:/home/runner/.codex:ro"
+      - "${HOME}/.iar/container-auth/kimi-code:/home/runner/.kimi-code:ro"
+      # iar 全局状态持久化（daemon-locks / config / 跨重启的 registry 等）
+      - "${HOME}/.iar:/home/runner/.iar"
+    # 暴露端口：本 runner 不开对外端口；保留为扩展位。
+    expose: []
+    # 加 SIGINT / SIGTERM 优雅停机，让 daemon 走完当前 Issue 处理循环。
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+    # 不分配 tty；agent CLI 是非交互调用。
+    tty: false

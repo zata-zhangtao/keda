@@ -44,6 +44,34 @@ iar init
 iar init --skip-skills
 ```
 
+## 容器化运行（可选）
+
+`iar` 还提供 `iar container` 子命令组，把 agent runner 跑进 Docker 容器：
+
+- 容器内预装 claude / codex / kimi 三个 agent CLI + gh + Node + uv + just + git，避免污染本机工具链。
+- 认证通过 `iar container auth import` 一次性快照到 `~/.iar/container-auth/`，与本机 cc-switch 当前 profile 隔离——本机切账号不影响容器内 agent 认证。
+- 目标仓库挂载进容器，agent 在挂载目录的 `.iar-worktrees/` 建 worktree，宿主机可直接 `iar worktree open` 接管。
+- runner 容器资产（Dockerfile / compose / .env.example）随 `iar` 包发布，无需克隆 keda 源码，全局安装后即可使用。
+
+最小启动流程：
+
+```bash
+# 1. 准备认证（本机 cc-switch 切到要给容器用的账号）
+iar container auth import
+
+# 2. 准备 GitHub token（macOS keychain 容器读不到）
+echo "GH_TOKEN=$(gh auth token)" >> /path/to/your-repo/.env.local
+
+# 3. 启动容器 runner
+iar container up --repo /absolute/path/to/your-repo --repo-id keda
+
+# 4. 查看日志 / 停止
+iar container logs
+iar container down
+```
+
+完整说明见 `docs/guides/agent-runner.md` 的「容器化运行」章节。Docker 未安装时该子命令返回明确错误，不影响本机 `iar daemon` 用法。
+
 ## 排错
 
 - `command -v iar` 没命中：把 `~/.local/bin` 加入 `PATH`，或在新 shell 中重试。
