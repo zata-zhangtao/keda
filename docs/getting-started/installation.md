@@ -60,7 +60,7 @@ iar init --skip-skills
 iar container auth import
 
 # 2. 准备 GitHub token（macOS keychain 容器读不到）
-echo "GH_TOKEN=$(gh auth token)" >> /path/to/your-repo/.env.local
+export GH_TOKEN="$(gh auth token)"
 
 # 3. 启动容器 runner
 iar container up --repo /absolute/path/to/your-repo --repo-id keda
