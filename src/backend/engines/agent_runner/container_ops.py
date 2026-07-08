@@ -70,7 +70,11 @@ def _default_docker_runner(
     cwd: Path,
     check: bool,
 ) -> subprocess.CompletedProcess[str]:
-    """默认 docker compose 调用：直接走 :mod:`subprocess`。"""
+    """默认 docker compose 调用：直接走 :mod:`subprocess`。
+
+    捕获 stdout/stderr 供短命令（``up -d`` / ``down``）抑制 docker 噪声；
+    长命令（``logs``）用 :func:`_streaming_docker_runner` 走终端直通。
+    """
     return subprocess.run(
         argv,
         cwd=cwd,
@@ -80,6 +84,22 @@ def _default_docker_runner(
         text=True,
         encoding="utf-8",
     )
+
+
+def _streaming_docker_runner(
+    argv: list[str],
+    *,
+    env: dict[str, str],
+    cwd: Path,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    """streaming docker compose 调用：stdout/stderr 直通终端，不捕获。
+
+    供 ``logs``（尤其 ``--follow``）使用--``capture_output=True`` 会把流式
+    日志全部缓存到内存且不回显，用户看到空输出直到 SIGINT。这里让
+    :mod:`subprocess` 继承父进程 stdout/stderr，实时打印。
+    """
+    return subprocess.run(argv, cwd=cwd, env=env, check=check)
 
 
 def resolve_packaged_runner_assets() -> RunnerContainerAssets:
@@ -233,9 +253,14 @@ def run_container_logs(
     follow: bool = True,
     runner: DockerRunnerCallable | None = None,
 ) -> list[str]:
-    """执行 ``docker compose logs``（默认 streaming）。"""
+    """执行 ``docker compose logs``（默认 streaming）。
+
+    默认走 :func:`_streaming_docker_runner` 让日志直通终端；``logs --follow``
+    是长命令，不能用捕获式 runner（否则用户看到空输出直到 SIGINT）。测试可
+    注入 ``runner`` 捕获 argv。
+    """
     argv = build_container_logs_argv(compose_file, follow=follow)
-    effective_runner = runner if runner is not None else _default_docker_runner
+    effective_runner = runner if runner is not None else _streaming_docker_runner
     effective_runner(
         list(argv),
         env=_build_compose_env({}),

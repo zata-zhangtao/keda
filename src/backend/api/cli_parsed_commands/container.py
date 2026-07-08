@@ -176,8 +176,15 @@ def run_container_logs_command(ctx: ParsedCommandContext) -> int:
     follow = bool(getattr(parsed, "follow", True))
     controller = ContainerOpsController()
     assets = controller.resolve_packaged_runner_assets()
-    argv = stream_runner_container_logs(controller, assets.compose_file, follow=follow)
-    console.print(f"[green]Tailing logs:[/] {' '.join(shlex.quote(p) for p in argv)}")
+    # 先打印提示再进入 streaming：``--follow`` 会阻塞直到 SIGINT，
+    # 若把提示放在调用之后，用户在 streaming 期间永远看不到它，且
+    # Ctrl+C 会以 KeyboardInterrupt 形式抛出（见下方 except）。
+    hint = " (--follow, Ctrl+C 停止)" if follow else ""
+    console.print(f"[green]Tailing iar-runner logs[/]{hint}")
+    try:
+        stream_runner_container_logs(controller, assets.compose_file, follow=follow)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Stopped tailing logs.[/]")
     return 0
 
 
