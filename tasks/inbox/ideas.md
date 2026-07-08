@@ -217,3 +217,7 @@ Traceback (most recent call last):
 ## 2026-07-03 16:17
 
 > .iar/memory 完成之后 还要做记忆分层的功能
+
+## 2026-07-08 02:35 · iar-init-skill
+
+> iar init 的skill 不应该再从本机安装,而是从~/code/zata_code_template  所对应的github 仓库安装那两个skill 并且是按照到~/.claude 里面
