@@ -172,7 +172,11 @@ def _run_parsed_command(parsed: argparse.Namespace) -> int:
     repo_id: str | None = getattr(parsed, "repo_id", None)
     repo_override: str | None = getattr(parsed, "repo", None)
 
-    if repo_id is not None and repo_override is not None:
+    # ``container up`` 把 ``--repo`` 用作容器挂载路径、``--repo-id`` 用作仓库
+    # registry id，二者语义互补（与其它命令里二者互为仓库选择器不同），
+    # 不适用互斥校验；否则文档主路径 ``iar container up --repo <path>
+    # --repo-id <id>`` 会被误拦。
+    if repo_id is not None and repo_override is not None and parsed.command != "container up":
         logger.error("--repo and --repo-id are mutually exclusive.")
         return 1
 

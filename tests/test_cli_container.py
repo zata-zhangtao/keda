@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from backend.api.cli_parser import build_parser
@@ -111,3 +112,58 @@ def test_cli_typer_container_has_no_engines_import() -> None:
         "cli_typer_container.py must not directly import backend.engines.* — "
         "route through core facade."
     )
+
+
+def test_container_up_accepts_repo_path_and_repo_id_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """container up 同时传 --repo (mount path) 与 --repo-id (registry id) 不被互斥校验拦。
+
+    回归: _run_parsed_command 的互斥校验曾把文档主路径
+    `iar container up --repo <path> --repo-id <id>` 误判为 exit 1。
+    container up 的 --repo 是容器挂载路径、--repo-id 是仓库 registry id，
+    二者语义互补，与其它命令里二者互为仓库选择器不同。
+    """
+    import argparse
+
+    from backend.api import cli as cli_module
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    # 屏蔽真实 dispatch，只验证互斥校验不拦 container up。
+    monkeypatch.setattr(cli_module, "dispatch_parsed_command", lambda _ctx: 0)
+
+    namespace = argparse.Namespace(
+        command="container up",
+        repo=str(repo_path),
+        repo_id="keda",
+        config=None,
+        gh_token=None,
+        build=False,
+        dry_run=True,
+    )
+    assert cli_module._run_parsed_command(namespace) == 0
+
+
+def test_non_container_command_still_enforces_repo_selector_mutex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """非 container up 命令仍受 --repo/--repo-id 互斥校验约束。
+
+    确保 container up 的豁免是外科手术式的，不放松其它命令的选择器互斥。
+    """
+    import argparse
+
+    from backend.api import cli as cli_module
+
+    monkeypatch.setattr(cli_module, "dispatch_parsed_command", lambda _ctx: 0)
+
+    namespace = argparse.Namespace(
+        command="run",
+        repo=str(tmp_path),
+        repo_id="keda",
+        config=None,
+    )
+    # 互斥校验在 dispatch 之前，即便 dispatch 被模拟为 0 也应先返回 1。
+    assert cli_module._run_parsed_command(namespace) == 1
