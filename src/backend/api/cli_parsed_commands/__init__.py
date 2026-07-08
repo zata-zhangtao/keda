@@ -16,6 +16,12 @@ from backend.api.cli_parsed_commands.agent import (
     run_deliberate_command,
     run_repl_command,
 )
+from backend.api.cli_parsed_commands.container import (
+    run_container_auth_import_command,
+    run_container_down_command,
+    run_container_logs_command,
+    run_container_up_command,
+)
 from backend.api.cli_parsed_commands.init_workflow_takeover import (
     run_init_command,
     run_takeover_command,
@@ -81,6 +87,10 @@ _DISPATCH_TABLE: dict[str, callable] = {
     "loop cancel": run_loop_command,
     "loop run": run_loop_command,
     "loop-daemon": run_loop_command,
+    "container auth import": run_container_auth_import_command,
+    "container up": run_container_up_command,
+    "container down": run_container_down_command,
+    "container logs": run_container_logs_command,
 }
 
 

@@ -48,7 +48,9 @@ __all__ = [
     "_run_typer_repository_command",
     "_typer_selector_options",
     "app",
+    "auth_app",
     "completion_app",
+    "container_app",
     "daemon_app",
     "issue_app",
     "labels_app",
@@ -157,6 +159,17 @@ loop_app = typer.Typer(
     no_args_is_help=True,
     context_settings=_HELP_CONTEXT,
 )
+container_app = typer.Typer(
+    help="Manage the iar runner container (auth import, up, down, logs).",
+    no_args_is_help=True,
+    context_settings=_HELP_CONTEXT,
+)
+auth_app = typer.Typer(
+    help="Manage the container-side authentication snapshot.",
+    no_args_is_help=True,
+    context_settings=_HELP_CONTEXT,
+)
+container_app.add_typer(auth_app, name="auth")
 app.add_typer(labels_app, name="labels")
 app.add_typer(issue_app, name="issue")
 app.add_typer(completion_app, name="completion")
@@ -166,6 +179,7 @@ app.add_typer(registry_app, name="registry")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(loop_app, name="loop")
+app.add_typer(container_app, name="container")
 
 RepoOption = Annotated[str | None, typer.Option("--repo", help="Target repository path.")]
 RepoIdOption = Annotated[
@@ -310,6 +324,7 @@ from backend.api import (  # noqa: E402,F401
     cli_typer_agent,
     cli_typer_worktree,
     cli_typer_workflow,
+    cli_typer_container,
     cli_typer_takeover,
     cli_typer_loop,
 )
