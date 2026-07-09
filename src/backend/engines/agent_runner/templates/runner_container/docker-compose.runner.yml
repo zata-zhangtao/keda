@@ -46,10 +46,14 @@ services:
     volumes:
       # 目标仓库挂载为 /workspace/repo
       - "${REPO_PATH}:/workspace/repo"
-      # 容器专用认证（由 ``iar container auth import`` 预先生成）
-      - "${HOME}/.iar/container-auth/claude:/home/runner/.claude:ro"
-      - "${HOME}/.iar/container-auth/codex:/home/runner/.codex:ro"
-      - "${HOME}/.iar/container-auth/kimi-code:/home/runner/.kimi-code:ro"
+      # 容器专用认证（由 ``iar container auth import`` 预先生成）。
+      # 不加 :ro：claude/codex/kimi 运行时需在各自配置目录下写
+      # history / sessions / cache 等状态；只读挂载会导致 agent CLI 写入
+      # 失败而中断 ``iar daemon``。隔离性由独立路径保证（container-auth
+      # 与本机 ~/.claude 是不同目录，本机 cc-switch 切换不影响容器）。
+      - "${HOME}/.iar/container-auth/claude:/home/runner/.claude"
+      - "${HOME}/.iar/container-auth/codex:/home/runner/.codex"
+      - "${HOME}/.iar/container-auth/kimi-code:/home/runner/.kimi-code"
       # iar 全局状态持久化（daemon-locks / config / 跨重启的 registry 等）
       - "${HOME}/.iar:/home/runner/.iar"
     # 暴露端口：本 runner 不开对外端口；保留为扩展位。

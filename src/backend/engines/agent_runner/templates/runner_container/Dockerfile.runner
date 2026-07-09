@@ -26,6 +26,7 @@ ENV PYTHONUNBUFFERED=1 \
 ARG CLAUDE_VERSION=2.1.187
 ARG CODEX_VERSION=0.142.4
 ARG KIMI_VERSION=0.22.3
+ARG JUST_VERSION=1.55.1
 ARG NODE_MAJOR=22
 # KEDA_VERSION 接受 git tag 或 commit SHA；默认 main（开发迭代期方便）。
 ARG KEDA_VERSION=main
@@ -52,11 +53,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 just（cargo 编译较慢；从官方预编译二进制下载，二进制无依赖）。
-# tag_name 自 just 1.x 起不带 v 前缀，用 python 解 JSON 拿版本；按 dpkg 架构
-# 选择 aarch64 / x86_64 musl 静态链接二进制（无 glibc 依赖）。
+# 版本由 ARG JUST_VERSION 钉定（与 claude/codex/kimi 同策略），保证可复现
+# build；升级时改 ARG 即可。按 dpkg 架构选择 aarch64 / x86_64 musl 静态
+# 链接二进制（无 glibc 依赖）。
 RUN set -eux; \
-    JUST_VERSION=$(curl -fsSL https://api.github.com/repos/casey/just/releases/latest \
-        | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"].lstrip("v"))'); \
     JUST_ARCH=$(dpkg --print-architecture); \
     case "${JUST_ARCH}" in \
         amd64) JUST_TARGET="x86_64-unknown-linux-musl" ;; \
@@ -76,8 +76,9 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && mv /root/.local/bin/uv /usr/local/bin/uv
 
 # 安装 gosu（容器内 su/sudo 的轻量替代，专门为 entrypoint 设计）。
-# 从官方 release 下载单文件二进制；不验签（容器构建内无 gpg trust setup，
-# 走 sha256 校验已经覆盖完整性——二进制是 tianon/gosu 官方项目固定 release）。
+# 从官方 tianon/gosu GitHub release 下载固定 1.17 版本单文件二进制；
+# 构建内无 gpg trust setup，暂不做签名校验（与 just/uv 官方二进制下载
+# 同级别），如需更强完整性保证可后续补 sha256sum 校验。
 RUN set -eux; \
     ARCH=$(dpkg --print-architecture); \
     curl -fsSL -o /usr/local/bin/gosu \
@@ -137,7 +138,6 @@ RUN set -eux; \
             && uv pip install "keda @ git+https://github.com/zata-zhangtao/keda.git@${KEDA_VERSION}"; \
     fi; \
     echo "/opt/keda/.venv/bin" > /etc/profile.d/keda-path.sh
-USER runner
 
 # 复制 entrypoint（root 阶段：/usr/local/bin 必须 root 可写；后续 chmod 也在 root）。
 USER root

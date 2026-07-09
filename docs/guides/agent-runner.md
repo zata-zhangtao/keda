@@ -3275,12 +3275,14 @@ iar container auth import
 
 ### 准备 GitHub Token
 
-`gh` 在 macOS 用 keychain 存 token，容器读不到。导出 token 到 `.env`：
+`gh` 在 macOS 用 keychain 存 token，容器读不到。`iar container up` 从当前 shell 环境变量（或 `--gh-token`）读取 `GH_TOKEN` 并注入容器，因此需在启动容器前导出：
 
 ```bash
-gh auth token | pbcopy
-echo "GH_TOKEN=$(pbpaste)" >> /path/to/your-repo/.env.local
+export GH_TOKEN="$(gh auth token)"
+iar container up --repo /absolute/path/to/your-repo --repo-id keda
 ```
+
+> 注意：写入目标仓库 `.env.local` 不会生效--`iar container up` 不加载仓库级 dotenv，只读 shell 环境变量与 `--gh-token` 参数。若希望持久化，把 `export GH_TOKEN=...` 放进 shell rc 或用 `--gh-token` 显式传参。
 
 ### 启动容器 Runner
 
