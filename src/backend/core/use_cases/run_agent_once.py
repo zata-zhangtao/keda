@@ -919,6 +919,12 @@ def run_agent_until_committed(
     """
     max_recovery_attempts = max(0, config.runner.max_recovery_attempts)
     recovery_retry_delay_seconds = max(0, config.runner.recovery_retry_delay_seconds)
+    prd_relative_path = extract_prd_path(issue.body)
+    prd_baseline_content = (
+        (worktree_path / prd_relative_path).read_text(encoding="utf-8")
+        if prd_relative_path is not None and (worktree_path / prd_relative_path).exists()
+        else None
+    )
     recovery_failure_summary = ""
     recovery_failure_type: str = "verification_failed"
     final_verification_results: list[CommandResult] = []
@@ -1113,7 +1119,12 @@ def run_agent_until_committed(
 
         # Phase 3: 检查 PRD 交付（归档已完成 PRD）
         try:
-            ensure_prd_delivery_ready(issue, worktree_path, process_runner)
+            ensure_prd_delivery_ready(
+                issue,
+                worktree_path,
+                process_runner,
+                prd_baseline_content=prd_baseline_content,
+            )
         except PrdDeliveryError as exc:
             after_sha = get_head_sha(worktree_path, process_runner)
             failure_type = classify_failure(

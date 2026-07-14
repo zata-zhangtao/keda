@@ -23,6 +23,10 @@ from backend.core.shared.models.agent_runner import (
     MemoryConfig,
     PromptConfig,
 )
+from backend.core.shared.prd_change_log import (
+    extract_prd_change_log_entry_count,
+    parse_prd_change_log,
+)
 from backend.core.shared.prd_checklist import parse_prd_checklist
 from backend.core.use_cases.agent_runner_structured_evidence import (
     build_structured_evidence_prompt_suffix,
@@ -123,21 +127,16 @@ def _read_prd_text(prd_path: Path) -> str | None:
 
 
 def _build_prd_closeout_instruction(prd_relative_path: str) -> str:
-    """Return the canonical "update checklist, archive if complete" footer."""
-    prd_path_obj = Path(prd_relative_path)
-    archive_clause = ""
-    if (
-        len(prd_path_obj.parts) >= 2
-        and prd_path_obj.parts[0] == "tasks"
-        and prd_path_obj.parts[1] == "pending"
-    ):
-        archive_clause = (
-            " If all Acceptance Checklist items are complete, move the PRD "
-            "from `tasks/pending/` to `tasks/archive/`."
-        )
+    """构建所有 Agent prompt 共用的 PRD 演进规则。"""
     return (
-        "Before requesting a commit, update the PRD's Acceptance Checklist "
-        f"to reflect completed work.{archive_clause}"
+        "The PRD may evolve during implementation, but Change Log and Acceptance "
+        "Checklist are separate: when changing the PRD, append a `## Change Log` "
+        "entry with Type, Before, After, Reason, Impact, and Review. Only mark an "
+        "Acceptance Checklist item after its stated behavior was actually executed "
+        "and evidenced. Never weaken a user-visible, security, scope, or realistic "
+        "validation requirement without recording the change and its review status. "
+        "Do not move the PRD to `tasks/archive/`; the runner archives it after gates pass. "
+        f"Canonical PRD: `{prd_relative_path}`."
     )
 
 
@@ -343,10 +342,45 @@ def _validate_prd_checklist(
         )
 
 
+def _validate_prd_change_log(
+    *,
+    file_content: str,
+    baseline_content: str | None,
+    prd_relative_path: str,
+) -> None:
+    """当本轮修改 canonical PRD 时，要求附带完整 Change Log。"""
+    if baseline_content is None or file_content == baseline_content:
+        return
+    baseline_entry_count = extract_prd_change_log_entry_count(baseline_content)
+    change_log_result = parse_prd_change_log(file_content)
+    if not change_log_result.section_found:
+        raise PrdDeliveryError(
+            f"Canonical PRD changed without a Change Log section: {prd_relative_path}"
+        )
+    if change_log_result.entry_count == 0:
+        raise PrdDeliveryError(
+            f"Canonical PRD changed without a Change Log entry: {prd_relative_path}"
+        )
+    if change_log_result.entry_count <= baseline_entry_count:
+        raise PrdDeliveryError(
+            f"Canonical PRD changed without appending a Change Log entry: {prd_relative_path}"
+        )
+    if change_log_result.incomplete_entry_fields:
+        missing_by_entry = "; ".join(
+            f"entry {entry_number}: {', '.join(missing_fields)}"
+            for entry_number, missing_fields in change_log_result.incomplete_entry_fields.items()
+        )
+        raise PrdDeliveryError(
+            f"Canonical PRD Change Log is incomplete in {prd_relative_path}: {missing_by_entry}"
+        )
+
+
 def ensure_prd_delivery_ready(
     issue: IssueSummary,
     worktree_path: Path,
     process_runner: IProcessRunner,
+    *,
+    prd_baseline_content: str | None = None,
 ) -> None:
     """Validate canonical PRD state and auto-archive if complete.
 
@@ -360,6 +394,11 @@ def ensure_prd_delivery_ready(
     prd_path = worktree_path / prd_relative_path
     if prd_path.exists():
         file_content = prd_path.read_text(encoding="utf-8")
+        _validate_prd_change_log(
+            file_content=file_content,
+            baseline_content=prd_baseline_content,
+            prd_relative_path=prd_relative_path,
+        )
         _validate_prd_checklist(file_content, prd_relative_path)
 
         archive_relative_path = resolve_prd_archive_path(prd_relative_path)
@@ -479,8 +518,9 @@ def format_prd_delivery_failure(message: str) -> str:
     return "\n".join(
         [
             format_prd_delivery_detail(message),
-            "Update the canonical PRD: ensure all Acceptance Checklist items are checked, "
-            "and move the PRD from tasks/pending/ to tasks/archive/ if complete.",
+            "Complete the missing real work and evidence before marking its Acceptance "
+            "Checklist item. If the PRD itself must change, append a structured Change Log "
+            "entry; do not move the PRD to tasks/archive/.",
         ]
     )
 
@@ -661,10 +701,7 @@ def build_recovery_prompt(
     if prd_path:
         prd_closeout = _build_prd_closeout_instruction(prd_path)
         prd_context_block = _build_prd_context_block(issue, worktree_path)
-        prd_line = (
-            "Re-check the canonical PRD below; update the Acceptance Checklist "
-            f"to reflect the recovery work. {prd_closeout}\n\n{prd_context_block}"
-        )
+        prd_line = f"Re-check the canonical PRD below. {prd_closeout}\n\n{prd_context_block}"
     else:
         prd_line = "If the Issue references a PRD, re-check it if it affects the fix."
 

@@ -2582,18 +2582,18 @@ validation_passed = "validation/passed"
 1. **Prompt 引导**：`build_prompt()` 从 `config.toml` 的 `[agent_runner.prompts.phases]` 模板渲染 prompt，默认模板会：
    - 列出 runner 将要执行的 `verification_commands`，让 Agent 在写代码阶段就了解交付门禁。
    - 提醒 Agent 在请求 commit 前检查项目规范（AGENTS.md、命名、依赖方向、文件编码、行长度限制等）。
-   - 明确要求 Agent 在请求 commit 前更新 PRD 的 `Acceptance Checklist`，并在所有验收项完成后将 PRD 从 `tasks/pending/` 移动到 `tasks/archive/`。
+   - 明确区分 PRD 的 `Change Log` 与 `Acceptance Checklist`：实现中可演进 PRD，但每次变更必须追加结构化 Change Log（类型、原文、变更后、原因、影响、审核）；Checklist 只表示已真实执行并留存证据的验收状态。Agent 不移动 PRD，归档由 runner 在门禁通过后执行。
    - `build_fix_prompt()` 在 Fix Agent 阶段给出当前 verification 失败输出以及完整 verification 命令列表，约束 Agent 只修导致失败的代码/测试，并提醒检查项目规范。
    - `build_recovery_prompt()` 在 recovery 阶段给出 failure summary 和原始 verification 失败输出，并给出同样的 closeout 与规范检查提醒。
    - `build_progress_continuation_prompt()` 在跨 claim 续作时附带上一次失败的 failure summary 和 verification 输出，并提醒检查项目规范。
 2. **提交前 Delivery Gate**：runner 在 `publish_changes()` 之前执行 PRD delivery gate：
    - 无 PRD path：跳过 gate，保持现有行为。
-   - PRD 仍在 `tasks/pending/`：若 `Acceptance Checklist` 还有未勾选项，将失败原因交回 recovery prompt；若已全部勾选，runner 自动执行 `git mv tasks/pending/<name>.md tasks/archive/<name>.md`。
+   - PRD 仍在 `tasks/pending/`：若 `Acceptance Checklist` 还有未勾选项，将失败原因交回 recovery prompt；若本轮 PRD 内容相较执行开始时发生变更，必须有完整结构化 `Change Log`，否则同样打回。两项均通过后，runner 自动执行 `git mv tasks/pending/<name>.md tasks/archive/<name>.md`。
    - PRD 已在 `tasks/archive/`：校验 `Acceptance Checklist` 全部完成。
    - PRD 文件不存在、archive 目录缺失或 `Acceptance Checklist` section 缺失：进入 recovery loop，重试耗尽后标记 `agent/failed`。
 3. **归档纳入同一 Commit**：`git mv` 发生在 `git add -A` 之前，因此 PRD 归档变更会随 Agent 的代码变更一起进入同一个 commit，并包含在随后创建的 Draft PR 中，不需要 publish 后再追加 commit。
 
-> **注意**：runner 不会自动判断业务验收是否真实完成，只校验 Agent 是否已将 PRD 更新到交付完成态（checklist 全勾、文件在 archive）。
+> **注意**：runner 不会只因 PRD 的 checkbox 而信任业务完成度；Realistic Validation 与独立 verifier 仍需提供实际证据。Change Log 解释需求为何演进，不能替代任何验收项或证据。
 
 ## FastAPI 状态端点
 

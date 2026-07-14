@@ -541,8 +541,8 @@ def test_extract_prd_path_rejects_garbage_anchor() -> None:
     assert extract_prd_path(body) == "tasks/pending/P2-FEAT-20260527-190923-prd-from-issue.md"
 
 
-def test_build_prompt_includes_prd_closeout_for_pending_prd() -> None:
-    """Prompt should instruct the agent to update checklist and archive pending PRDs."""
+def test_build_prompt_separates_prd_change_log_from_checklist() -> None:
+    """Prompt should distinguish PRD evolution from acceptance completion."""
     issue = IssueSummary(
         number=1,
         title="Test",
@@ -553,8 +553,9 @@ def test_build_prompt_includes_prd_closeout_for_pending_prd() -> None:
     prompt = build_prompt(issue, Path("/worktree"), PromptConfig())
     assert "tasks/pending/example.md" in prompt
     assert "Acceptance Checklist" in prompt
-    assert "tasks/pending/" in prompt
-    assert "tasks/archive/" in prompt
+    assert "Change Log" in prompt
+    assert "Acceptance Checklist" in prompt
+    assert "Do not move the PRD" in prompt
 
 
 def test_build_prompt_no_prd_path() -> None:
@@ -570,8 +571,8 @@ def test_build_prompt_no_prd_path() -> None:
     assert "If the Issue references a PRD, read it before editing." in prompt
 
 
-def test_build_recovery_prompt_includes_prd_closeout() -> None:
-    """Recovery prompt should remind the agent about PRD closeout state."""
+def test_build_recovery_prompt_separates_prd_change_log_from_checklist() -> None:
+    """Recovery prompt should preserve the PRD evolution rule."""
     issue = IssueSummary(
         number=1,
         title="Test",
@@ -588,7 +589,8 @@ def test_build_recovery_prompt_includes_prd_closeout() -> None:
     )
     assert "tasks/pending/example.md" in prompt
     assert "Acceptance Checklist" in prompt
-    assert "tasks/archive/" in prompt
+    assert "Change Log" in prompt
+    assert "Do not move the PRD" in prompt
 
 
 def test_resolve_prd_archive_path_converts_pending() -> None:
@@ -640,6 +642,79 @@ def test_ensure_prd_delivery_ready_raises_when_pending_incomplete(
     fake_runner = FakeProcessRunner()
     with pytest.raises(PrdDeliveryError, match="unchecked items"):
         ensure_prd_delivery_ready(issue, tmp_path, fake_runner)
+
+
+def test_ensure_prd_delivery_ready_requires_change_log_for_prd_change(
+    tmp_path: Path,
+) -> None:
+    """本轮修改 PRD 时必须有独立于 Checklist 的结构化 Change Log。"""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prd_path = tmp_path / "tasks" / "pending" / "example.md"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    baseline_content = "# PRD\n\n## Acceptance Checklist\n\n- [x] done\n"
+    prd_path.write_text(
+        baseline_content + "\n新增了实现细节。\n",
+        encoding="utf-8",
+    )
+    fake_runner = FakeProcessRunner()
+
+    with pytest.raises(PrdDeliveryError, match="without a Change Log section"):
+        ensure_prd_delivery_ready(
+            issue,
+            tmp_path,
+            fake_runner,
+            prd_baseline_content=baseline_content,
+        )
+
+
+def test_ensure_prd_delivery_ready_requires_new_change_log_entry(
+    tmp_path: Path,
+) -> None:
+    """已有 Change Log 时，每次新的 PRD 修改仍须追加一条记录。"""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    baseline_content = """# PRD
+
+## Change Log
+
+### 2026-07-13 · Earlier change
+- 类型：实现细化
+- 原文：原实现
+- 变更后：新实现
+- 原因：补齐边界
+- 影响：无用户可见变化
+- 审核：已记录
+
+## Acceptance Checklist
+
+- [x] done
+"""
+    prd_path = tmp_path / "tasks" / "pending" / "example.md"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(
+        baseline_content.replace("# PRD", "# PRD\n\n新的实现说明"),
+        encoding="utf-8",
+    )
+    fake_runner = FakeProcessRunner()
+
+    with pytest.raises(PrdDeliveryError, match="without appending a Change Log entry"):
+        ensure_prd_delivery_ready(
+            issue,
+            tmp_path,
+            fake_runner,
+            prd_baseline_content=baseline_content,
+        )
 
 
 def test_ensure_prd_delivery_ready_git_mv_when_pending_complete(
@@ -2729,6 +2804,19 @@ def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
                     assert "unchecked items" in prompt
                     _write_commit_request(worktree_path, "agent: recovered fix")
                     _write_complete_prd(worktree_path, "tasks/pending/example.md")
+                    recovery_prd_path = worktree_path / "tasks/pending/example.md"
+                    recovery_prd_path.write_text(
+                        recovery_prd_path.read_text(encoding="utf-8")
+                        + "\n## Change Log\n\n"
+                        + "### 2026-07-14 · Recovery update\n"
+                        + "- 类型：验收状态更新\n"
+                        + "- 原文：验收项未完成\n"
+                        + "- 变更后：验收项已完成\n"
+                        + "- 原因：已执行缺失验证\n"
+                        + "- 影响：交付状态更新\n"
+                        + "- 审核：runner 门禁待验证\n",
+                        encoding="utf-8",
+                    )
                 return CommandResult(command_tuple, 0, "", "")
             if command_tuple == ("git", "rev-parse", "HEAD"):
                 self._sha_calls += 1
