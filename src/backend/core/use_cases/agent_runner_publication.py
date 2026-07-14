@@ -51,7 +51,7 @@ from backend.core.use_cases.agent_runner_publish import (
 )
 from backend.core.use_cases.agent_runner_validation import (
     ensure_validation_evidence_ready,
-    publish_validation_evidence,
+    publish_validation_evidence_best_effort,
 )
 from backend.core.use_cases.agent_runner_workflow import workflow_state_labels
 from backend.core.use_cases.run_agent_once import (
@@ -296,23 +296,21 @@ def _publish_validation_evidence_after_pr(
     process_runner: IProcessRunner,
     pr_url: str,
 ) -> None:
-    """Upload evidence and post the PR evidence comment after PR creation."""
-    try:
-        publish_validation_evidence(
-            issue=issue,
-            worktree_path=worktree_path,
-            config=config,
-            github_client=github_client,
-            process_runner=process_runner,
-            pr_url=pr_url,
-            head_sha=get_head_sha(worktree_path, process_runner),
-        )
-    except Exception as exc:  # noqa: BLE001 - surface category for recovery.
-        raise PublishFailureError(
-            f"Failed to publish validation evidence: {exc}",
-            worktree_path=worktree_path,
-            failure_category=PublishFailureCategory.COMMENT_UPDATE,
-        ) from exc
+    """Upload evidence and post the PR evidence comment after PR creation.
+
+    Best-effort (see :func:`publish_validation_evidence_best_effort`): the
+    push/PR/label transitions above this call have already succeeded, so a
+    failure here must not roll the Issue back to ``agent/failed``.
+    """
+    publish_validation_evidence_best_effort(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=config,
+        github_client=github_client,
+        process_runner=process_runner,
+        pr_url=pr_url,
+        head_sha=get_head_sha(worktree_path, process_runner),
+    )
 
 
 def _count_local_commits_since_base(

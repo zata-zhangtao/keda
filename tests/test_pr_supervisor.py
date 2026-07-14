@@ -49,6 +49,35 @@ def test_parse_supervisor_action_repair() -> None:
     assert result.findings_counts.get("high") == 1
 
 
+def test_parse_supervisor_action_translates_code_reviewer_changes_requested() -> None:
+    """A code-reviewer verdict should drive repair instead of failing the Issue."""
+    text = (
+        "```json\n"
+        "{\n"
+        '  "verdict": "changes_requested",\n'
+        '  "summary": "Capability policy is not wired to the HTTP path.",\n'
+        '  "findings": [{"severity": "medium", "title": "Missing policy"}]\n'
+        "}\n"
+        "```"
+    )
+
+    result = parse_supervisor_action(text)
+
+    assert result.action == "repair_pr_branch"
+    assert result.summary == "Capability policy is not wired to the HTTP path."
+    assert result.findings_counts == {"high": 0, "medium": 1, "low": 0}
+
+
+def test_parse_supervisor_action_translates_code_reviewer_approval() -> None:
+    """A code-reviewer approval should remain eligible for the PR state guard."""
+    text = '```json\n{"verdict": "approved", "summary": "No findings."}\n```'
+
+    result = parse_supervisor_action(text)
+
+    assert result.action == "approve_for_human_review"
+    assert result.summary == "No findings."
+
+
 def test_parse_supervisor_action_invalid_marks_failed() -> None:
     """Invalid action should fail closed instead of requesting vague human input."""
     text = '{"action": "unknown_action"}'
@@ -81,6 +110,18 @@ def test_contains_supervisor_decision_detects_json_block() -> None:
 def test_contains_supervisor_decision_detects_bare_json() -> None:
     """A bare JSON object with an action field counts as a decision."""
     text = 'Some preamble {"action": "mark_failed", "summary": "bad"} trailing'
+    assert contains_supervisor_decision(text) is True
+
+
+def test_contains_supervisor_decision_detects_code_reviewer_verdict() -> None:
+    """A parseable code-reviewer verdict is recoverable supervisor output."""
+    text = (
+        "```json\n"
+        '{"verdict": "changes_requested", "summary": "Fix it.", '
+        '"findings": [{"severity": "medium", "title": "Missing policy"}]}\n'
+        "```"
+    )
+
     assert contains_supervisor_decision(text) is True
 
 

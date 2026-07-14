@@ -90,7 +90,7 @@ from backend.core.use_cases.agent_runner_supervisor import (
 from backend.core.use_cases.agent_runner_validation import (
     ValidationEvidenceError,
     process_validation_gate,
-    publish_validation_evidence,
+    publish_validation_evidence_best_effort,
 )
 from backend.core.use_cases.pr_supervisor import (
     build_rebase_repair_complete_comment,
@@ -664,24 +664,18 @@ def _process_running_rework(
         )
 
     # 修复后刷新验证证据：新 head 需要新证据与新一轮人工签收
+    # best-effort：见 publish_validation_evidence_best_effort docstring。
     rework_pr_url = github_client.find_open_pr_by_head(pr_branch)
     if rework_pr_url is not None:
-        try:
-            publish_validation_evidence(
-                issue=issue,
-                worktree_path=worktree_path,
-                config=config,
-                github_client=github_client,
-                process_runner=process_runner,
-                pr_url=rework_pr_url,
-                head_sha=get_head_sha(worktree_path, process_runner),
-            )
-        except Exception as evidence_exc:  # noqa: BLE001 - refresh is best effort.
-            _logger.warning(
-                "Failed to refresh validation evidence for Issue #%d: %s",
-                issue.number,
-                evidence_exc,
-            )
+        publish_validation_evidence_best_effort(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            github_client=github_client,
+            process_runner=process_runner,
+            pr_url=rework_pr_url,
+            head_sha=get_head_sha(worktree_path, process_runner),
+        )
 
     # 标记为 supervising 并获取 PR 上下文
     transition_issue_workflow_state(github_client, issue.number, config, config.labels.supervising)

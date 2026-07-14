@@ -1,6 +1,6 @@
 # Idea Inbox — 总结（AI 派生，可重写；事实以 ideas.md 为准）
 
-_最后更新：2026-06-26 16:09_
+_最后更新：2026-07-09_
 
 ## 主题聚类
 
@@ -56,6 +56,10 @@ _最后更新：2026-06-26 16:09_
 - cc-switch 是否暴露 API 或配置文件供自动切换模型？（来源：2026-06-17 09:44）
 - 测试基准中的“完成度”是由人主观评判，还是需要引入自动化检查/测试通过标准？（来源：2026-06-26 16:01）
 - 验证证据的语言切换是否按用户/项目语言动态决定，还是统一使用中文？（来源：2026-06-14 20:24）
+
+## 待 PRD
+
+- **iar init 不写 `[agent_runner.autopilot]` 段** → 建议 PRD：修复 init 生成路径。已复现：dry-run 输出仅在 safety 注释里出现 1 次 autopilot，整段缺失；freshai 等历史初始化过的仓库必须手动补段才能用快速档。根因：`AgentRunnerLocalSettings` 继承自 `_AgentRunnerRepositoryOverrideSettings`，所有字段是 `| None = None` → `settings.autopilot` 是 None → `model_dump()` 写 None → `_filter_none_dict` 过滤掉。修复范围限于 init 写出端，不能破坏老 TOML 加载路径的向后兼容（保留 `Optional`，让 init 路径显式填工厂默认）。（来源：2026-07-09）
 
 ## 已升级
 

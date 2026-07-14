@@ -42,6 +42,14 @@ _RETRYABLE_GH_ERROR_PATTERNS = (
     re.compile(r"502\s+Bad Gateway", re.IGNORECASE),
     re.compile(r"503\s+Service Unavailable", re.IGNORECASE),
     re.compile(r"504\s+Gateway Timeout", re.IGNORECASE),
+    # HTTP 499：客户端/边缘代理提前断开连接，纯网络层瞬时故障，与请求内容无关。
+    re.compile(r"non-200 OK status code:\s*499\b", re.IGNORECASE),
+    # GitHub 边缘节点的 "Whoa there!" 通用 400 页面：可能是瞬时的滥用检测误判，
+    # 也可能是 sanitize_github_body 没兜住的内容问题——重试只帮前者，但对后者
+    # 也无害（重试耗尽后会落回原有 agent/failed + recover 提示路径）。
+    # 只匹配这个具体 HTML 页面签名，不匹配普通结构化 400（如校验失败），避免
+    # 掩盖真正的请求错误。
+    re.compile(r"non-200 OK status code:\s*400.*Whoa there!", re.IGNORECASE | re.DOTALL),
 )
 
 #: Extracts the numeric comment ID from a GitHub issue comment URL.

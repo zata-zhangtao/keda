@@ -604,6 +604,73 @@ def test_create_issue_gives_up_after_max_retries(tmp_path: Path) -> None:
     assert runner.attempts == 3
 
 
+def test_create_issue_retries_on_client_closed_request(tmp_path: Path) -> None:
+    """create_issue should retry on HTTP 499 (client/edge closed the connection)."""
+    runner = _FlakyProcessRunner(
+        fail_count=1,
+        error_text='non-200 OK status code: 499  body: ""',
+    )
+    github_client = GitHubCliClient(tmp_path, runner)
+
+    with patch("backend.infrastructure.github_client.time.sleep") as mock_sleep:
+        issue_url = github_client.create_issue(title="title", body="body", labels=["type/feature"])
+
+    assert issue_url == "https://github.com/org/repo/issues/42"
+    assert runner.attempts == 2
+    mock_sleep.assert_called_once()
+
+
+def test_create_issue_retries_on_edge_whoa_there_400(tmp_path: Path) -> None:
+    """create_issue should retry GitHub's generic edge 'Whoa there!' 400 page.
+
+    This is the exact failure shape seen in production: a sanitized comment
+    body still tripped GitHub's edge-level abuse/validation page, which
+    permanently stranded the Issue in ``agent/failed`` because nothing
+    retried it. Whether the underlying cause is transient (worth retrying)
+    or a deterministic content issue, retrying is safe: it either recovers
+    or falls through to the exact same failure after a couple of seconds.
+    """
+    runner = _FlakyProcessRunner(
+        fail_count=1,
+        error_text=(
+            'non-200 OK status code: 400 Bad Request body: "\\r\\n<html>\\r\\n'
+            "  <head>\\r\\n    <title>Bad request &middot; GitHub</title>\\r\\n"
+            '  </head>\\r\\n  <body>\\r\\n    <div class=\\"c\\">\\r\\n'
+            "      <h1>Whoa there!</h1>\\r\\n      <p>You have sent an invalid "
+            'request.</p>\\r\\n    </div>\\r\\n  </body>\\r\\n</html>\\r\\n"'
+        ),
+    )
+    github_client = GitHubCliClient(tmp_path, runner)
+
+    with patch("backend.infrastructure.github_client.time.sleep") as mock_sleep:
+        issue_url = github_client.create_issue(title="title", body="body", labels=["type/feature"])
+
+    assert issue_url == "https://github.com/org/repo/issues/42"
+    assert runner.attempts == 2
+    mock_sleep.assert_called_once()
+
+
+def test_create_issue_does_not_retry_structured_400(tmp_path: Path) -> None:
+    """A normal structured 400 (real validation error) must not be retried.
+
+    Negative control for the "Whoa there!" pattern above: a clean JSON-style
+    API rejection is a deterministic client-side bug, not a transient edge
+    error, and must still fail fast rather than being masked by retries.
+    """
+    runner = _FlakyProcessRunner(
+        fail_count=1,
+        error_text='non-200 OK status code: 400 Bad Request body: "{\\"message\\":\\"Validation Failed\\"}"',
+    )
+    github_client = GitHubCliClient(tmp_path, runner)
+
+    with patch("backend.infrastructure.github_client.time.sleep") as mock_sleep:
+        with pytest.raises(subprocess.CalledProcessError):
+            github_client.create_issue(title="title", body="body", labels=[])
+
+    assert runner.attempts == 1
+    mock_sleep.assert_not_called()
+
+
 def test_list_pull_requests_for_issue_normalises_states(tmp_path: Path) -> None:
     """list_pull_requests_for_issue maps gh states to the 4-bucket view model."""
     command = (

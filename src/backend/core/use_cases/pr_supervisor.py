@@ -35,6 +35,7 @@ from backend.core.use_cases.agent_runner_failure import (
 from backend.core.use_cases.agent_runner_verification_recovery import (
     ensure_verification_passed_with_recovery,
 )
+from backend.core.use_cases.agent_review import ReviewerDecision, parse_reviewer_decision
 from backend.core.use_cases.run_agent_once import (
     commit_requested_changes,
     ensure_verification_passed,
@@ -140,6 +141,27 @@ VALID_SUPERVISOR_ACTIONS: set[str] = {
 REALISTIC_VALIDATION_SIGN_OFF_CHECK = "Realistic Validation sign-off"
 
 
+def _translate_code_reviewer_decision(
+    reviewer_decision: ReviewerDecision,
+) -> SupervisorActionResult | None:
+    """将 code-reviewer 的 verdict 转换为 post-PR supervisor action。"""
+    if not reviewer_decision.parseable:
+        return None
+    return SupervisorActionResult(
+        action=(
+            "approve_for_human_review"
+            if reviewer_decision.verdict == "approved"
+            else "repair_pr_branch"
+        ),
+        summary=reviewer_decision.summary,
+        findings_counts={
+            "high": reviewer_decision.findings_high,
+            "medium": reviewer_decision.findings_medium,
+            "low": reviewer_decision.findings_low,
+        },
+    )
+
+
 def is_sign_off_gate_only_failure(pr_context: PullRequestContext) -> bool:
     """Return True when every reported failing check is the manual sign-off gate.
 
@@ -233,6 +255,9 @@ def build_supervisor_prompt(
             "Output rules:",
             "- Respond with a single JSON object in a markdown code block.",
             "- Required fields: action, summary.",
+            "- If you invoke the `code-reviewer` skill, its `verdict` report is "
+            "review input only. Do not return `verdict` or the skill report; "
+            "translate the review outcome into the required `action` field.",
             f"- The `{REALISTIC_VALIDATION_SIGN_OFF_CHECK}` check is an "
             "intentional manual gate: it is expected to fail until a human "
             "reviewer ticks the sign-off checkboxes. If it is the only failing "
@@ -256,8 +281,8 @@ def contains_supervisor_decision(text: str) -> bool:
         text: Agent response text extracted from captured stdout.
 
     Returns:
-        True only when a JSON object containing an ``action`` field can be
-        decoded from the text, regardless of whether the action is valid.
+        True when the output contains either an ``action`` decision or a
+        parseable code-reviewer ``verdict`` that can be translated into one.
     """
     # 提取逻辑与 parse_supervisor_action 保持一致，确保"可识别决策"的判定
     # 不会与实际解析行为产生分歧
@@ -267,18 +292,21 @@ def contains_supervisor_decision(text: str) -> bool:
     else:
         match = re.search(r"\{.*\"action\".*\}", text, re.DOTALL)
         if not match:
-            return False
+            return parse_reviewer_decision(text).parseable
         json_text = match.group(0)
 
     try:
         payload = json.loads(json_text)
     except json.JSONDecodeError:
-        return False
-    return isinstance(payload, dict) and "action" in payload
+        return parse_reviewer_decision(text).parseable
+    if isinstance(payload, dict) and "action" in payload:
+        return True
+    return parse_reviewer_decision(text).parseable
 
 
 def parse_supervisor_action(text: str) -> SupervisorActionResult:
     """Parse supervisor JSON output from agent response text."""
+    reviewer_decision = parse_reviewer_decision(text)
     # 优先匹配 markdown 代码块，兼容模型在 JSON 外包裹解释文本的情况
     match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
@@ -287,6 +315,9 @@ def parse_supervisor_action(text: str) -> SupervisorActionResult:
         # 回退：尝试直接提取包含 action 字段的最外层 JSON 对象
         match = re.search(r"\{.*\"action\".*\}", text, re.DOTALL)
         if not match:
+            translated_reviewer_result = _translate_code_reviewer_decision(reviewer_decision)
+            if translated_reviewer_result is not None:
+                return translated_reviewer_result
             return SupervisorActionResult(
                 action="mark_failed",
                 summary=(
@@ -299,6 +330,9 @@ def parse_supervisor_action(text: str) -> SupervisorActionResult:
     try:
         payload = json.loads(json_text)
     except json.JSONDecodeError:
+        translated_reviewer_result = _translate_code_reviewer_decision(reviewer_decision)
+        if translated_reviewer_result is not None:
+            return translated_reviewer_result
         return SupervisorActionResult(
             action="mark_failed",
             summary=(
@@ -308,6 +342,10 @@ def parse_supervisor_action(text: str) -> SupervisorActionResult:
         )
 
     raw_action = payload.get("action")
+    if raw_action is None:
+        translated_reviewer_result = _translate_code_reviewer_decision(reviewer_decision)
+        if translated_reviewer_result is not None:
+            return translated_reviewer_result
     action = str(raw_action) if raw_action is not None else ""
     if action not in VALID_SUPERVISOR_ACTIONS:
         return SupervisorActionResult(

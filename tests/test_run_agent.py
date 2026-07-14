@@ -1107,6 +1107,43 @@ def test_publish_failure_category_push_vs_pr_create() -> None:
     assert exc_info.value.failure_category == PublishFailureCategory.PR_CREATE
 
 
+def test_publish_validation_evidence_after_pr_is_best_effort() -> None:
+    """Unlike push/PR-create, an evidence-comment failure must not raise.
+
+    Regression for a production incident: push, PR create, and the label
+    transition to ``agent/supervising`` had already succeeded; a transient
+    GitHub-edge error on the trailing evidence comment then rolled the
+    Issue all the way back to ``agent/failed``, discarding that good state
+    over what is purely an audit-trail comment.
+    """
+    from unittest.mock import patch
+
+    from backend.core.use_cases.agent_runner_publication import (
+        _publish_validation_evidence_after_pr,
+    )
+
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="Test body",
+        labels=(),
+    )
+
+    with patch(
+        "backend.core.use_cases.agent_runner_validation.publish_validation_evidence",
+        side_effect=RuntimeError('non-200 OK status code: 499  body: ""'),
+    ):
+        _publish_validation_evidence_after_pr(
+            issue=issue,
+            worktree_path=Path("."),
+            config=AppConfig(),
+            github_client=FakeGitHubClient(),
+            process_runner=FakeProcessRunner(),
+            pr_url="https://github.com/example/repo/pull/1",
+        )
+
+
 def test_validate_safe_changes_rejects_forbidden_path(tmp_path: Path) -> None:
     """Runner should not publish configured secret-like paths."""
     repo = tmp_path / "repo"

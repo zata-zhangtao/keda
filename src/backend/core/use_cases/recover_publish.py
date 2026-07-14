@@ -28,7 +28,7 @@ from backend.core.use_cases.agent_runner_failure import (
 from backend.core.use_cases.agent_runner_validation import (
     build_validation_checklist_block,
     extract_realistic_validation_items,
-    publish_validation_evidence,
+    publish_validation_evidence_best_effort,
     validation_required,
 )
 
@@ -427,23 +427,17 @@ def recover_publish_issue(
             raise exc
 
     # 第 5.5 步：上传验证证据并发 PR 证据评论（要求验证且证据存在时）。
+    # best-effort：见 publish_validation_evidence_best_effort docstring。
     if recovered_issue is not None:
-        try:
-            publish_validation_evidence(
-                issue=recovered_issue,
-                worktree_path=worktree_path,
-                config=config,
-                github_client=github_client,
-                process_runner=process_runner,
-                pr_url=pr_url,
-                head_sha=head_sha,
-            )
-        except Exception as evidence_exc:  # noqa: BLE001 - recovery must not abort here.
-            _logger.warning(
-                "Failed to publish validation evidence during recovery for Issue #%d: %s",
-                issue_number,
-                evidence_exc,
-            )
+        publish_validation_evidence_best_effort(
+            issue=recovered_issue,
+            worktree_path=worktree_path,
+            config=config,
+            github_client=github_client,
+            process_runner=process_runner,
+            pr_url=pr_url,
+            head_sha=head_sha,
+        )
 
     # 第六步：推送与 PR 均成功后，写入恢复成功评论。
     success_comment = build_recovery_success_comment(

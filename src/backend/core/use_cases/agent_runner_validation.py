@@ -1150,6 +1150,46 @@ def publish_validation_evidence(
     return upload
 
 
+def publish_validation_evidence_best_effort(
+    *,
+    issue: IssueSummary,
+    worktree_path: Path,
+    config: AppConfig,
+    github_client: IGitHubClient,
+    process_runner: IProcessRunner,
+    pr_url: str,
+    head_sha: str,
+) -> EvidenceUpload | None:
+    """尽力发布证据评论；失败只记录日志，绝不向上抛异常。
+
+    证据评论是审计信息的镶边，真正的门禁是 PR body 里的 checklist 与
+    verifier/checks 标签——评论本身发不出去（例如 GitHub 边缘偶发的瞬时
+    4xx/5xx）不该让调用方把已经成功的 push/PR/label 状态回滚成失败。首次
+    发布、rework 证据刷新、手动 recover 三个调用点都需要这个语义，因此收敛
+    成一个共享实现，而不是各自复制一份 try/except。
+
+    Returns:
+        EvidenceUpload；失败、不要求验证或无证据文件时返回 ``None``。
+    """
+    try:
+        return publish_validation_evidence(
+            issue=issue,
+            worktree_path=worktree_path,
+            config=config,
+            github_client=github_client,
+            process_runner=process_runner,
+            pr_url=pr_url,
+            head_sha=head_sha,
+        )
+    except Exception as exc:  # noqa: BLE001 - best-effort by design, see docstring.
+        _logger.warning(
+            "Failed to publish validation evidence for Issue #%d (non-fatal): %s",
+            issue.number,
+            exc,
+        )
+        return None
+
+
 # ---------------------------------------------------------------------------
 # daemon 软门禁
 # ---------------------------------------------------------------------------

@@ -221,3 +221,7 @@ Traceback (most recent call last):
 ## 2026-07-08 02:35 · iar-init-skill
 
 > iar init 的skill 不应该再从本机安装,而是从~/code/zata_code_template  所对应的github 仓库安装那两个skill 并且是按照到~/.claude 里面
+
+## 2026-07-09 · iar-init-autopilot-missing
+
+> 一个很大的问题是 我iar init 创建的 toml 没有[agent_runner.autopilot]段，freshai 这种已经初始化过的仓库就缺这段，必须手动补才能用 autopilot 快速档。

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,7 @@ from backend.core.use_cases.agent_runner_validation import (
     parse_validation_checklist_state,
     process_validation_gate,
     publish_validation_evidence,
+    publish_validation_evidence_best_effort,
     reset_validation_checklist,
     upload_evidence_branch,
     validation_required,
@@ -766,6 +768,67 @@ def test_publish_validation_evidence_skips_when_not_required(
     assert all(call["method"] != "comment_pr" for call in fake_client.calls)
 
 
+def test_publish_validation_evidence_best_effort_swallows_comment_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A comment_pr failure must be logged and swallowed, never raised.
+
+    Regression for a production incident: evidence upload succeeded but the
+    trailing ``gh pr comment`` hit a transient GitHub edge error, and the
+    caller (first-run publish / rework refresh / manual recover) rolled the
+    whole Issue back to ``agent/failed`` over what is purely an audit-trail
+    comment. The composite helper must degrade gracefully instead.
+    """
+    worktree_path, evidence_dir = _evidence_worktree(tmp_path)
+    config = AppConfig()
+    responses = {
+        (
+            "git",
+            "hash-object",
+            "-w",
+            "--",
+            str(evidence_dir / "rv-1-shot.png"),
+        ): CommandResult(("git",), 0, "blob1\n", ""),
+        (
+            "git",
+            "hash-object",
+            "-w",
+            "--",
+            str(evidence_dir / "rv-2-cli.txt"),
+        ): CommandResult(("git",), 0, "blob2\n", ""),
+        ("git", "mktree"): CommandResult(("git", "mktree"), 0, "tree1\n", ""),
+        (
+            "git",
+            "commit-tree",
+            "tree1",
+            "-m",
+            "Realistic Validation evidence for issue #42",
+        ): CommandResult(("git",), 0, "commit1\n", ""),
+    }
+    fake_runner = FakeProcessRunner(responses=responses)
+
+    class _EdgeErrorOnCommentClient(FakeGitHubClient):
+        def comment_pr(self, pr_number: int, body: str) -> None:
+            raise RuntimeError('non-200 OK status code: 499  body: ""')
+
+    caplog.set_level(logging.WARNING, logger="backend.core.use_cases.agent_runner_validation")
+
+    upload = publish_validation_evidence_best_effort(
+        issue=_issue(),
+        worktree_path=worktree_path,
+        config=config,
+        github_client=_EdgeErrorOnCommentClient(),
+        process_runner=fake_runner,
+        pr_url="https://github.com/example/repo/pull/7",
+        head_sha="abc1234",
+    )
+
+    assert upload is None
+    assert "non-fatal" in caplog.text
+    assert "Issue #42" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # publish_changes 集成（清单注入与泄漏守卫）
 # ---------------------------------------------------------------------------
@@ -1030,8 +1093,7 @@ def test_cleanup_deletes_branches_for_closed_issues(tmp_path: Path) -> None:
             ls_remote_command: CommandResult(
                 ls_remote_command,
                 0,
-                "sha1\trefs/heads/iar-evidence/issue-41\n"
-                "sha2\trefs/heads/iar-evidence/issue-42\n",
+                "sha1\trefs/heads/iar-evidence/issue-41\nsha2\trefs/heads/iar-evidence/issue-42\n",
                 "",
             )
         }
