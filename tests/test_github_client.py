@@ -812,4 +812,141 @@ def test_list_issues_by_label_omits_label_flag_when_none(tmp_path: Path) -> None
 
     assert len(issues) == 1
     assert issues[0].number == 1
-    assert fake_runner.calls == [list(command_without_label)]
+
+
+def test_sync_labels_creates_verifier_passed_label(tmp_path: Path) -> None:
+    """sync_labels must register validation/verifier-passed so post-PR verdicts can tag.
+
+    Regression: when ``validation/verifier-passed`` was missing from the
+    spec table, fresh repositories ran ``gh issue edit --add-label`` and
+    GitHub rejected the call with ``'validation/verifier-passed' not
+    found``, which surfaced as ``agent/failed`` during publication.
+    """
+    fake_runner = FakeProcessRunner()
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    github_client.sync_labels(LabelConfig())
+
+    created_labels = [
+        call[call.index("create") + 1]
+        for call in fake_runner.calls
+        if call[:3] == ["gh", "label", "create"]
+    ]
+    assert "validation/verifier-passed" in created_labels
+
+
+def test_edit_issue_labels_creates_missing_label_and_retries(tmp_path: Path) -> None:
+    """``gh issue edit`` failure on a missing label should auto-create + retry.
+
+    Real-world scenario: a fresh repository that never ran ``labels sync``
+    is missing ``validation/verifier-passed``. The runner still tries to
+    add it after a green verifier verdict; instead of crashing, it should
+    ``gh label create --force`` the missing labels and retry the edit.
+    """
+
+    class _MissingLabelRunner(FakeProcessRunner):
+        """First ``gh issue edit`` fails with a not-found stderr; everything else OK."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.edit_attempts = 0
+
+        def run(self, command, *, cwd, check=True, **kwargs):  # type: ignore[override]
+            command_list = list(command)
+            if command_list[:3] == ["gh", "issue", "edit"] and "--add-label" in command_list:
+                self.edit_attempts += 1
+                if self.edit_attempts == 1:
+                    exc = subprocess.CalledProcessError(
+                        returncode=1,
+                        cmd=command_list,
+                        output="",
+                        stderr=(
+                            "failed to update "
+                            "https://github.com/GetRichTogether/TransMaster/pull/24: "
+                            "'validation/verifier-passed' not found"
+                        ),
+                    )
+                    if check:
+                        raise exc
+            return super().run(command, cwd=cwd, check=check, **kwargs)
+
+    fake_runner = _MissingLabelRunner()
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    github_client.edit_issue_labels(24, add=["validation/verifier-passed"])
+
+    # Order: view (current labels) → gh label create --force → gh issue edit
+    # (retry). The first gh issue edit raises before being recorded in
+    # ``calls`` (the FakeProcessRunner subclass raises before delegating to
+    # ``super().run``, mirroring how a real subprocess ``CalledProcessError``
+    # surfaces).
+    assert fake_runner.calls == [
+        [
+            "gh",
+            "issue",
+            "view",
+            "24",
+            "--json",
+            "labels",
+        ],
+        [
+            "gh",
+            "label",
+            "create",
+            "validation/verifier-passed",
+            "--force",
+        ],
+        [
+            "gh",
+            "issue",
+            "edit",
+            "24",
+            "--add-label",
+            "validation/verifier-passed",
+        ],
+    ]
+    assert fake_runner.edit_attempts == 2
+
+
+def test_edit_issue_labels_does_not_swallow_unrelated_errors(tmp_path: Path) -> None:
+    """Failures that do not look like missing-label errors must propagate as-is.
+
+    We simulate a TLS timeout — transient infrastructure failure. The
+    fallback must not attempt ``gh label create`` because that would mask
+    the real cause and could even succeed on a non-existent label just to
+    hide the underlying network failure.
+    """
+
+    class _TransientErrorRunner(FakeProcessRunner):
+        """First ``gh issue edit`` raises a CalledProcessError with a TLS stderr."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        def run(self, command, *, cwd, check=True, **kwargs):  # type: ignore[override]
+            command_list = list(command)
+            if command_list[:3] == ["gh", "issue", "edit"]:
+                self.attempts += 1
+                exc = subprocess.CalledProcessError(
+                    returncode=1,
+                    cmd=command_list,
+                    output="",
+                    stderr="Post https://api.github.com/graphql: net/http: TLS handshake timeout",
+                )
+                if check:
+                    raise exc
+            return super().run(command, cwd=cwd, check=check, **kwargs)
+
+    fake_runner = _TransientErrorRunner()
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        github_client.edit_issue_labels(24, add=["validation/verifier-passed"])
+    assert "TLS handshake timeout" in (excinfo.value.stderr or "")
+
+    ensure_calls = [call for call in fake_runner.calls if call[:3] == ["gh", "label", "create"]]
+    assert ensure_calls == []
+    # Confirm we did NOT silently retry the edit; only the view call succeeded.
+    edit_calls = [call for call in fake_runner.calls if call[:3] == ["gh", "issue", "edit"]]
+    assert edit_calls == []

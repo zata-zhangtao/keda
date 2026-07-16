@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Sequence
@@ -198,7 +199,15 @@ def edit_issue_labels(
     add: Sequence[str] = (),
     remove: Sequence[str] = (),
 ) -> None:
-    """Add and remove Issue labels."""
+    """Add and remove Issue labels.
+
+    On ``gh issue edit`` failure caused by a missing repository label (not
+    a network or auth error), the missing labels are created with
+    ``gh label create --force`` and the edit is retried. This guards against
+    fresh repositories whose label set does not yet include workflow labels
+    such as ``validation/verifier-passed`` that the runner only attaches in
+    specific code paths.
+    """
     current_labels = client._list_issue_label_names(issue_number)
     labels_to_add = [label for label in add if label not in current_labels]
     requested_add_labels = set(add)
@@ -208,12 +217,68 @@ def edit_issue_labels(
     if not labels_to_add and not labels_to_remove:
         return
 
+    command = _build_edit_labels_command(issue_number, labels_to_add, labels_to_remove)
+    try:
+        client._run_with_retry(command, cwd=client.repo_path)
+        return
+    except subprocess.CalledProcessError as exc:
+        if not _is_missing_label_error(exc) or not labels_to_add:
+            raise
+        _logger.info(
+            "gh issue edit reported missing label(s) on #%d; creating %s and retrying.",
+            issue_number,
+            ", ".join(labels_to_add),
+        )
+        for label in labels_to_add:
+            client._run_with_retry(
+                _build_ensure_label_command(label),
+                cwd=client.repo_path,
+            )
+        client._run_with_retry(command, cwd=client.repo_path)
+
+
+def _build_edit_labels_command(
+    issue_number: int,
+    labels_to_add: Sequence[str],
+    labels_to_remove: Sequence[str],
+) -> list[str]:
+    """Build the ``gh issue edit`` argv for the requested label deltas."""
     command = ["gh", "issue", "edit", str(issue_number)]
     for label in labels_to_add:
         command.extend(["--add-label", label])
     for label in labels_to_remove:
         command.extend(["--remove-label", label])
-    client._run_with_retry(command, cwd=client.repo_path)
+    return command
+
+
+def _is_missing_label_error(exc: subprocess.CalledProcessError) -> bool:
+    """Return True when a failed ``gh issue edit`` looks like a missing-label error.
+
+    GitHub surfaces the missing-label case in two shapes depending on the
+    CLI version:
+
+    - ``'validation/verifier-passed' not found``
+    - ``Could not resolve to a RepositoryLabel with the name '...'``
+
+    Both indicate the same root cause: the repository does not yet have the
+    label. Other failures (network, auth, permission) bubble up unchanged.
+    """
+    combined = (exc.stderr or "") + "\n" + (exc.output or "")
+    lowered = combined.lower()
+    return "not found" in lowered or "could not resolve to a repositorylabel" in lowered.replace(
+        " ", ""
+    )
+
+
+def _build_ensure_label_command(label: str) -> list[str]:
+    """Build the ``gh label create --force`` argv that idempotently creates a label."""
+    return [
+        "gh",
+        "label",
+        "create",
+        label,
+        "--force",
+    ]
 
 
 def list_issue_label_names(client: _ClientProtocol, issue_number: int) -> set[str]:

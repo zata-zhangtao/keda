@@ -69,6 +69,11 @@ _LABEL_SPECS: list[tuple[str, str, str]] = [
         "A human verified the validation evidence and signed off.",
     ),
     (
+        "validation/verifier-passed",
+        "0E8A16",
+        "Independent verifier agent approved this PR.",
+    ),
+    (
         "source/prd",
         "0052CC",
         "Issue has a canonical PRD tracked in the repository.",
@@ -107,6 +112,7 @@ def sync_labels(client: _ClientProtocol, labels: LabelConfig) -> None:
         "agent/deliberate": labels.deliberate,
         "validation/pending": labels.validation_pending,
         "validation/passed": labels.validation_passed,
+        "validation/verifier-passed": labels.verifier_passed,
     }
     configured_names.update({f"agent/{k}": v for k, v in labels.agent_labels.items()})
     for label_name, color, description in label_specs:

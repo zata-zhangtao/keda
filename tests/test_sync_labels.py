@@ -28,3 +28,9 @@ def test_sync_labels_includes_rework_prd() -> None:
     """LabelConfig must expose the rework-prd trigger label for Issue->PRD."""
     labels_config = LabelConfig()
     assert labels_config.rework_prd == "agent/rework-prd"
+
+
+def test_sync_labels_includes_verifier_passed() -> None:
+    """LabelConfig must expose the verifier-passed label so post-PR verdict can tag."""
+    labels_config = LabelConfig()
+    assert labels_config.verifier_passed == "validation/verifier-passed"
