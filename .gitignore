@@ -69,3 +69,11 @@ Thumbs.db
 
 # pytest-testmon SQLite cache
 .testmondata*
+
+# >>> iar (managed by `iar init`) >>>
+# Realistic Validation evidence (worktree-local)
+.iar/
+
+# IAR-managed git worktrees (host-local)
+.iar-worktrees/
+# <<< iar <<<

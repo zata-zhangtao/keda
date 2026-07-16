@@ -267,7 +267,7 @@ uv run --project /path/to/keda iar init --dry-run
 uv run --project /path/to/keda iar init
 ```
 
-`iar init --dry-run` 只打印将要写入的内容，不创建文件。`.iar.toml` 已存在时，`iar init` 会拒绝覆盖；确认需要重建时显式传入 `--force`。
+`iar init --dry-run` 只打印将要写入的内容，不创建文件。新生成的 `.iar.toml` 会包含全部**仓库级可覆盖**配置段及其具有默认值的字段，其中 `[agent_runner.autopilot]` 默认关闭；如需启用快速合并，还必须同时把 `[agent_runner.safety].auto_merge` 设为 `true`。这些初始值会固定为当前仓库的显式配置，后续修改全局默认值不会覆盖它们。`.iar.toml` 已存在时，`iar init` 会拒绝覆盖；确认需要重建时显式传入 `--force`。
 
 `iar init` 成功写入本地配置后，还会自动把当前仓库注册（或更新路径）到全局 `config.toml` 的 `[agent_runner.repositories]` 中，使 `iar daemon` 默认即可在当前仓库启动。如果该 `repo_id` 已在 registry 中但指向不同路径，init 会自动更新 registry 路径到当前位置。
 
@@ -300,11 +300,12 @@ uv run --project /path/to/keda iar init
 >
 > Please open `.iar.toml` and review the commands against your actual test / lint / build workflow, or paste the list into your own AI tool for suggestions. This is the final gate before the runner commits, so make sure it can actually block broken changes.
 
-生成示例：
+生成内容节选（完整且随版本演进的字段以 `iar init --dry-run` 输出为准；回归测试会校验所有仓库级配置字段均被渲染）：
 
 ```toml
 # IAR 本地仓库配置
-# 本文件只覆盖当前仓库特有的配置；未指定的字段继承 config.toml / 环境变量的全局默认值。
+# `iar init` 会写入全部仓库级配置的默认值；这些值随后显式覆盖全局默认值。
+# 没有默认值的可选字段未写入时，才继承 config.toml / 环境变量的全局默认值。
 # 修改后无需重启 daemon，下一次轮询自动生效。
 # 完整字段说明见 docs/guides/agent-runner.md。
 
@@ -632,20 +633,9 @@ agent = "codex"
 role = "implementer"
 behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concrete steps, and implementation details. Highlight what can be built and what resources are needed."
 
-# GitHub labels 状态流转配置（如你的仓库使用不同标签名，可取消注释并覆盖）
-# [agent_runner.labels]
-# ready = "agent/ready"
-# running = "agent/running"
-# supervising = "agent/supervising"
-# review = "agent/review"
-# failed = "agent/failed"
-# blocked = "agent/blocked"
-# codex = "agent/codex"
-# claude = "agent/claude"
-# kimi = "agent/kimi"
 ```
 
-仓库本地 `.iar.toml` 可覆盖 `git`、`runner`、`labels`、`worktree`、`safety`、`prompts`、`pre_pr_review`、`post_pr_supervisor`、`generated_content`、`interactive_decision` 和 `deliberation`。`config.toml` 继续保存全局默认值、环境级设置和 legacy registry，不应保存 token、API key 或账号凭据。
+仓库本地 `.iar.toml` 可覆盖 `labels`、`git`、`worktree`、`runner`、`memory`、`safety`、`autopilot`、`validation`、`prompts`、`pre_pr_review`、`post_pr_supervisor`、`daemon`、`generated_content`、`interactive_decision`、`repl` 和 `deliberation`。`config.toml` 继续保存全局默认值、环境级设置和 legacy registry，不应保存 token、API key 或账号凭据。
 
 单仓库命令的目标解析规则：
 
@@ -1450,7 +1440,7 @@ The next daemon pass or `iar run` will detect the label and process the Issue be
 4. **Resolve Path** (inside the worktree):
    - If the Issue body already contains a `- PRD path: \`...\`` anchor, the runner rewrites that same file.
    - If no anchor exists, the runner generates a new filename under `tasks/pending/` using the pattern `P<priority>-<TYPE>-YYYYMMDD-HHMMSS-prd-<slug>.md` (priority/type are inferred from `priority/<p>` and `type/<t>` labels, or the `[Type]` title prefix).
-5. **Generate**: It calls the configured content generator. In agent mode the prompt is built from the `prd` skill spec (`~/.claude/skills/prd/SKILL.md`, the single source of the PRD methodology and 11-section output contract); if the skill is unreachable it falls back to the configured `prompt` template, then to a minimal fallback PRD.
+5. **Generate**: It calls the configured content generator. In agent mode the prompt is built from the user-level `prd` skill that `iar init` fetched from remote `zata-codes-template` (the single source of the PRD methodology and output contract); if the skill is unreachable it falls back to the configured `prompt` template, then to a minimal fallback PRD.
 6. **Write**: The PRD file is written inside the worktree (overwriting existing or creating new).
 7. **Commit + Publish**: The PRD is committed to the `issue-<N>` branch and published via `publish_changes` — pushed to the remote and opened (or reused) as a **draft PR**. A regenerated-but-identical PRD that produces no new commit skips PR creation.
 8. **Update Issue**:
@@ -1514,7 +1504,7 @@ body_template = "..."
 prompt = "..."   # fallback only — used when the prd skill spec is unreachable
 ```
 
-In `mode = "agent"`, the PRD prompt is built from the `prd` skill spec rather than the inline `prompt`. The skill path is resolved as: explicit override → `IAR_PRD_SKILL_PATH` environment variable → `~/.claude/skills/prd/SKILL.md`. The skill is the single source of the PRD methodology/output contract, so the inline `prompt` is kept only as a fallback for when the skill file cannot be read (e.g. a runner host without the skill installed). Set `IAR_PRD_SKILL_PATH` when the runner runs in a product repo while the skill lives under a different home directory.
+In `mode = "agent"`, the PRD prompt is built from the `prd` skill spec rather than the inline `prompt`. The skill path is resolved as: explicit override → `IAR_PRD_SKILL_PATH` → `CC_SWITCH_SKILLS_DIR` → existing user-level `~/.cc-switch/skills`、`~/.codex/skills`、`~/.claude/skills`、`~/.kimi-code/skills` candidates. `iar init` fetches only `prd` and `code-reviewer` from the remote `zata-zhangtao/zata-codes-template` repository and installs them under the selected user-level root; Keda does not ship their contents in its wheel. The skill is the single source of the PRD methodology/output contract, so the inline `prompt` is kept only as a fallback for when the skill file cannot be read. Set `IAR_PRD_SKILL_PATH` when the runner runs in a product repo while the skill lives under a different home directory.
 
 See the "Generated Content 配置" section above for the full template variable list and example.
 

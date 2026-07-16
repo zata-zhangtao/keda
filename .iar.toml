@@ -1,5 +1,6 @@
 # IAR 本地仓库配置
-# 本文件只覆盖当前仓库特有的配置；未指定的字段继承 config.toml / 环境变量的全局默认值。
+# `iar init` 会写入全部仓库级配置的默认值；这些值随后显式覆盖全局默认值。
+# 没有默认值的可选字段未写入时，才继承 config.toml / 环境变量的全局默认值。
 # 修改后无需重启 daemon，下一次轮询自动生效。
 # 完整字段说明见 docs/guides/agent-runner.md。
 
@@ -14,6 +15,25 @@ display_name = "keda"
 # 可选：GitHub owner/name（``gh pr list --repo`` 使用）。
 # 缺省时 ``iar issue list`` 的 PR 列为空 + stderr 一次性 WARN。
 github_repo = "zata-zhangtao/keda"
+
+# GitHub labels 状态流转配置
+[agent_runner.labels]
+ready = "agent/ready"
+running = "agent/running"
+supervising = "agent/supervising"
+review = "agent/review"
+failed = "agent/failed"
+blocked = "agent/blocked"
+waiting = "agent/waiting"
+validation_pending = "validation/pending"
+validation_passed = "validation/passed"
+verifier_passed = "validation/verifier-passed"
+group_prefix = "task-group/"
+codex = "agent/codex"
+claude = "agent/claude"
+kimi = "agent/kimi"
+rework_prd = "agent/rework-prd"
+deliberate = "agent/deliberate"
 
 # Git 发布配置：推送 remote、目标基础分支 base_branch
 [agent_runner.git]
@@ -56,6 +76,7 @@ transient_retry_attempts = 2
 # 瞬时错误每次重试前等待的秒数
 transient_retry_delay_seconds = 10
 timeout_seconds = 14400
+fix_agent_enabled = true
 inactivity_timeout_seconds = 1200
 # 提交前自动运行的验证命令；任一命令失败会进入 recovery。
 # 注意：这里显式拆出 pre-commit，避免 `just test` 的 quality-flag 缓存把 lint 跳过；
@@ -66,10 +87,26 @@ verification_commands = [
     "just test all",
     "uv run mkdocs build --strict",
 ]
+# git add 后、git commit 前额外运行的 pre-commit 命令；失败转 Fix Agent
+pre_commit_verification_command = "SKIP=check-test-flag uv run pre-commit run --all-files"
+
+# IAR 任务记忆与 Skill 草稿存储配置
+[agent_runner.memory]
+enabled = true
+base_dir = ".iar/memory"
+skill_drafts_dir = ".iar/skills/drafts"
+promoted_skills_dirs = [
+    ".iar/skills",
+]
+top_k_skills = 3
+top_k_facts = 5
+auto_promote = true
+auto_promote_threshold = 3
+auto_promote_min_success_rate = 1.0
 
 # 发布前安全边界：自动合并开关、禁止提交的路径模式
 [agent_runner.safety]
-# 是否允许自动合并 PR（强烈建议保持 false）
+# 是否允许自动合并 PR（强烈建议保持 false；与 agent_runner.autopilot.enabled 同时为 true 才会真正生效）
 auto_merge = false
 # 提交前禁止变更的路径通配模式
 forbidden_path_patterns = [
@@ -78,6 +115,19 @@ forbidden_path_patterns = [
     "secrets/*",
     "docker-compose.prod.yml",
 ]
+
+# Autopilot 快速档（合并队列）：supervisor 之后串行合并；需配合 safety.auto_merge = true 同时启用
+[agent_runner.autopilot]
+# 是否启用快速档（合并队列）；仅当该值与 safety.auto_merge 同时为 true 时 review 才会自动合并
+enabled = false
+# 合并方式；当前唯一支持 'squash'（非法值在加载期拒绝）
+merge_method = "squash"
+# Issue 需要 validation 时是否要求 validation/verifier-passed 标签先存在
+require_verifier_pass = true
+# verifier 绿灯后自动替人工勾选 PR body 的 sign-off 清单（幂等）
+auto_sign_off = true
+# 等 PR checks 全绿的最大秒数；超时则放弃本轮合并
+merge_check_timeout_seconds = 1800
 
 # Realistic Validation 证据门禁配置
 [agent_runner.validation]
@@ -109,10 +159,14 @@ verifier_enabled = true
 verifier_agent = "auto"
 # verifier agent 运行超时秒数（默认 1800）
 verifier_timeout_seconds = 1800
-# 前端改动（git diff 命中 frontend_paths）强制证据目录含真实视觉文件(图片/视频),否则门禁失败(默认开;独立于 verifier)
+artifact_health_enabled = true
+# 前端改动（git diff 命中 frontend_paths）是否强制证据目录含真实视觉文件(图片/视频),否则门禁失败(默认开;独立于 verifier)
 frontend_visual_evidence_required = true
-# 判定为前端的目录前缀(默认模板约定的两个前端 app);runner 用它识别目标仓库前端改动
-frontend_paths = ["frontend-admin", "frontend-public"]
+# 判定为前端的目录前缀列表(默认 frontend-admin/frontend-public);runner 用它识别目标仓库的前端改动
+frontend_paths = [
+    "frontend-admin",
+    "frontend-public",
+]
 
 # 实现 Agent 的 prompt 模板；默认 phase 与自定义阶段模板
 [agent_runner.prompts]
@@ -152,6 +206,19 @@ crash_retry_initial_backoff_seconds = 30
 # 崩溃重试单次退避等待的最大秒数
 crash_retry_max_backoff_seconds = 600
 
+# Daemon 轮询与 reclaim 配置（覆盖全局 [agent_runner.daemon] 默认）
+[agent_runner.daemon]
+# review-daemon 轮询间隔秒数
+review_interval_seconds = 120
+# daemon 轮询间隔秒数
+run_interval_seconds = 120
+# 每轮 Phase 0 审议最大 Issue 数
+max_deliberation_issues = 1
+# 是否在每轮开头 reclaim 卡死的 agent/running Issue
+reclaim_stale_running = true
+# TTL reclaim 阈值(秒):claim 含 started_at 且距 now 超过此值即便 PID 仍活也视为 stale
+reclaim_ttl_seconds = 10800
+
 # GitHub Issue / PR 内容生成（面向人类阅读，不影响实现 Agent）
 [agent_runner.generated_content]
 # 是否启用 AI 生成 Issue / PR 正文
@@ -168,7 +235,7 @@ default_agent = "auto"
 # 是否从 PRD 生成 Issue
 enabled = true
 # 生成模式：template（模板渲染）或 agent（调用 AI）
-mode = "agent"
+mode = "template"
 # 输出格式：json / markdown
 output = "json"
 # Issue 标题模板
@@ -191,7 +258,7 @@ include_diff_stat = true
 # 是否生成 Draft PR 正文
 enabled = true
 # 生成模式：template（模板渲染）或 agent（调用 AI）
-mode = "agent"
+mode = "template"
 # 输出格式：json / markdown
 output = "json"
 # PR 标题模板
@@ -247,6 +314,31 @@ max_context_chars = 24000
 # 是否允许 `iar ask --yes` 跳过人工确认
 allow_execute_yes = true
 
+# 交互式 REPL（iar 无子命令）配置：默认 agent、审计目录与命令确认策略
+[agent_runner.repl]
+enabled = true
+default_agent = "claude"
+default_output_dir = "logs/agent-runner/repl"
+max_context_chars = 24000
+agent_timeout_seconds = 120
+auto_confirm_commands = [
+    "labels sync --dry-run",
+    "run --dry-run",
+    "review --dry-run",
+    "ask --plan-only",
+]
+confirm_commands = [
+    "run",
+    "daemon",
+    "review",
+    "review-daemon",
+    "issue create",
+    "recover",
+    "blocked-continue",
+    "worktree create",
+    "worktree remove",
+]
+
 # 多 agent 审议（iar deliberate）配置：轮数、合成 agent、参与角色
 [agent_runner.deliberation]
 # 默认审议轮数
@@ -285,15 +377,3 @@ agent = "codex"
 role = "implementer"
 # 角色行为 prompt
 behavior_prompt = "You are a pragmatic implementer. Focus on feasibility, concrete steps, and implementation details. Highlight what can be built and what resources are needed."
-
-# GitHub labels 状态流转配置（如你的仓库使用不同标签名，可取消注释并覆盖）
-# [agent_runner.labels]
-# ready = "agent/ready"
-# running = "agent/running"
-# supervising = "agent/supervising"
-# review = "agent/review"
-# failed = "agent/failed"
-# blocked = "agent/blocked"
-# codex = "agent/codex"
-# claude = "agent/claude"
-# kimi = "agent/kimi"

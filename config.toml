@@ -440,9 +440,11 @@ body_template = [
   "- [ ] Implement the feature",
   "- [ ] Run verification",
 ]
-# PRD 规范单一来源是 `prd` skill（~/.claude/skills/prd/SKILL.md，可用 IAR_PRD_SKILL_PATH
-# 覆盖）。agent 模式优先把该 skill 规范注入 prompt；仅当 skill 不可达时才回退到下面
-# 这份模板 prompt。请勿在此处与 skill 之间维护两份漂移的章节契约。
+# PRD 规范单一来源是由 zata_code_template 安装到用户级目录的 `prd` skill（可用
+# IAR_PRD_SKILL_PATH 覆盖；默认依次识别 CC_SWITCH_SKILLS_DIR、~/.cc-switch/skills、
+# ~/.codex/skills、~/.claude/skills、~/.kimi-code/skills）。agent 模式优先把该规范注入
+# prompt；仅当 skill 不可达时才回退到下面这份模板 prompt。请勿在此处与 skill 之间维护两份
+# 漂移的章节契约。
 prompt = [
   "You are a technical product manager. Write a comprehensive PRD (Product Requirements Document) in Markdown format.",
   "",

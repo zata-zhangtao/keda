@@ -25,7 +25,7 @@
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zata-zhangtao/keda/main/install.sh | bash
 iar --version
-iar init   # 在任意 Git 仓库内运行，会自动写入 .iar.toml 并复制 prd / code-reviewer 两个 Skill
+iar init   # 在任意 Git 仓库内写入 .iar.toml 并同步 IAR 初始化配置
 ```
 
 **从 PyPI 安装（keda 已发布到 PyPI 后可用）：**
@@ -54,6 +54,14 @@ pip install --user keda       # 兜底：用户级安装
 | `--uninstall` | 卸载 keda 工具环境与 iar binary |
 
 环境变量等价：`KEDA_VERSION`、`KEDA_INSTALL_METHOD`、`KEDA_SOURCE`、`KEDA_PYPI=1`（legacy，等价于 `--source pypi`）。
+
+### 安装 Agent Skills
+
+`prd` 与 `code-reviewer` 由远程
+[`zata-codes-template`](https://github.com/zata-zhangtao/zata-codes-template) 仓库维护，不随 Keda
+wheel 分发。`iar init` 会仅下载这两个 Skill 并安装到用户级目录，绝不会写入项目目录；因此同一台
+机器上的所有项目共用同一份规范。安装目标依次为 `CC_SWITCH_SKILLS_DIR`、已有的 cc-switch、Codex、
+Claude、Kimi Code 配置目录；若都不存在则创建 `~/.codex/skills`。
 
 ## 前置要求
 

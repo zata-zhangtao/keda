@@ -46,10 +46,16 @@ jobs:
       - name: Build sdist + wheel
         run: uv build
 
-      - name: Verify wheel contains bundled skills
+      - name: Verify distributions omit bundled skills
         run: |
-          python -m zipfile -l dist/*.whl | grep -E "agent_runner/skills/(prd|code-reviewer)/SKILL.md" \
-            || (echo "wheel is missing bundled skills; check pyproject.toml [tool.setuptools.package-data]" && exit 1)
+          if python -m zipfile -l dist/*.whl | grep -qE "agent_runner/skills/(prd|code-reviewer)/SKILL.md"; then
+            echo "wheel must not contain bundled skills"
+            exit 1
+          fi
+          if tar -tzf dist/*.tar.gz | grep -qE "agent_runner/skills/(prd|code-reviewer)/SKILL.md"; then
+            echo "sdist must not contain bundled skills"
+            exit 1
+          fi
 
       - name: Compute SHA256SUMS
         working-directory: dist

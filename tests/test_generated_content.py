@@ -856,13 +856,42 @@ def test_load_prd_skill_spec_reads_and_handles_missing(tmp_path: Path) -> None:
 
 
 def test_resolve_prd_skill_path_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Explicit path wins, then IAR_PRD_SKILL_PATH env, then the ~/.claude default."""
+    """显式覆盖、环境变量与模板用户级目录按优先级解析。"""
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
     explicit = tmp_path / "explicit.md"
     assert resolve_prd_skill_path(explicit) == explicit
     monkeypatch.setenv("IAR_PRD_SKILL_PATH", str(tmp_path / "env.md"))
     assert resolve_prd_skill_path() == tmp_path / "env.md"
     monkeypatch.delenv("IAR_PRD_SKILL_PATH", raising=False)
-    assert resolve_prd_skill_path() == Path.home() / ".claude" / "skills" / "prd" / "SKILL.md"
+    configured_skill_path = tmp_path / "configured-skills" / "prd" / "SKILL.md"
+    configured_skill_path.parent.mkdir(parents=True)
+    configured_skill_path.write_text("configured", encoding="utf-8")
+    monkeypatch.setenv("CC_SWITCH_SKILLS_DIR", str(tmp_path / "configured-skills"))
+    assert resolve_prd_skill_path() == configured_skill_path
+    monkeypatch.delenv("CC_SWITCH_SKILLS_DIR", raising=False)
+
+    cc_switch_skill_path = tmp_path / ".cc-switch" / "skills" / "prd" / "SKILL.md"
+    codex_skill_path = tmp_path / ".codex" / "skills" / "prd" / "SKILL.md"
+    claude_skill_path = tmp_path / ".claude" / "skills" / "prd" / "SKILL.md"
+    kimi_code_skill_path = tmp_path / ".kimi-code" / "skills" / "prd" / "SKILL.md"
+    for skill_path in (
+        cc_switch_skill_path,
+        codex_skill_path,
+        claude_skill_path,
+        kimi_code_skill_path,
+    ):
+        skill_path.parent.mkdir(parents=True, exist_ok=True)
+        skill_path.write_text(skill_path.parent.parent.parent.name, encoding="utf-8")
+
+    assert resolve_prd_skill_path() == cc_switch_skill_path
+    cc_switch_skill_path.unlink()
+    assert resolve_prd_skill_path() == codex_skill_path
+    codex_skill_path.unlink()
+    assert resolve_prd_skill_path() == claude_skill_path
+    claude_skill_path.unlink()
+    assert resolve_prd_skill_path() == kimi_code_skill_path
+    kimi_code_skill_path.unlink()
+    assert resolve_prd_skill_path() == cc_switch_skill_path
 
 
 def test_generate_prd_content_agent_fallback_to_template() -> None:

@@ -20,14 +20,19 @@ from backend.engines.agent_runner.repository_gitignore import (  # noqa: F401
     ensure_gitignore_entries,
 )
 from backend.infrastructure.config.settings import (
+    AgentRunnerAutopilotSettings,
+    AgentRunnerDaemonSettings,
     AgentRunnerDeliberationSettings,
     AgentRunnerGeneratedContentSettings,
     AgentRunnerGitSettings,
     AgentRunnerInteractiveDecisionSettings,
+    AgentRunnerLabelSettings,
     AgentRunnerLocalSettings,
+    AgentRunnerMemorySettings,
     AgentRunnerPostPrSupervisorSettings,
     AgentRunnerPrePrReviewSettings,
     AgentRunnerPromptSettings,
+    AgentRunnerReplSettings,
     AgentRunnerRepositoryMetadataSettings,
     AgentRunnerRunnerSettings,
     AgentRunnerSafetySettings,
@@ -148,7 +153,8 @@ def detect_git_repository_root(
 
 
 TOML_HEADER_COMMENT = """# IAR 本地仓库配置
-# 本文件只覆盖当前仓库特有的配置；未指定的字段继承 config.toml / 环境变量的全局默认值。
+# `iar init` 会写入全部仓库级配置的默认值；这些值随后显式覆盖全局默认值。
+# 没有默认值的可选字段未写入时，才继承 config.toml / 环境变量的全局默认值。
 # 修改后无需重启 daemon，下一次轮询自动生效。
 # 完整字段说明见 docs/guides/agent-runner.md。
 """
@@ -156,9 +162,11 @@ TOML_HEADER_COMMENT = """# IAR 本地仓库配置
 # 生成文件中顶级 section 的展示顺序。
 _IAR_SECTION_ORDER = (
     "repository",
+    "labels",
     "git",
     "worktree",
     "runner",
+    "memory",
     "safety",
     "autopilot",
     "validation",
@@ -168,15 +176,18 @@ _IAR_SECTION_ORDER = (
     "daemon",
     "generated_content",
     "interactive_decision",
+    "repl",
     "deliberation",
 )
 
 # section -> 段前说明注释（中文为主，关键术语保留英文）。
 _IAR_SECTION_COMMENTS: dict[str, str] = {
     "repository": "仓库身份标识（用于多仓库管理时区分不同仓库）",
+    "labels": "GitHub labels 状态流转配置",
     "git": "Git 发布配置：推送 remote、目标基础分支 base_branch",
     "worktree": "Issue worktree 的创建与定位命令；默认使用 iar worktree，通常无需修改",
     "runner": "Runner 行为配置：每轮处理 Issue 数量、默认 agent、提交前验证命令",
+    "memory": "IAR 任务记忆与 Skill 草稿存储配置",
     "safety": "发布前安全边界：自动合并开关、禁止提交的路径模式",
     "autopilot": "Autopilot 快速档（合并队列）：supervisor 之后串行合并；需配合 safety.auto_merge = true 同时启用",
     "validation": "Realistic Validation 证据门禁配置",
@@ -186,6 +197,7 @@ _IAR_SECTION_COMMENTS: dict[str, str] = {
     "daemon": "Daemon 轮询与 reclaim 配置（覆盖全局 [agent_runner.daemon] 默认）",
     "generated_content": "GitHub Issue / PR 内容生成（面向人类阅读，不影响实现 Agent）",
     "interactive_decision": "交互式决策（iar ask）配置：默认 agent、输出目录、执行确认等",
+    "repl": "交互式 REPL（iar 无子命令）配置：默认 agent、审计目录与命令确认策略",
     "deliberation": "多 agent 审议（iar deliberate）配置：轮数、合成 agent、参与角色",
 }
 
@@ -324,35 +336,6 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "deliberation.profiles.implementer.behavior_prompt": "角色行为 prompt",
 }
 
-# 注释掉的常用覆盖示例：[agent_runner.labels]。
-_IAR_LABELS_EXAMPLE = """
-# GitHub labels 状态流转配置（如你的仓库使用不同标签名，可取消注释并覆盖）
-# [agent_runner.labels]
-# ready = "agent/ready"
-# running = "agent/running"
-# supervising = "agent/supervising"
-# review = "agent/review"
-# failed = "agent/failed"
-# blocked = "agent/blocked"
-# codex = "agent/codex"
-# claude = "agent/claude"
-# kimi = "agent/kimi"
-"""
-
-# 注释掉的常用覆盖示例：[agent_runner.daemon]。
-# daemon 配置传统上由全局 ~/.iar/config.toml 统一管理；只有在「这个仓库
-# 想覆盖轮询 / reclaim 阈值」时,取消注释并改字段,merge 路径会按
-# ``_merge_optional_model`` 把 None 字段保留全局值,非 None 字段覆盖。
-_IAR_DAEMON_EXAMPLE = """
-# Daemon 轮询与 reclaim 配置（取消注释可覆盖全局默认；不写则继承全局）
-# [agent_runner.daemon]
-# review_interval_seconds = 120      # review-daemon 轮询间隔秒数
-# run_interval_seconds = 120         # daemon 轮询间隔秒数
-# max_deliberation_issues = 1        # 每轮 Phase 0 审议最大 Issue 数
-# reclaim_stale_running = true       # 是否在每轮开头 reclaim 卡死的 agent/running
-# reclaim_ttl_seconds = 10800        # TTL 阈值(秒):claim 含 started_at 且超时即视为 stale
-"""
-
 
 def settings_to_toml_string(settings: AgentRunnerLocalSettings) -> str:
     """Serialize AgentRunnerLocalSettings to a commented .iar.toml string."""
@@ -362,7 +345,7 @@ def settings_to_toml_string(settings: AgentRunnerLocalSettings) -> str:
     wrapped = {"agent_runner": data}
     toml_body = tomli_w.dumps(wrapped)
     annotated_body = _annotate_iar_toml(toml_body)
-    return TOML_HEADER_COMMENT + "\n" + annotated_body + _IAR_LABELS_EXAMPLE + _IAR_DAEMON_EXAMPLE
+    return TOML_HEADER_COMMENT + "\n" + annotated_body
 
 
 def _annotate_iar_toml(toml_body: str) -> str:
@@ -730,18 +713,23 @@ def build_repository_local_config_text(
             remote=selected_remote,
             base_branch=selected_base_branch,
         ),
+        labels=AgentRunnerLabelSettings(),
         worktree=AgentRunnerWorktreeSettings(),
         runner=AgentRunnerRunnerSettings(
             verification_commands=verification_commands,
             pre_commit_verification_command=pre_commit_verification_command,
         ),
+        memory=AgentRunnerMemorySettings(),
         safety=AgentRunnerSafetySettings(),
+        autopilot=AgentRunnerAutopilotSettings(),
         validation=AgentRunnerValidationSettings(),
         prompts=AgentRunnerPromptSettings(),
         pre_pr_review=AgentRunnerPrePrReviewSettings(),
         post_pr_supervisor=AgentRunnerPostPrSupervisorSettings(),
+        daemon=AgentRunnerDaemonSettings(),
         generated_content=AgentRunnerGeneratedContentSettings(),
         interactive_decision=AgentRunnerInteractiveDecisionSettings(),
+        repl=AgentRunnerReplSettings(),
         deliberation=AgentRunnerDeliberationSettings(),
     )
 

@@ -52,18 +52,6 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--remote")
     init_parser.add_argument("--base-branch")
     init_parser.add_argument(
-        "--copy-skills",
-        dest="copy_skills",
-        choices=("true", "false"),
-        default="true",
-        help="Copy bundled skills (prd, code-reviewer) into .claude/skills/.",
-    )
-    init_parser.add_argument(
-        "--skip-skills",
-        action="store_true",
-        help="Skip bundled skill copy (equivalent to --copy-skills=false).",
-    )
-    init_parser.add_argument(
         "--no-update-gitignore",
         action="store_true",
         help=(

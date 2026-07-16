@@ -59,7 +59,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "backend.engines.agent_runner.templates" = ["**/*"]
-"backend.engines.agent_runner.skills" = ["**/*"]
 
 [dependency-groups]
 dev = [

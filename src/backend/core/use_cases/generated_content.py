@@ -659,15 +659,25 @@ def _validate_prd_output(text: str) -> bool:
 # 环境变量覆盖 prd skill 路径，便于全局工具 / 跨仓库运行（runner 在产品仓执行，
 # skill 在用户级目录）下显式指定，而非硬编码安装路径。
 _PRD_SKILL_PATH_ENV_VAR = "IAR_PRD_SKILL_PATH"
-# 默认安装位置相对用户主目录派生（不写死绝对安装路径）。
-_DEFAULT_PRD_SKILL_RELATIVE_PATH = Path(".claude") / "skills" / "prd" / "SKILL.md"
+_CC_SWITCH_SKILLS_DIR_ENV_VAR = "CC_SWITCH_SKILLS_DIR"
+_PRD_SKILL_RELATIVE_PATH = Path("prd") / "SKILL.md"
+_DEFAULT_PRD_SKILL_ROOT_RELATIVE_PATHS: tuple[Path, ...] = (
+    Path(".cc-switch") / "skills",
+    Path(".codex") / "skills",
+    Path(".claude") / "skills",
+    Path(".kimi-code") / "skills",
+)
 
 
 def resolve_prd_skill_path(explicit_path: Path | None = None) -> Path:
-    """解析 ``prd`` skill ``SKILL.md`` 路径，不硬编码绝对安装路径。
+    """解析模板安装器管理的 ``prd`` skill 路径。
 
     解析优先级：显式入参 → ``IAR_PRD_SKILL_PATH`` 环境变量 →
-    ``~/.claude/skills/prd/SKILL.md``（相对主目录派生）。
+    ``CC_SWITCH_SKILLS_DIR`` → 模板安装器的用户级目录
+    （``~/.cc-switch/skills``、``~/.codex/skills``、``~/.claude/skills``、
+    ``~/.kimi-code/skills``）。
+    默认候选中优先返回存在的 ``SKILL.md``；全部缺失时返回第一个候选，
+    由调用方保留现有 fallback 行为。
 
     Args:
         explicit_path: 调用方显式指定的路径；为 ``None`` 时回落到环境变量/默认。
@@ -680,7 +690,21 @@ def resolve_prd_skill_path(explicit_path: Path | None = None) -> Path:
     env_value = os.environ.get(_PRD_SKILL_PATH_ENV_VAR)
     if env_value:
         return Path(env_value).expanduser()
-    return Path.home() / _DEFAULT_PRD_SKILL_RELATIVE_PATH
+    configured_skills_root = os.environ.get(_CC_SWITCH_SKILLS_DIR_ENV_VAR)
+    candidate_skill_paths: list[Path] = []
+    if configured_skills_root:
+        candidate_skill_paths.append(
+            Path(configured_skills_root).expanduser() / _PRD_SKILL_RELATIVE_PATH
+        )
+    user_home_path = Path.home()
+    candidate_skill_paths.extend(
+        user_home_path / relative_skills_root / _PRD_SKILL_RELATIVE_PATH
+        for relative_skills_root in _DEFAULT_PRD_SKILL_ROOT_RELATIVE_PATHS
+    )
+    for candidate_skill_path in candidate_skill_paths:
+        if candidate_skill_path.is_file():
+            return candidate_skill_path
+    return candidate_skill_paths[0]
 
 
 def load_prd_skill_spec(explicit_path: Path | None = None) -> str | None:

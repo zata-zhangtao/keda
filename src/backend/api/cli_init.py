@@ -14,13 +14,6 @@ from backend.engines.agent_runner.factory import (
     create_registry_editor,
     logger,
 )
-from backend.engines.agent_runner.init_flow import (
-    BundledSkillCopyOptions,
-    DEFAULT_BUNDLED_SKILL_NAMES,
-    copy_bundled_skills,
-    format_skill_copy_plan,
-    format_skill_copy_summary,
-)
 from backend.engines.agent_runner.repository_local import (
     GITIGNORE_BLOCK_FOOTER,
     GITIGNORE_BLOCK_HEADER,
@@ -32,6 +25,10 @@ from backend.engines.agent_runner.repository_local import (
     ensure_gitignore_entries,
     initialize_repository_local_config,
 )
+from backend.engines.agent_runner.remote_template_skills import (
+    RemoteTemplateSkillInstallOptions,
+    install_remote_template_skills,
+)
 from backend.engines.agent_runner.takeover import upsert_repository
 
 if TYPE_CHECKING:
@@ -39,7 +36,7 @@ if TYPE_CHECKING:
 
 
 def _run_init_command(parsed: argparse.Namespace, process_runner: IProcessRunner) -> int:
-    """Render / write the local config, copy bundled skills, sync labels."""
+    """渲染或写入本地配置、同步 gitignore、注册表与标签。"""
     try:
         init_result = initialize_repository_local_config(
             RepositoryInitOptions(
@@ -67,17 +64,42 @@ def _run_init_command(parsed: argparse.Namespace, process_runner: IProcessRunner
     )
     if parsed.dry_run:
         print(init_result.config_text, end="")
+        _print_gitignore_plan(gitignore_result)
+        remote_skill_result = install_remote_template_skills(
+            RemoteTemplateSkillInstallOptions(process_runner=process_runner, dry_run=True)
+        )
+        remote_skill_names = ", ".join(remote_skill_result.installed_skill_names)
         console.print(
-            f"[cyan]{format_skill_copy_plan(init_result.repo_root_path)}[/]",
+            f"[cyan]Would install remote template skills:[/] {remote_skill_names} -> "
+            f"{remote_skill_result.target_skills_root}",
             markup=False,
         )
-        _print_gitignore_plan(gitignore_result)
         return 0
     if init_result.wrote_file:
         console.print(f"[green]Wrote IAR local config:[/] {init_result.config_path}")
     else:
         console.print(f"[dim]IAR local config already up to date:[/] {init_result.config_path}")
     _print_gitignore_summary(gitignore_result)
+    try:
+        remote_skill_result = install_remote_template_skills(
+            RemoteTemplateSkillInstallOptions(process_runner=process_runner)
+        )
+    except Exception as exc:  # noqa: BLE001 - remote availability is required by iar init.
+        error_console.print(f"[red]Remote template skill installation failed:[/] {exc}")
+        return 1
+    remote_skill_names = ", ".join(remote_skill_result.installed_skill_names)
+    overwritten_names = ", ".join(remote_skill_result.overwritten_skill_names)
+    skipped_names = ", ".join(remote_skill_result.skipped_skill_names)
+    console.print(
+        f"[green]Installed remote template skills:[/] {remote_skill_names} -> "
+        f"{remote_skill_result.target_skills_root}"
+    )
+    if overwritten_names:
+        console.print(
+            f"[yellow]Overwrote user-owned skills (matching remote template):[/] {overwritten_names}"
+        )
+    if skipped_names:
+        console.print(f"[dim]Remote template skills already up to date:[/] {skipped_names}")
     if init_result.repo_id:
         try:
             registry_result = upsert_repository(
@@ -96,33 +118,6 @@ def _run_init_command(parsed: argparse.Namespace, process_runner: IProcessRunner
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to register repository in global registry: %s", exc)
             return 1
-    copy_skills_flag = (
-        False
-        if getattr(parsed, "skip_skills", False)
-        else str(getattr(parsed, "copy_skills", "true")).lower() != "false"
-    )
-    try:
-        skill_result = copy_bundled_skills(
-            BundledSkillCopyOptions(
-                repo_root_path=init_result.repo_root_path,
-                force=parsed.force,
-                dry_run=False,
-                skip=not copy_skills_flag,
-                skill_names=DEFAULT_BUNDLED_SKILL_NAMES,
-            )
-        )
-    except Exception as exc:  # noqa: BLE001
-        error_console.print(f"[yellow]Bundled skill copy failed:[/] {exc}")
-    else:
-        for line in format_skill_copy_summary(skill_result):
-            if line.startswith("Copied skill"):
-                console.print(f"[green]{line}[/]")
-            elif line.startswith(("Overwrote skill", "Skill diverged")):
-                console.print(f"[yellow]{line}[/]")
-            elif line.startswith("Skill already up to date"):
-                console.print(f"[dim]{line}[/]")
-            else:
-                console.print(line)
     try:
         sync_labels(
             labels_config=LabelConfig(),

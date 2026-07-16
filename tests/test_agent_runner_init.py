@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 
 from backend.api.cli import main
+from backend.engines.agent_runner.remote_template_skills import (
+    RemoteTemplateSkillInstallOptions,
+    RemoteTemplateSkillInstallResult,
+)
 from backend.engines.agent_runner.repository_local import (
     GITIGNORE_BLOCK_FOOTER,
     GITIGNORE_BLOCK_HEADER,
@@ -19,8 +25,22 @@ from backend.engines.agent_runner.repository_local import (
     ensure_gitignore_entries,
     initialize_repository_local_config,
 )
+from backend.infrastructure.config.settings import AgentRunnerLocalSettings
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _stub_remote_template_skill_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    """避免既有 IAR 初始化测试访问 GitHub；远程同步另有专项测试覆盖。"""
+    monkeypatch.setattr(
+        "backend.api.cli_init.install_remote_template_skills",
+        lambda options: RemoteTemplateSkillInstallResult(
+            target_skills_root=Path("/test/user-skills"),
+            installed_skill_names=("prd", "code-reviewer"),
+            dry_run=options.dry_run,
+        ),
+    )
 
 
 def _run_git(repo_path: Path, *git_args: str) -> subprocess.CompletedProcess[str]:
@@ -41,6 +61,32 @@ def _init_git_repository(tmp_path: Path, name: str) -> Path:
     _run_git(repo_path, "checkout", "-b", "main")
     _run_git(repo_path, "remote", "add", "origin", "git@github.com:example/target.git")
     return repo_path
+
+
+def _assert_toml_includes_non_null_model_fields(
+    toml_section: dict[str, object],
+    settings_model: BaseModel,
+) -> None:
+    """递归确认 TOML 包含配置模型中每个可序列化字段。"""
+    for field_name in type(settings_model).model_fields:
+        field_value = getattr(settings_model, field_name)
+        if field_value is None:
+            continue
+
+        assert field_name in toml_section
+        rendered_value = toml_section[field_name]
+        if isinstance(field_value, BaseModel):
+            assert isinstance(rendered_value, dict)
+            _assert_toml_includes_non_null_model_fields(rendered_value, field_value)
+        elif isinstance(field_value, dict):
+            assert isinstance(rendered_value, dict)
+            for mapping_key, mapping_value in field_value.items():
+                if isinstance(mapping_value, BaseModel):
+                    nested_rendered_value = rendered_value[mapping_key]
+                    assert isinstance(nested_rendered_value, dict)
+                    _assert_toml_includes_non_null_model_fields(
+                        nested_rendered_value, mapping_value
+                    )
 
 
 def test_iar_init_dry_run_real_entry(tmp_path: Path) -> None:
@@ -117,6 +163,36 @@ def test_iar_init_prints_review_hint_after_write(
     assert "请检查" in captured.err
     assert "Please review verification_commands" in captured.err
     assert "git diff --check" in captured.err
+
+
+def test_iar_init_requests_remote_user_skill_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """正常 init 必须委托远程模板同步用户级的两个受限 Skill。"""
+    repo_path = _init_git_repository(tmp_path, "target")
+    requested_options: list[RemoteTemplateSkillInstallOptions] = []
+    monkeypatch.chdir(repo_path)
+    monkeypatch.setenv("IAR_CONFIG", str(_create_isolated_config(tmp_path)))
+
+    def capture_install_options(
+        options: RemoteTemplateSkillInstallOptions,
+    ) -> RemoteTemplateSkillInstallResult:
+        requested_options.append(options)
+        return RemoteTemplateSkillInstallResult(
+            target_skills_root=tmp_path / "user-skills",
+            installed_skill_names=("prd", "code-reviewer"),
+            dry_run=options.dry_run,
+        )
+
+    monkeypatch.setattr(
+        "backend.api.cli_init.install_remote_template_skills", capture_install_options
+    )
+
+    assert main(["init"]) == 0
+    assert len(requested_options) == 1
+    assert requested_options[0].process_runner is not None
+    assert not requested_options[0].dry_run
 
 
 def _create_isolated_config(tmp_path: Path) -> Path:
@@ -579,6 +655,24 @@ def test_iar_init_renders_interactive_decision_and_deliberation_sections(
     assert "[agent_runner.deliberation.profiles.architect]" in config_text
     assert "[agent_runner.deliberation.profiles.skeptic]" in config_text
     assert "[agent_runner.deliberation.profiles.implementer]" in config_text
+
+
+def test_iar_init_renders_every_repository_level_config_field(
+    tmp_path: Path,
+) -> None:
+    """生成的本地模板必须包含所有仓库级配置模型的可序列化字段。"""
+    repo_path = _init_git_repository(tmp_path, "target")
+
+    _, config_text, _ = build_repository_local_config_text(
+        RepositoryInitOptions(cwd=repo_path, dry_run=True)
+    )
+
+    rendered_agent_runner = tomllib.loads(config_text)["agent_runner"]
+    rendered_settings = AgentRunnerLocalSettings(**rendered_agent_runner)
+
+    for section_name in AgentRunnerLocalSettings.model_fields:
+        assert getattr(rendered_settings, section_name) is not None
+    _assert_toml_includes_non_null_model_fields(rendered_agent_runner, rendered_settings)
 
 
 def test_detect_default_remote_falls_back_when_upstream_missing(

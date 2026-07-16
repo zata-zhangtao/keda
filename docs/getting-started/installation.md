@@ -23,7 +23,7 @@ iar --version
 | `KEDA_VERSION` | 等价于 `--version`。 |
 | `KEDA_PYPI=1` | 预留钩子，从 PyPI 拉取（尚未启用）。 |
 
-## 复制到目标仓库的 Skill
+## 初始化仓库与用户级 Skills
 
 安装完 `iar` 之后，进入任意 Git 仓库执行：
 
@@ -35,14 +35,14 @@ iar init
 `iar init` 会：
 
 1. 写入仓库根目录的 `.iar.toml`。
-2. 从 wheel 包内复制 `prd` 与 `code-reviewer` 两份 Skill 到 `<repo>/.claude/skills/`，SHA256 一致时跳过，不一致且传 `--force` 时覆盖。
+2. 管理 IAR 所需的 `.gitignore` 条目。
 3. 同步标准 GitHub label（`agent`、`rework-prd` 等）。
 
-跳过 Skill 复制的写法：
-
-```bash
-iar init --skip-skills
-```
+`prd` 与 `code-reviewer` 不随 wheel 分发。`iar init` 会从远程
+[`zata-codes-template`](https://github.com/zata-zhangtao/zata-codes-template) 下载且仅下载这两个
+Skill，再安装到用户级目录；不会写入项目内 `.claude/skills`、`.codex/skills` 或
+`.kimi-code/skills`。它优先使用 `CC_SWITCH_SKILLS_DIR`，随后选择已有的 cc-switch、Codex、Claude、
+Kimi Code 配置目录；都不存在时创建 `~/.codex/skills`。因此该步骤需要能够访问 GitHub。
 
 ## 容器化运行（可选）
 

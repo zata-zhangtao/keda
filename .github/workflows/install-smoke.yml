@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   install-smoke:
-    name: Install + iar init on ${{ matrix.os }} / py${{ matrix.python-version }}
+    name: Install + repository init on ${{ matrix.os }} / py${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -57,12 +57,17 @@ jobs:
           git -C "$tmp_repo" checkout -q -b main
           git -C "$tmp_repo" config user.email "smoke@example.com"
           git -C "$tmp_repo" config user.name "Install Smoke"
+          user_skills_dir="$tmp_repo/user-skills"
           cd "$tmp_repo"
-          iar init --dry-run
-          iar init
-          test -f "$tmp_repo/.claude/skills/prd/SKILL.md"
-          test -f "$tmp_repo/.claude/skills/code-reviewer/SKILL.md"
-          iar init  # second run should be a no-op for skills
+          CC_SWITCH_SKILLS_DIR="$user_skills_dir" iar init --dry-run
+          CC_SWITCH_SKILLS_DIR="$user_skills_dir" iar init
+          test -f "$tmp_repo/.iar.toml"
+          test -f "$user_skills_dir/prd/SKILL.md"
+          test -f "$user_skills_dir/code-reviewer/SKILL.md"
+          test ! -e "$tmp_repo/.claude/skills"
+          test ! -e "$tmp_repo/.codex/skills"
+          test ! -e "$tmp_repo/.kimi-code/skills"
+          CC_SWITCH_SKILLS_DIR="$user_skills_dir" iar init  # second run updates only user-level skills
 
       - name: "Optional: install from raw GitHub URL (release tag only)"
         if: startsWith(github.ref, 'refs/tags/v')

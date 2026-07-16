@@ -8,6 +8,7 @@ from backend.engines.agent_runner.repository_local import (
     settings_to_toml_string,
 )
 from backend.infrastructure.config.settings import (
+    AgentRunnerDaemonSettings,
     AgentRunnerLocalSettings as LiveAgentRunnerLocalSettings,
     AgentRunnerRepositoryMetadataSettings,
     load_agent_runner_local_settings,
@@ -56,14 +57,11 @@ def test_local_settings_without_daemon_override(tmp_path: Path) -> None:
     assert loaded.daemon is None
 
 
-def test_init_renders_daemon_example_block() -> None:
-    """init 模板渲染结果包含 _IAR_DAEMON_EXAMPLE 注释块。
-
-    验证:用户 ``iar init`` 后能在 .iar.toml 看到 [agent_runner.daemon] 注释示例,
-    取消注释即可改 reclaim_ttl_seconds 等字段。
-    """
+def test_init_renders_daemon_default_fields() -> None:
+    """init 模板渲染结果包含可直接编辑的 daemon 默认配置。"""
     settings = LiveAgentRunnerLocalSettings(
-        repository=AgentRunnerRepositoryMetadataSettings(id="fake-repo", enabled=True)
+        repository=AgentRunnerRepositoryMetadataSettings(id="fake-repo", enabled=True),
+        daemon=AgentRunnerDaemonSettings(),
     )
     rendered = settings_to_toml_string(settings)
 
