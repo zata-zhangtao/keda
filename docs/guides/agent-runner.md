@@ -2395,6 +2395,12 @@ iar issue create        PRD 含 Realistic Validation 清单
 agent 执行              prompt 强制要求实跑验证计划，证据写入 worktree 的
                         .iar/evidence/（runner 在 worktree 创建时写入
                         git info/exclude，证据永远进不了代码 diff）。
+                        仅用于截图采集、临时 server 或探针的辅助脚本也必须
+                        留在 .iar/evidence/scripts/。只有 PRD 明确需要 keda
+                        后续复跑的脚本才可提交，且必须命名为
+                        scripts/rv_evidence/rv-<item-number>-<slug>.*；
+                        scripts_evidence/、scripts/evidence/ 与
+                        scripts/evidence_helpers/ 会被门禁打回 recovery。
                         带 iar:structured-evidence marker 的 Issue 还必须写
                         .iar/evidence/evidence.json manifest，按 checklist item
                         分组描述命令、关键输出摘要、解释、风险及关联证据文件。
@@ -2523,7 +2529,7 @@ validation_passed = "validation/passed"
 - `items` 必须覆盖 Realistic Validation checklist 的全部 item，每个 item 出现一次。
 - 每个 item 必填字段：`item_number`、`item_name`、`command`、`evidence_files`、`output_summary`、`explanation`、`risks`。
 - `evidence_files` 可有多个文件；每个文件必须存在于 `.iar/evidence/`，且文件名匹配 `rv-<item_number>-*` 或 `rv-<item_number>.*`。
-- `command` 必须是可独立复现、自终止的检查命令。如果命令涉及多行 Python 或复杂 setup，应将其落到仓库已跟踪的独立脚本（例如 `scripts/rv_evidence/` 下按 item 命名的文件）并在 `command` 中引用；避免把内联 `python -c "..."` 写进 manifest，否则 runner 复跑时难以维护，也容易被 keda 判定为不可复现。脚本本身不会被 runner 修改，每次复跑覆盖的是 `.iar/evidence/` 下的证据产物。
+- `command` 必须是可独立复现、自终止的检查命令。如果 PRD 要求的命令涉及多行 Python 或复杂 setup，应将其落到已跟踪的 `scripts/rv_evidence/rv-<item-number>-<slug>.*` 并在 `command` 中引用；避免把内联 `python -c "..."` 写进 manifest，否则 runner 复跑时难以维护，也容易被 keda 判定为不可复现。截图采集、临时 server、探针等仅用于取证的辅助脚本必须放 `.iar/evidence/scripts/`，不会被 runner 修改或提交；每次复跑覆盖的是 `.iar/evidence/` 下的证据产物。
 - runner 在渲染 PR comment 时重新计算每个证据文件的 SHA-256，展示短 hash 与完整 hash。
 
 ### Reviewer 验收流程

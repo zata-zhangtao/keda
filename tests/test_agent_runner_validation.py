@@ -27,6 +27,7 @@ from backend.core.use_cases.agent_runner_validation import (
     collect_evidence_coverage_problems,
     ensure_evidence_dir_excluded,
     ensure_frontend_visual_evidence,
+    ensure_no_misplaced_evidence_helpers,
     ensure_no_evidence_paths_in_changes,
     ensure_validation_commands_pass,
     ensure_validation_evidence_ready,
@@ -224,6 +225,8 @@ def test_build_validation_prompt_line() -> None:
     config = AppConfig()
     prompt_line = build_validation_prompt_line(_issue(), config)
     assert ".iar/evidence" in prompt_line
+    assert "scripts/rv_evidence/" in prompt_line
+    assert "scripts_evidence/" in prompt_line
     assert build_validation_prompt_line(_issue(body="plain"), config) == ""
 
 
@@ -249,6 +252,7 @@ def test_validation_evidence_failure_recovery_prompt_keeps_instruction() -> None
     assert "item 2 exited 2" in prompt
     assert "Run the validation plan for real" in prompt
     assert "do not fabricate evidence" in prompt
+    assert "scripts/rv_evidence/" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +550,87 @@ def test_ensure_no_evidence_paths_in_changes_blocks_leak(tmp_path: Path) -> None
     )
     with pytest.raises(RuntimeError, match="evidence"):
         ensure_no_evidence_paths_in_changes(tmp_path, AppConfig(), fake_runner)
+
+
+@pytest.mark.parametrize(
+    "misplaced_path",
+    (
+        "scripts_evidence/capture_voice_evidence.sh",
+        "scripts/evidence/capture.py",
+        "scripts/evidence_helpers/seed.py",
+    ),
+)
+def test_ensure_no_misplaced_evidence_helpers_enters_recovery(
+    tmp_path: Path, misplaced_path: str
+) -> None:
+    """错误路径的取证辅助脚本会被证据门禁拒绝。"""
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                command=("git", "status", "--porcelain", "-z"),
+                return_code=0,
+                stdout=f"A  {misplaced_path}\0",
+                stderr="",
+            )
+        }
+    )
+
+    with pytest.raises(ValidationEvidenceError, match="unsupported tracked paths"):
+        ensure_no_misplaced_evidence_helpers(tmp_path, fake_runner)
+
+
+def test_ensure_no_misplaced_evidence_helpers_allows_reusable_rv_script(tmp_path: Path) -> None:
+    """PRD 所需的可复跑 RV 脚本可以作为正常交付物保留。"""
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                command=("git", "status", "--porcelain", "-z"),
+                return_code=0,
+                stdout="A  scripts/rv_evidence/rv-1-login.py\0",
+                stderr="",
+            )
+        }
+    )
+
+    ensure_no_misplaced_evidence_helpers(tmp_path, fake_runner)
+
+
+def test_ensure_no_misplaced_evidence_helpers_allows_untracked_rv_script_directory(
+    tmp_path: Path,
+) -> None:
+    """Git 收拢未跟踪目录时，目录内合规的 RV 脚本仍可通过。"""
+    rv_script_path = tmp_path / "scripts" / "rv_evidence" / "rv-1-login.py"
+    rv_script_path.parent.mkdir(parents=True)
+    rv_script_path.write_text("print('ok')\n", encoding="utf-8")
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                command=("git", "status", "--porcelain", "-z"),
+                return_code=0,
+                stdout="?? scripts/rv_evidence/\0",
+                stderr="",
+            )
+        }
+    )
+
+    ensure_no_misplaced_evidence_helpers(tmp_path, fake_runner)
+
+
+def test_ensure_no_misplaced_evidence_helpers_rejects_misnamed_rv_script(tmp_path: Path) -> None:
+    """可提交的 RV 脚本必须带对应的 RV 编号。"""
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                command=("git", "status", "--porcelain", "-z"),
+                return_code=0,
+                stdout="A  scripts/rv_evidence/capture_voice.py\0",
+                stderr="",
+            )
+        }
+    )
+
+    with pytest.raises(ValidationEvidenceError, match="invalid reusable RV script name"):
+        ensure_no_misplaced_evidence_helpers(tmp_path, fake_runner)
 
 
 # ---------------------------------------------------------------------------

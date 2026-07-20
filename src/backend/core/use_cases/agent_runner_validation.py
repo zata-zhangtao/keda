@@ -108,6 +108,13 @@ _PR_URL_PATTERN = re.compile(
 
 _INLINE_TEXT_SUFFIXES = {".txt", ".log", ".md", ".out"}
 _MAX_INLINE_EVIDENCE_CHARS = 3000
+_MISPLACED_EVIDENCE_HELPER_PREFIXES = (
+    "scripts_evidence/",
+    "scripts/evidence/",
+    "scripts/evidence_helpers/",
+)
+_REUSABLE_RV_SCRIPT_PREFIX = "scripts/rv_evidence/"
+_REUSABLE_RV_SCRIPT_PATH_PATTERN = re.compile(r"^scripts/rv_evidence/rv-\d+-[^/]+$")
 
 
 @dataclass(frozen=True)
@@ -396,7 +403,15 @@ def build_validation_prompt_line(issue: IssueSummary, config: AppConfig) -> str:
         f"{enforcement_text}"
         "Do not substitute the real entry point an item describes with "
         "fakes, mocks, or TestClient. Never put evidence files under "
-        "version control and never capture secrets in them."
+        "version control and never capture secrets in them. "
+        f"Keep scripts used only to capture evidence or provide temporary RV setup "
+        f"under `{config.validation.evidence_dir}/scripts/`; they must not enter "
+        "the code diff. A reusable script may be committed only when the PRD "
+        "requires it for a reproducible RV command, and then it must live under "
+        "`scripts/rv_evidence/` with an `rv-<item-number>-<slug>` name. Do not "
+        "create `scripts_evidence/`, `scripts/evidence/`, or "
+        "`scripts/evidence_helpers/`. Before requesting a commit, inspect `git "
+        "diff --name-only` and remove temporary evidence helpers."
     ]
     if has_structured_evidence_marker(issue.body):
         structured_suffix = build_structured_evidence_prompt_suffix(config.validation.language)
@@ -820,14 +835,72 @@ def format_validation_evidence_detail(message: str) -> str:
     )
 
 
-def format_validation_evidence_failure(message: str) -> str:
+def format_validation_evidence_failure(message: str, evidence_dir: str = ".iar/evidence") -> str:
     """Build the failure section for an evidence recovery prompt."""
     return "\n".join(
         [
             format_validation_evidence_detail(message),
             "Run the validation plan for real and write the evidence files; "
-            "do not fabricate evidence and do not capture secrets.",
+            "do not fabricate evidence and do not capture secrets. Keep scripts used "
+            f"only for evidence capture or temporary RV setup under `{evidence_dir}/scripts/` "
+            "and out of the code diff. Only PRD-required reusable RV scripts may be "
+            "committed, under `scripts/rv_evidence/` named `rv-<item-number>-<slug>`; "
+            "never create `scripts_evidence/`, `scripts/evidence/`, or "
+            "`scripts/evidence_helpers/`.",
         ]
+    )
+
+
+def ensure_no_misplaced_evidence_helpers(
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+) -> None:
+    """拒绝把取证辅助脚本放入未授权的受版本控制路径。
+
+    复杂且需要复跑的 RV 命令可以作为交付物保留在
+    ``scripts/rv_evidence/``。除此之外，证据采集与临时 setup 脚本必须留在
+    worktree-local evidence directory；本检查拦截几种曾被 Agent 误建的路径，
+    让它们进入既有 recovery 循环而不是污染待发布的变更。
+
+    Args:
+        worktree_path: 当前 Agent worktree 根目录。
+        process_runner: 用于读取 worktree 变更的进程执行器。
+
+    Raises:
+        ValidationEvidenceError: 发现未授权的取证辅助脚本路径时抛出。
+    """
+    changed_paths = list_changed_paths(worktree_path, process_runner)
+    misplaced_paths: list[str] = []
+    for changed_path in changed_paths:
+        if changed_path.startswith(_MISPLACED_EVIDENCE_HELPER_PREFIXES):
+            misplaced_paths.append(changed_path)
+            continue
+        if not changed_path.startswith(_REUSABLE_RV_SCRIPT_PREFIX):
+            continue
+        if _REUSABLE_RV_SCRIPT_PATH_PATTERN.fullmatch(changed_path):
+            continue
+        candidate_path = worktree_path / changed_path
+        if changed_path.endswith("/") and candidate_path.is_dir():
+            invalid_script_paths = [
+                str(script_path.relative_to(worktree_path))
+                for script_path in candidate_path.rglob("*")
+                if script_path.is_file()
+                and not _REUSABLE_RV_SCRIPT_PATH_PATTERN.fullmatch(
+                    str(script_path.relative_to(worktree_path))
+                )
+            ]
+            misplaced_paths.extend(invalid_script_paths)
+            continue
+        misplaced_paths.append(changed_path)
+    if not misplaced_paths:
+        return
+    misplaced_paths_text = ", ".join(sorted(set(misplaced_paths)))
+    raise ValidationEvidenceError(
+        "Validation-only helper scripts are in unsupported tracked paths or use "
+        "an invalid reusable RV script name: "
+        f"{misplaced_paths_text}. Move temporary helpers to `.iar/evidence/scripts/` "
+        "and keep them out of the diff. A PRD-required reusable RV script belongs "
+        "under `scripts/rv_evidence/` named `rv-<item-number>-<slug>` instead."
     )
 
 

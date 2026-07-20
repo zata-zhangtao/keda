@@ -104,6 +104,7 @@ from backend.core.use_cases.agent_runner_validation import (
     ValidationEvidenceError,
     build_validation_prompt_line,
     ensure_evidence_dir_excluded,
+    ensure_no_misplaced_evidence_helpers,
     ensure_validation_commands_pass,
     ensure_validation_evidence_ready,
     format_validation_evidence_detail,
@@ -1174,6 +1175,7 @@ def run_agent_until_committed(
         # Phase 3.5: Realistic Validation 证据门禁（要求验证且无豁免时）
         try:
             ensure_validation_evidence_ready(issue, worktree_path, config, process_runner)
+            ensure_no_misplaced_evidence_helpers(worktree_path, process_runner)
             ensure_validation_commands_pass(issue, worktree_path, config, process_runner)
             # Phase 3.6: independent verifier (pre-PR; red -> this same recovery
             # loop auto-repairs, bounded; escalates to a human only on exhaustion).
@@ -1218,9 +1220,10 @@ def run_agent_until_committed(
             )
             if attempt_index >= max_recovery_attempts:
                 raise MaxRetriesExceededError(attempt_results) from exc
-            recovery_failure_summary = format_validation_evidence_failure(str(exc))
+            recovery_failure_summary = format_validation_evidence_failure(
+                str(exc), config.validation.evidence_dir
+            )
             recovery_failure_type = failure_type.value
-            recovery_failure_summary = format_validation_evidence_failure(str(exc))
             _logger.warning(
                 "Validation evidence check failed for Issue #%d; asking agent to recover (%d/%d).",
                 issue.number,
