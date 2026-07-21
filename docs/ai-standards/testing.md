@@ -136,6 +136,8 @@ HTML 报告仍固定在 `tests/playwright-e2e/playwright-report/`，可用 `just
 
 使用 `just ai implement` 实现 PRD 时，Agent 必须生成可审查的证据包，而不是直接勾选 Acceptance Checklist。
 
+> **证据留存策略**：`tasks/evidence/` 只提交文本报告（`*.verification-plan.md`、`*.evidence-report.md`、`*.verifier-report.md`）；原始证据产物（截图、录屏、命令输出、大日志）由 `.gitignore` 排除，仅留在本地磁盘。这与 iar agent runner 的 `.iar/evidence/` 同一原则——原始证据不进代码历史（避免二进制膨胀、密钥泄漏永久化）。verifier 与 `check_prd_evidence.sh` 在实现期仍针对本地文件运行。`tasks/evidence/` 是本地 `just ai implement` 流的约定；经 iar daemon 的 Issue→PR 流改用 worktree 内的 `.iar/evidence/`（git 排除，证据发布到 PR 评论 + orphan 分支），见 `docs/guides/agent-runner.md`。
+
 流程：
 
 1. **生成验证计划**：executor 在 `tasks/evidence/<prd-basename>/<prd-basename>.verification-plan.md` 中列出每条验收项对应的可执行验证命令或 e2e 用例。

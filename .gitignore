@@ -67,6 +67,17 @@ Thumbs.db
 .iar
 .agent-runner/
 
+# Realistic Validation evidence packages — local PRD flow (`just ai implement`).
+# Commit only the text reports (*.md: verification-plan / evidence-report /
+# verifier-report); keep raw artifacts (screenshots, recordings, captured
+# output, large logs) local-only. Same principle as the iar runner's
+# .iar/evidence/: raw evidence never enters code history (binary bloat + secret
+# leakage in permanent git history). The verifier and check_prd_evidence.sh
+# still run against the local files at implement time.
+tasks/evidence/**
+!tasks/evidence/**/
+!tasks/evidence/**/*.md
+
 # pytest-testmon SQLite cache
 .testmondata*
 
