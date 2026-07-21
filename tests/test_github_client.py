@@ -74,6 +74,40 @@ def test_comment_issue_sanitizes_body_before_posting(tmp_path: Path) -> None:
     assert capturing_runner.body_files == ["## Agent Runner Failed bad bytes"]
 
 
+def test_edit_issue_comment_passes_body_as_gh_api_file_field(tmp_path: Path) -> None:
+    """Editing a comment must read the body via ``gh api -F body=@<file>``.
+
+    Regression for Issue #89: the field was built as ``body@<file>`` (missing the
+    ``=``), so ``gh api`` rejected it with ``invalid key`` on every edit. Only the
+    first write to a comment survived (that path creates via ``gh issue comment``),
+    so the in-place-edited attempt-history comment silently froze at its first row.
+    """
+    repo_view_command = ("gh", "repo", "view", "--json", "nameWithOwner")
+    fake_runner = FakeProcessRunner(
+        responses={
+            repo_view_command: CommandResult(
+                command=repo_view_command,
+                return_code=0,
+                stdout=json.dumps({"nameWithOwner": "owner/repo"}),
+                stderr="",
+            )
+        }
+    )
+    github_client = GitHubCliClient(tmp_path, fake_runner)
+
+    github_client.edit_issue_comment(5029728609, "## Attempt History\n| body |")
+
+    api_calls = [call for call in fake_runner.calls if "api" in call and "-F" in call]
+    assert len(api_calls) == 1, fake_runner.calls
+    argv = api_calls[0]
+    assert "PATCH" in argv
+    assert "repos/owner/repo/issues/comments/5029728609" in argv
+    field_value = argv[argv.index("-F") + 1]
+    # ``gh api`` reads a field value from a file only with the ``key=@file`` form;
+    # the buggy ``key@file`` form is parsed as an invalid key and rejected.
+    assert field_value.startswith("body=@"), field_value
+
+
 def test_list_issue_comments_requests_comments_field(tmp_path: Path) -> None:
     """Issue comment loading should request and parse the comments field."""
     command = (

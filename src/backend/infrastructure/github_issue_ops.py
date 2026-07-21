@@ -431,7 +431,7 @@ def edit_issue_comment(client: _ClientProtocol, comment_id: int, body: str) -> N
                 "-X",
                 "PATCH",
                 "-F",
-                f"body@{body_path}",
+                f"body=@{body_path}",
             ],
             cwd=client.repo_path,
         )
