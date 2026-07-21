@@ -176,6 +176,7 @@ def build_app_config_from_settings(
             create_command=worktree_settings.create_command,
             reuse_command=worktree_settings.reuse_command,
             path_command=worktree_settings.path_command,
+            provision_database=worktree_settings.provision_database,
             base_branch=git_settings.base_branch,
         ),
         runner=RunnerConfig(

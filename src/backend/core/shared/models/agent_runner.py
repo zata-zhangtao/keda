@@ -189,6 +189,7 @@ class WorktreeConfig:
     )
     reuse_command: str = "iar worktree path --branch issue-{issue_number}"
     path_command: str = "iar worktree path --branch issue-{issue_number}"
+    provision_database: bool = False
     base_branch: str = "main"
 
 

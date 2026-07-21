@@ -31,6 +31,8 @@ Options:
 
 Behavior:
   所有 worktree 统一集中到 <repo_parent>/<repo-name>-worktrees/ 下。
+  只能从 Git primary worktree 创建，避免嵌套创建和本地资源冲突。
+  新 worktree 会获得独立 PostgreSQL 数据库；开发和 E2E 共用该库。
   issue-* 分支在未指定 --subdir 时，默认归入 tasks/ 子目录。
   默认会同步 base/源远程的 tracking ref 作为新 worktree 起点。
   可通过环境变量控制远程同步行为:
@@ -968,6 +970,26 @@ function ai_worktree() {
 
     if ! install_python_dependencies; then
         return 1
+    fi
+
+    # 使用现有项目复制建库能力，为当前 worktree 生成唯一数据库并拒绝回退到共享库。
+    local worktree_database_identifier=""
+    local worktree_branch_digest=""
+    worktree_branch_digest="$(printf '%s' "$branch_name" | git hash-object --stdin | cut -c1-8)"
+    worktree_database_identifier="${repo_name}_wt_${branch_name}_${worktree_branch_digest}"
+    echo "🗄️ 正在创建 worktree 专用数据库 ..."
+    if ! uv run python "$repo_root_path/scripts/shared/template/setup_copied_database.py" \
+        "$worktree_database_identifier" "$target_abs_path" --strict; then
+        echo "❌ 无法准备 worktree 专用 PostgreSQL 数据库，已停止创建流程。"
+        return 1
+    fi
+
+    if [ -f "$target_abs_path/alembic.ini" ]; then
+        echo "🧬 正在迁移 worktree 专用数据库 ..."
+        if ! uv run alembic upgrade head; then
+            echo "❌ worktree 数据库迁移失败。"
+            return 1
+        fi
     fi
 
     if [ "$enable_vscode_add" = "true" ]; then

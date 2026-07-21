@@ -1,13 +1,8 @@
 # Max-file-lines allow-list.
 #
-# 命中本文件路径的 Python 文件即使非空行超过 1000 行也只产生 WARNING,
-# 不阻断 CI。存量超额文件必须随同拆分 PRD 一起清零,新增条目需说明
-# 拆分计划与验收依据。
+# 本文件仅保留格式说明；历史豁免已经清零，禁止新增条目。
 #
 # 规则:
 # - 每行一个相对仓库根的 POSIX 风格路径(以 .py 结尾)
 # - 以 `#` 开头的整行视为注释,会被忽略
-# - 新增条目必须配套一份拆分 PRD 或在 PR 描述中说明豁免理由
-src/backend/core/use_cases/run_agent_once.py
-src/backend/core/use_cases/agent_runner_orchestrate.py
-src/backend/core/use_cases/agent_runner_validation.py
+# - 任何代码文件超过 1000 非空行时必须拆分，不得通过 allow-list 绕过

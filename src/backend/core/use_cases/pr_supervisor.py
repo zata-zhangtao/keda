@@ -25,20 +25,18 @@ from backend.core.use_cases.agent_runner_commit import (
     remove_commit_request,
 )
 from backend.core.use_cases.agent_runner_feedback import (
-    VerificationFailedError,
     build_recovery_prompt,
     failed_verification_results,
 )
 from backend.core.use_cases.agent_runner_failure import (
     format_recovery_failure_summary,
 )
+from backend.core.use_cases.pr_supervisor_repair import execute_repair
 from backend.core.use_cases.agent_runner_verification_recovery import (
     ensure_verification_passed_with_recovery,
 )
 from backend.core.use_cases.agent_review import ReviewerDecision, parse_reviewer_decision
 from backend.core.use_cases.run_agent_once import (
-    commit_requested_changes,
-    ensure_verification_passed,
     extract_agent_response_text,
     get_current_branch,
     get_head_sha,
@@ -49,6 +47,9 @@ from backend.core.use_cases.run_agent_once import (
 )
 
 _logger = logging.getLogger(__name__)
+
+# 保持既有导入路径兼容，实际实现按职责拆至 repair 子模块。
+__all__ = ["execute_repair"]
 
 
 def _normalize_rebase_target_name(raw: str | None) -> str | None:
@@ -821,128 +822,6 @@ def execute_rebase(
     # 用 force-with-lease 推送到 PR 分支
     process_runner.run(
         ["git", "push", "--force-with-lease", remote, pr_branch],
-        cwd=worktree_path,
-    )
-
-    return verification_results
-
-
-def execute_repair(
-    *,
-    issue: IssueSummary,
-    worktree_path: Path,
-    config: AppConfig,
-    process_runner: IProcessRunner,
-    pr_branch: str,
-    expected_head: str,
-    supervisor_agent: str,
-) -> list[CommandResult]:
-    """Run a repair agent on the existing PR branch and commit changes.
-
-    Args:
-        issue: The Issue being repaired.
-        worktree_path: Path to the worktree.
-        config: Application configuration.
-        process_runner: Process runner for commands.
-        pr_branch: Name of the PR branch.
-        expected_head: Expected current HEAD SHA before repair.
-        supervisor_agent: Agent to run for repair.
-
-    Returns:
-        Verification results after repair commit.
-    """
-    # 先锁定工作树状态，防止竞态
-    current_head = get_head_sha(worktree_path, process_runner)
-    if current_head != expected_head:
-        raise RuntimeError(
-            f"Repair aborted: HEAD {current_head} does not match expected {expected_head}"
-        )
-
-    current_branch = get_current_branch(worktree_path, process_runner)
-    if current_branch != pr_branch:
-        raise RuntimeError(f"Repair aborted: on branch {current_branch}, expected {pr_branch}")
-
-    repair_prompt = "\n".join(
-        [
-            f"Repair PR branch for Issue #{issue.number}: {issue.title}",
-            "",
-            f"Issue URL: {issue.url}",
-            f"Worktree: {worktree_path}",
-            "",
-            "The post-PR supervisor requested code changes on this branch.",
-            "Inspect the current worktree, make the necessary fixes, and request a commit.",
-            "- Only modify files inside the current worktree.",
-            "- Do not switch branches, merge main, push, or create PRs.",
-            "- Do not run `git add` or `git commit`; the runner handles commits.",
-            "- After fixing, write `.agent-runner/commit-request.json` as JSON with `commit_message`.",
-        ]
-    )
-
-    max_attempts = max(1, config.post_pr_supervisor.max_repair_attempts)
-    verification_results: list[CommandResult] = []
-    for attempt in range(1, max_attempts + 1):
-        run_agent_with_prompt(
-            supervisor_agent, repair_prompt, worktree_path, process_runner, issue=issue
-        )
-
-        request_path = worktree_path / ".agent-runner" / "commit-request.json"
-        if request_path.is_file():
-            try:
-                verification_results = commit_requested_changes(
-                    issue,
-                    worktree_path,
-                    config,
-                    process_runner,
-                    expected_branch=pr_branch,
-                )
-            except VerificationFailedError as exc:
-                if attempt >= max_attempts:
-                    raise
-                # 取消 staging，让 agent 继续修
-                process_runner.run(
-                    ["git", "reset", "--mixed"],
-                    cwd=worktree_path,
-                    check=False,
-                )
-                repair_prompt = build_recovery_prompt(
-                    issue,
-                    worktree_path,
-                    recovery_attempt=attempt,
-                    max_recovery_attempts=max_attempts,
-                    failure_summary=format_recovery_failure_summary(
-                        "Verification failed before repair commit.",
-                        exc.verification_results,
-                    ),
-                )
-                continue
-        else:
-            if has_changes(worktree_path, process_runner):
-                raise RuntimeError(
-                    "Repair agent changed files without writing .agent-runner/commit-request.json."
-                )
-            # Agent 未修改时仍需验证当前代码
-            verification_results = run_verification(worktree_path, config, process_runner)
-            if failed_verification_results(verification_results):
-                if attempt >= max_attempts:
-                    ensure_verification_passed(verification_results)
-                repair_prompt = build_recovery_prompt(
-                    issue,
-                    worktree_path,
-                    recovery_attempt=attempt,
-                    max_recovery_attempts=max_attempts,
-                    failure_summary=format_recovery_failure_summary(
-                        "Verification failed before repair commit.",
-                        verification_results,
-                    ),
-                )
-                continue
-        break
-    else:
-        ensure_verification_passed(verification_results)
-
-    remote = config.git.remote
-    process_runner.run(
-        ["git", "push", remote, pr_branch],
         cwd=worktree_path,
     )
 

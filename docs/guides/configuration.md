@@ -43,6 +43,17 @@
   - 仅在 `WORKTREE_FRONTEND_STRATEGY=install-per-worktree` 时生效。
   - 设为 `true` 后，跳过前端依赖安装步骤。
 
+创建完成后，`just worktree` 会根据仓库名、分支名与短哈希生成唯一的 PostgreSQL
+数据库名，改写新 worktree `.env.local` 中的 `DATABASE_URL`，再创建数据库并执行
+Alembic 迁移（如仓库存在 `alembic.ini`）。该流程使用严格模式：`.env.local` 未配置
+PostgreSQL URL、数据库无法创建或迁移失败时，worktree 创建命令会失败，避免多个
+worktree 意外共用同一数据库。开发服务与 E2E 测试共用该 worktree 专用数据库。
+
+`iar daemon` 也可通过 `[agent_runner.worktree]` 的 `provision_database = true` 在领取
+Issue 后执行同一流程。数据库 URL 支持 PostgreSQL（`postgresql...`）和 MySQL
+（`mysql...`）；两者均要求数据库账号有创建数据库的权限。SQLite 不支持 worktree
+隔离，严格模式下会阻止 daemon 开始执行，避免多个 Issue 共享同一个数据库文件。
+
 对包含多个前端子项目的仓库，默认策略会覆盖类似 `demo-frontend/`、`admin-frontend/` 这类嵌套目录，而不是只处理仓库根目录。
 
 ## 模板同步配置

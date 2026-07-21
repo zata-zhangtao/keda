@@ -20,6 +20,7 @@ from backend.core.shared.models.agent_runner import (
     IssueSummary,
     WorktreeConfig,
 )
+from backend.core.use_cases import run_agent_once as run_agent_once_module
 from backend.core.use_cases.run_agent_once import create_or_reuse_worktree
 from backend.infrastructure.git.worktree import WorktreeManager, WORKTREE_DIR_NAME
 from backend.infrastructure.process_runner import SubprocessRunner
@@ -219,6 +220,46 @@ def test_create_or_reuse_worktree_heals_env_files_on_reuse(
 
     assert resolved_worktree_path == worktree_path.resolve()
     assert (worktree_path / ".env").read_text(encoding="utf-8") == "SECRET=1\n"
+
+
+def test_create_or_reuse_worktree_provisions_database_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Daemon worktree setup provisions an isolated database before agent execution."""
+    repo_path = _init_git_repository(tmp_path, "target")
+    worktree_path = WorktreeManager(repo_path, SubprocessRunner()).create(
+        branch="issue-52", base_branch="main"
+    )
+    config = AppConfig(
+        worktree=WorktreeConfig(
+            create_command="false",
+            reuse_command="true",
+            path_command=f"echo {worktree_path}",
+            provision_database=True,
+            base_branch="main",
+        )
+    )
+    issue = IssueSummary(
+        number=52,
+        title="database isolation",
+        url="https://example/issues/52",
+        body="",
+        labels=(),
+    )
+    provision_requests = []
+
+    def fake_provision(request: object, _: object) -> None:
+        provision_requests.append(request)
+
+    monkeypatch.setattr(run_agent_once_module, "provision_worktree_database", fake_provision)
+
+    resolved_worktree_path = create_or_reuse_worktree(repo_path, issue, config, SubprocessRunner())
+
+    assert resolved_worktree_path == worktree_path.resolve()
+    assert len(provision_requests) == 1
+    assert provision_requests[0].issue_number == issue.number
+    assert provision_requests[0].worktree_path == worktree_path.resolve()
 
 
 def test_create_or_reuse_worktree_links_frontend_node_modules(

@@ -336,6 +336,9 @@ create_command = "iar worktree create --branch issue-{issue_number} --base-branc
 reuse_command = "iar worktree path --branch issue-{issue_number}"
 # 获取 worktree 绝对路径的命令
 path_command = "iar worktree path --branch issue-{issue_number}"
+# daemon 在 Agent 运行前为 worktree 配置独立 PostgreSQL/MySQL 数据库；
+# 需要 worktree 的 .env.local 包含 DATABASE_URL。
+provision_database = true
 
 # Runner 行为配置：每轮处理 Issue 数量、默认 agent、提交前验证命令
 [agent_runner.runner]
@@ -2096,6 +2099,7 @@ base_branch = "main"
 create_command = "iar worktree create --branch issue-{issue_number} --base-branch {base_branch}"
 reuse_command = "iar worktree path --branch issue-{issue_number}"
 path_command = "iar worktree path --branch issue-{issue_number}"
+provision_database = true
 
 [agent_runner.runner]
 default_agent = "auto"

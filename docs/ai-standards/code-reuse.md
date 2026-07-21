@@ -76,7 +76,8 @@ cost_values = fetch_costs("2026-01-01", "2026-01-31", True)
 
 - 目标：单个 `.py` 文件非空行少于 500 行
 - 上限：新增或重写模块不应超过 800 行
-- 过渡：`hooks/shared/check_max_file_lines.py` 仍以 1000 行 warn-only 兼容历史文件
+- 硬上限：任何未列入历史 allow-list 的代码文件，非空行不得超过 1000 行；`hooks/shared/check_max_file_lines.py` 会阻断交付
+- 过渡：allow-list 仅用于已存在的历史文件，禁止新增豁免；触及此类文件时应优先拆分
 
 模块拆分规则：
 

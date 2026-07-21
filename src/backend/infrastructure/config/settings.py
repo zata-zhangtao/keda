@@ -449,6 +449,7 @@ class AgentRunnerWorktreeSettings(BaseModel):
     )
     reuse_command: str = "iar worktree path --branch issue-{issue_number}"
     path_command: str = "iar worktree path --branch issue-{issue_number}"
+    provision_database: bool = False
 
 
 class AgentRunnerRunnerSettings(BaseModel):

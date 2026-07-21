@@ -19,6 +19,12 @@ def _run_create_script(
     )
     env = os.environ.copy()
     env.update(extra_env or {})
+    fake_binary_dir = cwd.parent / "fake-bin"
+    fake_binary_dir.mkdir(exist_ok=True)
+    fake_uv_path = fake_binary_dir / "uv"
+    fake_uv_path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_uv_path.chmod(0o755)
+    env["PATH"] = f"{fake_binary_dir}{os.pathsep}{env['PATH']}"
     args = [str(script_path), branch]
     if extra_args:
         args.extend(extra_args)

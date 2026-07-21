@@ -150,6 +150,8 @@ base_branch = "main"
 create_command = "iar worktree create --branch issue-{issue_number} --base-branch {base_branch}"
 reuse_command = "iar worktree path --branch issue-{issue_number}"
 path_command = "iar worktree path --branch issue-{issue_number}"
+# daemon 在 worktree 准备完成后创建独立 PostgreSQL/MySQL 数据库并运行迁移。
+provision_database = true
 
 [agent_runner.runner]
 default_agent = "claude"
