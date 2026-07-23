@@ -449,7 +449,10 @@ class AgentRunnerWorktreeSettings(BaseModel):
     )
     reuse_command: str = "iar worktree path --branch issue-{issue_number}"
     path_command: str = "iar worktree path --branch issue-{issue_number}"
-    provision_database: bool = False
+    # 是否为每个 Issue worktree 建独立库,避免并行 worktree 互踩共享库的 alembic_version。
+    # 默认开启;目标仓需含 scripts/shared/template/setup_copied_database.py,缺脚本或无关系型
+    # DB 时 provision 会告警并回退到共享库(见 use_cases.worktree_database)。
+    provision_database: bool = True
 
 
 class AgentRunnerRunnerSettings(BaseModel):

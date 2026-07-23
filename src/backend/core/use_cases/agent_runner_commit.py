@@ -160,6 +160,57 @@ def _commit_with_autofix_recovery(
     process_runner.run(commit_command, cwd=worktree_path, check=True)
 
 
+def _run_pre_commit_verification_with_autofix_retry(
+    command: str,
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> CommandResult:
+    """运行配置的 pre-commit 验证命令，对「自动改写型」钩子做一次幂等重试。
+
+    ``pre-commit run --all-files`` 中的 ruff-format / trailing-whitespace /
+    end-of-file-fixer 等钩子会重写文件而非仅报告，并以非零码退出（"files were
+    modified by this hook"）。这类失败是纯格式化、幂等可恢复的：把改写结果重新
+    stage 后再跑一次即可通过。仅当命令首次非零却未改动任何跟踪文件（真实
+    lint/检查错误），或重新 stage 后第二次仍非零时，才返回非零结果，由调用方
+    判为 :class:`VerificationFailedError`。
+
+    这与 :func:`_commit_with_autofix_recovery` 对 ``git commit`` 阶段 autofix
+    钩子的处理保持一致，避免同一类纯格式化失败在「commit 前的显式验证」这一步
+    被直接判死、白白耗尽 post-PR 修复配额。
+
+    Args:
+        command: 配置的 pre-commit 验证命令（经 ``bash -lc`` 执行）。
+        worktree_path: agent worktree 路径。
+        config: Agent Runner 配置，用于重新 stage 前的禁改路径校验。
+        process_runner: 命令执行器。
+
+    Returns:
+        最终一次运行的结果；``return_code == 0`` 表示通过。
+    """
+    first_result = process_runner.run(
+        ["bash", "-lc", command],
+        cwd=worktree_path,
+        check=False,
+    )
+    if first_result.return_code == 0:
+        return first_result
+    if not _verification_left_tracked_worktree_changes(worktree_path, process_runner):
+        # 非零但未改动任何跟踪文件：真实的 lint/检查失败，交由调用方判失败。
+        return first_result
+    # autofix 钩子重写了文件：校验禁改路径后重新 stage，再跑一次确认是否只是格式化。
+    # Imported locally to avoid a circular dependency with agent_runner_publish.
+    from backend.core.use_cases.agent_runner_publish import validate_safe_changes
+
+    validate_safe_changes(worktree_path, config, process_runner)
+    process_runner.run(["git", "add", "-u"], cwd=worktree_path)
+    return process_runner.run(
+        ["bash", "-lc", command],
+        cwd=worktree_path,
+        check=False,
+    )
+
+
 def commit_requested_changes(
     issue: IssueSummary,
     worktree_path: Path,
@@ -222,10 +273,11 @@ def commit_requested_changes(
             "Running configured pre-commit verification command for Issue #%d",
             issue.number,
         )
-        pre_commit_result = process_runner.run(
-            ["bash", "-lc", config.runner.pre_commit_verification_command],
-            cwd=worktree_path,
-            check=False,
+        pre_commit_result = _run_pre_commit_verification_with_autofix_retry(
+            config.runner.pre_commit_verification_command,
+            worktree_path,
+            config,
+            process_runner,
         )
         if pre_commit_result.return_code != 0:
             raise VerificationFailedError([pre_commit_result])

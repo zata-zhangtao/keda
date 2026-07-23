@@ -221,6 +221,11 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "worktree.create_command": "创建新 worktree 的命令；{issue_number} 和 {base_branch} 会被替换",
     "worktree.reuse_command": "复用已有 worktree 时定位路径的命令",
     "worktree.path_command": "获取 worktree 绝对路径的命令",
+    "worktree.provision_database": (
+        "是否为每个 Issue worktree 建独立库(建库 + 改写 .env.local 的 DATABASE_URL 后跑 "
+        "alembic upgrade head);默认开启,需目标仓含 "
+        "scripts/shared/template/setup_copied_database.py,缺脚本或无关系型 DB 时告警并回退到共享库"
+    ),
     "runner.max_issues": "每次轮询每个仓库最多处理多少个 Issue",
     "runner.max_concurrent_issues": (
         "单轮内并行处理的 Issue 数量：1 为串行（默认）；>1 时同一轮并行跑多个 "
