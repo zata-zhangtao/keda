@@ -717,6 +717,132 @@ def test_ensure_prd_delivery_ready_requires_new_change_log_entry(
         )
 
 
+def _prd_body_with_table_change_log(baseline_content: str) -> str:
+    """构造把 Change Log 写成 Markdown 表格的 PRD（解析器会数成 0 条）。"""
+    return (
+        baseline_content
+        + "\n新的实现说明\n\n## Change Log\n\n"
+        + "| # | Type | Before | After | Reason | Impact | Review |\n"
+        + "|---|------|--------|-------|--------|--------|--------|\n"
+        + "| CL-1 | evidence | 旧 | 新 | 补齐证据 | 无用户可见变化 | 待审 |\n"
+    )
+
+
+def test_ensure_prd_delivery_ready_rejects_table_change_log(tmp_path: Path) -> None:
+    """Change Log 写成表格时门禁必须报错并解释表格行不被计入。
+
+    这是历史 recovery 死循环的根因：agent 用表格记录变更、解析器数成 0 条，
+    错误信息又不说明原因，agent 每轮只会往表格里再补一行。
+    """
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prd_path = tmp_path / "tasks" / "pending" / "example.md"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    baseline_content = "# PRD\n\n## Acceptance Checklist\n\n- [x] done\n"
+    prd_path.write_text(
+        _prd_body_with_table_change_log(baseline_content),
+        encoding="utf-8",
+    )
+    fake_runner = FakeProcessRunner()
+
+    with pytest.raises(
+        PrdDeliveryError,
+        match="without a Change Log entry.*table rows are not counted",
+    ):
+        ensure_prd_delivery_ready(
+            issue,
+            tmp_path,
+            fake_runner,
+            prd_baseline_content=baseline_content,
+        )
+
+
+def test_ensure_prd_delivery_ready_accepts_bullet_change_log(tmp_path: Path) -> None:
+    """规范的 ``###`` 标题 + bullet 字段格式必须通过 Change Log 门禁。"""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prd_path = tmp_path / "tasks" / "pending" / "example.md"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tasks" / "archive").mkdir(parents=True, exist_ok=True)
+    baseline_content = "# PRD\n\n## Acceptance Checklist\n\n- [x] done\n"
+    prd_path.write_text(
+        baseline_content
+        + "\n## Change Log\n\n"
+        + "### 2026-07-24 · 验收更新\n"
+        + "- Type: evidence\n"
+        + "- Before: 验收项未完成\n"
+        + "- After: 验收项已完成\n"
+        + "- Reason: 已执行缺失验证\n"
+        + "- Impact: 无用户可见变化\n"
+        + "- Review: runner 门禁待验证\n",
+        encoding="utf-8",
+    )
+    fake_runner = FakeProcessRunner()
+
+    # 不抛异常即视为通过；runner 会随后 git add + git mv 归档。
+    ensure_prd_delivery_ready(
+        issue,
+        tmp_path,
+        fake_runner,
+        prd_baseline_content=baseline_content,
+    )
+
+
+def test_ensure_prd_delivery_ready_validates_change_log_on_archive_path(
+    tmp_path: Path,
+) -> None:
+    """agent 私自把 PRD 移进 archive/ 也不能绕过 Change Log 门禁。"""
+    issue = IssueSummary(
+        number=1,
+        title="T",
+        url="U",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    baseline_content = "# PRD\n\n## Acceptance Checklist\n\n- [x] done\n"
+    # 模拟 agent 违规 git mv：pending 路径不存在，archive 路径存在且 Change Log 是表格。
+    archive_path = tmp_path / "tasks" / "archive" / "example.md"
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_path.write_text(
+        _prd_body_with_table_change_log(baseline_content),
+        encoding="utf-8",
+    )
+    fake_runner = FakeProcessRunner()
+
+    with pytest.raises(PrdDeliveryError, match="without a Change Log entry"):
+        ensure_prd_delivery_ready(
+            issue,
+            tmp_path,
+            fake_runner,
+            prd_baseline_content=baseline_content,
+        )
+
+
+def test_build_prompt_includes_change_log_format_example() -> None:
+    """Prompt 必须内嵌可解析的 Change Log 格式样例，且声明表格不被解析。"""
+    issue = IssueSummary(
+        number=1,
+        title="Test",
+        url="https://github.com/example/repo/issues/1",
+        body="PRD path: `tasks/pending/example.md`",
+        labels=(),
+    )
+    prompt = build_prompt(issue, Path("/worktree"), PromptConfig())
+    assert "### <short title of this change>" in prompt
+    assert "- Type:" in prompt
+    assert "Markdown tables are NOT parsed" in prompt
+
+
 def test_ensure_prd_delivery_ready_git_mv_when_pending_complete(
     tmp_path: Path,
 ) -> None:

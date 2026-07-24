@@ -126,6 +126,31 @@ def _read_prd_text(prd_path: Path) -> str | None:
         return None
 
 
+# 结构化 Change Log 的唯一可解析格式：每条记录是一个 ``###`` 标题，后跟六个
+# bullet 字段。解析器 ``parse_prd_change_log`` 只识别这种结构；Markdown 表格行
+# 会被数成 0 条。历史上 agent 把 Change Log 写成表格后，门禁反复判定“未追加
+# Change Log 条目”，而 prompt 从未说明必须用 ``###`` + bullet，导致 recovery
+# 每轮往表格里再补一行、永不收敛的死循环。prompt 与失败反馈共用本样例，确保
+# agent 拿到的格式说明与门禁实际校验的格式严格一致。
+_PRD_CHANGE_LOG_FORMAT_EXAMPLE = "\n".join(
+    [
+        "Change Log entries MUST use this exact Markdown structure — each entry is a "
+        "`###` heading followed by six bullet fields. Markdown tables are NOT parsed "
+        "and count as zero entries (this is the #1 cause of repeated delivery failures):",
+        "",
+        "## Change Log",
+        "",
+        "### <short title of this change>",
+        "- Type: <scope / evidence / test / doc / ...>",
+        "- Before: <prior wording or state>",
+        "- After: <new wording or state>",
+        "- Reason: <why the PRD changed>",
+        "- Impact: <effect on deliverables and requirements>",
+        "- Review: <review status>",
+    ]
+)
+
+
 def _build_prd_closeout_instruction(prd_relative_path: str) -> str:
     """构建所有 Agent prompt 共用的 PRD 演进规则。"""
     return (
@@ -136,7 +161,8 @@ def _build_prd_closeout_instruction(prd_relative_path: str) -> str:
         "and evidenced. Never weaken a user-visible, security, scope, or realistic "
         "validation requirement without recording the change and its review status. "
         "Do not move the PRD to `tasks/archive/`; the runner archives it after gates pass. "
-        f"Canonical PRD: `{prd_relative_path}`."
+        f"Canonical PRD: `{prd_relative_path}`.\n\n"
+        f"{_PRD_CHANGE_LOG_FORMAT_EXAMPLE}"
     )
 
 
@@ -359,7 +385,9 @@ def _validate_prd_change_log(
         )
     if change_log_result.entry_count == 0:
         raise PrdDeliveryError(
-            f"Canonical PRD changed without a Change Log entry: {prd_relative_path}"
+            f"Canonical PRD changed without a Change Log entry: {prd_relative_path} "
+            "(a `## Change Log` section exists but no entry was parsed; entries must be "
+            "`###` headings with bullet fields — Markdown table rows are not counted)"
         )
     if change_log_result.entry_count <= baseline_entry_count:
         raise PrdDeliveryError(
@@ -437,6 +465,16 @@ def ensure_prd_delivery_ready(
         archive_path = worktree_path / archive_relative_path
         if archive_path.exists():
             file_content = archive_path.read_text(encoding="utf-8")
+            # Agent 违规自行 ``git mv`` 到 archive/ 时会走到这里。若不同样校验
+            # Change Log，PRD 只要落进 archive 就绕过了变更审计门禁。对 runner
+            # 在上一轮已合法归档、本轮内容相对 baseline 未变的场景，
+            # ``_validate_prd_change_log`` 会因 ``file_content == baseline_content``
+            # 或条目数仍高于 baseline 而放行，不会误伤。
+            _validate_prd_change_log(
+                file_content=file_content,
+                baseline_content=prd_baseline_content,
+                prd_relative_path=archive_relative_path,
+            )
             _validate_prd_checklist(file_content, archive_relative_path)
             return
 
