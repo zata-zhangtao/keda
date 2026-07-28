@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IProcessRunner
@@ -21,6 +21,7 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_runner_feedback import (
     VerificationFailedError,
     ensure_verification_passed,
+    failed_verification_results,
 )
 from backend.core.use_cases.agent_runner_git import (
     get_current_branch,
@@ -160,55 +161,51 @@ def _commit_with_autofix_recovery(
     process_runner.run(commit_command, cwd=worktree_path, check=True)
 
 
-def _run_pre_commit_verification_with_autofix_retry(
-    command: str,
+def _run_commit_gate_with_autofix_retry(
+    run_gate: Callable[[], list[CommandResult]],
     worktree_path: Path,
     config: AppConfig,
     process_runner: IProcessRunner,
-) -> CommandResult:
-    """运行配置的 pre-commit 验证命令，对「自动改写型」钩子做一次幂等重试。
+) -> list[CommandResult]:
+    """运行一道提交前门禁，对「自动改写型」钩子做一次幂等重试。
 
-    ``pre-commit run --all-files`` 中的 ruff-format / trailing-whitespace /
-    end-of-file-fixer 等钩子会重写文件而非仅报告，并以非零码退出（"files were
-    modified by this hook"）。这类失败是纯格式化、幂等可恢复的：把改写结果重新
-    stage 后再跑一次即可通过。仅当命令首次非零却未改动任何跟踪文件（真实
-    lint/检查错误），或重新 stage 后第二次仍非零时，才返回非零结果，由调用方
-    判为 :class:`VerificationFailedError`。
+    pre-commit 里的 ruff-format / trailing-whitespace / end-of-file-fixer 等钩子
+    会重写文件而非仅报告，并以非零码退出（"files were modified by this hook"）。
+    这类失败是纯格式化、幂等可恢复的：把改写结果重新 stage 后再跑一次即可通过。
+    仅当门禁首次非零却未改动任何跟踪文件（真实 lint/检查错误），或重新 stage 后
+    第二次仍非零时，才返回失败结果，由调用方判为
+    :class:`VerificationFailedError`。
 
-    这与 :func:`_commit_with_autofix_recovery` 对 ``git commit`` 阶段 autofix
-    钩子的处理保持一致，避免同一类纯格式化失败在「commit 前的显式验证」这一步
-    被直接判死、白白耗尽 post-PR 修复配额。
+    ``verification_commands`` 与 ``pre_commit_verification_command`` 两道门禁共用
+    本函数。前者往往通过 ``just test`` / ``just lint`` 间接跑同一批 pre-commit
+    钩子，且在 :func:`commit_requested_changes` 里排在更前面；只给后者加容错时，
+    autofix 失败会在更早的那道门被直接判死（实证：freshai Issue #96 的 pre-PR
+    review 补丁）。行为上与 :func:`_commit_with_autofix_recovery` 对 ``git commit``
+    阶段 autofix 钩子的处理保持一致。
 
     Args:
-        command: 配置的 pre-commit 验证命令（经 ``bash -lc`` 执行）。
+        run_gate: 执行一次门禁的可调用对象，返回该次运行的命令结果列表。
         worktree_path: agent worktree 路径。
         config: Agent Runner 配置，用于重新 stage 前的禁改路径校验。
         process_runner: 命令执行器。
 
     Returns:
-        最终一次运行的结果；``return_code == 0`` 表示通过。
+        最终一次运行的命令结果列表；全部 ``return_code == 0`` 表示通过。
     """
-    first_result = process_runner.run(
-        ["bash", "-lc", command],
-        cwd=worktree_path,
-        check=False,
-    )
-    if first_result.return_code == 0:
-        return first_result
+    first_attempt_results = run_gate()
+    if not failed_verification_results(first_attempt_results):
+        return first_attempt_results
     if not _verification_left_tracked_worktree_changes(worktree_path, process_runner):
         # 非零但未改动任何跟踪文件：真实的 lint/检查失败，交由调用方判失败。
-        return first_result
+        return first_attempt_results
     # autofix 钩子重写了文件：校验禁改路径后重新 stage，再跑一次确认是否只是格式化。
     # Imported locally to avoid a circular dependency with agent_runner_publish.
     from backend.core.use_cases.agent_runner_publish import validate_safe_changes
 
+    _logger.info("Commit gate rewrote tracked files (autofix hook); re-staging and retrying once.")
     validate_safe_changes(worktree_path, config, process_runner)
     process_runner.run(["git", "add", "-u"], cwd=worktree_path)
-    return process_runner.run(
-        ["bash", "-lc", command],
-        cwd=worktree_path,
-        check=False,
-    )
+    return run_gate()
 
 
 def commit_requested_changes(
@@ -258,29 +255,40 @@ def commit_requested_changes(
 
     validate_safe_changes(worktree_path, config, process_runner)
     process_runner.run(["git", "add", "-A"], cwd=worktree_path)
-    # 在 git commit 前再次运行验证，确保 staged 内容仍通过门禁
-    verification_results = run_verification(worktree_path, config, process_runner)
-    try:
-        ensure_verification_passed(verification_results)
-    except VerificationFailedError:
-        # Let the Fix Agent / Recovery Agent handle verification failures.
-        raise
+    # 在 git commit 前再次运行验证，确保 staged 内容仍通过门禁。验证命令里常有
+    # just test / just lint 这类会间接触发 pre-commit autofix 钩子的配方，因此与
+    # 下面的 pre-commit 门禁一样先做一次重新 stage 重试；真实失败仍上抛，交由
+    # Fix Agent / Recovery Agent 处理。
+    verification_results = _run_commit_gate_with_autofix_retry(
+        lambda: run_verification(worktree_path, config, process_runner),
+        worktree_path,
+        config,
+        process_runner,
+    )
+    ensure_verification_passed(verification_results)
     # 如果目标仓库配置了额外的 pre-commit 检查命令（如完整 pre-commit run），
     # 在 git commit 前主动执行一次。这样 pre-commit hook 失败会作为
     # VerificationFailedError 进入 Fix Agent，而不是裸的 CalledProcessError。
-    if config.runner.pre_commit_verification_command:
+    pre_commit_command = config.runner.pre_commit_verification_command
+    if pre_commit_command:
         _logger.info(
             "Running configured pre-commit verification command for Issue #%d",
             issue.number,
         )
-        pre_commit_result = _run_pre_commit_verification_with_autofix_retry(
-            config.runner.pre_commit_verification_command,
+        pre_commit_results = _run_commit_gate_with_autofix_retry(
+            lambda: [
+                process_runner.run(
+                    ["bash", "-lc", pre_commit_command],
+                    cwd=worktree_path,
+                    check=False,
+                )
+            ],
             worktree_path,
             config,
             process_runner,
         )
-        if pre_commit_result.return_code != 0:
-            raise VerificationFailedError([pre_commit_result])
+        if failed_verification_results(pre_commit_results):
+            raise VerificationFailedError(pre_commit_results)
     if _verification_left_tracked_worktree_changes(worktree_path, process_runner):
         # Imported locally to avoid a circular dependency with agent_runner_publish.
         from backend.core.use_cases.agent_runner_publish import validate_safe_changes

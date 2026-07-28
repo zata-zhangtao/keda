@@ -284,6 +284,8 @@ uv run --project /path/to/keda iar init
 
 代码层面的默认值只有 `git diff --check`（避免在未 `iar init` 的仓库里因缺少 mkdocs/pytest 而直接失败）。`iar init` 会按上述规则生成更完整的项目专属命令列表。
 
+> **autofix 钩子的一次幂等重试**：`ruff-format`、`trailing-whitespace`、`end-of-file-fixer` 这类钩子会**就地重写文件**再以非零码退出（`files were modified by this hook`），这是纯格式化、幂等可恢复的失败。`commit_requested_changes` 对**两道门禁都**做同一处理（`_run_commit_gate_with_autofix_retry`）：门禁非零时先看 `git diff --quiet` —— 若跟踪文件被改写过，就校验禁改路径、`git add -u` 重新 stage 并**再跑一次**；只有「非零但没改任何文件」（真实 lint/检查错误）或「重新 stage 后第二次仍非零」才判 `VerificationFailedError`。这一点对 `verification_commands` 尤其重要：它排在 `pre_commit_verification_command` 之前，而 `just test` / `just lint --full` 内部往往就是同一批 pre-commit 钩子，早期只给后者加容错时纯格式化失败会在更早的门被直接判死（实证：freshai Issue #96 的 pre-PR review 补丁）。注意 `just test` 一类配方常把 lint 输出重定向掉（`just lint --full >/dev/null 2>&1`），失败时 GitHub 评论里只剩 `ERROR: Lint failed`；判断是不是 autofix 可比对被改文件的 mtime 与失败时间戳，并在 worktree 里原地重跑一次同一条命令。
+
 探测出的命令列表会被 runner 写入首次实现 prompt、Fix Agent prompt 和 Recovery Agent prompt，让 Agent 在编码和修复阶段都能看到完整的交付门禁。所有 prompt 都会提醒 Agent 在请求 commit 前检查项目规范（AGENTS.md、命名、依赖方向、文件编码、行长度限制等）。
 
 > **check-test-flag 护栏**：若仓库装了 `check-test-flag` 钩子却没有可探测的 `just test` 配方，`iar init` 会**跳过** `verification_commands` 里的 `pre-commit run --all-files`（工作区级别的 bare pre-commit 会死锁）；而 `pre_commit_verification_command` 会带 `SKIP=check-test-flag` 前缀写入，这样 git add 后仍提前运行其余 lint/format 钩子，同时避免 check-test-flag 在 `just test` 标记未刷新时失败。`git commit` 本身仍会运行完整 pre-commit（含 check-test-flag）。这类仓库最佳做法仍是补一个 `just test` 配方或移除 check-test-flag。

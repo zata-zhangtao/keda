@@ -160,33 +160,43 @@ def test_commit_requested_changes_raises_when_pre_commit_verification_fails(
     assert "check-test-flag failed" in failed_results[0].stderr
 
 
-class _PrecommitVerificationRunner(FakeProcessRunner):
-    """Fake runner returning a sequence of return codes for the pre-commit command.
+class _SequencedGateRunner(FakeProcessRunner):
+    """Fake runner returning a scripted return-code sequence for one gate command.
 
-    Drives the pre-commit verification autofix retry: the first run exits
-    non-zero (a hook rewrote files), the runner re-stages, and a later run
+    Drives the commit gate autofix retry: the first run of the matching command
+    exits non-zero (a hook rewrote files), the runner re-stages, and a later run
     passes or keeps failing. All other commands fall back to ``responses``.
+    Both commit gates（``verification_commands`` 与
+    ``pre_commit_verification_command``）走同一条 ``bash -lc`` 包装路径，故用
+    命令片段匹配复用同一个假 runner。
     """
 
-    def __init__(self, *, pre_commit_return_codes: list[int], **kwargs: object) -> None:
+    def __init__(
+        self,
+        *,
+        gate_command_fragment: str,
+        gate_return_codes: list[int],
+        **kwargs: object,
+    ) -> None:
         super().__init__(**kwargs)  # type: ignore[arg-type]
-        self._pre_commit_return_codes = pre_commit_return_codes
-        self._pre_commit_attempts = 0
+        self._gate_command_fragment = gate_command_fragment
+        self._gate_return_codes = gate_return_codes
+        self._gate_attempts = 0
 
     def run(self, command, **kwargs):  # type: ignore[override]
         command_list = list(command)
-        is_pre_commit = (
+        is_gate_command = (
             len(command_list) == 3
             and command_list[:2] == ["bash", "-lc"]
-            and "pre-commit run" in command_list[2]
+            and self._gate_command_fragment in command_list[2]
         )
-        if not is_pre_commit:
+        if not is_gate_command:
             return super().run(command, **kwargs)
         # 记录调用（返回值丢弃），再按序列覆盖退出码模拟 autofix 钩子。
         super().run(command, **kwargs)
-        index = min(self._pre_commit_attempts, len(self._pre_commit_return_codes) - 1)
-        return_code = self._pre_commit_return_codes[index]
-        self._pre_commit_attempts += 1
+        index = min(self._gate_attempts, len(self._gate_return_codes) - 1)
+        return_code = self._gate_return_codes[index]
+        self._gate_attempts += 1
         return CommandResult(
             command=tuple(command),
             return_code=return_code,
@@ -195,8 +205,8 @@ class _PrecommitVerificationRunner(FakeProcessRunner):
         )
 
 
-def _pre_commit_autofix_responses(diff_quiet_rc: int) -> dict[tuple[str, ...], CommandResult]:
-    """Return base command responses shared by the pre-commit autofix retry tests."""
+def _autofix_gate_responses(diff_quiet_rc: int) -> dict[tuple[str, ...], CommandResult]:
+    """Return base command responses shared by the commit gate autofix retry tests."""
     return {
         ("git", "branch", "--show-current"): CommandResult(
             ("git", "branch", "--show-current"), 0, "issue-123\n", ""
@@ -223,9 +233,10 @@ def test_commit_requested_changes_retries_pre_commit_verification_after_autofix(
     worktree_path.mkdir()
     _write_commit_request(worktree_path, "agent: implement example")
 
-    fake_runner = _PrecommitVerificationRunner(
-        pre_commit_return_codes=[1, 0],
-        responses=_pre_commit_autofix_responses(diff_quiet_rc=1),
+    fake_runner = _SequencedGateRunner(
+        gate_command_fragment="pre-commit run",
+        gate_return_codes=[1, 0],
+        responses=_autofix_gate_responses(diff_quiet_rc=1),
     )
     config = AppConfig(
         runner=RunnerConfig(
@@ -257,9 +268,10 @@ def test_commit_requested_changes_raises_when_pre_commit_autofix_does_not_resolv
     worktree_path.mkdir()
     _write_commit_request(worktree_path, "agent: implement example")
 
-    fake_runner = _PrecommitVerificationRunner(
-        pre_commit_return_codes=[1, 1],
-        responses=_pre_commit_autofix_responses(diff_quiet_rc=1),
+    fake_runner = _SequencedGateRunner(
+        gate_command_fragment="pre-commit run",
+        gate_return_codes=[1, 1],
+        responses=_autofix_gate_responses(diff_quiet_rc=1),
     )
     config = AppConfig(
         runner=RunnerConfig(
@@ -281,3 +293,65 @@ def test_commit_requested_changes_raises_when_pre_commit_autofix_does_not_resolv
         call for call in fake_runner.calls if call == ["pre-commit", "run", "--all-files"]
     ]
     assert len(pre_commit_calls) == 2
+
+
+def test_commit_requested_changes_retries_verification_commands_after_autofix(
+    tmp_path: Path,
+) -> None:
+    """``verification_commands`` 触发的 autofix 改写同样要重试，而不是直接判死。
+
+    freshai Issue #96 的实证路径：``verification_commands`` 里的 ``just test``
+    内部跑 ``pre-commit run --all-files``，ruff-format 重写了一个跟踪文件后以非零
+    码退出。该门禁排在 ``pre_commit_verification_command`` 之前，若没有同样的重新
+    stage 重试，纯格式化失败会在这里就把 Issue 打成 ``agent/failed``。
+    """
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: implement example")
+
+    fake_runner = _SequencedGateRunner(
+        gate_command_fragment="just test",
+        gate_return_codes=[1, 0],
+        responses=_autofix_gate_responses(diff_quiet_rc=1),
+    )
+    config = AppConfig(runner=RunnerConfig(verification_commands=("just test",)))
+
+    commit_requested_changes(
+        _make_issue(),
+        worktree_path,
+        config,
+        fake_runner,
+        expected_branch="issue-123",
+    )
+
+    verification_calls = [call for call in fake_runner.calls if call == ["just", "test"]]
+    assert len(verification_calls) == 2
+    assert ["git", "add", "-u"] in fake_runner.calls
+
+
+def test_commit_requested_changes_raises_when_verification_autofix_does_not_resolve(
+    tmp_path: Path,
+) -> None:
+    """重新 stage 后仍失败的 ``verification_commands`` 是真实错误，必须上抛。"""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    _write_commit_request(worktree_path, "agent: implement example")
+
+    fake_runner = _SequencedGateRunner(
+        gate_command_fragment="just test",
+        gate_return_codes=[1, 1],
+        responses=_autofix_gate_responses(diff_quiet_rc=1),
+    )
+    config = AppConfig(runner=RunnerConfig(verification_commands=("just test",)))
+
+    with pytest.raises(VerificationFailedError):
+        commit_requested_changes(
+            _make_issue(),
+            worktree_path,
+            config,
+            fake_runner,
+            expected_branch="issue-123",
+        )
+
+    verification_calls = [call for call in fake_runner.calls if call == ["just", "test"]]
+    assert len(verification_calls) == 2
