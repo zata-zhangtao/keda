@@ -154,6 +154,8 @@ def test_run_agent_with_prompt_can_capture_output(tmp_path: Path) -> None:
         str(tmp_path),
         "--sandbox",
         "workspace-write",
+        "--config",
+        "sandbox_workspace_write.network_access=true",
         "--ask-for-approval",
         "never",
         "exec",
@@ -181,6 +183,43 @@ def test_run_agent_with_prompt_can_capture_output(tmp_path: Path) -> None:
 
     assert uncaptured.stdout == ""
     assert captured.stdout == '{"verdict": "approved"}'
+
+
+def test_run_agent_with_prompt_grants_codex_worktree_git_metadata(
+    tmp_path: Path,
+) -> None:
+    """Codex 在 linked worktree 里必须能写主仓的 git 元数据目录。
+
+    否则 lint flag 之类的 git 侧写入会因沙箱可写根不含 `.git/worktrees/<name>/`
+    而报 `Operation not permitted`。
+    """
+    main_git_dir = tmp_path / "repo" / ".git"
+    worktree_git_dir = main_git_dir / "worktrees" / "issue-1"
+    worktree_git_dir.mkdir(parents=True)
+    (worktree_git_dir / "commondir").write_text("../..\n", encoding="utf-8")
+    worktree_path = tmp_path / "repo-worktrees" / "issue-1"
+    worktree_path.mkdir(parents=True)
+    (worktree_path / ".git").write_text(f"gitdir: {worktree_git_dir}\n", encoding="utf-8")
+    fake_runner = FakeProcessRunner()
+
+    run_agent_with_prompt("codex", "Implement.", worktree_path, fake_runner)
+
+    command = fake_runner.calls[0]
+    assert command[command.index("--add-dir") + 1] == str(worktree_git_dir.resolve())
+    assert str(main_git_dir.resolve()) in command
+    assert command.index("--add-dir") < command.index("exec")
+
+
+def test_run_agent_with_prompt_omits_add_dir_for_plain_checkout(
+    tmp_path: Path,
+) -> None:
+    """普通 checkout 的 `.git` 已在可写根内，不应追加多余的 `--add-dir`。"""
+    (tmp_path / ".git").mkdir()
+    fake_runner = FakeProcessRunner()
+
+    run_agent_with_prompt("codex", "Implement.", tmp_path, fake_runner)
+
+    assert "--add-dir" not in fake_runner.calls[0]
 
 
 def test_run_agent_with_prompt_passes_timeout(tmp_path: Path) -> None:

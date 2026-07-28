@@ -408,18 +408,73 @@ def _build_kimi_command(prompt: str, worktree_path: Path) -> list[str]:  # noqa:
     return ["kimi", "--prompt", prompt]
 
 
+def _resolve_worktree_git_writable_roots(worktree_path: Path) -> list[str]:
+    """解析 linked worktree 需要额外放行写入的 git 元数据目录。
+
+    `git worktree add` 建出的 worktree 里 `.git` 是一个指向主仓
+    `.git/worktrees/<name>/` 的指针文件，而该目录落在 codex `--cd` 的可写根之外。
+    不放行会让 lint flag（`scripts/shared/hooks/quality_flag.sh` 写
+    `.last_linted_commit`）等 git 侧写入报 `Operation not permitted`。
+
+    Args:
+        worktree_path: worktree 根目录。
+
+    Returns:
+        需要放行写入的绝对路径列表。普通 checkout（`.git` 是目录，本就在可写根内）
+        或指针文件无法解析时返回空列表。
+    """
+    git_pointer_path = worktree_path / ".git"
+    if not git_pointer_path.is_file():
+        return []
+    try:
+        pointer_text = git_pointer_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return []
+    gitdir_prefix = "gitdir:"
+    if not pointer_text.startswith(gitdir_prefix):
+        return []
+    worktree_git_dir = Path(pointer_text[len(gitdir_prefix) :].strip())
+    if not worktree_git_dir.is_absolute():
+        worktree_git_dir = worktree_path / worktree_git_dir
+    writable_roots = [worktree_git_dir]
+    common_dir_pointer_path = worktree_git_dir / "commondir"
+    if common_dir_pointer_path.is_file():
+        try:
+            common_dir = Path(common_dir_pointer_path.read_text(encoding="utf-8").strip())
+        except OSError:
+            common_dir = None
+        if common_dir is not None:
+            if not common_dir.is_absolute():
+                common_dir = worktree_git_dir / common_dir
+            writable_roots.append(common_dir)
+    resolved_roots = (root.resolve() for root in writable_roots)
+    return [str(root) for root in dict.fromkeys(resolved_roots)]
+
+
 def _build_codex_command(prompt: str, worktree_path: Path) -> list[str]:
-    return [
+    """构造 codex 的非交互执行命令。
+
+    沙箱固定为 `workspace-write`，并显式打开两项能力，否则 agent 无法完成验证：
+    - `sandbox_workspace_write.network_access`：默认禁网会让访问本机 DB / HTTP
+      入口的 Realistic Validation 恒失败（表现为 `Operation not permitted`）。
+    - `--add-dir` 放行 worktree 的 git 元数据目录，见
+      `_resolve_worktree_git_writable_roots`。
+    """
+    command = [
         "codex",
         "--cd",
         str(worktree_path),
         "--sandbox",
         "workspace-write",
+        "--config",
+        "sandbox_workspace_write.network_access=true",
         "--ask-for-approval",
         "never",
-        "exec",
-        prompt,
     ]
+    for writable_root in _resolve_worktree_git_writable_roots(worktree_path):
+        command += ["--add-dir", writable_root]
+    command += ["exec", prompt]
+    return command
 
 
 _AGENT_COMMAND_BUILDERS: dict[str, Callable[[str, Path], list[str]]] = {
