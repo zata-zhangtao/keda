@@ -1118,12 +1118,22 @@ sync-template flags="":
         exit 0
     fi
 
+    # Capture the lint output instead of discarding it: this gate runs inside the
+    # agent runner's commit path, and when it fails the only thing a human (or the
+    # repair agent) ever sees is this recipe's stdout. Sending it to /dev/null made
+    # runner failures undiagnosable — see freshai Issue #99.
     echo "🔍 Running full lint checks..."
-    if ! SKIP=check-test-flag just lint --full >/dev/null 2>&1; then
+    lint_output_file="$(mktemp)"
+    if ! SKIP=check-test-flag just lint --full >"$lint_output_file" 2>&1; then
         echo "ERROR: Lint failed. Fix lint errors before running tests."
         echo "   Run: just lint --full"
+        echo "--- just lint --full output (last 200 lines) ---"
+        tail -n 200 "$lint_output_file"
+        echo "--- end of just lint --full output ---"
+        rm -f "$lint_output_file"
         exit 1
     fi
+    rm -f "$lint_output_file"
     lint_tree_after_lint="$(quality_effective_tree working lint)"
     echo "✅ Lint passed. Proceeding to tests..."
 

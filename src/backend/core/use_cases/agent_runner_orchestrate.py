@@ -69,7 +69,11 @@ from backend.core.use_cases.agent_runner_publication import (
     _reuse_existing_local_commit,
 )
 from backend.core.use_cases.agent_runner_rework import build_missing_worktree_comment
-from backend.core.use_cases.agent_runner_run_history import append_run_record
+from backend.core.use_cases.agent_runner_run_history import (
+    ATTEMPT_HISTORY_MAX_ROWS,
+    append_run_record,
+    load_issue_attempt_trail,
+)
 from backend.core.use_cases.agent_runner_supervisor import (
     _run_supervisor_with_repair_loop,
 )
@@ -745,19 +749,31 @@ _ATTEMPT_HISTORY_MARKER = "<!-- iar-attempt-history -->"
 _ATTEMPT_HISTORY_TITLE = "### Attempt History"
 
 
-def _build_attempt_history_comment(attempt_results: list[AttemptResult]) -> str:
-    """Build a GitHub comment body that carries the attempt history table."""
-    history_table = format_attempt_history(attempt_results)
+def _build_attempt_history_comment(
+    attempt_results: list[AttemptResult],
+    *,
+    older_omitted: bool = False,
+) -> str:
+    """Build a GitHub comment body that carries the attempt history table.
+
+    Args:
+        attempt_results: Attempts to render, oldest first.
+        older_omitted: Whether older attempts were dropped by the row cap, in
+            which case the comment says so instead of silently truncating.
+    """
+    history_table = format_attempt_history(attempt_results, include_title=False)
     if not history_table:
         history_table = "_(No attempts recorded yet.)_"
-    return "\n".join(
-        [
-            _ATTEMPT_HISTORY_MARKER,
-            f"{_ATTEMPT_HISTORY_TITLE} (live)",
-            "",
-            history_table,
-        ]
-    )
+    body_lines = [_ATTEMPT_HISTORY_MARKER, f"{_ATTEMPT_HISTORY_TITLE} (live)", ""]
+    if older_omitted:
+        body_lines.extend(
+            [
+                f"_(Older attempts omitted; showing the latest {ATTEMPT_HISTORY_MAX_ROWS}.)_",
+                "",
+            ]
+        )
+    body_lines.append(history_table)
+    return "\n".join(body_lines)
 
 
 def _persist_attempt_result(
@@ -774,6 +790,14 @@ def _persist_attempt_result(
     This is the incremental persistence callback wired into
     :func:`run_agent_until_committed`. Failures are logged and swallowed so the
     runner state machine is never blocked by the side-channel storage.
+
+    The comment is rendered from the stored trail rather than from
+    ``attempt_results``, because the in-memory list restarts at attempt 1 on
+    every agent switch and every re-claim — rendering from it would edit the
+    single marker comment down to just the current agent's rows and drop
+    everything an earlier agent recorded. ``attempt_results`` stays the fallback
+    for runs without a store (and for the rare case where the append above
+    failed but the read succeeded, which the next attempt's update repairs).
     """
     if run_history_store is not None:
         try:
@@ -798,6 +822,11 @@ def _persist_attempt_result(
                 exc_info=True,
             )
 
+    stored_trail = load_issue_attempt_trail(
+        run_history_store=run_history_store,
+        repo_id=repo_id,
+        issue_number=issue_number,
+    )
     try:
         entries = github_client.list_issue_comment_entries(issue_number)
         comment_id: int | None = None
@@ -805,7 +834,10 @@ def _persist_attempt_result(
             if _ATTEMPT_HISTORY_MARKER in body:
                 comment_id = existing_id
                 break
-        comment_body = _build_attempt_history_comment(attempt_results)
+        comment_body = _build_attempt_history_comment(
+            stored_trail.attempts or attempt_results,
+            older_omitted=stored_trail.older_omitted,
+        )
         if comment_id is not None:
             github_client.edit_issue_comment(comment_id, comment_body)
         else:

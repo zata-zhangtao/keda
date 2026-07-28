@@ -297,6 +297,38 @@ class SqliteConsoleStore:
             for record_row in record_rows
         ]
 
+    def list_issue_attempts(
+        self, *, repo_id: str, issue_number: int, limit: int = 100
+    ) -> list[AttemptRecord]:
+        """按时间正序列出某个 Issue 的 attempt 记录；失败时降级为空列表。"""
+        try:
+            with self._connect() as connection:
+                attempt_rows = connection.execute(
+                    "SELECT repo_id, issue_number, agent, attempt_number, failure_type, "
+                    "recovered, detail, started_at, finished_at, duration_seconds "
+                    "FROM attempt_records WHERE repo_id = ? AND issue_number = ? "
+                    "ORDER BY id DESC LIMIT ?",
+                    (repo_id, issue_number, limit),
+                ).fetchall()
+        except Exception as exc:  # noqa: BLE001 - side-channel must not break runs.
+            _logger.warning("Failed to list attempt records from %s: %s", self._db_path, exc)
+            return []
+        return [
+            AttemptRecord(
+                repo_id=attempt_row["repo_id"],
+                issue_number=int(attempt_row["issue_number"]),
+                agent=attempt_row["agent"],
+                attempt_number=int(attempt_row["attempt_number"]),
+                failure_type=attempt_row["failure_type"],
+                recovered=bool(attempt_row["recovered"]),
+                detail=attempt_row["detail"],
+                started_at=attempt_row["started_at"],
+                finished_at=attempt_row["finished_at"],
+                duration_seconds=float(attempt_row["duration_seconds"]),
+            )
+            for attempt_row in reversed(attempt_rows)
+        ]
+
     def list_recent_audits(self, *, limit: int = 100) -> list[AuditEntry]:
         """倒序列出最近的审计条目。"""
         with self._connect() as connection:

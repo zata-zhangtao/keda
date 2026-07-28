@@ -7,6 +7,7 @@ Agent 将 commit message 写入此文件，runner 读取并执行实际 commit�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Callable, Sequence
@@ -113,7 +114,12 @@ def _verification_left_tracked_worktree_changes(
     worktree_path: Path,
     process_runner: IProcessRunner,
 ) -> bool:
-    """Return whether verification changed tracked files after staging."""
+    """Return whether verification left *unstaged* edits on tracked files.
+
+    调用方只用它决定「提交前要不要补一次 ``git add -u``」，所以这里刻意只看未暂存
+    改动：钩子自行 stage 过的内容已经在索引里，无需再补。判断「门禁是否改写过文件」
+    另有 :func:`_tracked_change_fingerprint`，两者语义不同，不要互相替换。
+    """
     diff_result = process_runner.run(
         ["git", "diff", "--quiet"],
         cwd=worktree_path,
@@ -126,6 +132,41 @@ def _verification_left_tracked_worktree_changes(
     raise RuntimeError(
         f"Unable to inspect worktree changes after verification: {diff_result.stderr.strip()}"
     )
+
+
+def _tracked_change_fingerprint(
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+) -> str:
+    """对已跟踪文件的工作区与暂存区内容取指纹，用于识别 autofix 钩子的改写。
+
+    只看未暂存的 ``git diff`` 不足以覆盖所有自动改写型钩子：
+    ``hooks/shared/archive_tasks.py`` 这类钩子改完文件会自行 ``git add``，工作区
+    随即回到干净状态，未暂存 diff 毫无痕迹，门禁失败就会被误判成「真实 lint 错误」
+    而跳过重试。因此把 ``git diff --cached`` 的暂存内容一并纳入指纹。
+
+    Args:
+        worktree_path: agent worktree 路径。
+        process_runner: 命令执行器。
+
+    Returns:
+        工作区补丁与暂存区补丁拼接后的 SHA-256 摘要。
+
+    Raises:
+        RuntimeError: 无法读取 worktree 的 diff 状态时。
+    """
+    fingerprint = hashlib.sha256()
+    for diff_command in (["git", "diff"], ["git", "diff", "--cached"]):
+        diff_result = process_runner.run(diff_command, cwd=worktree_path, check=False)
+        if diff_result.return_code != 0:
+            raise RuntimeError(
+                "Unable to inspect worktree changes after verification: "
+                f"{diff_result.stderr.strip()}"
+            )
+        # 逐条摘要而非先拼接：门禁跑在 ``git add -A`` 之后，暂存补丁可能很大。
+        fingerprint.update(diff_result.stdout.encode("utf-8"))
+        fingerprint.update(b"\0")
+    return fingerprint.hexdigest()
 
 
 def _commit_with_autofix_recovery(
@@ -174,7 +215,9 @@ def _run_commit_gate_with_autofix_retry(
     这类失败是纯格式化、幂等可恢复的：把改写结果重新 stage 后再跑一次即可通过。
     仅当门禁首次非零却未改动任何跟踪文件（真实 lint/检查错误），或重新 stage 后
     第二次仍非零时，才返回失败结果，由调用方判为
-    :class:`VerificationFailedError`。
+    :class:`VerificationFailedError`。改动判定走
+    :func:`_tracked_change_fingerprint`，因此同时覆盖「改写后自行 ``git add``」的
+    钩子——这类钩子不会留下未暂存 diff，只看 ``git diff`` 会漏判。
 
     ``verification_commands`` 与 ``pre_commit_verification_command`` 两道门禁共用
     本函数。前者往往通过 ``just test`` / ``just lint`` 间接跑同一批 pre-commit
@@ -192,10 +235,11 @@ def _run_commit_gate_with_autofix_retry(
     Returns:
         最终一次运行的命令结果列表；全部 ``return_code == 0`` 表示通过。
     """
+    fingerprint_before_gate = _tracked_change_fingerprint(worktree_path, process_runner)
     first_attempt_results = run_gate()
     if not failed_verification_results(first_attempt_results):
         return first_attempt_results
-    if not _verification_left_tracked_worktree_changes(worktree_path, process_runner):
+    if _tracked_change_fingerprint(worktree_path, process_runner) == fingerprint_before_gate:
         # 非零但未改动任何跟踪文件：真实的 lint/检查失败，交由调用方判失败。
         return first_attempt_results
     # autofix 钩子重写了文件：校验禁改路径后重新 stage，再跑一次确认是否只是格式化。

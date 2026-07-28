@@ -594,7 +594,10 @@ def test_build_prompt_separates_prd_change_log_from_checklist() -> None:
     assert "Acceptance Checklist" in prompt
     assert "Change Log" in prompt
     assert "Acceptance Checklist" in prompt
-    assert "Do not move the PRD" in prompt
+    # 归档规则必须双向表述：只说「别自己归档」会让下游 reviewer 把 runner 已完成的
+    # 归档判成越权并回滚，随后撞上推送前的 archive 门禁（freshai Issue #99）。
+    assert "never `git mv` it into" in prompt
+    assert "never move it back to `tasks/pending/`" in prompt
 
 
 def test_build_prompt_no_prd_path() -> None:
@@ -629,7 +632,8 @@ def test_build_recovery_prompt_separates_prd_change_log_from_checklist() -> None
     assert "tasks/pending/example.md" in prompt
     assert "Acceptance Checklist" in prompt
     assert "Change Log" in prompt
-    assert "Do not move the PRD" in prompt
+    assert "never `git mv` it into" in prompt
+    assert "never move it back to `tasks/pending/`" in prompt
 
 
 def test_resolve_prd_archive_path_converts_pending() -> None:

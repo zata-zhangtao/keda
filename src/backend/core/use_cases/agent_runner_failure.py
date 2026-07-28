@@ -414,17 +414,29 @@ def _summarize_attempt_detail(detail: str) -> str:
     return summary
 
 
-def format_attempt_history(attempt_results: list[AttemptResult]) -> str:
-    """Format attempt results as a Markdown table."""
+def format_attempt_history(
+    attempt_results: list[AttemptResult],
+    *,
+    include_title: bool = True,
+) -> str:
+    """Format attempt results as a Markdown table.
+
+    Args:
+        attempt_results: Attempts to render, oldest first.
+        include_title: Whether to prefix the table with its own heading. The
+            live attempt-history comment already carries one, so it renders the
+            table headless instead of repeating the title.
+    """
     if not attempt_results:
         return ""
 
-    lines = [
-        "### Attempt History",
-        "",
-        "| Attempt | Agent | Failure Type | Recovered | Duration | Detail |",
-        "|---------|-------|-------------|-----------|----------|--------|",
-    ]
+    lines = ["### Attempt History", ""] if include_title else []
+    lines.extend(
+        [
+            "| Attempt | Agent | Failure Type | Recovered | Duration | Detail |",
+            "|---------|-------|-------------|-----------|----------|--------|",
+        ]
+    )
     for result in attempt_results:
         detail = _summarize_attempt_detail(result.detail)
         recovered = "Yes" if result.recovered else "No"

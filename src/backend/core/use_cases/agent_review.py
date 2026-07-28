@@ -29,9 +29,9 @@ from backend.core.use_cases.agent_runner_failure import (
 from backend.core.use_cases.run_agent_once import (
     EmptyCommitRequestError,
     VerificationFailedError,
+    build_prd_review_reference,
     commit_requested_changes,
     extract_agent_response_text,
-    extract_prd_path,
     format_verification_failure,
     get_head_sha,
     run_agent_with_prompt_resilient,
@@ -140,12 +140,7 @@ def build_review_packet(
     通过 ``previous_commit_failure`` 把失败命令与输出回喂给本轮 reviewer，使其能针对
     真正的门禁失败调整做法，而不是蒙着眼重复同样的改动。
     """
-    prd_path = extract_prd_path(issue.body)
-    prd_line = (
-        f"Canonical PRD: `{prd_path}`"
-        if prd_path
-        else "If the Issue references a PRD, read it before reviewing."
-    )
+    prd_line = build_prd_review_reference(issue, worktree_path)
 
     diff_result = process_runner.run(
         ["git", "diff", f"{config.git.base_branch}...{head_sha}"],

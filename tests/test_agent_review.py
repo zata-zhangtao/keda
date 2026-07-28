@@ -289,6 +289,61 @@ def test_build_review_packet_includes_diff_and_verification() -> None:
     assert "Findings JSON schema" in packet
 
 
+def _build_review_packet_for_prd(worktree_path: Path, prd_relative_path: str) -> str:
+    """Build a minimal review packet for an Issue whose body records ``prd_relative_path``."""
+    issue = IssueSummary(
+        number=99,
+        title="Knowledge scope",
+        url="https://github.com/example/repo/issues/99",
+        body=f"PRD path: `{prd_relative_path}`",
+        labels=(),
+    )
+    return build_review_packet(
+        issue=issue,
+        worktree_path=worktree_path,
+        config=AppConfig(),
+        process_runner=FakeProcessRunner(),
+        verification_results=[],
+        head_sha="abc123",
+    )
+
+
+def test_build_review_packet_points_at_archived_prd_and_forbids_rollback(
+    tmp_path: Path,
+) -> None:
+    """runner 归档后，review packet 必须指向 archive 路径并禁止回滚。
+
+    freshai Issue #99 的死锁路径：``ensure_prd_delivery_ready`` 在 pre-PR review
+    之前把 PRD ``git mv`` 到 ``tasks/archive/``，但 Issue body 永远停留在
+    ``tasks/pending/`` 原始路径。packet 照抄 Issue body 时，reviewer 看到
+    「canonical 路径文件不存在 + diff 里有归档移动」，把归档判成越权改动并回滚，
+    随后撞上推送前的 ``assert_prd_archived_for_publish``，每轮来回搬运、永不收敛。
+    """
+    pending_relative_path = "tasks/pending/P1-FEAT-20260724-164500-knowledge-search-scope.md"
+    archive_relative_path = "tasks/archive/P1-FEAT-20260724-164500-knowledge-search-scope.md"
+    (tmp_path / "tasks" / "archive").mkdir(parents=True)
+    (tmp_path / archive_relative_path).write_text("# PRD\n", encoding="utf-8")
+
+    packet = _build_review_packet_for_prd(tmp_path, pending_relative_path)
+
+    assert f"Canonical PRD: `{archive_relative_path}`" in packet
+    assert "the runner already archived it" in packet
+    assert "never move it back to `tasks/pending/`" in packet
+
+
+def test_build_review_packet_keeps_pending_path_before_archiving(tmp_path: Path) -> None:
+    """PRD 尚未归档时，packet 仍指向 pending 路径，但同样声明归档归属规则。"""
+    pending_relative_path = "tasks/pending/P1-FEAT-20260724-164500-knowledge-search-scope.md"
+    (tmp_path / "tasks" / "pending").mkdir(parents=True)
+    (tmp_path / pending_relative_path).write_text("# PRD\n", encoding="utf-8")
+
+    packet = _build_review_packet_for_prd(tmp_path, pending_relative_path)
+
+    assert f"Canonical PRD: `{pending_relative_path}`" in packet
+    assert "the runner already archived it" not in packet
+    assert "never `git mv` it into" in packet
+
+
 def test_build_review_packet_uses_configured_template() -> None:
     """When ``review_prompt_template`` is configured it overrides the default."""
     issue = IssueSummary(

@@ -237,6 +237,27 @@ class IRunHistoryStore(ABC):
         ...
 
     @abstractmethod
+    def list_issue_attempts(
+        self, *, repo_id: str, issue_number: int, limit: int = 100
+    ) -> list[AttemptRecord]:
+        """按时间正序列出某个 Issue 的 attempt 记录。
+
+        runner 进程内存中的 attempt 列表在每次跨 agent fallback 与每次重新
+        claim 时都会从 1 重新计数，只有存储侧保留该 Issue 的完整尝试轨迹；
+        实时 attempt 历史评论据此渲染，才不会把上一个 agent 的历史行覆盖掉。
+
+        Args:
+            repo_id: 目标仓库标识。
+            issue_number: 目标 Issue 编号。
+            limit: 最多返回的记录数；超出时保留最近写入的若干条。
+
+        Returns:
+            按写入时间正序（最早在前）排列的 attempt 记录；读取失败时返回空
+            列表，实现不得抛出阻断 runner 的异常。
+        """
+        ...
+
+    @abstractmethod
     def list_recent_audits(self, *, limit: int = 100) -> list[AuditEntry]:
         """倒序列出最近的审计条目。"""
         ...

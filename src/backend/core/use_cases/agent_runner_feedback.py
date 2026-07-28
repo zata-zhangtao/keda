@@ -151,6 +151,19 @@ _PRD_CHANGE_LOG_FORMAT_EXAMPLE = "\n".join(
 )
 
 
+# 归档动作由 runner 独占，且这条规则必须**双向**表述：既禁止 agent 自己 ``git mv``
+# 到 ``tasks/archive/``，也禁止任何人把 runner 已归档的 PRD 挪回 ``tasks/pending/``。
+# 历史上只写了前半句，pre-PR reviewer 读到「不要归档 PRD」后，把 runner 在
+# ``ensure_prd_delivery_ready`` 里合法完成的归档判成越权并回滚，紧接着推送前的
+# ``assert_prd_archived_for_publish`` 又硬要求 PRD 位于 archive，两道门禁互相打架，
+# reviewer 每轮来回搬运文件、永不收敛（实证：freshai Issue #99）。
+_PRD_ARCHIVE_OWNERSHIP_RULE = (
+    "Archiving the PRD is the runner's job alone: never `git mv` it into "
+    "`tasks/archive/` yourself, and once the runner has archived it, never move it "
+    "back to `tasks/pending/` — the pre-push gate requires it to stay archived."
+)
+
+
 def _build_prd_closeout_instruction(prd_relative_path: str) -> str:
     """构建所有 Agent prompt 共用的 PRD 演进规则。"""
     return (
@@ -160,7 +173,7 @@ def _build_prd_closeout_instruction(prd_relative_path: str) -> str:
         "Acceptance Checklist item after its stated behavior was actually executed "
         "and evidenced. Never weaken a user-visible, security, scope, or realistic "
         "validation requirement without recording the change and its review status. "
-        "Do not move the PRD to `tasks/archive/`; the runner archives it after gates pass. "
+        f"{_PRD_ARCHIVE_OWNERSHIP_RULE} "
         f"Canonical PRD: `{prd_relative_path}`.\n\n"
         f"{_PRD_CHANGE_LOG_FORMAT_EXAMPLE}"
     )
@@ -335,6 +348,37 @@ def resolve_prd_archive_path(prd_relative_path: str) -> str | None:
     if len(path.parts) >= 2 and path.parts[0] == "tasks" and path.parts[1] == "pending":
         return str(Path("tasks") / "archive" / path.name)
     return None
+
+
+def build_prd_review_reference(issue: IssueSummary, worktree_path: Path) -> str:
+    """构建 pre-PR review packet 里的 canonical PRD 引用行。
+
+    Issue body 记录的永远是 ``tasks/pending/`` 原始路径——``git mv`` 只搬文件，不会
+    回写 Issue。而 :func:`ensure_prd_delivery_ready` 会在 pre-PR review **之前**把
+    PRD 归档到 ``tasks/archive/``。若 review packet 照抄 Issue body 的路径，reviewer
+    看到的是「canonical 路径上的文件不存在 + diff 里有一次归档移动」，自然把归档判成
+    越权改动并回滚，随后撞上 :func:`assert_prd_archived_for_publish`。因此这里解析
+    PRD 在 worktree 里的**实际**位置，并附上归档归属规则说明其不可回滚。
+
+    Args:
+        issue: 正在评审的 Issue。
+        worktree_path: reviewer 工作的 worktree 路径。
+
+    Returns:
+        写入 review packet 的 canonical PRD 引用文本；Issue 未关联 PRD 时返回通用提示。
+    """
+    prd_relative_path = extract_prd_path(issue.body)
+    if not prd_relative_path:
+        return "If the Issue references a PRD, read it before reviewing."
+
+    archive_relative_path = resolve_prd_archive_path(prd_relative_path)
+    if archive_relative_path and (worktree_path / archive_relative_path).exists():
+        return (
+            f"Canonical PRD: `{archive_relative_path}` — the runner already archived it "
+            f"from `{prd_relative_path}`, which is why the Issue body still shows the "
+            f"pre-archive path. {_PRD_ARCHIVE_OWNERSHIP_RULE}"
+        )
+    return f"Canonical PRD: `{prd_relative_path}`. {_PRD_ARCHIVE_OWNERSHIP_RULE}"
 
 
 def _format_unchecked_items(

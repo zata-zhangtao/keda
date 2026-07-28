@@ -1093,6 +1093,158 @@ def test_persist_attempt_result_updates_existing_github_comment() -> None:
     assert len(comment_calls) == 0
 
 
+def _make_attempt_result(*, agent: str, attempt_number: int, detail: str) -> AttemptResult:
+    """Build a failed attempt whose detail is unique enough to assert on."""
+    return AttemptResult(
+        attempt_number=attempt_number,
+        failure_type=FailureType.AGENT_ERROR,
+        recovered=False,
+        detail=detail,
+        agent=agent,
+        started_at="2026-07-28T03:17:58+00:00",
+        finished_at="2026-07-28T03:35:38+00:00",
+        duration_seconds=1059.9,
+    )
+
+
+def _latest_history_body(fake_client: FakeGitHubClient) -> str:
+    """Return the body of the most recent attempt-history comment write."""
+    history_writes = [
+        call
+        for call in fake_client.calls
+        if call["method"] in {"comment_issue", "edit_issue_comment"}
+        and "<!-- iar-attempt-history -->" in call.get("body", "")
+    ]
+    return history_writes[-1]["body"]
+
+
+def test_persist_attempt_result_keeps_earlier_agent_rows(tmp_path: Path) -> None:
+    """A fallback agent's first attempt must not wipe the previous agent's rows.
+
+    Reproduces the freshai#99 report: claude burned its recovery budget, the
+    chain switched to kimi, and kimi's attempt 1 re-rendered the live comment
+    from an empty in-memory list — erasing every claude row from the Issue.
+    """
+    from backend.core.use_cases.agent_runner_orchestrate import _persist_attempt_result
+    from backend.infrastructure.persistence.console_store import SqliteConsoleStore
+
+    fake_client = FakeGitHubClient()
+    store = SqliteConsoleStore(tmp_path / "console.db")
+    claude_attempts: list[AttemptResult] = []
+    for attempt_number in (1, 2):
+        claude_attempt = _make_attempt_result(
+            agent="claude",
+            attempt_number=attempt_number,
+            detail=f"claude failed round {attempt_number}",
+        )
+        claude_attempts.append(claude_attempt)
+        _persist_attempt_result(
+            result=claude_attempt,
+            attempt_results=list(claude_attempts),
+            repo_id="freshai",
+            issue_number=99,
+            github_client=fake_client,
+            run_history_store=store,
+        )
+
+    # 跨 agent fallback：kimi 接手时内存列表只有它自己的第 1 轮。
+    kimi_attempt = _make_attempt_result(
+        agent="kimi", attempt_number=1, detail="kimi failed round 1"
+    )
+    _persist_attempt_result(
+        result=kimi_attempt,
+        attempt_results=[kimi_attempt],
+        repo_id="freshai",
+        issue_number=99,
+        github_client=fake_client,
+        run_history_store=store,
+    )
+
+    latest_body = _latest_history_body(fake_client)
+    assert "claude failed round 1" in latest_body
+    assert "claude failed round 2" in latest_body
+    assert "kimi failed round 1" in latest_body
+
+
+def test_persist_attempt_result_keeps_rows_from_earlier_claim(tmp_path: Path) -> None:
+    """A re-claim whose attempt numbering restarts extends the trail, not replaces it."""
+    from backend.core.use_cases.agent_runner_orchestrate import _persist_attempt_result
+    from backend.infrastructure.persistence.console_store import SqliteConsoleStore
+
+    fake_client = FakeGitHubClient()
+    store = SqliteConsoleStore(tmp_path / "console.db")
+    first_claim_attempt = _make_attempt_result(
+        agent="claude", attempt_number=1, detail="first claim failure"
+    )
+    _persist_attempt_result(
+        result=first_claim_attempt,
+        attempt_results=[first_claim_attempt],
+        repo_id="freshai",
+        issue_number=99,
+        github_client=fake_client,
+        run_history_store=store,
+    )
+
+    # 新进程重新 claim：内存列表又从 attempt 1 开始。
+    second_claim_attempt = _make_attempt_result(
+        agent="claude", attempt_number=1, detail="second claim failure"
+    )
+    _persist_attempt_result(
+        result=second_claim_attempt,
+        attempt_results=[second_claim_attempt],
+        repo_id="freshai",
+        issue_number=99,
+        github_client=fake_client,
+        run_history_store=store,
+    )
+
+    latest_body = _latest_history_body(fake_client)
+    assert "first claim failure" in latest_body
+    assert "second claim failure" in latest_body
+
+
+def test_persist_attempt_result_notes_omitted_older_attempts(tmp_path: Path) -> None:
+    """Beyond the row cap the comment keeps the latest rows and says so."""
+    from backend.core.shared.interfaces.runner_console import AttemptRecord
+    from backend.core.use_cases.agent_runner_orchestrate import _persist_attempt_result
+    from backend.core.use_cases.agent_runner_run_history import ATTEMPT_HISTORY_MAX_ROWS
+    from backend.infrastructure.persistence.console_store import SqliteConsoleStore
+
+    fake_client = FakeGitHubClient()
+    store = SqliteConsoleStore(tmp_path / "console.db")
+    for attempt_number in range(1, ATTEMPT_HISTORY_MAX_ROWS + 1):
+        store.append_attempt(
+            AttemptRecord(
+                repo_id="freshai",
+                issue_number=99,
+                agent="claude",
+                attempt_number=attempt_number,
+                failure_type="agent_error",
+                recovered=False,
+                detail=f"stored failure {attempt_number}",
+                started_at="2026-07-28T03:17:58+00:00",
+                finished_at="2026-07-28T03:35:38+00:00",
+                duration_seconds=10.0,
+            )
+        )
+
+    newest_attempt = _make_attempt_result(agent="kimi", attempt_number=1, detail="newest failure")
+    _persist_attempt_result(
+        result=newest_attempt,
+        attempt_results=[newest_attempt],
+        repo_id="freshai",
+        issue_number=99,
+        github_client=fake_client,
+        run_history_store=store,
+    )
+
+    latest_body = _latest_history_body(fake_client)
+    assert f"Older attempts omitted; showing the latest {ATTEMPT_HISTORY_MAX_ROWS}." in latest_body
+    assert "stored failure 1 " not in latest_body
+    assert "stored failure 2 " in latest_body
+    assert "newest failure" in latest_body
+
+
 def test_run_once_switches_agent_on_provider_capacity(monkeypatch) -> None:
     """run_once wires the fallback chain: capacity on agent 1 switches to agent 2."""
     from backend.core.use_cases import agent_runner_orchestrate as orchestrate

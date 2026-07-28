@@ -5,7 +5,11 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from backend.core.shared.interfaces.runner_console import AuditEntry, RunRecord
+from backend.core.shared.interfaces.runner_console import (
+    AttemptRecord,
+    AuditEntry,
+    RunRecord,
+)
 from backend.infrastructure.persistence.console_store import (
     RoadmapQueueEntry,
     RoadmapSettingsEntry,
@@ -47,6 +51,70 @@ def test_append_and_list_runs(tmp_path: Path) -> None:
     assert recent_runs[0].outcome == "failed"
     assert recent_runs[0].error_summary == "boom"
     assert recent_runs[1].outcome == "completed"
+
+
+def _make_attempt_record(
+    *,
+    repo_id: str = "keda-main",
+    issue_number: int = 99,
+    agent: str = "claude",
+    attempt_number: int = 1,
+) -> AttemptRecord:
+    return AttemptRecord(
+        repo_id=repo_id,
+        issue_number=issue_number,
+        agent=agent,
+        attempt_number=attempt_number,
+        failure_type="agent_error",
+        recovered=False,
+        detail=f"{agent} round {attempt_number}",
+        started_at="2026-07-28T03:17:58+00:00",
+        finished_at="2026-07-28T03:35:38+00:00",
+        duration_seconds=1059.9,
+    )
+
+
+def test_list_issue_attempts_returns_chronological_trail(tmp_path: Path) -> None:
+    """One Issue's attempts come back oldest-first, across agents."""
+    store = SqliteConsoleStore(tmp_path / "console.db")
+    store.append_attempt(_make_attempt_record(agent="claude", attempt_number=1))
+    store.append_attempt(_make_attempt_record(agent="claude", attempt_number=2))
+    store.append_attempt(_make_attempt_record(agent="kimi", attempt_number=1))
+
+    issue_attempts = store.list_issue_attempts(repo_id="keda-main", issue_number=99)
+
+    assert [(a.agent, a.attempt_number) for a in issue_attempts] == [
+        ("claude", 1),
+        ("claude", 2),
+        ("kimi", 1),
+    ]
+    assert issue_attempts[0].recovered is False
+    assert issue_attempts[0].duration_seconds == 1059.9
+
+
+def test_list_issue_attempts_filters_by_repo_and_issue(tmp_path: Path) -> None:
+    """Attempts from other repos or other Issues never leak into the trail."""
+    store = SqliteConsoleStore(tmp_path / "console.db")
+    store.append_attempt(_make_attempt_record(repo_id="freshai", issue_number=99))
+    store.append_attempt(_make_attempt_record(repo_id="keda-main", issue_number=99))
+    store.append_attempt(_make_attempt_record(repo_id="freshai", issue_number=100))
+
+    issue_attempts = store.list_issue_attempts(repo_id="freshai", issue_number=99)
+
+    assert len(issue_attempts) == 1
+    assert issue_attempts[0].repo_id == "freshai"
+    assert issue_attempts[0].issue_number == 99
+
+
+def test_list_issue_attempts_keeps_latest_within_limit(tmp_path: Path) -> None:
+    """The limit trims the oldest rows and still returns oldest-first."""
+    store = SqliteConsoleStore(tmp_path / "console.db")
+    for attempt_number in (1, 2, 3):
+        store.append_attempt(_make_attempt_record(attempt_number=attempt_number))
+
+    issue_attempts = store.list_issue_attempts(repo_id="keda-main", issue_number=99, limit=2)
+
+    assert [a.attempt_number for a in issue_attempts] == [2, 3]
 
 
 def test_list_runs_filters_by_repo(tmp_path: Path) -> None:

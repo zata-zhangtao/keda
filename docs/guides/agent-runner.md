@@ -1538,7 +1538,7 @@ Issue 执行失败后会被标记为 `agent/failed`，runner 不会再自动处�
 3. **跨 agent fallback（Level 2）**：当某 agent **耗尽 recovery 预算仍失败**，或命中**供应商容量限制**（429 usage limit、529 overloaded——这类同一供应商重试也只会继续失败），runner 会切换到 `agent_fallback_order` 里的下一个 agent，在已落盘的进度上接力。切换次数受 `max_agent_switches` 封顶。配置中列出但本机未安装的 agent（命令不存在）会被自动跳过。
 4. **不切换的情况**：安全违规（禁改路径、分支异常）等不可恢复错误换谁都失败，runner 直接停止、不浪费配额。
 
-`agent_fallback_order` 默认包含 `["claude", "kimi", "codex"]`，主 agent 失败后会依次尝试链中的下一个可用 agent。未安装的 agent（命令不存在）会被自动跳过。将 `agent_fallback_order` 设为空列表即可关闭跨 agent fallback，回退到单 agent 行为。所有尝试（含跨 agent）都会汇总进失败评论的 **Attempt History** 表，表格包含 **Agent**（执行 agent）、**Duration**（耗时）和 **Detail**（失败摘要）列；同时每轮 attempt 会实时写入本地 SQLite 运行历史库的 `attempt_records` 表，并更新 GitHub Issue 上一条带 `<!-- iar-attempt-history -->` marker 的增量评论。
+`agent_fallback_order` 默认包含 `["claude", "kimi", "codex"]`，主 agent 失败后会依次尝试链中的下一个可用 agent。未安装的 agent（命令不存在）会被自动跳过。将 `agent_fallback_order` 设为空列表即可关闭跨 agent fallback，回退到单 agent 行为。所有尝试（含跨 agent）都会汇总进失败评论的 **Attempt History** 表，表格包含 **Agent**（执行 agent）、**Duration**（耗时）和 **Detail**（失败摘要）列；同时每轮 attempt 会实时写入本地 SQLite 运行历史库的 `attempt_records` 表，并更新 GitHub Issue 上一条带 `<!-- iar-attempt-history -->` marker 的增量评论。该实时评论按 `(repo_id, issue_number)` 从 SQLite 轨迹整表重渲染，因此跨 agent fallback 和重新 claim 都会**追加**到同一张表，不会把上一个 agent 的历史行覆盖掉；轨迹超过 50 行时只保留最近 50 行，并在表格上方注明 `Older attempts omitted`。
 
 配置示例见上文 `[agent_runner.runner]`：`agent_fallback_order` / `max_agent_switches` / `transient_retry_attempts` / `transient_retry_delay_seconds`。
 
@@ -2569,7 +2569,7 @@ validation_passed = "validation/passed"
 - 如果验证过程中的 formatter 或 lint 自动修复了已跟踪文件，runner 会在安全路径校验后用 `git add -u` 同步这些 tracked 修改，避免 `.last_tested_commit` 指向 working tree 而 commit hook 检查到过期 staged tree
 - Agent CLI 非零退出或任一验证失败时，runner 最多按 `max_recovery_attempts` 重新调用同一个 Agent；每次 recovery 前会等待 `recovery_retry_delay_seconds` 秒，并把失败摘要以及失败命令的 exit code、stdout、stderr 放入 Fix Agent / Recovery Agent prompt；首次实现 prompt 也会预先列出完整的 `verification_commands` 并提醒检查项目规范，让 Agent 在写代码阶段就了解交付门禁。Agent 修复后仍只能写 commit request，不能直接提交
 - Runner 通过 `classify_failure` 对每次尝试进行分层失败识别，覆盖 `UNCOMMITTED_CHANGES`、`NO_COMMITS`、`VERIFICATION_FAILED`、`AGENT_ERROR`、`UNRECOVERABLE` 等类型；不可恢复错误（如安全路径拦截）会立即终止 retry loop
-- 每轮尝试的结果都会记录在 `AttemptResult` 中，包含执行 agent、起止时间、耗时；runner 会实时把结果写入本地 SQLite `attempt_records` 表，并更新 GitHub Issue 上带 `<!-- iar-attempt-history -->` marker 的增量评论。最终失败评论中的「Attempt History」表格展示 attempt_number、agent、failure_type、recovered、duration、detail，便于人工 review 时追踪 Agent 的修复轨迹；Detail 列取每次失败输出的最后一行有效内容（实际报错几乎总在末尾），而不是从头截断的样板文字
+- 每轮尝试的结果都会记录在 `AttemptResult` 中，包含执行 agent、起止时间、耗时；runner 会实时把结果写入本地 SQLite `attempt_records` 表，再用 `IRunHistoryStore.list_issue_attempts` 读回该 Issue 的完整轨迹（跨 agent、跨 claim）渲染 GitHub Issue 上带 `<!-- iar-attempt-history -->` marker 的增量评论。内存中的 attempt 列表每次换 agent 或重新 claim 都会从 1 重新计数，只能代表本轮，因此不作为渲染源（仅在没有配置 SQLite 存储时兜底）。最终失败评论中的「Attempt History」表格展示 attempt_number、agent、failure_type、recovered、duration、detail，便于人工 review 时追踪 Agent 的修复轨迹；Detail 列取每次失败输出的最后一行有效内容（实际报错几乎总在末尾），而不是从头截断的样板文字
 - 失败评论会识别已知错误签名：命中 Claude API 用量限额（429 / usage limit）时，在评论顶部输出加粗的 Root cause 摘要并带上限额重置时间；`CalledProcessError` 的命令回显只保留命令名（如 `claude`），不会把完整 agent prompt 打进评论
 - 如果 Agent 没有产生任何新 commit 且工作区也没有未提交变更，runner 仍会将 Issue 标记为 `agent/failed`
 - Pre-PR reviewer 的修改同样必须通过 `verification_commands` 才能发布
@@ -2584,7 +2584,7 @@ validation_passed = "validation/passed"
 1. **Prompt 引导**：`build_prompt()` 从 `config.toml` 的 `[agent_runner.prompts.phases]` 模板渲染 prompt，默认模板会：
    - 列出 runner 将要执行的 `verification_commands`，让 Agent 在写代码阶段就了解交付门禁。
    - 提醒 Agent 在请求 commit 前检查项目规范（AGENTS.md、命名、依赖方向、文件编码、行长度限制等）。
-   - 明确区分 PRD 的 `Change Log` 与 `Acceptance Checklist`：实现中可演进 PRD，但每次变更必须追加结构化 Change Log（类型、原文、变更后、原因、影响、审核）；Checklist 只表示已真实执行并留存证据的验收状态。Agent 不移动 PRD，归档由 runner 在门禁通过后执行。
+   - 明确区分 PRD 的 `Change Log` 与 `Acceptance Checklist`：实现中可演进 PRD，但每次变更必须追加结构化 Change Log（类型、原文、变更后、原因、影响、审核）；Checklist 只表示已真实执行并留存证据的验收状态。归档动作由 runner 独占，规则必须双向理解：Agent 不得自行 `git mv` 到 `tasks/archive/`，**且 runner 归档之后任何人都不得把 PRD 挪回 `tasks/pending/`**。
    - `build_fix_prompt()` 在 Fix Agent 阶段给出当前 verification 失败输出以及完整 verification 命令列表，约束 Agent 只修导致失败的代码/测试，并提醒检查项目规范。
    - `build_recovery_prompt()` 在 recovery 阶段给出 failure summary 和原始 verification 失败输出，并给出同样的 closeout 与规范检查提醒。
    - `build_progress_continuation_prompt()` 在跨 claim 续作时附带上一次失败的 failure summary 和 verification 输出，并提醒检查项目规范。
@@ -2594,6 +2594,7 @@ validation_passed = "validation/passed"
    - PRD 已在 `tasks/archive/`：校验 `Acceptance Checklist` 全部完成。
    - PRD 文件不存在、archive 目录缺失或 `Acceptance Checklist` section 缺失：进入 recovery loop，重试耗尽后标记 `agent/failed`。
 3. **归档纳入同一 Commit**：`git mv` 发生在 `git add -A` 之前，因此 PRD 归档变更会随 Agent 的代码变更一起进入同一个 commit，并包含在随后创建的 Draft PR 中，不需要 publish 后再追加 commit。
+4. **Pre-PR Review 与归档的关系**：delivery gate 排在 pre-PR review **之前**，因此 reviewer 看到的 worktree 里 PRD 已经在 `tasks/archive/`，而 Issue body 记录的仍是归档前的 `tasks/pending/` 路径（`git mv` 不回写 Issue）。`build_prd_review_reference()` 因此把 review packet 的 canonical 路径解析成 worktree 里的**实际**位置，并显式声明归档不可回滚。若 reviewer 把 PRD 挪回 `tasks/pending/`，推送前的 `assert_prd_archived_for_publish()` 会以 `Archived PRD not found in worktree` 硬失败，两道门禁互相打架、每轮来回搬运文件且永不收敛（实证：freshai Issue #99）。
 
 > **注意**：runner 不会只因 PRD 的 checkbox 而信任业务完成度；Realistic Validation 与独立 verifier 仍需提供实际证据。Change Log 解释需求为何演进，不能替代任何验收项或证据。
 
