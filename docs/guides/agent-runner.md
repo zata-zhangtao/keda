@@ -1538,7 +1538,7 @@ Issue 执行失败后会被标记为 `agent/failed`，runner 不会再自动处�
 3. **跨 agent fallback（Level 2）**：当某 agent **耗尽 recovery 预算仍失败**，或命中**供应商容量限制**（429 usage limit、529 overloaded——这类同一供应商重试也只会继续失败），runner 会切换到 `agent_fallback_order` 里的下一个 agent，在已落盘的进度上接力。切换次数受 `max_agent_switches` 封顶。配置中列出但本机未安装的 agent（命令不存在）会被自动跳过。
 4. **不切换的情况**：安全违规（禁改路径、分支异常）等不可恢复错误换谁都失败，runner 直接停止、不浪费配额。
 
-`agent_fallback_order` 默认包含 `["claude", "kimi", "codex"]`，主 agent 失败后会依次尝试链中的下一个可用 agent。未安装的 agent（命令不存在）会被自动跳过。将 `agent_fallback_order` 设为空列表即可关闭跨 agent fallback，回退到单 agent 行为。所有尝试（含跨 agent）都会汇总进失败评论的 **Attempt History** 表，表格包含 **Agent**（执行 agent）、**Duration**（耗时）和 **Detail**（失败摘要）列；同时每轮 attempt 会实时写入本地 SQLite 运行历史库的 `attempt_records` 表，并更新 GitHub Issue 上一条带 `<!-- iar-attempt-history -->` marker 的增量评论。该实时评论按 `(repo_id, issue_number)` 从 SQLite 轨迹整表重渲染，因此跨 agent fallback 和重新 claim 都会**追加**到同一张表，不会把上一个 agent 的历史行覆盖掉；轨迹超过 50 行时只保留最近 50 行，并在表格上方注明 `Older attempts omitted`。
+`agent_fallback_order` 默认包含 `["claude", "kimi", "codex"]`，主 agent 失败后会依次尝试链中的下一个可用 agent。未安装的 agent（命令不存在）会被自动跳过。将 `agent_fallback_order` 设为空列表即可关闭跨 agent fallback，回退到单 agent 行为。所有尝试（含跨 agent）都会汇总进失败评论的 **Attempt History** 表，表格包含 **Started (UTC)**（本轮开始时间）、**Agent**（执行 agent）、**Duration**（耗时）和 **Detail**（失败摘要）列；同时每轮 attempt 会实时写入本地 SQLite 运行历史库的 `attempt_records` 表，并更新 GitHub Issue 上一条带 `<!-- iar-attempt-history -->` marker 的增量评论。该实时评论按 `(repo_id, issue_number)` 从 SQLite 轨迹整表重渲染，因此跨 agent fallback 和重新 claim 都会**追加**到同一张表，不会把上一个 agent 的历史行覆盖掉；轨迹超过 50 行时只保留最近 50 行，并在表格上方注明 `Older attempts omitted`。
 
 配置示例见上文 `[agent_runner.runner]`：`agent_fallback_order` / `max_agent_switches` / `transient_retry_attempts` / `transient_retry_delay_seconds`。
 
@@ -2495,6 +2495,15 @@ validation_passed = "validation/passed"
 
 语言配置只使用现有 TOML 配置体系（`config.toml` / `.iar.toml` 的 `[agent_runner.validation]`），不引入新的 `.iar/config` 文件，避免配置漂移。项目级默认语言写在 `config.toml`，单个仓库可通过 `.iar.toml` 覆盖。
 
+### verifier 判定的可诊断性：`red` 与"没吐 verdict"是两件事
+
+verifier 以 `capture_output` 运行，输出不进 stdout、也不逐行落日志。为了让阻断事后可查证：
+
+- **原始响应落盘**：每次 verifier 跑完，完整响应写到 `<evidence_dir>/verifier-response.txt`（默认 `.iar/evidence/verifier-response.txt`），文件头记录 issue、verifier agent、builder sha、解析出的 risk、**是否找到 verdict marker**、响应字符数。写盘失败只降级为告警，不影响门禁本身。
+- **两种阻断成因分开表述**：verdict marker 缺失时仍按 fail-safe 阻断（绝不静默放行），但它是 **verifier 侧的协议/可靠性故障**，不代表 builder 的改动有缺陷。此时 attempt Detail 与 recovery prompt 明确写"NO verdict marker / verifier-side protocol failure / do not invent fixes"，并指向上面那份原始响应；只有真判 `red` 才说"Fix what the verifier found"。
+- **为什么必须区分**：`ValidationVerdict.findings` 总会被填入响应文本，所以"findings 是否为空"无法用来判断有没有 verdict——唯一可靠信号是 `marker_found`。混在一起时，verifier 只是漏了最后那行 marker，builder 却被指使去修一个不存在的发现，白烧一轮 attempt。
+- **排查顺序**：daemon 被 verifier 挡下时，先读 `verifier-response.txt`；若里面没有任何实际发现，问题在 verifier agent（考虑用 `verifier_agent` 显式指定一个稳定的 agent，而不是 `auto`），不在被验的代码。
+
 ### 前端改动强制真实视觉证据（fail-closed）
 
 当目标仓库本轮 git 变更命中 `frontend_paths` 前缀（默认 `frontend-admin/` 与 `frontend-public/`）时，`.iar/evidence/` 第一层**必须至少有一个视觉证据文件**（图片 `.png/.jpg/.jpeg/.gif/.webp` 或视频 `.mp4/.mov/.webm`），否则证据门禁抛 `ValidationEvidenceError`，与其余门禁一样进入既有 recovery，不放行发布。
@@ -2534,7 +2543,7 @@ validation_passed = "validation/passed"
 - `language` 必须等于 Issue marker 与 config 中的语言。
 - `items` 必须覆盖 Realistic Validation checklist 的全部 item，每个 item 出现一次。
 - 每个 item 必填字段：`item_number`、`item_name`、`command`、`evidence_files`、`output_summary`、`explanation`、`risks`。
-- `evidence_files` 可有多个文件；每个文件必须存在于 `.iar/evidence/`，且文件名匹配 `rv-<item_number>-*` 或 `rv-<item_number>.*`。
+- `evidence_files` 可有多个文件；每个文件必须存在于 `.iar/evidence/`，且文件名匹配 `rv-<item_number>-*` 或 `rv-<item_number>.*`。**条目只写纯文件名**（`"rv-1-run.txt"`），不带 `.iar/evidence/` 等目录前缀——存在性按 `evidence_dir / file_name` 解析；这与同一 manifest 中 `expected_artifacts[].path` 使用 worktree 相对路径的约定相反，是历史上 agent 最容易写错的一处。写成带前缀的路径时 runner 会剥掉目录并 warning 放过，不再判红。
 - `command` 必须是可独立复现、自终止的检查命令。如果 PRD 要求的命令涉及多行 Python 或复杂 setup，应将其落到已跟踪的 `scripts/rv_evidence/rv-<item-number>-<slug>.*` 并在 `command` 中引用；避免把内联 `python -c "..."` 写进 manifest，否则 runner 复跑时难以维护，也容易被 keda 判定为不可复现。截图采集、临时 server、探针等仅用于取证的辅助脚本必须放 `.iar/evidence/scripts/`，不会被 runner 修改或提交；每次复跑覆盖的是 `.iar/evidence/` 下的证据产物。
 - runner 在渲染 PR comment 时重新计算每个证据文件的 SHA-256，展示短 hash 与完整 hash。
 
@@ -2569,7 +2578,7 @@ validation_passed = "validation/passed"
 - 如果验证过程中的 formatter 或 lint 自动修复了已跟踪文件，runner 会在安全路径校验后用 `git add -u` 同步这些 tracked 修改，避免 `.last_tested_commit` 指向 working tree 而 commit hook 检查到过期 staged tree
 - Agent CLI 非零退出或任一验证失败时，runner 最多按 `max_recovery_attempts` 重新调用同一个 Agent；每次 recovery 前会等待 `recovery_retry_delay_seconds` 秒，并把失败摘要以及失败命令的 exit code、stdout、stderr 放入 Fix Agent / Recovery Agent prompt；首次实现 prompt 也会预先列出完整的 `verification_commands` 并提醒检查项目规范，让 Agent 在写代码阶段就了解交付门禁。Agent 修复后仍只能写 commit request，不能直接提交
 - Runner 通过 `classify_failure` 对每次尝试进行分层失败识别，覆盖 `UNCOMMITTED_CHANGES`、`NO_COMMITS`、`VERIFICATION_FAILED`、`AGENT_ERROR`、`UNRECOVERABLE` 等类型；不可恢复错误（如安全路径拦截）会立即终止 retry loop
-- 每轮尝试的结果都会记录在 `AttemptResult` 中，包含执行 agent、起止时间、耗时；runner 会实时把结果写入本地 SQLite `attempt_records` 表，再用 `IRunHistoryStore.list_issue_attempts` 读回该 Issue 的完整轨迹（跨 agent、跨 claim）渲染 GitHub Issue 上带 `<!-- iar-attempt-history -->` marker 的增量评论。内存中的 attempt 列表每次换 agent 或重新 claim 都会从 1 重新计数，只能代表本轮，因此不作为渲染源（仅在没有配置 SQLite 存储时兜底）。最终失败评论中的「Attempt History」表格展示 attempt_number、agent、failure_type、recovered、duration、detail，便于人工 review 时追踪 Agent 的修复轨迹；Detail 列取每次失败输出的最后一行有效内容（实际报错几乎总在末尾），而不是从头截断的样板文字
+- 每轮尝试的结果都会记录在 `AttemptResult` 中，包含执行 agent、起止时间、耗时；runner 会实时把结果写入本地 SQLite `attempt_records` 表，再用 `IRunHistoryStore.list_issue_attempts` 读回该 Issue 的完整轨迹（跨 agent、跨 claim）渲染 GitHub Issue 上带 `<!-- iar-attempt-history -->` marker 的增量评论。内存中的 attempt 列表每次换 agent 或重新 claim 都会从 1 重新计数，只能代表本轮，因此不作为渲染源（仅在没有配置 SQLite 存储时兜底）。最终失败评论中的「Attempt History」表格展示 attempt_number、started_at、agent、failure_type、recovered、duration、detail，便于人工 review 时追踪 Agent 的修复轨迹；由于 attempt_number 只在本轮内递增，整表会混排多轮（例如 `claude 1..6` 后紧跟 `kimi 1..2`），因此表格用 **Started (UTC)** 列给出时间锚点（`YYYY-MM-DD HH:MMZ`；缺失渲染为 `-`，无法解析则原样回显），并在表格下方固定附一行说明"编号在每次换 agent 与每次重新 claim 时从 1 重新开始"，避免被误读成编号错乱；Detail 列取每次失败输出的最后一行有效内容（实际报错几乎总在末尾），而不是从头截断的样板文字
 - 失败评论会识别已知错误签名：命中 Claude API 用量限额（429 / usage limit）时，在评论顶部输出加粗的 Root cause 摘要并带上限额重置时间；`CalledProcessError` 的命令回显只保留命令名（如 `claude`），不会把完整 agent prompt 打进评论
 - 如果 Agent 没有产生任何新 commit 且工作区也没有未提交变更，runner 仍会将 Issue 标记为 `agent/failed`
 - Pre-PR reviewer 的修改同样必须通过 `verification_commands` 才能发布

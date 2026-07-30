@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.core.shared.models.agent_runner import (
@@ -220,6 +221,13 @@ def classify_failure(
 
 _ATTEMPT_DETAIL_SUMMARY_MAX_LENGTH = 200
 _ATTEMPT_DETAIL_SCAFFOLD_LINES = frozenset({"```", "```text", "stdout:", "stderr:"})
+_ATTEMPT_START_DISPLAY_FORMAT = "%Y-%m-%d %H:%MZ"
+_ATTEMPT_START_MISSING_DISPLAY = "-"
+_ATTEMPT_NUMBER_SCOPE_NOTE = (
+    "_`Attempt` counts within one agent run: it restarts at 1 on every agent "
+    "switch and every re-claim, so use `Started` to tell consecutive runs apart. "
+    "Rows are ordered oldest-first._"
+)
 
 _USAGE_LIMIT_HINT_PATTERN = re.compile(
     r"usage limit (?:exceeded|reached)|request rejected \(429\)",
@@ -414,6 +422,28 @@ def _summarize_attempt_detail(detail: str) -> str:
     return summary
 
 
+def _format_attempt_start(started_at: str) -> str:
+    """Render an attempt's ISO-8601 UTC start time for the history table.
+
+    表格里的 ``Attempt`` 编号只在"本轮 agent 运行"内递增，跨 agent fallback 和
+    重新 claim 都会从 1 重新开始，而实时评论把同一个 Issue 的全部轨迹渲染进同一
+    张表，因此必须给每行一个时间锚点，读者才能分辨相邻两行属于同一轮还是两轮。
+
+    历史行可能没有 ``started_at``（旧库记录，或没有配置 SQLite 时的内存兜底），
+    空值渲染为 ``-``，无法解析的值原样回显，不让整张表因为一个时间戳失败。
+    不带时区的取值按 UTC 解释，与 ``AttemptResult.started_at`` 的约定一致。
+    """
+    if not started_at:
+        return _ATTEMPT_START_MISSING_DISPLAY
+    try:
+        started_datetime = datetime.fromisoformat(started_at)
+    except ValueError:
+        return started_at
+    if started_datetime.tzinfo is None:
+        started_datetime = started_datetime.replace(tzinfo=timezone.utc)
+    return started_datetime.astimezone(timezone.utc).strftime(_ATTEMPT_START_DISPLAY_FORMAT)
+
+
 def format_attempt_history(
     attempt_results: list[AttemptResult],
     *,
@@ -433,8 +463,8 @@ def format_attempt_history(
     lines = ["### Attempt History", ""] if include_title else []
     lines.extend(
         [
-            "| Attempt | Agent | Failure Type | Recovered | Duration | Detail |",
-            "|---------|-------|-------------|-----------|----------|--------|",
+            "| Attempt | Started (UTC) | Agent | Failure Type | Recovered | Duration | Detail |",
+            "|---------|---------------|-------|-------------|-----------|----------|--------|",
         ]
     )
     for result in attempt_results:
@@ -443,9 +473,10 @@ def format_attempt_history(
         agent = result.agent or "-"
         duration = f"{result.duration_seconds:.1f}s"
         lines.append(
-            f"| {result.attempt_number} | {agent} | "
+            f"| {result.attempt_number} | {_format_attempt_start(result.started_at)} | {agent} | "
             f"{result.failure_type.value} | {recovered} | {duration} | {detail} |"
         )
+    lines.extend(["", _ATTEMPT_NUMBER_SCOPE_NOTE])
     return "\n".join(lines)
 
 

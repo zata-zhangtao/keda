@@ -4180,9 +4180,12 @@ def test_format_attempt_history_table() -> None:
         ),
     ]
     table = format_attempt_history(results)
-    assert "| Attempt | Agent | Failure Type | Recovered | Duration | Detail |" in table
-    assert "| 1 | - | no_commits | No | 0.0s | No commits produced. |" in table
-    assert "| 2 | - | success | Yes | 0.0s | Agent fixed the issue. |" in table
+    assert (
+        "| Attempt | Started (UTC) | Agent | Failure Type | Recovered | Duration | Detail |"
+        in table
+    )
+    assert "| 1 | - | - | no_commits | No | 0.0s | No commits produced. |" in table
+    assert "| 2 | - | - | success | Yes | 0.0s | Agent fixed the issue. |" in table
 
 
 def test_format_attempt_history_includes_agent_column() -> None:
@@ -4204,8 +4207,57 @@ def test_format_attempt_history_includes_agent_column() -> None:
         ),
     ]
     table = format_attempt_history(results)
-    assert "| 1 | claude | provider_capacity | No | 0.0s | Claude at capacity. |" in table
-    assert "| 1 | codex | success | Yes | 0.0s | Codex finished. |" in table
+    assert "| 1 | - | claude | provider_capacity | No | 0.0s | Claude at capacity. |" in table
+    assert "| 1 | - | codex | success | Yes | 0.0s | Codex finished. |" in table
+
+
+def test_format_attempt_history_separates_runs_that_restart_numbering() -> None:
+    """Repeated attempt numbers should stay distinguishable via Started + note."""
+    results = [
+        AttemptResult(
+            attempt_number=6,
+            failure_type=FailureType.AGENT_ERROR,
+            recovered=False,
+            detail="Evidence gate rejected the manifest.",
+            agent="claude",
+            started_at="2026-07-30T05:31:12.367039+00:00",
+        ),
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.AGENT_ERROR,
+            recovered=False,
+            detail="Evidence gate rejected the manifest.",
+            agent="kimi",
+            started_at="2026-07-30T06:44:03+00:00",
+        ),
+    ]
+    table = format_attempt_history(results)
+    assert "| 6 | 2026-07-30 05:31Z | claude |" in table
+    assert "| 1 | 2026-07-30 06:44Z | kimi |" in table
+    assert "restarts at 1 on every agent switch and every re-claim" in table
+
+
+def test_format_attempt_history_tolerates_unusable_start_timestamps() -> None:
+    """A malformed or naive start timestamp must not break the whole table."""
+    results = [
+        AttemptResult(
+            attempt_number=1,
+            failure_type=FailureType.NO_COMMITS,
+            recovered=False,
+            detail="Naive timestamp is read as UTC.",
+            started_at="2026-07-30T05:31:12",
+        ),
+        AttemptResult(
+            attempt_number=2,
+            failure_type=FailureType.NO_COMMITS,
+            recovered=False,
+            detail="Unparseable timestamp is echoed verbatim.",
+            started_at="not-a-timestamp",
+        ),
+    ]
+    table = format_attempt_history(results)
+    assert "| 1 | 2026-07-30 05:31Z | - |" in table
+    assert "| 2 | not-a-timestamp | - |" in table
 
 
 _USAGE_LIMIT_STDOUT = (

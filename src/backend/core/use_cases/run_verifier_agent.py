@@ -42,6 +42,7 @@ _VERDICT_MARKER_PATTERN = re.compile(
     r"<!--\s*iar:verifier-verdict\s+risk=(?P<risk>green|yellow|red)\s*-->"
 )
 _NO_VERDICT_FINDINGS = "No parseable verifier verdict marker found; treating as blocked (red)."
+_VERIFIER_RESPONSE_FILENAME = "verifier-response.txt"
 
 
 @dataclass(frozen=True)
@@ -51,10 +52,15 @@ class ValidationVerdict:
     ``risk`` 取值 {``green``, ``yellow``, ``red``}:green/yellow 放行(yellow
     附警告评论、不阻断),red 阻断发布并打回 builder。``findings`` 是人读的
     发现说明(对抗验证中发现的缝隙 / 风险)。
+
+    ``marker_found`` 区分"verifier 真的判了 red"与"verifier 没吐出 verdict
+    marker、被 fail-safe 当成 red"。两者都阻断,但成因完全不同:后者是 verifier
+    侧的协议/可靠性故障,不代表 builder 的改动有缺陷。
     """
 
     risk: str
     findings: str = ""
+    marker_found: bool = True
 
     @property
     def passed(self) -> bool:
@@ -65,6 +71,11 @@ class ValidationVerdict:
     def blocks(self) -> bool:
         """red 阻断发布,走 repair 循环打回 builder。"""
         return self.risk == "red"
+
+    @property
+    def missing_marker(self) -> bool:
+        """verifier 没有产出可解析的 verdict marker(fail-safe 记为 red)。"""
+        return not self.marker_found
 
 
 def format_verifier_verdict_marker(risk: str) -> str:
@@ -92,7 +103,14 @@ def parse_verifier_verdict(text: str, *, findings: str = "") -> ValidationVerdic
     for latest_match in _VERDICT_MARKER_PATTERN.finditer(text):
         pass
     if latest_match is None:
-        return ValidationVerdict(risk="red", findings=findings or _NO_VERDICT_FINDINGS)
+        # findings 仍带回原始输出以便排查,但 marker_found=False 才是"没判定"的
+        # 唯一可靠信号——以前只靠 findings 是否等于哨兵字符串来区分,而调用方
+        # 总会填入响应文本,于是哨兵永远走不到,红判与漏 marker 无法分辨。
+        return ValidationVerdict(
+            risk="red",
+            findings=findings or _NO_VERDICT_FINDINGS,
+            marker_found=False,
+        )
     return ValidationVerdict(risk=latest_match.group("risk"), findings=findings)
 
 
@@ -188,6 +206,35 @@ def build_verifier_prompt(
     )
 
 
+def _write_verifier_response_log(
+    response_log_path: Path,
+    header_lines: list[str],
+    response_text: str,
+) -> Path | None:
+    """把 verifier 的原始响应落盘,便于事后分辨"真红"与"漏 marker"。
+
+    verifier 以 ``capture_output`` 运行,输出不进 stdout 也不逐行落日志;一旦
+    判定阻断,操作者事后无从查证它到底说了什么。写盘失败绝不能影响门禁本身。
+
+    Returns:
+        实际写入的路径;写入失败时返回 ``None``。
+    """
+    try:
+        response_log_path.parent.mkdir(parents=True, exist_ok=True)
+        response_log_path.write_text(
+            "\n".join([*header_lines, "", response_text]),
+            encoding="utf-8",
+        )
+    except OSError as write_error:
+        _logger.warning(
+            "Could not save verifier response to %s: %s",
+            response_log_path,
+            write_error,
+        )
+        return None
+    return response_log_path
+
+
 def run_verifier_agent(
     issue: IssueSummary,
     worktree_path: Path,
@@ -197,6 +244,7 @@ def run_verifier_agent(
     process_runner: IProcessRunner,
     *,
     timeout_seconds: int | None = None,
+    response_log_path: Path | None = None,
 ) -> ValidationVerdict:
     """Run the independent verifier agent and return its parsed verdict.
 
@@ -204,6 +252,10 @@ def run_verifier_agent(
     跑 :func:`build_verifier_prompt`,捕获输出并 :func:`parse_verifier_verdict`。
     解析为 fail-safe:无可解析 verdict 即 ``red``。本函数只负责"跑 + 解析",
     是否启用、选哪个 agent、red 后如何 repair,由编排层决定。
+
+    Args:
+        response_log_path: 可选,把原始响应写到这里供事后排查(见
+            :func:`_write_verifier_response_log`)。
 
     Returns:
         ``ValidationVerdict``;verifier 的输出文本作为 ``findings`` 带回。
@@ -219,7 +271,43 @@ def run_verifier_agent(
         issue=issue,
     )
     response_text = extract_agent_response_text(result)
-    return parse_verifier_verdict(response_text, findings=response_text.strip()[:4000])
+    verdict = parse_verifier_verdict(response_text, findings=response_text.strip()[:4000])
+
+    saved_log_path: Path | None = None
+    if response_log_path is not None:
+        saved_log_path = _write_verifier_response_log(
+            response_log_path,
+            [
+                "# Independent verifier raw response",
+                f"# issue: #{issue.number}",
+                f"# verifier agent: {verifier_agent}",
+                f"# builder sha: {builder_sha}",
+                f"# parsed risk: {verdict.risk}",
+                f"# verdict marker found: {'no' if verdict.missing_marker else 'yes'}",
+                f"# response chars: {len(response_text)}",
+            ],
+            response_text,
+        )
+    if verdict.missing_marker:
+        _logger.error(
+            "Independent verifier (agent %r) emitted NO verdict marker for Issue #%d; "
+            "fail-safe blocking as red. Raw response was %d chars%s — check whether it "
+            "actually judged the change or just failed to follow the output protocol.",
+            verifier_agent,
+            issue.number,
+            len(response_text),
+            f", saved to {saved_log_path}" if saved_log_path else " (not saved)",
+        )
+    else:
+        _logger.info(
+            "Independent verifier (agent %r) returned %s for Issue #%d (%d chars%s).",
+            verifier_agent,
+            verdict.risk.upper(),
+            issue.number,
+            len(response_text),
+            f", saved to {saved_log_path}" if saved_log_path else "",
+        )
+    return verdict
 
 
 def _choose_verifier_agent(config: AppConfig, builder_agent: str) -> str:
@@ -235,6 +323,42 @@ def _choose_verifier_agent(config: AppConfig, builder_agent: str) -> str:
         if candidate != builder_agent:
             return candidate
     return builder_agent
+
+
+def _format_verifier_block_message(
+    *,
+    verdict: ValidationVerdict,
+    verifier_agent: str,
+    issue_number: int,
+    response_log_path: Path,
+) -> str:
+    """构建阻断消息:把"真判 red"与"没吐 verdict"讲成两件不同的事。
+
+    这条消息既进 attempt 历史的 Detail 列,也进 builder 的 recovery prompt。以前
+    两种成因共用一句"Fix what the verifier found",于是 verifier 只是漏了 marker
+    时,builder 会被指使去修一个根本不存在的发现——白烧一轮 attempt(实证:
+    freshai Issue #111,verifier 用的 agent 未产出 marker)。
+    """
+    if verdict.missing_marker:
+        return (
+            f"Independent verifier (agent '{verifier_agent}') produced NO verdict marker "
+            f"for issue #{issue_number}, so the fail-safe protocol blocks it like RED. "
+            "This is a verifier-side protocol failure, NOT a proven defect in the change: "
+            "do not invent fixes for findings that do not exist. Its raw output was saved "
+            f"to `{response_log_path}` — read it first. If it contains no actual finding, "
+            "leave the implementation and evidence as they are; if the verifier agent keeps "
+            "failing to emit the marker, that is a runner/agent problem to escalate rather "
+            "than a code problem. Raw output head:\n"
+            f"{verdict.findings}"
+        )
+    return (
+        f"Independent verifier (agent '{verifier_agent}') returned RED for "
+        f"issue #{issue_number}: it could not independently confirm the change "
+        "does what the issue asks. Findings:\n"
+        f"{verdict.findings}\n"
+        "Fix what the verifier found, or correct the Realistic Validation "
+        "oracle if the check itself is wrong."
+    )
 
 
 def run_verifier_gate(
@@ -276,6 +400,7 @@ def run_verifier_gate(
     manifest = load_evidence_manifest(worktree_path, config)
     verifier_agent = _choose_verifier_agent(config, builder_agent)
     builder_sha = get_head_sha(worktree_path, process_runner)
+    response_log_path = worktree_path / config.validation.evidence_dir / _VERIFIER_RESPONSE_FILENAME
     verdict = run_verifier_agent(
         issue,
         worktree_path,
@@ -284,15 +409,16 @@ def run_verifier_gate(
         verifier_agent,
         process_runner,
         timeout_seconds=config.validation.verifier_timeout_seconds,
+        response_log_path=response_log_path,
     )
     if verdict.blocks:
         raise ValidationEvidenceError(
-            f"Independent verifier (agent '{verifier_agent}') returned RED for "
-            f"issue #{issue.number}: it could not independently confirm the change "
-            "does what the issue asks. Findings:\n"
-            f"{verdict.findings}\n"
-            "Fix what the verifier found, or correct the Realistic Validation "
-            "oracle if the check itself is wrong."
+            _format_verifier_block_message(
+                verdict=verdict,
+                verifier_agent=verifier_agent,
+                issue_number=issue.number,
+                response_log_path=response_log_path,
+            )
         )
     if verdict.risk == "yellow":
         _logger.warning(

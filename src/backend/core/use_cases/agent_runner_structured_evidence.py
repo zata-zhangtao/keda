@@ -19,7 +19,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from backend.core.shared.interfaces.agent_runner import IProcessRunner
 from backend.core.shared.models.agent_runner import AppConfig
@@ -296,6 +296,31 @@ def _extract_optional_string(block_data: dict[str, object], field_name: str) -> 
     return ""
 
 
+def _normalize_evidence_file_name(raw_file_name: str, item_number: int) -> str:
+    """把 ``evidence_files`` 条目归一为 ``evidence_dir`` 下的纯文件名。
+
+    manifest 契约是纯文件名（存在性检查按 ``evidence_dir / file_name`` 解析），
+    但 prompt 只要求"证据文件命名为 ``rv-<item_number>-<slug>.<ext>`` 并放在
+    ``{evidence_dir}/`` 下"，从未规定 manifest 里填文件名还是路径；同一份
+    manifest 里的 ``expected_artifacts[].path`` 又确实是 worktree 相对路径。
+    因此 agent 极易写成 ``.iar/evidence/rv-1-foo.png``——两条 prompt 语句都满足，
+    却撞上纯文件名的正则，且报错只说"不匹配 rv-1-* 命名"，无法自我修复。
+
+    这里做与 :func:`_extract_manifest_item_number` 同类的防御性归一：剥掉目录
+    部分并 warning，而不是让证据门禁在同一个笔误上反复判红、烧掉整轮重试预算。
+    """
+    normalized_name = PurePosixPath(raw_file_name.replace("\\", "/")).name
+    if normalized_name != raw_file_name:
+        logging.getLogger(__name__).warning(
+            "Item %d: normalized evidence file %r to %r; "
+            "`evidence_files` entries must be bare file names.",
+            item_number,
+            raw_file_name,
+            normalized_name,
+        )
+    return normalized_name
+
+
 def _extract_evidence_files(block_data: dict[str, object], item_number: int) -> tuple[str, ...]:
     """Extract and validate the ``evidence_files`` list."""
     raw_files = block_data.get("evidence_files")
@@ -309,7 +334,12 @@ def _extract_evidence_files(block_data: dict[str, object], item_number: int) -> 
             raise ValidationEvidenceError(
                 f"Item {item_number}: `evidence_files` contains an empty or non-string entry."
             )
-        evidence_files.append(file_name.strip())
+        normalized_name = _normalize_evidence_file_name(file_name.strip(), item_number)
+        if not normalized_name:
+            raise ValidationEvidenceError(
+                f"Item {item_number}: `evidence_files` entry {file_name!r} has no file name."
+            )
+        evidence_files.append(normalized_name)
     return tuple(evidence_files)
 
 
@@ -470,7 +500,10 @@ def _validate_evidence_file(
         raise ValidationEvidenceError(
             f"Item {expected_item_number}: evidence file `{file_name}` does not "
             f"match the required `rv-{expected_item_number}-*` or "
-            f"`rv-{expected_item_number}.*` naming pattern."
+            f"`rv-{expected_item_number}.*` naming pattern. Rename the file to "
+            f"`rv-{expected_item_number}-<slug>.<ext>` inside "
+            f"`{config.validation.evidence_dir}/`, and list it in `evidence_files` "
+            "as a bare file name without any directory prefix."
         )
     actual_item_number = int(file_match.group("item"))
     if actual_item_number != expected_item_number:
@@ -792,7 +825,10 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
             "`item_number`（序号，必须是正整数，例如 `1` / `2` / `3`；不要加引号，"
             '不要写成 checklist id 字符串如 `"rv-1"`）、'
             "`item_name`（名称）、`command`（可复现命令）、"
-            "`evidence_files`（关联证据文件列表）、`output_summary`（关键输出摘要）、"
+            "`evidence_files`（关联证据文件列表，只写纯文件名，例如 "
+            '`["rv-1-login.txt"]`；不要带 `{evidence_dir}/` 或任何目录前缀，'
+            "与 `expected_artifacts[].path` 的 worktree 相对路径不同）、"
+            "`output_summary`（关键输出摘要）、"
             "`explanation`（为什么该证据能证明检查点成立）、`risks`（潜在风险或不适用说明）、"
             "`negative_control`（能让该项变红的命令或注入的故障）、`expected_fail`（变红时的样子）。"
             "每个检查点都要证明'这测试会失败'：先用 negative_control 让它变红、记录 expected_fail，"
@@ -807,7 +843,10 @@ def build_structured_evidence_prompt_suffix(language: str) -> str:
         "`{evidence_dir}/evidence.json`, grouped by Realistic Validation checklist item. "
         "Each evidence block must include: `item_number` (positive integer, e.g. `1`/`2`/`3`; "
         'do not quote it or use checklist id strings like `"rv-1"`), `item_name`, `command`, '
-        "`evidence_files`, `output_summary`, `explanation` (why the evidence satisfies "
+        '`evidence_files` (bare file names only, e.g. `["rv-1-login.txt"]` — never '
+        "prefixed with `{evidence_dir}/` or any directory, unlike "
+        "`expected_artifacts[].path` which is worktree-relative), "
+        "`output_summary`, `explanation` (why the evidence satisfies "
         "the checkpoint), `risks` (potential risks or not-applicable notes), "
         "`negative_control` (a command or injected fault that makes this item go RED), "
         "and `expected_fail` (what red looks like). "

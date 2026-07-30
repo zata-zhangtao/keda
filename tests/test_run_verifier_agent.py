@@ -407,3 +407,109 @@ def test_run_verifier_gate_returns_verdict_on_green(
         _structured_issue(), tmp_path, config, FakeProcessRunner(), "claude"
     )
     assert verdict is not None and verdict.risk == "green"
+
+
+def test_missing_marker_is_distinguishable_even_with_findings_text() -> None:
+    """漏 marker 必须能与"真判 red"区分,且不能依赖 findings 是否为空。
+
+    调用方总会把响应文本填进 findings,所以哨兵字符串永远走不到——只要模型
+    吐了任何文字但漏了最后那行 marker,红判与漏判就无法分辨(实证:
+    freshai Issue #111)。marker_found 才是可靠信号。
+    """
+    silent = parse_verifier_verdict("no marker here", findings="I ran some things.")
+    judged = parse_verifier_verdict(
+        f"real finding\n{format_verifier_verdict_marker('red')}", findings="login breaks"
+    )
+
+    assert silent.risk == "red" and silent.blocks
+    assert silent.missing_marker is True
+    assert silent.findings == "I ran some things."  # 原始输出仍带回，供排查
+    assert judged.risk == "red" and judged.blocks
+    assert judged.missing_marker is False
+
+
+def test_run_verifier_agent_saves_raw_response_for_diagnosis(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """verifier 以 capture_output 运行,原始响应必须落盘,否则事后无从查证。"""
+    from backend.core.use_cases import run_verifier_agent as rva
+
+    def _fake_resilient(agent_name, prompt, worktree_path, process_runner, **kwargs):
+        return CommandResult((agent_name,), 0, "I could not run the stack.", "")
+
+    monkeypatch.setattr(rva, "run_agent_with_prompt_resilient", _fake_resilient)
+    response_log_path = tmp_path / ".iar" / "evidence" / "verifier-response.txt"
+
+    verdict = rva.run_verifier_agent(
+        _issue(),
+        tmp_path,
+        "abc1234",
+        _manifest(),
+        "kimi",
+        FakeProcessRunner(),
+        response_log_path=response_log_path,
+    )
+
+    assert verdict.missing_marker is True
+    saved = response_log_path.read_text(encoding="utf-8")
+    assert "# verifier agent: kimi" in saved
+    assert "# parsed risk: red" in saved
+    assert "# verdict marker found: no" in saved
+    assert "I could not run the stack." in saved
+
+
+def test_run_verifier_agent_response_log_failure_does_not_break_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """写盘失败只能降级为告警,不能影响 verdict 本身。"""
+    from backend.core.use_cases import run_verifier_agent as rva
+
+    def _fake_resilient(agent_name, prompt, worktree_path, process_runner, **kwargs):
+        return CommandResult((agent_name,), 0, f"ok\n{format_verifier_verdict_marker('green')}", "")
+
+    monkeypatch.setattr(rva, "run_agent_with_prompt_resilient", _fake_resilient)
+    # 用一个已存在的**文件**当父目录，迫使 mkdir/write 失败。
+    blocking_file = tmp_path / "not-a-dir"
+    blocking_file.write_text("x", encoding="utf-8")
+
+    verdict = rva.run_verifier_agent(
+        _issue(),
+        tmp_path,
+        "abc1234",
+        _manifest(),
+        "kimi",
+        FakeProcessRunner(),
+        response_log_path=blocking_file / "verifier-response.txt",
+    )
+
+    assert verdict.risk == "green"
+
+
+def test_run_verifier_gate_missing_marker_message_does_not_blame_the_builder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """漏 marker 的阻断消息不得指使 builder 去修不存在的发现。
+
+    这条消息同时是 attempt Detail 与 recovery prompt;以前两种成因共用
+    "Fix what the verifier found",白烧过 attempt。
+    """
+    from backend.core.use_cases import run_verifier_agent as rva
+
+    record: dict = {}
+    _patch_gate_deps(
+        monkeypatch,
+        rva,
+        ValidationVerdict(risk="red", findings="I had trouble.", marker_found=False),
+        record,
+    )
+    config = AppConfig(validation=ValidationConfig(verifier_enabled=True))
+
+    with pytest.raises(ValidationEvidenceError) as exc_info:
+        rva.run_verifier_gate(_structured_issue(), tmp_path, config, FakeProcessRunner(), "claude")
+
+    message = str(exc_info.value)
+    assert "NO verdict marker" in message
+    assert "verifier-side protocol failure" in message
+    assert "do not invent fixes" in message
+    assert "verifier-response.txt" in message
+    assert "Fix what the verifier found" not in message

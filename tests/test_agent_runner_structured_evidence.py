@@ -176,6 +176,98 @@ def test_load_evidence_manifest_accepts_rv_prefixed_item_number(
     assert result.items[0].item_number == 1
 
 
+def test_load_evidence_manifest_normalizes_directory_prefixed_evidence_files(
+    tmp_path: Path,
+) -> None:
+    """`evidence_files` written as `.iar/evidence/rv-1-*` paths are normalized.
+
+    The prompt tells the agent both to name files `rv-<n>-<slug>.<ext>` and to
+    place them under the evidence dir, so writing the full path into the
+    manifest satisfies it literally; the gate must not burn a retry on it.
+    """
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "rv-1-run.txt").write_text("ok", encoding="utf-8")
+    manifest = {
+        "version": 1,
+        "language": "zh-CN",
+        "items": [
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "uv run pytest tests/test_demo.py -k run -v",
+                "evidence_files": [".iar/evidence/rv-1-run.txt"],
+                "output_summary": "demo run 输出 ok。",
+                "explanation": "真实执行了 demo run。",
+                "risks": "无外部依赖。",
+                "negative_control": "改坏被测逻辑后重跑该用例",
+                "expected_fail": "pytest 该用例 FAILED",
+            }
+        ],
+    }
+    (evidence_dir / "evidence.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    result = load_evidence_manifest(tmp_path, AppConfig())
+
+    assert result.items[0].evidence_files == ("rv-1-run.txt",)
+
+
+def test_validate_evidence_manifest_naming_error_explains_bare_file_name(
+    tmp_path: Path,
+) -> None:
+    """A genuinely mis-named file must be told how to fix it, not just rejected."""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "login-page.png").write_bytes(b"png")
+    manifest = {
+        "version": 1,
+        "language": "zh-CN",
+        "items": [
+            {
+                "item_number": 1,
+                "item_name": "行为 A 真实验证",
+                "command": "uv run pytest tests/test_demo.py -k run -v",
+                "evidence_files": ["login-page.png"],
+                "output_summary": "demo run 输出 ok。",
+                "explanation": "真实执行了 demo run。",
+                "risks": "无外部依赖。",
+                "negative_control": "改坏被测逻辑后重跑该用例",
+                "expected_fail": "pytest 该用例 FAILED",
+            }
+        ],
+    }
+    (evidence_dir / "evidence.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationEvidenceError) as error_info:
+        validate_evidence_manifest(
+            issue_body=_ISSUE_BODY + "\n" + format_structured_evidence_marker("zh-CN"),
+            checklist_items=["- [ ] 行为 A"],
+            worktree_path=tmp_path,
+            config=AppConfig(),
+        )
+
+    error_text = str(error_info.value)
+    assert "rv-1-<slug>.<ext>" in error_text
+    assert "bare file name" in error_text
+
+
+def test_build_structured_evidence_prompt_suffix_pins_evidence_files_shape() -> None:
+    """The prompt must state that `evidence_files` carries bare file names."""
+    zh_suffix = build_structured_evidence_prompt_suffix("zh-CN")
+    en_suffix = build_structured_evidence_prompt_suffix("en-US")
+
+    assert "只写纯文件名" in zh_suffix
+    assert "不要带 `{evidence_dir}/`" in zh_suffix
+    assert "bare file names only" in en_suffix
+    assert "never prefixed with `{evidence_dir}/`" in en_suffix
+
+
 def test_build_structured_evidence_prompt_suffix_warns_against_exec_redirection() -> None:
     """The prompt explicitly discourages shell exec redirection that leaks output."""
     zh_suffix = build_structured_evidence_prompt_suffix("zh-CN")
