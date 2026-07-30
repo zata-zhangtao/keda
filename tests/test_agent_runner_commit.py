@@ -15,6 +15,11 @@ from backend.core.shared.models.agent_runner import (
 from backend.core.use_cases.agent_runner_commit import commit_requested_changes
 from backend.core.use_cases.agent_runner_feedback import VerificationFailedError
 from tests.conftest import FakeProcessRunner
+from tests.support.agent_runner import (
+    is_bash_wrapped_verification_call,
+    make_ready_issue,
+    write_commit_request,
+)
 
 
 def _make_issue(number: int = 123) -> IssueSummary:
@@ -27,19 +32,13 @@ def _make_issue(number: int = 123) -> IssueSummary:
     )
 
 
-def _write_commit_request(worktree_path: Path, commit_message: str) -> None:
-    request_path = worktree_path / ".agent-runner" / "commit-request.json"
-    request_path.parent.mkdir(parents=True, exist_ok=True)
-    request_path.write_text(f'{{"commit_message": "{commit_message}"}}\n', encoding="utf-8")
-
-
 def test_commit_requested_changes_raises_on_verification_failure(
     tmp_path: Path,
 ) -> None:
     """Verification failures should raise VerificationFailedError."""
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
-    _write_commit_request(worktree_path, "agent: implement example")
+    write_commit_request(worktree_path, "agent: implement example")
 
     fake_runner = FakeProcessRunner(
         responses={
@@ -75,7 +74,7 @@ def test_commit_requested_changes_runs_pre_commit_verification_command(
     """Configured pre-commit verification command runs after staging and before commit."""
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
-    _write_commit_request(worktree_path, "agent: implement example")
+    write_commit_request(worktree_path, "agent: implement example")
 
     fake_runner = FakeProcessRunner(
         responses={
@@ -119,7 +118,7 @@ def test_commit_requested_changes_raises_when_pre_commit_verification_fails(
     """
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
-    _write_commit_request(worktree_path, "agent: implement example")
+    write_commit_request(worktree_path, "agent: implement example")
 
     fake_runner = FakeProcessRunner(
         responses={
@@ -252,7 +251,7 @@ def test_commit_requested_changes_retries_pre_commit_verification_after_autofix(
     """
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
-    _write_commit_request(worktree_path, "agent: implement example")
+    write_commit_request(worktree_path, "agent: implement example")
 
     fake_runner = _SequencedGateRunner(
         gate_command_fragment="pre-commit run",
@@ -288,7 +287,7 @@ def test_commit_requested_changes_raises_when_pre_commit_autofix_does_not_resolv
     """A hook that keeps failing after re-staging must still raise (a real error)."""
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
-    _write_commit_request(worktree_path, "agent: implement example")
+    write_commit_request(worktree_path, "agent: implement example")
 
     fake_runner = _SequencedGateRunner(
         gate_command_fragment="pre-commit run",
@@ -330,7 +329,7 @@ def test_commit_requested_changes_retries_verification_commands_after_autofix(
     """
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
-    _write_commit_request(worktree_path, "agent: implement example")
+    write_commit_request(worktree_path, "agent: implement example")
 
     fake_runner = _SequencedGateRunner(
         gate_command_fragment="just test",
@@ -364,7 +363,7 @@ def test_commit_requested_changes_retries_when_autofix_hook_stages_its_own_rewri
     """
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
-    _write_commit_request(worktree_path, "agent: implement example")
+    write_commit_request(worktree_path, "agent: implement example")
 
     fake_runner = _SequencedGateRunner(
         gate_command_fragment="just test",
@@ -392,7 +391,7 @@ def test_commit_requested_changes_does_not_retry_when_gate_changed_nothing(
     """门禁非零且未改动任何文件时是真实 lint 错误，只跑一次就上抛。"""
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
-    _write_commit_request(worktree_path, "agent: implement example")
+    write_commit_request(worktree_path, "agent: implement example")
 
     fake_runner = _SequencedGateRunner(
         gate_command_fragment="just test",
@@ -421,7 +420,7 @@ def test_commit_requested_changes_raises_when_verification_autofix_does_not_reso
     """重新 stage 后仍失败的 ``verification_commands`` 是真实错误，必须上抛。"""
     worktree_path = tmp_path / "issue-123"
     worktree_path.mkdir()
-    _write_commit_request(worktree_path, "agent: implement example")
+    write_commit_request(worktree_path, "agent: implement example")
 
     fake_runner = _SequencedGateRunner(
         gate_command_fragment="just test",
@@ -442,3 +441,269 @@ def test_commit_requested_changes_raises_when_verification_autofix_does_not_reso
 
     verification_calls = [call for call in fake_runner.calls if call == ["just", "test"]]
     assert len(verification_calls) == 2
+
+
+def test_commit_requested_changes_rejects_branch_change(tmp_path: Path) -> None:
+    """Commit proxy should only commit on the expected branch."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    write_commit_request(worktree_path, "agent: implement example")
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="main\n",
+                stderr="",
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected branch: main"):
+        commit_requested_changes(
+            make_ready_issue(),
+            worktree_path,
+            AppConfig(),
+            fake_runner,
+            expected_branch="issue-123",
+        )
+
+    commands = [tuple(command) for command in fake_runner.calls]
+    assert ("git", "add", "-A") not in commands
+
+
+def test_commit_requested_changes_rejects_forbidden_paths(tmp_path: Path) -> None:
+    """Commit proxy should apply forbidden path checks before staging."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    write_commit_request(worktree_path, "agent: implement example")
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-123\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M .env\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                command=("git", "status", "--porcelain", "-z"),
+                return_code=0,
+                stdout=" M .env\0",
+                stderr="",
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="Refusing to publish forbidden paths"):
+        commit_requested_changes(
+            make_ready_issue(),
+            worktree_path,
+            AppConfig(),
+            fake_runner,
+            expected_branch="issue-123",
+        )
+
+    commands = [tuple(command) for command in fake_runner.calls]
+    assert ("git", "add", "-A") not in commands
+
+
+def test_commit_requested_changes_restages_tracked_verification_edits(
+    tmp_path: Path,
+) -> None:
+    """Commit proxy should sync formatter edits made during verification."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    write_commit_request(worktree_path, "agent: implement example")
+    fake_runner = FakeProcessRunner(
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-123\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M tests/test_example.py\n",
+                stderr="",
+            ),
+            ("git", "diff", "--quiet"): CommandResult(
+                command=("git", "diff", "--quiet"),
+                return_code=1,
+                stdout="",
+                stderr="",
+            ),
+        }
+    )
+    config = AppConfig(runner=RunnerConfig(verification_commands=("just test",)))
+
+    commit_requested_changes(
+        make_ready_issue(),
+        worktree_path,
+        config,
+        fake_runner,
+        expected_branch="issue-123",
+    )
+
+    commands = [tuple(command) for command in fake_runner.calls]
+    initial_stage_index = commands.index(("git", "add", "-A"))
+    verification_index = next(
+        index
+        for index, command in enumerate(commands)
+        if is_bash_wrapped_verification_call(command, ("just", "test"))
+    )
+    tracked_diff_index = commands.index(("git", "diff", "--quiet"))
+    tracked_restage_index = commands.index(("git", "add", "-u"))
+    commit_index = commands.index(("git", "commit", "-m", "agent: implement example"))
+    assert (
+        initial_stage_index
+        < verification_index
+        < tracked_diff_index
+        < tracked_restage_index
+        < commit_index
+    )
+
+
+class _PrecommitCommitRunner(FakeProcessRunner):
+    """Fake runner that drives the proxy commit's pre-commit recovery path.
+
+    Returns the configured return codes for successive proxy ``git commit``
+    invocations so a test can simulate a hook rewriting files (fail then pass)
+    or a hard lint error (fail then fail). All other commands fall back to the
+    configured ``responses``/defaults.
+    """
+
+    def __init__(self, *, commit_return_codes: list[int], **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._commit_return_codes = commit_return_codes
+        self._commit_attempts = 0
+
+    def run(
+        self,
+        command,
+        *,
+        cwd,
+        check=True,
+        timeout=None,
+        inactivity_timeout=None,
+        capture_output=True,
+        input_text=None,
+        label=None,
+    ):
+        command_tuple = tuple(command)
+        is_proxy_commit = command_tuple[:2] == ("git", "commit")
+        if is_proxy_commit:
+            from backend.infrastructure.process_runner import CommandFailedError
+
+            self.calls.append(list(command))
+            self.input_texts.append(input_text)
+            index = min(self._commit_attempts, len(self._commit_return_codes) - 1)
+            return_code = self._commit_return_codes[index]
+            self._commit_attempts += 1
+            if check and return_code != 0:
+                raise CommandFailedError(
+                    return_code,
+                    list(command),
+                    output="",
+                    stderr="pre-commit hook failed",
+                )
+            return CommandResult(
+                command=command_tuple,
+                return_code=return_code,
+                stdout="",
+                stderr="pre-commit hook failed" if return_code != 0 else "",
+            )
+        return super().run(
+            command,
+            cwd=cwd,
+            check=check,
+            timeout=timeout,
+            capture_output=capture_output,
+            input_text=input_text,
+            label=label,
+        )
+
+
+def _precommit_runner(*, commit_return_codes: list[int], diff_quiet_rc: int):
+    return _PrecommitCommitRunner(
+        commit_return_codes=commit_return_codes,
+        responses={
+            ("git", "branch", "--show-current"): CommandResult(
+                command=("git", "branch", "--show-current"),
+                return_code=0,
+                stdout="issue-123\n",
+                stderr="",
+            ),
+            ("git", "status", "--porcelain"): CommandResult(
+                command=("git", "status", "--porcelain"),
+                return_code=0,
+                stdout=" M src/example.py\n",
+                stderr="",
+            ),
+            ("git", "diff", "--quiet"): CommandResult(
+                command=("git", "diff", "--quiet"),
+                return_code=diff_quiet_rc,
+                stdout="",
+                stderr="",
+            ),
+        },
+    )
+
+
+def test_commit_requested_changes_retries_after_precommit_autofix(
+    tmp_path: Path,
+) -> None:
+    """A hook that rewrites files (ruff-format) should not fail the commit."""
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    write_commit_request(worktree_path, "agent: implement example")
+    # First proxy commit fails (files modified by hook); diff --quiet reports
+    # tracked changes, so the runner re-stages and the retry succeeds.
+    fake_runner = _precommit_runner(commit_return_codes=[1, 0], diff_quiet_rc=1)
+    config = AppConfig(runner=RunnerConfig(verification_commands=("git diff --check",)))
+
+    commit_requested_changes(
+        make_ready_issue(),
+        worktree_path,
+        config,
+        fake_runner,
+        expected_branch="issue-123",
+    )
+
+    proxy_commits = [
+        command for command in fake_runner.calls if tuple(command)[:2] == ("git", "commit")
+    ]
+    assert len(proxy_commits) == 2
+    assert proxy_commits[0] == ["git", "commit", "-m", "agent: implement example"]
+    assert ["git", "add", "-u"] in fake_runner.calls
+
+
+def test_commit_requested_changes_raises_on_persistent_precommit_failure(
+    tmp_path: Path,
+) -> None:
+    """A real lint error (no hook auto-fix) must still fail the commit."""
+    from backend.infrastructure.process_runner import CommandFailedError
+
+    worktree_path = tmp_path / "issue-123"
+    worktree_path.mkdir()
+    write_commit_request(worktree_path, "agent: implement example")
+    # Commit keeps failing and no tracked files were rewritten (diff --quiet
+    # reports clean), so there is nothing to re-stage and the error propagates.
+    fake_runner = _precommit_runner(commit_return_codes=[1, 1], diff_quiet_rc=0)
+    config = AppConfig(runner=RunnerConfig(verification_commands=("git diff --check",)))
+
+    with pytest.raises(CommandFailedError):
+        commit_requested_changes(
+            make_ready_issue(),
+            worktree_path,
+            config,
+            fake_runner,
+            expected_branch="issue-123",
+        )
