@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import signal
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,8 +19,9 @@ from backend.infrastructure.process_runner import (
     ClaudeStreamRenderer,
     CommandFailedError,
     SubprocessRunner,
-    _TimestampedStreamFormatter,
     _format_timestamped_line,
+    _terminate_process_tree,
+    _TimestampedStreamFormatter,
     should_filter_claude_stream,
 )
 
@@ -577,6 +582,7 @@ def test_process_watchdog_logs_heartbeat_and_kills_on_timeout() -> None:
     with (
         patch.object(process_runner.time, "monotonic", side_effect=[1.1, 2.1]),
         patch.object(process_runner, "logger") as logger_mock,
+        patch.object(process_runner, "_terminate_process_tree") as terminate_mock,
     ):
         watchdog._run()
 
@@ -592,7 +598,7 @@ def test_process_watchdog_logs_heartbeat_and_kills_on_timeout() -> None:
         2,
         "slow command",
     )
-    mock_process.kill.assert_called_once_with()
+    terminate_mock.assert_called_once_with(mock_process)
 
 
 def test_process_watchdog_includes_context_label_in_logs() -> None:
@@ -658,10 +664,13 @@ def test_process_watchdog_kills_on_inactivity_timeout() -> None:
     watchdog._last_output_at = 0
     watchdog._stop_event = _NeverStoppedEvent()
 
-    with patch.object(process_runner.time, "monotonic", side_effect=[3.0, 3.0]):
+    with (
+        patch.object(process_runner.time, "monotonic", side_effect=[3.0, 3.0]),
+        patch.object(process_runner, "_terminate_process_tree") as terminate_mock,
+    ):
         watchdog._run()
 
-    mock_process.kill.assert_called_once_with()
+    terminate_mock.assert_called_once_with(mock_process)
 
 
 def test_process_watchdog_does_not_kill_on_inactivity_when_output_is_active() -> None:
@@ -873,3 +882,102 @@ def test_command_failed_error_preserves_attributes() -> None:
     assert exc.cmd == ["cmd"]
     assert exc.output == "out"
     assert exc.stderr == "err"
+
+
+def test_terminate_process_tree_signals_child_process_group() -> None:
+    """终止超时命令时必须向子进程所在的进程组发信号，而不是只杀直接子进程。"""
+    from backend.infrastructure import process_runner
+
+    mock_process = MagicMock()
+    mock_process.pid = 4242
+
+    def _fake_getpgid(pid: int) -> int:
+        return 4242 if pid == 4242 else 777
+
+    with (
+        patch.object(process_runner.os, "getpgid", side_effect=_fake_getpgid),
+        patch.object(process_runner.os, "killpg") as killpg_mock,
+    ):
+        _terminate_process_tree(mock_process)
+
+    killpg_mock.assert_called_once_with(4242, signal.SIGKILL)
+    mock_process.kill.assert_not_called()
+
+
+def test_terminate_process_tree_never_kills_runner_own_group() -> None:
+    """子进程仍在 runner 自己的进程组里时只能杀直接子进程，否则 runner 会自杀。"""
+    from backend.infrastructure import process_runner
+
+    mock_process = MagicMock()
+    mock_process.pid = 4242
+
+    with (
+        patch.object(process_runner.os, "getpgid", return_value=777),
+        patch.object(process_runner.os, "killpg") as killpg_mock,
+    ):
+        _terminate_process_tree(mock_process)
+
+    killpg_mock.assert_not_called()
+    mock_process.kill.assert_called_once_with()
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="进程组回收依赖 POSIX killpg")
+def test_captured_timeout_reclaims_surviving_pipeline_member(tmp_path: Path) -> None:
+    """超时命令留下的管道成员不得让 captured 路径永久阻塞。
+
+    这是 daemon 卡死的回归测试：``bash -lc "sleep 30 | tee ..."`` 超时后 ``tee``
+    仍持有继承来的 stdout 写端，只杀直接子进程会让 ``communicate()`` 永远读不到
+    EOF，runner 线程无限期挂住（实测曾让 daemon 停止轮询任何 Issue）。
+    """
+    child_pid_path = tmp_path / "child-pid.txt"
+    runner = SubprocessRunner()
+    command = ["bash", "-lc", f"echo $$ > {child_pid_path}; sleep 30 | tee /dev/null"]
+    run_outcomes: list[str] = []
+
+    def _invoke_runner() -> None:
+        try:
+            runner.run(command, cwd=tmp_path, check=False, capture_output=True, timeout=1)
+        except subprocess.TimeoutExpired:
+            run_outcomes.append("timeout")
+        except BaseException as unexpected_error:  # pragma: no cover - 失败时便于定位
+            run_outcomes.append(f"error:{unexpected_error!r}")
+        else:
+            run_outcomes.append("returned")
+
+    runner_thread = threading.Thread(target=_invoke_runner, daemon=True)
+    runner_thread.start()
+    runner_thread.join(timeout=20)
+
+    assert not runner_thread.is_alive(), "超时命令仍在阻塞 runner：进程组没有被整组回收"
+    assert run_outcomes == ["timeout"]
+
+    leaked_group_id = int(child_pid_path.read_text(encoding="utf-8").strip())
+    group_gone_deadline = time.monotonic() + 10
+    while time.monotonic() < group_gone_deadline:
+        try:
+            os.killpg(leaked_group_id, 0)
+        except OSError:
+            break
+        time.sleep(0.2)
+    else:
+        pytest.fail(f"进程组 {leaked_group_id} 在超时后仍存活")
+
+
+def test_captured_keyboard_interrupt_tears_down_process_group(tmp_path: Path) -> None:
+    """Ctrl-C 也必须整组回收。
+
+    子进程改用独立进程组后，终端产生的 SIGINT 不会再自动送达子进程，
+    所以拆除逻辑必须捕获 BaseException 而不只是 Exception。
+    """
+    from backend.infrastructure import process_runner
+
+    with (
+        patch.object(process_runner.subprocess, "Popen") as popen_mock,
+        patch.object(process_runner, "_terminate_process_tree") as terminate_mock,
+    ):
+        fake_process = popen_mock.return_value
+        fake_process.communicate.side_effect = KeyboardInterrupt
+        with pytest.raises(KeyboardInterrupt):
+            process_runner._run_captured_process(["sleep", "30"], cwd=tmp_path, timeout=5)
+
+    terminate_mock.assert_called_once_with(fake_process)

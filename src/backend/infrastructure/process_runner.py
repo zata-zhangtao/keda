@@ -6,6 +6,7 @@ import codecs
 import json
 import os
 import select
+import signal
 import subprocess
 import sys
 import threading
@@ -29,6 +30,48 @@ _PTY_AVAILABLE = pty is not None and hasattr(pty, "openpty")
 _MAX_BUFFER_SIZE = 4096
 _MAX_ERROR_DETAIL_LEN = 4096
 _COMMAND_HEARTBEAT_SECONDS = 60
+
+# 带超时的子进程都放进**自己的进程组**，超时时才能整组回收（见
+# :func:`_terminate_process_tree`）。用 ``process_group=0``（setpgid）而不是
+# ``start_new_session=True``（setsid）：只换进程组、保留控制终端，避免改变
+# kimi/codex 这类依赖 tty 行为的 agent 的运行环境。
+_OWN_PROCESS_GROUP_KWARGS: dict[str, Any] = {"process_group": 0} if hasattr(os, "setpgid") else {}
+
+
+def _terminate_process_tree(process: subprocess.Popen[Any]) -> None:
+    """终止超时子进程**及其整个进程组**，而不是只终止直接子进程。
+
+    ``Popen.kill()`` 只向直接子进程发信号。对 ``bash -lc "script.sh | tee log"``
+    这类命令，管道里的 ``tee`` 和脚本自己拉起的后台进程会活下来，并继续持有它们
+    继承到的 stdout 写端；于是 :func:`_run_captured_process` 的 ``communicate()``
+    永远读不到 EOF，超时后整个 runner 无限期阻塞——被 kill 的子进程连僵尸都没被
+    回收，daemon 也不再轮询任何 Issue。
+
+    子进程由 ``_OWN_PROCESS_GROUP_KWARGS`` 放进独立进程组（组 id 等于其 pid），
+    向组发信号即可覆盖所有派生进程。若平台不支持而子进程仍留在 runner 自己的组
+    里，则退回只杀直接子进程，避免把 runner 自己一起杀掉。
+
+    Args:
+        process: 需要终止的子进程句柄。
+    """
+    killable_group_id: int | None = None
+    if hasattr(os, "killpg"):
+        try:
+            child_group_id = os.getpgid(process.pid)
+        except OSError:  # 子进程已退出或已被回收。
+            child_group_id = None
+        if child_group_id is not None and child_group_id != os.getpgid(0):
+            killable_group_id = child_group_id
+    if killable_group_id is not None:
+        try:
+            os.killpg(killable_group_id, signal.SIGKILL)
+            return
+        except OSError:  # 组已消失，退回直接终止。
+            pass
+    try:
+        process.kill()
+    except OSError:  # 子进程已退出。
+        pass
 
 
 def _format_timestamped_line(text: str) -> str:
@@ -212,6 +255,7 @@ class SubprocessRunner:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                **_OWN_PROCESS_GROUP_KWARGS,
             )
             watchdog = _ProcessWatchdog(
                 process,
@@ -248,8 +292,10 @@ class SubprocessRunner:
                         stderr_lines.append(line)
                 return_code = process.wait(timeout=timeout)
                 watchdog.raise_if_timed_out()
-            except Exception:
-                process.kill()
+            except BaseException:
+                # BaseException 而不是 Exception：Ctrl-C（KeyboardInterrupt）也必须
+                # 拆掉整个进程组，否则子进程会变成孤儿继续跑。
+                _terminate_process_tree(process)
                 process.wait()
                 raise
             finally:
@@ -295,6 +341,7 @@ def _run_captured_process(
         text=True,
         encoding="utf-8",
         errors="replace",
+        **_OWN_PROCESS_GROUP_KWARGS,
     )
     watchdog = _ProcessWatchdog(
         process,
@@ -313,8 +360,8 @@ def _run_captured_process(
             stdout, stderr = _communicate_with_activity_tracking(process, watchdog)
             process.wait()
         watchdog.raise_if_timed_out()
-    except Exception:
-        process.kill()
+    except BaseException:
+        _terminate_process_tree(process)
         process.wait()
         raise
     finally:
@@ -432,7 +479,7 @@ class _ProcessWatchdog:
                 elapsed_seconds,
                 _summarize_command(self._command),
             )
-            self._process.kill()
+            _terminate_process_tree(self._process)
             return True
         if self._inactivity_timeout is not None:
             with self._output_lock:
@@ -447,7 +494,7 @@ class _ProcessWatchdog:
                     inactive_seconds,
                     _summarize_command(self._command),
                 )
-                self._process.kill()
+                _terminate_process_tree(self._process)
                 return True
         return False
 
@@ -599,6 +646,7 @@ def run_filtered_claude_stream(
         encoding="utf-8",
         errors="replace",
         bufsize=1,
+        **_OWN_PROCESS_GROUP_KWARGS,
     )
     watchdog = _ProcessWatchdog(
         process,
@@ -674,8 +722,8 @@ def run_filtered_claude_stream(
                 logger.info("Agent output: %s", buffered)
         return_code = process.wait(timeout=timeout)
         watchdog.raise_if_timed_out()
-    except Exception:
-        process.kill()
+    except BaseException:
+        _terminate_process_tree(process)
         process.wait()
         raise
     finally:
@@ -729,6 +777,7 @@ def _run_pty_stream(
             stdout=slave_fd,
             stderr=slave_fd,
             close_fds=True,
+            **_OWN_PROCESS_GROUP_KWARGS,
         )
     finally:
         os.close(slave_fd)
@@ -800,8 +849,8 @@ def _run_pty_stream(
             _flush_log_lines(final=True)
         return_code = process.wait(timeout=timeout)
         watchdog.raise_if_timed_out()
-    except Exception:
-        process.kill()
+    except BaseException:
+        _terminate_process_tree(process)
         process.wait()
         raise
     finally:

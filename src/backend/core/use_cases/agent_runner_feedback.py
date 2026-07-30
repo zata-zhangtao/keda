@@ -163,6 +163,22 @@ _PRD_ARCHIVE_OWNERSHIP_RULE = (
     "back to `tasks/pending/` — the pre-push gate requires it to stay archived."
 )
 
+# 归档门禁（:func:`ensure_prd_delivery_ready`，执行循环 Phase 3）跑在 runner 自己的
+# independent verifier（Phase 3.6）、PR 创建与评审**之前**，所以「等独立 verifier 全链
+# PASS 后才归档」这类条目在被检查的那一刻永远无法成立：勾上是撒谎，不勾就被门禁打回，
+# agent 只能在同一行上空转。实证：freshai Issue #111 连续 5 次 attempt 都失败在同一条
+# `- [ ] 独立 verifier 对 rv-1～rv-6 全链证据 PASS 后才归档。`。因此必须给出明确出口——
+# runner 自己负责的门禁写成 `- [~]` + 一行理由（`[~]` 不是复选框，解析器视为已处理）。
+_RUNNER_OWNED_CHECKLIST_ITEM_RULE = (
+    "An Acceptance Checklist item that waits on a runner-owned gate can never be ticked "
+    "here: this archive check runs BEFORE the runner's independent verifier, PR creation "
+    'and review, so an item such as "archive only after the independent verifier passes" '
+    "is unsatisfiable at this point. Rewrite those items as "
+    "`- [~] <original text> — runner-owned gate: <which gate>` (a `[~]` item counts as "
+    "resolved, not unchecked) and leave the gate itself to the runner. Never tick an item "
+    "whose evidence you did not actually produce."
+)
+
 
 def _build_prd_closeout_instruction(prd_relative_path: str) -> str:
     """构建所有 Agent prompt 共用的 PRD 演进规则。"""
@@ -603,6 +619,7 @@ def format_prd_delivery_failure(message: str) -> str:
             "Complete the missing real work and evidence before marking its Acceptance "
             "Checklist item. If the PRD itself must change, append a structured Change Log "
             "entry; do not move the PRD to tasks/archive/.",
+            _RUNNER_OWNED_CHECKLIST_ITEM_RULE,
         ]
     )
 

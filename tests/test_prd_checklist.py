@@ -38,6 +38,28 @@ class TestParsePrdChecklist:
         assert result.unchecked_items == []
         assert result.is_complete is True
 
+    def test_tilde_marked_items_count_as_resolved(self) -> None:
+        """`- [~]` 是豁免标记（runner 自持门禁 / 未执行即终止），不算未勾选。
+
+        归档门禁依赖这个语义给 agent 留出口：`- [~] … — runner-owned gate: …`
+        必须放行，否则「等独立 verifier PASS 后才归档」这类条目会让 attempt 死循环
+        （实证：freshai Issue #111）。
+        """
+        content = "\n".join(
+            [
+                "# PRD",
+                "",
+                "## Acceptance Checklist",
+                "",
+                "- [x] 真实入口证据已产出",
+                "- [~] 独立 verifier 全链 PASS 后才归档 — runner-owned gate: Phase 3.6",
+                "",
+            ]
+        )
+        result = parse_prd_checklist(content)
+        assert result.unchecked_items == []
+        assert result.is_complete is True
+
     def test_unchecked_items_are_reported_with_line_numbers(self) -> None:
         """Unchecked items should include 1-based line numbers."""
         content = "\n".join(

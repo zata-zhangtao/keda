@@ -10,6 +10,8 @@ from backend.core.use_cases.agent_runner_feedback import (
     build_progress_continuation_prompt,
     build_prompt,
     build_recovery_prompt,
+    format_prd_delivery_detail,
+    format_prd_delivery_failure,
 )
 
 
@@ -269,3 +271,28 @@ def test_build_progress_continuation_prompt_includes_failure_context() -> None:
     assert "ruff check" in prompt
     assert "E501 line too long" in prompt
     assert "project conventions" in prompt
+
+
+def test_prd_delivery_failure_offers_runner_owned_gate_escape() -> None:
+    """归档门禁的 recovery prompt 必须给出 runner 自持门禁的处理方式。
+
+    否则 agent 会卡在「等独立 verifier PASS 后才归档」这类条目上反复重试
+    （实证：freshai Issue #111 连续 5 次 attempt 都失败在同一行）。
+    """
+    prompt = format_prd_delivery_failure(
+        "Acceptance Checklist has unchecked items in tasks/pending/example.md:\n"
+        "  - L502: - [ ] 独立 verifier 对 rv-1～rv-6 全链证据 PASS 后才归档。"
+    )
+
+    assert "independent verifier" in prompt
+    assert "[~]" in prompt
+    assert "runner-owned gate" in prompt
+    assert "Never tick an item whose evidence you did not actually produce." in prompt
+
+
+def test_prd_delivery_detail_stays_diagnostic_only() -> None:
+    """attempt 历史的 Detail 只记失败原因，不夹带通用指导。"""
+    detail = format_prd_delivery_detail("Acceptance Checklist has unchecked items in x.md")
+
+    assert detail.splitlines()[-1] == "Acceptance Checklist has unchecked items in x.md"
+    assert "[~]" not in detail

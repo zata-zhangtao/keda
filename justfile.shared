@@ -770,6 +770,7 @@ implement prd_file ai_tool prompt="":
 #   just ai push                              # run `just test`, commit, then push with claude
 #   just ai push kimi "custom prompt"          # use kimi, then push
 #   just ai implement <prd-file> [tool]       # implement a PRD (default: claude)
+#   just ai tag                               # auto-bump patch of latest tag (v0.1.2 -> v0.1.3), tag, then push
 #   just ai tag <name>                        # write tag message, create annotated tag with claude, then push
 #   just ai tag <name> kimi "custom prompt"   # use kimi with a custom prompt, then push
 # Shortcuts: check, fix, commit, push, implement, tag — all delegate to scripts/shared/just/ai_run.sh
@@ -802,7 +803,7 @@ ai subcommand arg1="" arg2="" arg3="" :
             echo "  just ai commit                  # run just test, then commit"
             echo "  just ai push                    # run just test, then commit and push"
             echo "  just ai implement <prd-file>    # implement a PRD"
-            echo "  just ai tag <name>              # write tag message, create annotated tag, then push (default: claude)"
+            echo "  just ai tag [name]              # tag & push (no name = auto-bump patch, e.g. v0.1.2 -> v0.1.3; default: claude)"
             exit 1
             ;;
     esac
@@ -1026,10 +1027,30 @@ _ai_tag tag_name ai_tool="claude" prompt="" :
     ai_tool="{{ai_tool}}"
     prompt_text="{{prompt}}"
 
+    # When no tag name is given, default to bumping the patch (最后一位) of the
+    # most recent semver tag, e.g. v0.1.2 -> v0.1.3. This keeps `just ai tag`
+    # a zero-arg release shortcut for the common "next small version" case.
     if [ -z "$tag_name" ]; then
-        echo "Error: tag name is required."
-        echo "Usage: just ai tag <name> [claude|kimi] [prompt]"
-        exit 1
+        latest_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+        if [ -z "$latest_tag" ]; then
+            echo "Error: no existing tag found to auto-increment from."
+            echo "Create the first tag explicitly, e.g.: just ai tag v0.1.0"
+            exit 1
+        fi
+        # Match an optional 'v' prefix + MAJOR.MINOR.PATCH; anything else is
+        # too ambiguous to bump safely, so require an explicit name instead.
+        if [[ "$latest_tag" =~ ^(v?)([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            tag_prefix="${BASH_REMATCH[1]}"
+            tag_major="${BASH_REMATCH[2]}"
+            tag_minor="${BASH_REMATCH[3]}"
+            tag_patch="${BASH_REMATCH[4]}"
+            tag_name="${tag_prefix}${tag_major}.${tag_minor}.$((tag_patch + 1))"
+            echo "No tag name given; auto-incrementing patch: ${latest_tag} -> ${tag_name}"
+        else
+            echo "Error: latest tag '${latest_tag}' is not a MAJOR.MINOR.PATCH version."
+            echo "Cannot auto-increment; pass a tag name explicitly, e.g.: just ai tag v1.2.3"
+            exit 1
+        fi
     fi
 
     # Tag is the only `ai` subcommand that strictly whitelists tools,
@@ -1101,6 +1122,11 @@ sync-template flags="":
 #   just test        - Run local tests (no API keys needed; skip if code unchanged)
 #   just test all    - Run all tests
 #   just test real   - Run tests requiring API keys
+#
+# On a warm working tree both the lint and test fast-path flags short-circuit
+# their respective stages; that is what keeps `just test` under 30 seconds in
+# steady-state local development. The fast path is only consulted when the
+# flag file's branch, HEAD and effective tree all still match.
 @test type="local": _check-completion
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1113,31 +1139,52 @@ sync-template flags="":
     head_hash="$(quality_head_hash)"
     test_tree="$(quality_effective_tree working test)"
 
-    if [ "{{type}}" = "local" ] && quality_flag_matches "$flag_file" "$branch_name" "$head_hash" "$test_tree"; then
+    # CI forces a full run so flag files from a previous host/job never
+    # mask regressions; local development still benefits from the warm path.
+    is_ci=0
+    if [ -n "${CI:-}" ]; then
+        is_ci=1
+    fi
+
+    if [ "$is_ci" -eq 0 ] && [ "{{type}}" = "local" ] && quality_flag_matches "$flag_file" "$branch_name" "$head_hash" "$test_tree"; then
         echo "✅ just test flag valid: $branch_name @ ${head_hash:0:8} (tree: ${test_tree:0:8}); skipping tests."
         exit 0
     fi
 
-    # Capture the lint output instead of discarding it: this gate runs inside the
-    # agent runner's commit path, and when it fails the only thing a human (or the
-    # repair agent) ever sees is this recipe's stdout. Sending it to /dev/null made
-    # runner failures undiagnosable — see freshai Issue #99.
-    echo "🔍 Running full lint checks..."
-    lint_output_file="$(mktemp)"
-    if ! SKIP=check-test-flag just lint --full >"$lint_output_file" 2>&1; then
-        echo "ERROR: Lint failed. Fix lint errors before running tests."
-        echo "   Run: just lint --full"
-        echo "--- just lint --full output (last 200 lines) ---"
-        tail -n 200 "$lint_output_file"
-        echo "--- end of just lint --full output ---"
+    # Lint fast path: when .last_linted_commit is valid for the current working
+    # tree, `just lint --full` short-circuits to <1s. Reuse that path here so
+    # `just test` on a warm tree stays well under 30s; only fall through to a
+    # full pre-commit run when the lint flag is stale or missing.
+    lint_tree_after_lint=""
+    if [ "$is_ci" -eq 0 ] && quality_flag_matches \
+        "$git_dir/.last_linted_commit" \
+        "$branch_name" \
+        "$head_hash" \
+        "$(quality_effective_tree working lint)"; then
+        echo "✅ just lint --full flag valid: $branch_name @ ${head_hash:0:8}; skipping lint."
+    else
+        # Capture the lint output instead of discarding it: this gate runs inside
+        # the agent runner's commit path, and when it fails the only thing a human
+        # (or the repair agent) ever sees is this recipe's stdout. Sending it to
+        # /dev/null made runner failures undiagnosable — see freshai Issue #99.
+        echo "🔍 Running full lint checks..."
+        lint_output_file="$(mktemp)"
+        if ! SKIP=check-test-flag just lint --full >"$lint_output_file" 2>&1; then
+            echo "ERROR: Lint failed. Fix lint errors before running tests."
+            echo "   Run: just lint --full"
+            echo "--- just lint --full output (last 200 lines) ---"
+            tail -n 200 "$lint_output_file"
+            echo "--- end of just lint --full output ---"
+            rm -f "$lint_output_file"
+            exit 1
+        fi
         rm -f "$lint_output_file"
-        exit 1
+        lint_tree_after_lint="$(quality_effective_tree working lint)"
+        echo "✅ Lint passed. Proceeding to tests..."
     fi
-    rm -f "$lint_output_file"
-    lint_tree_after_lint="$(quality_effective_tree working lint)"
-    echo "✅ Lint passed. Proceeding to tests..."
 
-    # Check Alembic migration heads if Alembic is installed
+    # Alembic must keep a single head regardless of whether the lint fast path
+    # was taken, so the check stays here even when lint is skipped above.
     if command -v alembic &>/dev/null; then
         alembic_heads="$(uv run alembic heads 2>/dev/null || true)"
         if [ -n "$alembic_heads" ]; then
@@ -1150,6 +1197,14 @@ sync-template flags="":
         fi
     fi
 
+    # Local runs use `-q` to shave startup/format overhead so a warm `just test`
+    # stays under 30s; CI keeps `-v` so logs surface every test outcome.
+    if [ -n "${CI:-}" ]; then
+        pytest_verbosity_flag="-v"
+    else
+        pytest_verbosity_flag="-q"
+    fi
+
     pytest_exit_code=0
     if [ "{{type}}" = "all" ]; then
         uv run pytest tests/ -v -m '' -n auto || pytest_exit_code=$?
@@ -1160,9 +1215,9 @@ sync-template flags="":
             pytest_exit_code=0
         fi
     else
-        # Local mode relies on pyproject.toml addopts to exclude slow/real_api
-        # and to enable pytest-xdist parallel execution.
-        uv run pytest tests/ -v || pytest_exit_code=$?
+        # Local mode relies on pytest.ini addopts to exclude slow/real_api/redis
+        # markers and to enable pytest-xdist parallel execution.
+        uv run pytest tests/ "$pytest_verbosity_flag" --no-header -p no:cacheprovider || pytest_exit_code=$?
     fi
 
     if [ "$pytest_exit_code" -ne 0 ]; then
@@ -1176,6 +1231,12 @@ sync-template flags="":
     head_hash="$(quality_head_hash)"
     test_tree="$(quality_effective_tree working test)"
     quality_write_flag "$git_dir/.last_tested_commit" "$branch_name" "$head_hash" "$test_tree"
+    if [ -z "$lint_tree_after_lint" ]; then
+        # Lint fast path was taken; recompute the lint tree now so the flag
+        # points at the same hash we matched against, otherwise the next
+        # `just lint --full` would no longer short-circuit.
+        lint_tree_after_lint="$(quality_effective_tree working lint)"
+    fi
     quality_write_flag "$git_dir/.last_linted_commit" "$branch_name" "$head_hash" "$lint_tree_after_lint"
     echo "✅ just test flag updated: $branch_name @ $head_hash"
     echo "✅ just lint --full flag updated: $branch_name @ $head_hash"
