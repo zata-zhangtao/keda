@@ -225,3 +225,14 @@ Traceback (most recent call last):
 ## 2026-07-09 · iar-init-autopilot-missing
 
 > 一个很大的问题是 我iar init 创建的 toml 没有[agent_runner.autopilot]段，freshai 这种已经初始化过的仓库就缺这段，必须手动补才能用 autopilot 快速档。
+
+## 2026-07-31 15:37 · attempt-history-timing
+
+```
+Attempt History (live)
+Attempt    Started (UTC)    Agent    Failure Type    Recovered    Duration    Detail
+1    2026-07-31 03:54Z    claude    agent_error    No    7075.2s    - L668: - [ ] Delivery Readiness：独立 verifier Agent 按每个 rv-id 核对 critical value、runtime boundary、forbidden bypass、fresh-state 与 final-tree provenance 并给出 PASS；所有 checklist 完成后才可归档。
+2    2026-07-31 05:52Z    claude    agent_error    No    903.3s    Item 2: evidence file rv-3-api-tests.txt belongs to item 3, not item 2.
+3    2026-07-31 06:08Z    claude    agent_error    No    532.5s    Realistic Validation item 1 failed when keda re-ran its command: bash .iar/evidence/scripts/capture_rv-1-e2e.sh exited 1. keda re-executes RV commands to confirm they actually pass — the agent's ev…
+4    2026-07-31 06:17Z    claude    no_commits    No    4667.9s    error: recipe lint failed with exit code 1  这个只有在任务结束的时候才会更新, 应该任务开始的时候更新, 你觉得呢, 而且只有任务开始时间, 没有任务结束时间呀
+```
