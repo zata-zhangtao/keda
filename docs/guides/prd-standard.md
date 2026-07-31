@@ -43,7 +43,7 @@ keda 的 agent runner 会把 PRD 的 Realistic Validation oracle 物化到 Issue
 
 - runner **优先确定性解析** skill 产出的 **YAML oracle 块**；无则回退旧式 `### Realistic Validation` 复选框（向后兼容）。
 - 证据缺失 / 不达标会打回 runner 重跑（recovery 循环）。
-- 当 keda 配置 `validation.reexecute_commands = true` 时，runner 会复跑 `evidence.json` 中每个 item 的 `command`。为保证命令可维护、可复跑，agent 应把 PRD 明确需要的复杂验证逻辑落到仓库已跟踪的独立脚本（仅限 `scripts/rv_evidence/rv-<item-number>-<slug>.*`），而不是把多行内联 `python -c "..."` 写进 manifest。截图采集、临时 server、探针等**仅用于取证**的脚本必须留在 `.iar/evidence/scripts/`，不得进入代码 diff；尤其不得新建 `scripts_evidence/`、`scripts/evidence/` 或 `scripts/evidence_helpers/`。每次复跑覆盖的是 `.iar/evidence/` 里的证据产物，不是可复跑脚本本身。
+- 当 keda 配置 `validation.reexecute_commands = true` 时，runner 会复跑 `evidence.json` 中每个 item 的 `command`。为保证命令可维护、可复跑，agent 应把复杂验证逻辑落到独立脚本并在 `command` 中引用，而不是把多行内联 `python -c "..."` 写进 manifest。**所有 RV 脚本——取证的、临时 setup 的、被 `command` 引用的可复跑 oracle——一律放 `.iar/evidence/scripts/`，不得进入代码 diff，没有例外。** 这些脚本会随证据一起上传到证据分支供审阅，因此同样不得含密钥；复跑缓存键并入其内容摘要，改写脚本必然触发真实重跑。每次复跑覆盖的是 `.iar/evidence/` 里的证据产物，不是脚本本身。
 - 进一步的"负控 + keda 复跑命令 + 独立 verifier agent"门禁,见 `tasks/pending/` 中对应的 Realistic Validation 门禁 PRD。
 
 #### 证据形态与"产物健全性"提示（v1.2 跟进）

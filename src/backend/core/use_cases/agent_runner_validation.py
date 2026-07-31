@@ -117,9 +117,12 @@ _MISPLACED_EVIDENCE_HELPER_PREFIXES = (
     "scripts_evidence/",
     "scripts/evidence/",
     "scripts/evidence_helpers/",
+    "scripts/rv_evidence/",
 )
-_REUSABLE_RV_SCRIPT_PREFIX = "scripts/rv_evidence/"
-_REUSABLE_RV_SCRIPT_PATH_PATTERN = re.compile(r"^scripts/rv_evidence/rv-\d+-[^/]+$")
+# RV 条目命名（``rv-1-``/``rv_1_`` 等）几乎不会出现在产品交付物上,因此可以
+# 独立于目录名识别错放的取证脚本——这是"换个新目录名规避"的兜底防线。
+_RV_ORACLE_NAME_PATTERN = re.compile(r"^rv[-_]\d+[-_]", re.IGNORECASE)
+_EVIDENCE_ORACLE_SUBDIR = "scripts"
 
 
 @dataclass(frozen=True)
@@ -409,14 +412,13 @@ def build_validation_prompt_line(issue: IssueSummary, config: AppConfig) -> str:
         "Do not substitute the real entry point an item describes with "
         "fakes, mocks, or TestClient. Never put evidence files under "
         "version control and never capture secrets in them. "
-        f"Keep scripts used only to capture evidence or provide temporary RV setup "
-        f"under `{config.validation.evidence_dir}/scripts/`; they must not enter "
-        "the code diff. A reusable script may be committed only when the PRD "
-        "requires it for a reproducible RV command, and then it must live under "
-        "`scripts/rv_evidence/` with an `rv-<item-number>-<slug>` name. Do not "
-        "create `scripts_evidence/`, `scripts/evidence/`, or "
-        "`scripts/evidence_helpers/`. Before requesting a commit, inspect `git "
-        "diff --name-only` and remove temporary evidence helpers."
+        f"EVERY RV script — evidence capture, temporary setup, and reproducible "
+        f"oracles referenced by an `evidence.json` command alike — belongs under "
+        f"`{config.validation.evidence_dir}/{_EVIDENCE_ORACLE_SUBDIR}/`. There is no "
+        "exception: no RV script may enter the code diff, whatever the PRD asks for. "
+        "These scripts are uploaded to the evidence branch for reviewers, so they "
+        "must not contain secrets either. Before requesting a commit, inspect `git "
+        "diff --name-only` and remove every RV script from the change set."
     ]
     if has_structured_evidence_marker(issue.body):
         structured_suffix = build_structured_evidence_prompt_suffix(config.validation.language)
@@ -435,9 +437,15 @@ def evidence_dir_path(worktree_path: Path, config: AppConfig) -> Path:
 
 
 def list_evidence_files(worktree_path: Path, config: AppConfig) -> list[Path]:
-    """List first-level regular evidence files, sorted by name.
+    """List first-level regular evidence *artifacts*, sorted by name.
 
-    隐藏文件（``.`` 开头）与子目录被忽略；v1 只收集证据目录第一层。
+    隐藏文件（``.`` 开头）与子目录被忽略——**这里的单层语义是刻意的,不要改成
+    递归**。本函数喂给两处判定:``collect_evidence_coverage_problems`` 按
+    ``rv-<n>-*`` 文件名对账清单覆盖,``ensure_frontend_visual_evidence`` 按后缀
+    找截图/录屏。一旦递归,``{evidence_dir}/scripts/rv-1-oracle.py`` 会冒充
+    rv-1 的证据文件、``scripts/`` 下的 ``.png`` 会冒充视觉证据,缺证据的清单项
+    就能蒙混过关。需要连子目录一起取（仅上传场景）请用
+    :func:`list_evidence_upload_files`。
     """
     evidence_dir = evidence_dir_path(worktree_path, config)
     if not evidence_dir.is_dir():
@@ -447,6 +455,60 @@ def list_evidence_files(worktree_path: Path, config: AppConfig) -> list[Path]:
         for candidate_path in evidence_dir.iterdir()
         if candidate_path.is_file() and not candidate_path.name.startswith(".")
     )
+
+
+def list_evidence_upload_files(worktree_path: Path, config: AppConfig) -> list[str]:
+    """List every evidence file, recursively, as evidence-dir-relative POSIX paths.
+
+    与 :func:`list_evidence_files` 的单层语义相对:上传到证据分支时要连同
+    ``{evidence_dir}/scripts/`` 下的 oracle 源码一起带走,审阅者才能看到"产出
+    这份证据的断言是怎么写的"。任何一级以 ``.`` 开头的文件或目录都跳过。
+
+    Returns:
+        相对证据目录的路径列表（POSIX 分隔符）,已排序;证据目录不存在时为空。
+    """
+    evidence_dir = evidence_dir_path(worktree_path, config)
+    if not evidence_dir.is_dir():
+        return []
+    relative_paths: list[str] = []
+    for candidate_path in evidence_dir.rglob("*"):
+        if not candidate_path.is_file():
+            continue
+        relative_path = candidate_path.relative_to(evidence_dir)
+        if any(part.startswith(".") for part in relative_path.parts):
+            continue
+        relative_paths.append(relative_path.as_posix())
+    return sorted(relative_paths)
+
+
+def evidence_oracle_digest(worktree_path: Path, config: AppConfig) -> str:
+    """Digest the RV oracle scripts so the re-execution cache tracks their content.
+
+    ``{evidence_dir}/`` 被 ``info/exclude`` 排除,因此其中的 oracle 不参与
+    ``HEAD`` 的 tree SHA。若缓存键只按 tree SHA + 命令构造,把 oracle 的断言删空
+    也不会改变键,门禁会继续报"已通过、跳过复跑"。本摘要把 oracle 内容并回缓存
+    键,让任何 oracle 改动都必然触发真实重跑。
+
+    摘要按目录整体计算而非按命令解析脚本路径:代价是改 A 脚本会让 B 条目一并
+    失效,换来的是不必解析 shell 命令行,方向上宁可过度失效也不放过。
+
+    Returns:
+        十六进制摘要;oracle 目录不存在或为空时返回固定的 ``"-"``,保证既有仓库
+        行为稳定。
+    """
+    oracle_dir = evidence_dir_path(worktree_path, config) / _EVIDENCE_ORACLE_SUBDIR
+    if not oracle_dir.is_dir():
+        return "-"
+    file_digests: list[str] = []
+    for script_path in sorted(oracle_dir.rglob("*")):
+        if not script_path.is_file():
+            continue
+        relative_path = script_path.relative_to(oracle_dir).as_posix()
+        content_digest = hashlib.sha256(script_path.read_bytes()).hexdigest()
+        file_digests.append(f"{relative_path}:{content_digest}")
+    if not file_digests:
+        return "-"
+    return hashlib.sha256("\n".join(file_digests).encode("utf-8")).hexdigest()[:16]
 
 
 def ensure_evidence_dir_excluded(
@@ -701,14 +763,23 @@ def _clean_tree_fingerprint(worktree_path: Path, process_runner: IProcessRunner)
     return tree_sha
 
 
-def _rv_reexec_cache_key(tree_fingerprint: str, item_number: int, command: str) -> str:
-    """Cache key 绑定"某命令在某代码树上、对某 item 已通过"。
+def _rv_reexec_cache_key(
+    tree_fingerprint: str,
+    item_number: int,
+    command: str,
+    oracle_digest: str,
+) -> str:
+    """Cache key 绑定"某命令在某代码树与某份 oracle 上、对某 item 已通过"。
 
     键里含命令的哈希:在(gitignore 的)manifest 里改命令不会改 tree SHA,
     但会改命令哈希 → 缓存未命中 → 照常复跑,不会用旧命令的结果蒙混。
+
+    键里同样含 oracle 摘要(:func:`evidence_oracle_digest`):命令字符串不变、
+    但它调用的脚本被改写时,tree SHA 与命令哈希都不变,只有摘要会变 → 缓存
+    未命中 → 照常复跑,不会用旧 oracle 的结论蒙混。
     """
     command_digest = hashlib.sha256(command.encode("utf-8")).hexdigest()[:16]
-    return f"{tree_fingerprint}|{item_number}|{command_digest}"
+    return f"{tree_fingerprint}|{item_number}|{command_digest}|{oracle_digest}"
 
 
 def _load_rv_reexec_cache(cache_path: Path) -> dict[str, str]:
@@ -773,10 +844,18 @@ def ensure_validation_commands_pass(
     cache_path = _rv_reexec_cache_path(worktree_path, config)
     cache_entries = _load_rv_reexec_cache(cache_path) if tree_fingerprint else {}
     newly_passed: dict[str, str] = {}
+    # oracle 摘要按次计算一次:同一轮内脚本内容不变,逐条重算既无必要也会让
+    # 中途被改写的脚本产生前后不一致的键。
+    oracle_digest = evidence_oracle_digest(worktree_path, config)
 
     for block in manifest.items:
         cache_key = (
-            _rv_reexec_cache_key(tree_fingerprint, block.item_number, block.command)
+            _rv_reexec_cache_key(
+                tree_fingerprint,
+                block.item_number,
+                block.command,
+                oracle_digest,
+            )
             if tree_fingerprint
             else None
         )
@@ -846,66 +925,140 @@ def format_validation_evidence_failure(message: str, evidence_dir: str = ".iar/e
         [
             format_validation_evidence_detail(message),
             "Run the validation plan for real and write the evidence files; "
-            "do not fabricate evidence and do not capture secrets. Keep scripts used "
-            f"only for evidence capture or temporary RV setup under `{evidence_dir}/scripts/` "
-            "and out of the code diff. Only PRD-required reusable RV scripts may be "
-            "committed, under `scripts/rv_evidence/` named `rv-<item-number>-<slug>`; "
-            "never create `scripts_evidence/`, `scripts/evidence/`, or "
-            "`scripts/evidence_helpers/`.",
+            "do not fabricate evidence and do not capture secrets. Every RV script "
+            "— evidence capture, temporary setup, and reproducible oracles referenced "
+            f"by an `evidence.json` command alike — must live under "
+            f"`{evidence_dir}/{_EVIDENCE_ORACLE_SUBDIR}/` and stay out of the code diff. "
+            "No RV script may be committed, whatever the PRD asks for.",
         ]
     )
 
 
+def is_misplaced_evidence_helper(repo_relative_path: str, config: AppConfig) -> bool:
+    """判定单个仓库相对路径是否为错放的 RV 辅助脚本。
+
+    这是前瞻守卫(:func:`ensure_no_misplaced_evidence_helpers`)与存量告警
+    (:func:`warn_legacy_evidence_helpers`)**共用的唯一判定源**,两处规则不得
+    各写一份,否则必然漂移。
+
+    判定顺序:
+
+    1. 落在证据目录下 → 合法。证据目录是 RV 脚本的唯一归宿,其内部结构不受限。
+    2. 命中历史上被反复误用的目录前缀 → 错放。
+    3. 文件名是 RV 条目命名(``rv-1-``/``rv_1_`` 等) → 错放。这条与目录名无关,
+       换个新目录名规避不掉。
+    4. 其余 → 合法。产品脚本(如 ``scripts/migrate_users.py``)不受影响。
+
+    Args:
+        repo_relative_path: 仓库相对路径,POSIX 分隔符。
+        config: 提供证据目录位置。
+
+    Returns:
+        错放为 ``True``。
+    """
+    normalized_path = repo_relative_path.strip("/")
+    if not normalized_path:
+        return False
+    evidence_prefix = config.validation.evidence_dir.strip("/") + "/"
+    if normalized_path.startswith(evidence_prefix):
+        return False
+    if normalized_path.startswith(_MISPLACED_EVIDENCE_HELPER_PREFIXES):
+        return True
+    return bool(_RV_ORACLE_NAME_PATTERN.match(Path(normalized_path).name))
+
+
+def _expand_changed_path(worktree_path: Path, changed_path: str) -> list[str]:
+    """把一条变更条目展开为具体文件路径。
+
+    ``git status --porcelain`` 对未跟踪目录只输出 ``?? dir/`` 一行而不展开其中
+    文件,不展开就只能拿到目录本身,逐文件判定会整体漏掉。
+    """
+    candidate_path = worktree_path / changed_path
+    if not changed_path.endswith("/") or not candidate_path.is_dir():
+        return [changed_path.strip("/")]
+    return [
+        file_path.relative_to(worktree_path).as_posix()
+        for file_path in candidate_path.rglob("*")
+        if file_path.is_file()
+    ]
+
+
 def ensure_no_misplaced_evidence_helpers(
     worktree_path: Path,
+    config: AppConfig,
     process_runner: IProcessRunner,
 ) -> None:
-    """拒绝把取证辅助脚本放入未授权的受版本控制路径。
+    """拒绝把任何 RV 脚本放进代码变更。
 
-    复杂且需要复跑的 RV 命令可以作为交付物保留在
-    ``scripts/rv_evidence/``。除此之外，证据采集与临时 setup 脚本必须留在
-    worktree-local evidence directory；本检查拦截几种曾被 Agent 误建的路径，
-    让它们进入既有 recovery 循环而不是污染待发布的变更。
+    RV 脚本——取证的、临时 setup 的、被 ``evidence.json`` 命令引用的可复跑
+    oracle——一律只能留在 worktree 本地的证据目录,没有例外。规则刻意不含任何
+    需要执行器判断的条件:此前"PRD 要求的可复跑脚本可以提交到
+    ``scripts/rv_evidence/``"这条豁免带着一个门禁从不校验的前提,执行器只要把
+    一次性脚本起成合规名字就能进代码树(freshai issue-113 实证)。
 
     Args:
         worktree_path: 当前 Agent worktree 根目录。
+        config: 提供证据目录位置。
         process_runner: 用于读取 worktree 变更的进程执行器。
 
     Raises:
-        ValidationEvidenceError: 发现未授权的取证辅助脚本路径时抛出。
+        ValidationEvidenceError: 变更中存在错放的 RV 脚本时抛出。
     """
-    changed_paths = list_changed_paths(worktree_path, process_runner)
     misplaced_paths: list[str] = []
-    for changed_path in changed_paths:
-        if changed_path.startswith(_MISPLACED_EVIDENCE_HELPER_PREFIXES):
-            misplaced_paths.append(changed_path)
-            continue
-        if not changed_path.startswith(_REUSABLE_RV_SCRIPT_PREFIX):
-            continue
-        if _REUSABLE_RV_SCRIPT_PATH_PATTERN.fullmatch(changed_path):
-            continue
-        candidate_path = worktree_path / changed_path
-        if changed_path.endswith("/") and candidate_path.is_dir():
-            invalid_script_paths = [
-                str(script_path.relative_to(worktree_path))
-                for script_path in candidate_path.rglob("*")
-                if script_path.is_file()
-                and not _REUSABLE_RV_SCRIPT_PATH_PATTERN.fullmatch(
-                    str(script_path.relative_to(worktree_path))
-                )
-            ]
-            misplaced_paths.extend(invalid_script_paths)
-            continue
-        misplaced_paths.append(changed_path)
+    for changed_path in list_changed_paths(worktree_path, process_runner):
+        misplaced_paths.extend(
+            expanded_path
+            for expanded_path in _expand_changed_path(worktree_path, changed_path)
+            if is_misplaced_evidence_helper(expanded_path, config)
+        )
     if not misplaced_paths:
         return
     misplaced_paths_text = ", ".join(sorted(set(misplaced_paths)))
+    evidence_oracle_dir = f"{config.validation.evidence_dir.strip('/')}/{_EVIDENCE_ORACLE_SUBDIR}/"
     raise ValidationEvidenceError(
-        "Validation-only helper scripts are in unsupported tracked paths or use "
-        "an invalid reusable RV script name: "
-        f"{misplaced_paths_text}. Move temporary helpers to `.iar/evidence/scripts/` "
-        "and keep them out of the diff. A PRD-required reusable RV script belongs "
-        "under `scripts/rv_evidence/` named `rv-<item-number>-<slug>` instead."
+        f"RV scripts must never enter the code diff: {misplaced_paths_text}. "
+        f"Move every one of them to `{evidence_oracle_dir}` — that is the only "
+        "supported location, for evidence-capture helpers and for reproducible "
+        "oracles referenced by an `evidence.json` command alike. Point the "
+        "manifest commands at the moved paths and re-run them."
+    )
+
+
+def warn_legacy_evidence_helpers(
+    worktree_path: Path,
+    config: AppConfig,
+    process_runner: IProcessRunner,
+) -> None:
+    """对仓库中**已提交**的 RV 脚本发出告警,但不阻塞交付。
+
+    :func:`ensure_no_misplaced_evidence_helpers` 只看本次变更,因此历史交付留在
+    主干里的取证脚本永远不会被发现。本扫描让它们在日志里可见,清理可以另行
+    安排——回溯硬失败会让存量违规的仓库下一个 PR 立刻被挡,代价不成比例。
+
+    git 命令失败时静默跳过:这是告警路径,不应因此中断交付。
+    """
+    tracked_result = process_runner.run(
+        ["git", "ls-files", "-z"],
+        cwd=worktree_path,
+        check=False,
+    )
+    if tracked_result.return_code != 0:
+        return
+    legacy_paths = sorted(
+        tracked_path
+        for tracked_path in tracked_result.stdout.split("\0")
+        if tracked_path and is_misplaced_evidence_helper(tracked_path, config)
+    )
+    if not legacy_paths:
+        return
+    evidence_oracle_dir = f"{config.validation.evidence_dir.strip('/')}/{_EVIDENCE_ORACLE_SUBDIR}/"
+    _logger.warning(
+        "%d RV helper script(s) are already committed in this repository and "
+        "predate the evidence-directory rule: %s. They do not block this "
+        "delivery, but they belong under `%s`; schedule a cleanup.",
+        len(legacy_paths),
+        ", ".join(legacy_paths),
+        evidence_oracle_dir,
     )
 
 

@@ -296,9 +296,10 @@ per-repo 上下文构建（本次修复点, engines/factory）:
 │   ├── tests/test_agent_runner_memory.py
 │   │   [修改]
 │   │   【总结】补原子写断言（写入过程中目标路径不存在半写内容可用 os.replace 语义覆盖）。
-│   └── scripts/rv_evidence/rv_anchor_cross_worktree.py
-│       [新增]
-│       【总结】rv-1/rv-2/rv-3 的可复跑证据脚本：临时 git 仓库 + 两个真实 git worktree，驱动公开 use-case 函数，断言记忆落在主仓库锚点并跨副本可见；提供 --legacy-anchor 反向对照模式。
+│
+│   注：rv-1/rv-2/rv-3 的可复跑 oracle 脚本 `rv_anchor_cross_worktree.py` **不进代码树**，
+│   执行时创建在 `.iar/evidence/scripts/` 下（git 排除，随证据上传到证据分支）。
+│   历史实现可从 `git show 9891de3:.iar/evidence/scripts/rv_anchor_cross_worktree.py` 取回作为起点。
 │
 └── Docs
     └── docs/guides/agent-runner.md
@@ -355,17 +356,17 @@ No data model changes in this PRD.（持久化仍为本地 JSON/Markdown 文件�
 ```yaml
 - id: rv-1
   behavior: 跨两个独立 worktree 的记忆持久化——副本 A 写入的短期记忆与 skill 草稿，副本 B 可读取，且文件落在主仓库锚点下
-  real_entry: "uv run --no-sync python scripts/rv_evidence/rv_anchor_cross_worktree.py"
+  real_entry: "uv run --no-sync python .iar/evidence/scripts/rv_anchor_cross_worktree.py"
   expected: "脚本创建临时 git 仓库与 worktree A/B；经 A 驱动公开 use-case 写入后，断言文件存在于主仓库 .iar/ 下且 A/B 内部均无 .iar 记忆文件；经 B 驱动检索能读到 A 写入的内容；exit=0"
   mock_boundary: "LLM/agent 子进程与 GitHub API 使用 stub；git worktree、文件系统、配置构建（真实调用 factory 上下文构建函数）必须真实"
-  negative_control: "uv run --no-sync python scripts/rv_evidence/rv_anchor_cross_worktree.py --legacy-anchor"
+  negative_control: "uv run --no-sync python .iar/evidence/scripts/rv_anchor_cross_worktree.py --legacy-anchor"
   expected_fail: "--legacy-anchor 强制旧语义（相对路径锚定副本）后，B 读不到 A 的记忆，脚本以非零码退出并打印缺失路径"
   test_layer: integration
   required_for_acceptance: true
 
 - id: rv-2
   behavior: 主仓库 .iar/skills/ 中的已晋升 skill 被任意新副本的 prompt 构建检索并以目录形式注入
-  real_entry: "uv run --no-sync python scripts/rv_evidence/rv_anchor_cross_worktree.py --scenario promoted-skill"
+  real_entry: "uv run --no-sync python .iar/evidence/scripts/rv_anchor_cross_worktree.py --scenario promoted-skill"
   expected: "skill 文件仅放置于主仓库 .iar/skills/；在全新 worktree 中调用 build_prompt，输出含该 skill 的 name/description/路径目录"
   mock_boundary: "同 rv-1"
   negative_control: "删除主仓库 .iar/skills/ 下该文件后重跑同场景"
@@ -375,7 +376,7 @@ No data model changes in this PRD.（持久化仍为本地 JSON/Markdown 文件�
 
 - id: rv-3
   behavior: 草稿计数跨副本累积并在阈值处自动晋升（原 PRD rv-7 的真实拓扑版）
-  real_entry: "uv run --no-sync python scripts/rv_evidence/rv_anchor_cross_worktree.py --scenario auto-promote"
+  real_entry: "uv run --no-sync python .iar/evidence/scripts/rv_anchor_cross_worktree.py --scenario auto-promote"
   expected: "三次成功蒸馏各自发生在独立的新建 worktree 中；主仓库草稿 usage_count 达到 3 后自动移动到 .iar/skills/ 且 draft 标记移除"
   mock_boundary: "同 rv-1；蒸馏输入用构造的 AttemptResult/diff"
   negative_control: "--scenario auto-promote --auto-promote-off"
@@ -485,7 +486,7 @@ No external validation required; repository evidence was sufficient.
 
 ### Validation Acceptance
 
-- [x] rv-1、rv-2、rv-3 脚本通过且其实现满足保真度纪律（脚本源码中存在 `git worktree add` 双副本创建，无同目录复用；review 时以 `rg -n "worktree add" scripts/rv_evidence/rv_anchor_cross_worktree.py` 佐证）。
+- [x] rv-1、rv-2、rv-3 脚本通过且其实现满足保真度纪律（脚本源码中存在 `git worktree add` 双副本创建，无同目录复用；review 时以 `rg -n "worktree add" .iar/evidence/scripts/rv_anchor_cross_worktree.py` 佐证）。
 - [x] rv-6 并发原子性用例通过。
 - [x] rv-5：`uv run --no-sync pytest -o addopts=""` 全绿 + `just lint --full` 全部 hook Passed（附计数输出）。
 - [~] rv-7 live 档：执行则附两次 `iar run` 的 prompt 注入证据；未执行则在证据包中显式标注"opt-in 未执行，最高可行保真档为 rv-1/rv-2/rv-3"。

@@ -2401,12 +2401,12 @@ iar issue create        PRD 含 Realistic Validation 清单
 agent 执行              prompt 强制要求实跑验证计划，证据写入 worktree 的
                         .iar/evidence/（runner 在 worktree 创建时写入
                         git info/exclude，证据永远进不了代码 diff）。
-                        仅用于截图采集、临时 server 或探针的辅助脚本也必须
-                        留在 .iar/evidence/scripts/。只有 PRD 明确需要 keda
-                        后续复跑的脚本才可提交，且必须命名为
-                        scripts/rv_evidence/rv-<item-number>-<slug>.*；
-                        scripts_evidence/、scripts/evidence/ 与
-                        scripts/evidence_helpers/ 会被门禁打回 recovery。
+                        所有 RV 脚本——截图采集、临时 server、探针，以及被
+                        evidence.json command 引用的可复跑 oracle——一律留在
+                        .iar/evidence/scripts/，没有例外，任何 RV 脚本都不得
+                        进入代码 diff。门禁按"目录前缀 + rv-<n>- 命名"两条规则
+                        识别错放并打回 recovery；已提交在树里的历史违规只记
+                        WARNING 日志，不阻塞交付。
                         带 iar:structured-evidence marker 的 Issue 还必须写
                         .iar/evidence/evidence.json manifest，按 checklist item
                         分组描述命令、关键输出摘要、解释、风险及关联证据文件。
@@ -2544,7 +2544,9 @@ verifier 以 `capture_output` 运行，输出不进 stdout、也不逐行落日�
 - `items` 必须覆盖 Realistic Validation checklist 的全部 item，每个 item 出现一次。
 - 每个 item 必填字段：`item_number`、`item_name`、`command`、`evidence_files`、`output_summary`、`explanation`、`risks`。
 - `evidence_files` 可有多个文件；每个文件必须存在于 `.iar/evidence/`，且文件名匹配 `rv-<item_number>-*` 或 `rv-<item_number>.*`。**条目只写纯文件名**（`"rv-1-run.txt"`），不带 `.iar/evidence/` 等目录前缀——存在性按 `evidence_dir / file_name` 解析；这与同一 manifest 中 `expected_artifacts[].path` 使用 worktree 相对路径的约定相反，是历史上 agent 最容易写错的一处。写成带前缀的路径时 runner 会剥掉目录并 warning 放过，不再判红。
-- `command` 必须是可独立复现、自终止的检查命令。如果 PRD 要求的命令涉及多行 Python 或复杂 setup，应将其落到已跟踪的 `scripts/rv_evidence/rv-<item-number>-<slug>.*` 并在 `command` 中引用；避免把内联 `python -c "..."` 写进 manifest，否则 runner 复跑时难以维护，也容易被 keda 判定为不可复现。截图采集、临时 server、探针等仅用于取证的辅助脚本必须放 `.iar/evidence/scripts/`，不会被 runner 修改或提交；每次复跑覆盖的是 `.iar/evidence/` 下的证据产物。
+- `command` 必须是可独立复现、自终止的检查命令。如果命令涉及多行 Python 或复杂 setup，应将其落到 `.iar/evidence/scripts/` 下的独立脚本并在 `command` 中引用；避免把内联 `python -c "..."` 写进 manifest，否则 runner 复跑时难以维护，也容易被 keda 判定为不可复现。**所有 RV 脚本一律放 `.iar/evidence/scripts/`，不存在可提交到代码树的例外**；每次复跑覆盖的是 `.iar/evidence/` 下的证据产物，不是脚本本身。
+- 证据分支会连同 `.iar/evidence/scripts/` 下的 oracle 源码一起上传（树形因此可含 `scripts/` 子目录，PR 评论中的条目名带相对路径前缀），审阅者能读到产出证据的断言本身。也因此 **oracle 脚本同样不得含密钥**。
+- 复跑缓存键并入 oracle 目录的内容摘要：命令字符串不变但脚本被改写时，缓存必然失效并真实重跑，不会用旧 oracle 的结论蒙混。
 - runner 在渲染 PR comment 时重新计算每个证据文件的 SHA-256，展示短 hash 与完整 hash。
 
 ### Reviewer 验收流程

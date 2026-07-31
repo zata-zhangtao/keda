@@ -62,6 +62,7 @@ from backend.core.use_cases.agent_runner_validation import (
     ensure_validation_evidence_ready,
     format_validation_evidence_detail,
     format_validation_evidence_failure,
+    warn_legacy_evidence_helpers,
 )
 
 
@@ -375,7 +376,10 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
         # Phase 3.5: Realistic Validation 证据门禁（要求验证且无豁免时）
         try:
             ensure_validation_evidence_ready(issue, worktree_path, config, process_runner)
-            ensure_no_misplaced_evidence_helpers(worktree_path, process_runner)
+            ensure_no_misplaced_evidence_helpers(worktree_path, config, process_runner)
+            # 存量违规只告警不阻塞：前瞻守卫只看本次变更，历史交付留在主干里的
+            # 取证脚本否则永远不可见。
+            warn_legacy_evidence_helpers(worktree_path, config, process_runner)
             ensure_validation_commands_pass(issue, worktree_path, config, process_runner)
             # Phase 3.6: independent verifier (pre-PR; red -> this same recovery
             # loop auto-repairs, bounded; escalates to a human only on exhaustion).

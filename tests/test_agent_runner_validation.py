@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ from backend.core.use_cases.agent_runner_validation import (
     ensure_validation_evidence_ready,
     evidence_branch_name,
     evidence_format_check_required,
+    evidence_oracle_digest,
     demanded_evidence_kinds,
     extract_evidence_format_markers,
     extract_evidence_format_waiver_reason,
@@ -44,6 +46,7 @@ from backend.core.use_cases.agent_runner_validation import (
     format_validation_waiver_marker,
     has_validation_waiver_marker,
     list_evidence_files,
+    list_evidence_upload_files,
     parse_latest_evidence_marker,
     parse_pr_number,
     parse_validation_checklist_state,
@@ -53,6 +56,7 @@ from backend.core.use_cases.agent_runner_validation import (
     reset_validation_checklist,
     upload_evidence_branch,
     validation_required,
+    warn_legacy_evidence_helpers,
 )
 from backend.core.use_cases.agent_runner_structured_evidence import (
     format_structured_evidence_marker,
@@ -225,8 +229,11 @@ def test_build_validation_prompt_line() -> None:
     config = AppConfig()
     prompt_line = build_validation_prompt_line(_issue(), config)
     assert ".iar/evidence" in prompt_line
-    assert "scripts/rv_evidence/" in prompt_line
-    assert "scripts_evidence/" in prompt_line
+    # 唯一目的地：prompt 里不得再出现任何代码树落点。
+    assert ".iar/evidence/scripts/" in prompt_line
+    assert "scripts/rv_evidence/" not in prompt_line
+    assert "scripts_evidence/" not in prompt_line
+    assert "scripts/evidence_helpers/" not in prompt_line
     assert build_validation_prompt_line(_issue(body="plain"), config) == ""
 
 
@@ -252,7 +259,8 @@ def test_validation_evidence_failure_recovery_prompt_keeps_instruction() -> None
     assert "item 2 exited 2" in prompt
     assert "Run the validation plan for real" in prompt
     assert "do not fabricate evidence" in prompt
-    assert "scripts/rv_evidence/" in prompt
+    assert ".iar/evidence/scripts/" in prompt
+    assert "scripts/rv_evidence/" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -552,85 +560,154 @@ def test_ensure_no_evidence_paths_in_changes_blocks_leak(tmp_path: Path) -> None
         ensure_no_evidence_paths_in_changes(tmp_path, AppConfig(), fake_runner)
 
 
+def _status_runner(porcelain_stdout: str) -> FakeProcessRunner:
+    """Build a runner whose ``git status --porcelain -z`` returns the given output."""
+    return FakeProcessRunner(
+        responses={
+            ("git", "status", "--porcelain", "-z"): CommandResult(
+                command=("git", "status", "--porcelain", "-z"),
+                return_code=0,
+                stdout=porcelain_stdout,
+                stderr="",
+            )
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "misplaced_path",
     (
         "scripts_evidence/capture_voice_evidence.sh",
         "scripts/evidence/capture.py",
         "scripts/evidence_helpers/seed.py",
+        # 原豁免目录：本身已不再是合法去处。
+        "scripts/rv_evidence/rv-1-login.py",
+        # 与目录名无关：换任何新目录名，RV 条目命名依然被拦。
+        "scripts/rv_helpers/rv-2-probe.py",
+        "tools/probes/rv_3_check.py",
+        "RV-4-Shout.py",
     ),
 )
 def test_ensure_no_misplaced_evidence_helpers_enters_recovery(
     tmp_path: Path, misplaced_path: str
 ) -> None:
-    """错误路径的取证辅助脚本会被证据门禁拒绝。"""
-    fake_runner = FakeProcessRunner(
-        responses={
-            ("git", "status", "--porcelain", "-z"): CommandResult(
-                command=("git", "status", "--porcelain", "-z"),
-                return_code=0,
-                stdout=f"A  {misplaced_path}\0",
-                stderr="",
-            )
-        }
+    """任何进入代码变更的 RV 脚本都会被证据门禁拒绝。"""
+    fake_runner = _status_runner(f"A  {misplaced_path}\0")
+
+    with pytest.raises(ValidationEvidenceError, match="RV scripts must never enter the code diff"):
+        ensure_no_misplaced_evidence_helpers(tmp_path, AppConfig(), fake_runner)
+
+
+@pytest.mark.parametrize(
+    "allowed_path",
+    (
+        # 正常产品脚本不受影响——命名规则要求 rv 后面紧跟编号。
+        "scripts/migrate_users.py",
+        "scripts/rv_render_png.py",
+        "src/backend/core/use_cases/revenue.py",
+        # 证据目录内一律豁免，其内部结构不受限。
+        ".iar/evidence/scripts/rv-1-oracle.py",
+    ),
+)
+def test_ensure_no_misplaced_evidence_helpers_allows_legitimate_paths(
+    tmp_path: Path, allowed_path: str
+) -> None:
+    """产品脚本与证据目录内的 oracle 都不该被拦。"""
+    ensure_no_misplaced_evidence_helpers(
+        tmp_path, AppConfig(), _status_runner(f"A  {allowed_path}\0")
     )
 
-    with pytest.raises(ValidationEvidenceError, match="unsupported tracked paths"):
-        ensure_no_misplaced_evidence_helpers(tmp_path, fake_runner)
 
-
-def test_ensure_no_misplaced_evidence_helpers_allows_reusable_rv_script(tmp_path: Path) -> None:
-    """PRD 所需的可复跑 RV 脚本可以作为正常交付物保留。"""
-    fake_runner = FakeProcessRunner(
-        responses={
-            ("git", "status", "--porcelain", "-z"): CommandResult(
-                command=("git", "status", "--porcelain", "-z"),
-                return_code=0,
-                stdout="A  scripts/rv_evidence/rv-1-login.py\0",
-                stderr="",
-            )
-        }
-    )
-
-    ensure_no_misplaced_evidence_helpers(tmp_path, fake_runner)
-
-
-def test_ensure_no_misplaced_evidence_helpers_allows_untracked_rv_script_directory(
+def test_ensure_no_misplaced_evidence_helpers_expands_untracked_directory(
     tmp_path: Path,
 ) -> None:
-    """Git 收拢未跟踪目录时，目录内合规的 RV 脚本仍可通过。"""
+    """未跟踪目录只输出一行 ``?? dir/``，必须展开后逐文件判定。"""
     rv_script_path = tmp_path / "scripts" / "rv_evidence" / "rv-1-login.py"
     rv_script_path.parent.mkdir(parents=True)
     rv_script_path.write_text("print('ok')\n", encoding="utf-8")
+
+    with pytest.raises(ValidationEvidenceError, match="rv-1-login.py"):
+        ensure_no_misplaced_evidence_helpers(
+            tmp_path, AppConfig(), _status_runner("?? scripts/rv_evidence/\0")
+        )
+
+
+def test_warn_legacy_evidence_helpers_warns_without_blocking(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """已提交的历史违规只记 WARNING，不抛异常。"""
     fake_runner = FakeProcessRunner(
         responses={
-            ("git", "status", "--porcelain", "-z"): CommandResult(
-                command=("git", "status", "--porcelain", "-z"),
+            ("git", "ls-files", "-z"): CommandResult(
+                command=("git", "ls-files", "-z"),
                 return_code=0,
-                stdout="?? scripts/rv_evidence/\0",
+                stdout="scripts_evidence/capture.py\0src/backend/core/runtime.py\0",
                 stderr="",
             )
         }
     )
 
-    ensure_no_misplaced_evidence_helpers(tmp_path, fake_runner)
+    with caplog.at_level(logging.WARNING):
+        warn_legacy_evidence_helpers(tmp_path, AppConfig(), fake_runner)
+
+    assert "scripts_evidence/capture.py" in caplog.text
+    assert "src/backend/core/runtime.py" not in caplog.text
 
 
-def test_ensure_no_misplaced_evidence_helpers_rejects_misnamed_rv_script(tmp_path: Path) -> None:
-    """可提交的 RV 脚本必须带对应的 RV 编号。"""
+def test_warn_legacy_evidence_helpers_stays_silent_when_git_fails(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """告警路径不得因 git 失败中断交付。"""
     fake_runner = FakeProcessRunner(
         responses={
-            ("git", "status", "--porcelain", "-z"): CommandResult(
-                command=("git", "status", "--porcelain", "-z"),
-                return_code=0,
-                stdout="A  scripts/rv_evidence/capture_voice.py\0",
-                stderr="",
+            ("git", "ls-files", "-z"): CommandResult(
+                command=("git", "ls-files", "-z"),
+                return_code=128,
+                stdout="",
+                stderr="not a git repository",
             )
         }
     )
 
-    with pytest.raises(ValidationEvidenceError, match="invalid reusable RV script name"):
-        ensure_no_misplaced_evidence_helpers(tmp_path, fake_runner)
+    with caplog.at_level(logging.WARNING):
+        warn_legacy_evidence_helpers(tmp_path, AppConfig(), fake_runner)
+
+    assert caplog.text == ""
+
+
+def test_list_evidence_upload_files_recurses_while_listing_stays_flat(tmp_path: Path) -> None:
+    """上传清单递归取子目录，证据对账清单必须保持单层。"""
+    config = AppConfig()
+    evidence_dir = tmp_path / config.validation.evidence_dir
+    (evidence_dir / "scripts").mkdir(parents=True)
+    (evidence_dir / "rv-1-run.txt").write_text("out\n", encoding="utf-8")
+    (evidence_dir / "scripts" / "rv-1-oracle.py").write_text("print(1)\n", encoding="utf-8")
+    (evidence_dir / ".hidden.txt").write_text("skip\n", encoding="utf-8")
+
+    assert list_evidence_upload_files(tmp_path, config) == [
+        "rv-1-run.txt",
+        "scripts/rv-1-oracle.py",
+    ]
+    assert [path.name for path in list_evidence_files(tmp_path, config)] == ["rv-1-run.txt"]
+
+
+def test_evidence_oracle_digest_tracks_content(tmp_path: Path) -> None:
+    """oracle 内容变化必须改变摘要；目录缺失时摘要稳定。"""
+    config = AppConfig()
+    evidence_dir = tmp_path / config.validation.evidence_dir
+    evidence_dir.mkdir(parents=True)
+
+    assert evidence_oracle_digest(tmp_path, config) == "-"
+
+    oracle_path = evidence_dir / "scripts" / "rv-1-oracle.py"
+    oracle_path.parent.mkdir()
+    oracle_path.write_text("assert real_check()\n", encoding="utf-8")
+    original_digest = evidence_oracle_digest(tmp_path, config)
+    assert original_digest != "-"
+    assert evidence_oracle_digest(tmp_path, config) == original_digest
+
+    oracle_path.write_text("pass  # assertions gutted\n", encoding="utf-8")
+    assert evidence_oracle_digest(tmp_path, config) != original_digest
 
 
 # ---------------------------------------------------------------------------
@@ -679,6 +756,79 @@ def _evidence_worktree(tmp_path: Path) -> tuple[Path, Path]:
     (evidence_dir / "rv-1-shot.png").write_bytes(b"png")
     (evidence_dir / "rv-2-cli.txt").write_text("$ demo run\nok\n", encoding="utf-8")
     return tmp_path, evidence_dir
+
+
+class _SequencedMktreeRunner(FakeProcessRunner):
+    """FakeProcessRunner 变体：``git mktree`` 按调用顺序返回不同 tree SHA。
+
+    嵌套树要连续调用多次 ``mktree``（子树在前、根树在后），而基类按命令元组做
+    单值映射，无法区分同一命令的第 N 次调用。
+    """
+
+    def __init__(
+        self,
+        *,
+        responses: dict[tuple[str, ...], CommandResult],
+        mktree_shas: list[str],
+    ) -> None:
+        super().__init__(responses=responses)
+        self._pending_mktree_shas = list(mktree_shas)
+
+    def run(self, command: Sequence[str], **kwargs: object) -> CommandResult:  # type: ignore[override]
+        if list(command) == ["git", "mktree"]:
+            self.responses[("git", "mktree")] = CommandResult(
+                ("git", "mktree"), 0, f"{self._pending_mktree_shas.pop(0)}\n", ""
+            )
+        return super().run(command, **kwargs)  # type: ignore[arg-type]
+
+
+def test_upload_evidence_branch_nests_oracle_subdirectory(tmp_path: Path) -> None:
+    """``{evidence_dir}/scripts/`` 的 oracle 源码要以子树形式随证据上传。
+
+    ``git mktree`` 是扁平的：子目录必须先成树，父层再以 ``040000 tree <sha>``
+    引用它。少了这一步，审阅者在证据分支上只能看到产出物、看不到产出它的断言。
+    """
+    worktree_path, evidence_dir = _evidence_worktree(tmp_path)
+    oracle_path = evidence_dir / "scripts" / "rv-1-oracle.py"
+    oracle_path.parent.mkdir()
+    oracle_path.write_text("assert real_check()\n", encoding="utf-8")
+    config = AppConfig()
+    responses = {
+        ("git", "hash-object", "-w", "--", str(evidence_dir / "rv-1-shot.png")): CommandResult(
+            ("git",), 0, "blob1\n", ""
+        ),
+        ("git", "hash-object", "-w", "--", str(evidence_dir / "rv-2-cli.txt")): CommandResult(
+            ("git",), 0, "blob2\n", ""
+        ),
+        ("git", "hash-object", "-w", "--", str(oracle_path)): CommandResult(
+            ("git",), 0, "blob3\n", ""
+        ),
+        ("git", "commit-tree", "roottree", "-m", "Realistic Validation evidence for issue #42"): (
+            CommandResult(("git",), 0, "commit1\n", "")
+        ),
+    }
+    fake_runner = _SequencedMktreeRunner(responses=responses, mktree_shas=["subtree", "roottree"])
+
+    upload = upload_evidence_branch(
+        issue=_issue(),
+        worktree_path=worktree_path,
+        config=config,
+        process_runner=fake_runner,
+    )
+
+    assert upload is not None
+    assert upload.file_names == ("rv-1-shot.png", "rv-2-cli.txt", "scripts/rv-1-oracle.py")
+    mktree_inputs = [
+        fake_runner.input_texts[index]
+        for index, call in enumerate(fake_runner.calls)
+        if call == ["git", "mktree"]
+    ]
+    assert len(mktree_inputs) == 2
+    # 子树只含 basename，不含目录前缀。
+    assert mktree_inputs[0] == "100644 blob blob3\trv-1-oracle.py\n"
+    # 根树以 040000 tree 引用子树，模式位不是 40000 也不是 100644。
+    assert "040000 tree subtree\tscripts" in mktree_inputs[1]
+    assert "100644 blob blob1\trv-1-shot.png" in mktree_inputs[1]
 
 
 def test_upload_evidence_branch_uses_orphan_plumbing(tmp_path: Path) -> None:

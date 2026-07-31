@@ -39,6 +39,56 @@ def evidence_branch_name(issue_number: int, config: AppConfig) -> str:
     return f"{config.validation.branch_prefix}issue-{issue_number}"
 
 
+def _write_evidence_tree(
+    *,
+    blob_shas_by_path: dict[str, str],
+    worktree_path: Path,
+    process_runner: IProcessRunner,
+) -> str:
+    """Build a (possibly nested) git tree bottom-up and return its SHA.
+
+    ``git mktree`` 只接受单层条目,子目录必须先成树再由父层以
+    ``040000 tree <sha>`` 引用。走自底向上递归而非 ``GIT_INDEX_FILE`` 临时索引,
+    是因为 :class:`IProcessRunner` 的 ``run`` 没有 ``env`` 参数,临时索引方案需要
+    改动跨层接口。
+
+    Args:
+        blob_shas_by_path: 相对当前层的 POSIX 路径 → 已写入的 blob SHA。
+        worktree_path: git 命令的工作目录。
+        process_runner: 进程执行器。
+
+    Returns:
+        当前层的 tree SHA。
+    """
+    direct_blob_shas: dict[str, str] = {}
+    subdir_blob_shas: dict[str, dict[str, str]] = {}
+    for relative_path, blob_sha in blob_shas_by_path.items():
+        directory_name, separator, remainder = relative_path.partition("/")
+        if not separator:
+            direct_blob_shas[relative_path] = blob_sha
+            continue
+        subdir_blob_shas.setdefault(directory_name, {})[remainder] = blob_sha
+
+    mktree_entries = [
+        f"100644 blob {blob_sha}\t{file_name}"
+        for file_name, blob_sha in sorted(direct_blob_shas.items())
+    ]
+    for directory_name, nested_blob_shas in sorted(subdir_blob_shas.items()):
+        subtree_sha = _write_evidence_tree(
+            blob_shas_by_path=nested_blob_shas,
+            worktree_path=worktree_path,
+            process_runner=process_runner,
+        )
+        mktree_entries.append(f"040000 tree {subtree_sha}\t{directory_name}")
+
+    tree_result = process_runner.run(
+        ["git", "mktree"],
+        cwd=worktree_path,
+        input_text="\n".join(mktree_entries) + "\n",
+    )
+    return tree_result.stdout.strip()
+
+
 def upload_evidence_branch(
     *,
     issue: IssueSummary,
@@ -51,34 +101,36 @@ def upload_evidence_branch(
     使用 plumbing 命令构造树与无父提交，不触碰 worktree 的 HEAD / index：
 
     1. ``git hash-object -w`` 逐个写入 blob
-    2. ``git mktree`` 由 stdin 构造树对象
+    2. 自底向上 ``git mktree`` 构造(可含子目录的)树对象
     3. ``git commit-tree``（无 ``-p``）生成 orphan 提交
     4. ``git push --force`` 更新 ``refs/heads/<prefix>issue-<N>``
+
+    收集文件用 :func:`validation.list_evidence_upload_files` 而非单层的
+    ``list_evidence_files``:证据分支要连 ``{evidence_dir}/scripts/`` 下的 oracle
+    源码一起带走,审阅者才能看到产出这份证据的断言是怎么写的。
 
     Returns:
         EvidenceUpload；证据目录为空时返回 ``None``。
     """
-    evidence_files = validation.list_evidence_files(worktree_path, config)
-    if not evidence_files:
+    evidence_relative_paths = validation.list_evidence_upload_files(worktree_path, config)
+    if not evidence_relative_paths:
         return None
 
-    mktree_entries: list[str] = []
-    uploaded_names: list[str] = []
-    for evidence_file in evidence_files:
+    evidence_dir = validation.evidence_dir_path(worktree_path, config)
+    blob_shas_by_path: dict[str, str] = {}
+    for relative_path in evidence_relative_paths:
         blob_result = process_runner.run(
-            ["git", "hash-object", "-w", "--", str(evidence_file)],
+            ["git", "hash-object", "-w", "--", str(evidence_dir / relative_path)],
             cwd=worktree_path,
         )
-        blob_sha = blob_result.stdout.strip()
-        mktree_entries.append(f"100644 blob {blob_sha}\t{evidence_file.name}")
-        uploaded_names.append(evidence_file.name)
+        blob_shas_by_path[relative_path] = blob_result.stdout.strip()
+    uploaded_names = list(evidence_relative_paths)
 
-    tree_result = process_runner.run(
-        ["git", "mktree"],
-        cwd=worktree_path,
-        input_text="\n".join(mktree_entries) + "\n",
+    tree_sha = _write_evidence_tree(
+        blob_shas_by_path=blob_shas_by_path,
+        worktree_path=worktree_path,
+        process_runner=process_runner,
     )
-    tree_sha = tree_result.stdout.strip()
     commit_result = process_runner.run(
         [
             "git",

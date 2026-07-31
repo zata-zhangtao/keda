@@ -5,7 +5,9 @@
 - Root-level scripts should be reserved for stable entrypoints that are safe to reference from docs, `just`, tests, and agent instructions.
 - `hooks/` keeps agent session hook contract paths stable.
 - `codex/` holds Codex CLI helper integrations such as macOS Shortcut notifications.
-- `worktree/`, `template/`, `secrets/`, `release/`, `just/`, `diagnostics/`, and `rv_evidence/` hold implementation files grouped by responsibility.
+- `worktree/`, `template/`, `secrets/`, `release/`, `just/`, and `diagnostics/` hold implementation files grouped by responsibility.
+
+Realistic Validation scripts do **not** belong here. Every RV script — evidence capture, temporary setup, and reproducible oracles referenced by an `evidence.json` command alike — lives under `.iar/evidence/scripts/` in the executing worktree, is git-excluded, and reaches reviewers through the evidence branch. There is no committed location for them.
 
 When adding a new script:
 
