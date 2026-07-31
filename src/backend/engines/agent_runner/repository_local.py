@@ -155,7 +155,8 @@ def detect_git_repository_root(
 TOML_HEADER_COMMENT = """# IAR 本地仓库配置
 # `iar init` 会写入全部仓库级配置的默认值；这些值随后显式覆盖全局默认值。
 # 没有默认值的可选字段未写入时，才继承 config.toml / 环境变量的全局默认值。
-# 修改后无需重启 daemon，下一次轮询自动生效。
+# 本文件在 daemon 启动时读取一次：改完要重启 daemon 才生效（`iar run` 这类单轮
+# 命令每次调用都重新读取，无需重启）。
 # 完整字段说明见 docs/guides/agent-runner.md。
 """
 
@@ -265,7 +266,8 @@ _IAR_FIELD_COMMENTS: dict[str, str] = {
     "validation.reexecute_cache_enabled": "命中代码树指纹(HEAD^{tree})时跳过该项 RV 命令复跑,避免 blocked-continue/换 agent 重复跑（默认开;工作区脏则不缓存、照常复跑）",
     "validation.verifier_enabled": "是否启用独立 verifier agent 复验（默认开;开启后在开 PR 前换一个 agent 对抗复验,red 自动打回 builder）",
     "validation.verifier_agent": "verifier 用哪个 agent（auto=自动挑一个≠builder 的）",
-    "validation.verifier_timeout_seconds": "verifier agent 运行超时秒数（默认 1800）",
+    "validation.verifier_timeout_seconds": "verifier agent 运行墙钟超时秒数（默认 1800；多条 RV + negative control 的 PRD 需要更大值）",
+    "validation.verifier_inactivity_timeout_seconds": "verifier agent 连续多少秒没有任何输出才判卡死并杀掉（默认 1200；与墙钟并存，让墙钟可以放宽而真卡死仍被及时杀掉）",
     "validation.frontend_visual_evidence_required": "前端改动（git diff 命中 frontend_paths）是否强制证据目录含真实视觉文件(图片/视频),否则门禁失败(默认开;独立于 verifier)",
     "validation.frontend_paths": "判定为前端的目录前缀列表(默认 frontend-admin/frontend-public);runner 用它识别目标仓库的前端改动",
     "prompts.default_phase": "默认使用的 prompt 阶段",

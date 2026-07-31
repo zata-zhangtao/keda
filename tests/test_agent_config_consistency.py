@@ -50,6 +50,36 @@ def test_runner_timeout_settings_match_core() -> None:
     assert settings.inactivity_timeout_seconds == core.inactivity_timeout_seconds
 
 
+def test_factory_maps_verifier_timeouts() -> None:
+    """verifier 的两个超时值都必须活着走完 settings → factory → domain。
+
+    用非默认值验证:两侧默认值相同会掩盖漏掉的 factory 映射(域对象是运行时真正
+    被读的那一份)。
+    """
+    from backend.core.shared.models.agent_runner import ValidationConfig
+    from backend.engines.agent_runner.factory import build_app_config_from_settings
+    from backend.infrastructure.config.settings import AgentRunnerValidationSettings
+
+    assert (
+        AgentRunnerValidationSettings().verifier_timeout_seconds
+        == ValidationConfig().verifier_timeout_seconds
+    )
+    assert (
+        AgentRunnerValidationSettings().verifier_inactivity_timeout_seconds
+        == ValidationConfig().verifier_inactivity_timeout_seconds
+    )
+
+    settings = AgentRunnerSettings()
+    settings.validation = AgentRunnerValidationSettings(
+        verifier_timeout_seconds=7200,
+        verifier_inactivity_timeout_seconds=900,
+    )
+    app_config = build_app_config_from_settings(settings)
+
+    assert app_config.validation.verifier_timeout_seconds == 7200
+    assert app_config.validation.verifier_inactivity_timeout_seconds == 900
+
+
 def test_factory_maps_fix_agent_enabled() -> None:
     """fix_agent_enabled must match defaults and survive the factory mapping.
 

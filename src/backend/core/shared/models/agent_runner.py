@@ -410,6 +410,13 @@ class ValidationConfig:
     evidence directory holds at least one visual file (image/video). It is
     driven by the diff, not by checklist keywords, and is independent of
     ``verifier_enabled``; set it off to opt out per repository.
+
+    ``verifier_timeout_seconds`` 是墙钟上限,``verifier_inactivity_timeout_seconds``
+    是"多久没有任何输出就判卡死"。只有墙钟一条线时,"复跑 E2E 的慢 verifier"和
+    "彻底卡死的 verifier"没有区别:想让前者跑完就必须把墙钟拉长,而拉长同样惠及
+    后者。两条线并存后,墙钟可以按最慢的真实工作量给足(多条 RV + negative control
+    动辄超过半小时),真卡死仍在静默期结束时就被杀掉。语义与 builder 侧的
+    ``RunnerConfig.inactivity_timeout_seconds`` 相同,默认值也对齐。
     """
 
     enabled: bool = True
@@ -426,6 +433,7 @@ class ValidationConfig:
     verifier_enabled: bool = True
     verifier_agent: str = "auto"
     verifier_timeout_seconds: int = 1800
+    verifier_inactivity_timeout_seconds: int = 1200
     artifact_health_enabled: bool = True
     frontend_visual_evidence_required: bool = True
     frontend_paths: tuple[str, ...] = ("frontend-admin", "frontend-public")

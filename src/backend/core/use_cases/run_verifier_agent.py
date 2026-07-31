@@ -17,11 +17,16 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from backend.core.shared.interfaces.agent_runner import IGitHubClient, IProcessRunner
 from backend.core.shared.models.agent_runner import AppConfig, IssueSummary
+from backend.core.use_cases.agent_runner_evidence_snapshot import (
+    restore_evidence_snapshot,
+    snapshot_evidence_dir,
+)
 from backend.core.use_cases.agent_runner_structured_evidence import (
     EvidenceManifest,
     ValidationEvidenceError,
@@ -235,6 +240,60 @@ def _write_verifier_response_log(
     return response_log_path
 
 
+def _save_timed_out_verifier_response(
+    timeout_error: subprocess.TimeoutExpired,
+    *,
+    issue: IssueSummary,
+    verifier_agent: str,
+    builder_sha: str,
+    response_log_path: Path | None,
+) -> None:
+    """超时被杀时,把 verifier 已经产出的部分输出落盘。
+
+    verifier 以 ``capture_output`` 运行,输出既不进 stdout 也不逐行落日志:超时
+    这条路径上如果不落盘,一次"跑了半小时被杀"就只剩一行 ``timed out``,连它判
+    到第几项、是不是已经发现了问题都看不到。写盘只为可诊断性,失败不影响门禁。
+    """
+    partial_output = _decode_partial_stream(timeout_error.output)
+    partial_stderr = _decode_partial_stream(timeout_error.stderr)
+    _logger.error(
+        "Independent verifier (agent %r) timed out after %ss for Issue #%d; "
+        "captured %d chars of partial output before the kill.",
+        verifier_agent,
+        timeout_error.timeout,
+        issue.number,
+        len(partial_output),
+    )
+    if response_log_path is None:
+        return
+    _write_verifier_response_log(
+        response_log_path,
+        [
+            "# Independent verifier raw response (TIMED OUT — no verdict)",
+            f"# issue: #{issue.number}",
+            f"# verifier agent: {verifier_agent}",
+            f"# builder sha: {builder_sha}",
+            f"# timeout seconds: {timeout_error.timeout}",
+            f"# partial stdout chars: {len(partial_output)}",
+            f"# partial stderr chars: {len(partial_stderr)}",
+        ],
+        "\n".join(part for part in (partial_output, partial_stderr) if part),
+    )
+
+
+def _decode_partial_stream(stream_content: str | bytes | None) -> str:
+    """把 ``TimeoutExpired`` 上的部分输出统一成 ``str``。
+
+    同一个属性在 text 模式下是 ``str``、在 bytes 模式下是 ``bytes``,而超时路径
+    不该因为解码细节再抛一次异常。
+    """
+    if stream_content is None:
+        return ""
+    if isinstance(stream_content, bytes):
+        return stream_content.decode("utf-8", errors="replace")
+    return stream_content
+
+
 def run_verifier_agent(
     issue: IssueSummary,
     worktree_path: Path,
@@ -244,6 +303,7 @@ def run_verifier_agent(
     process_runner: IProcessRunner,
     *,
     timeout_seconds: int | None = None,
+    inactivity_timeout_seconds: int | None = None,
     response_log_path: Path | None = None,
 ) -> ValidationVerdict:
     """Run the independent verifier agent and return its parsed verdict.
@@ -254,22 +314,40 @@ def run_verifier_agent(
     是否启用、选哪个 agent、red 后如何 repair,由编排层决定。
 
     Args:
+        timeout_seconds: 墙钟上限。
+        inactivity_timeout_seconds: 连续无输出多久判卡死。与墙钟并存,让墙钟
+            能按最慢的真实工作量放宽,同时真卡死仍被及时杀掉。
         response_log_path: 可选,把原始响应写到这里供事后排查(见
             :func:`_write_verifier_response_log`)。
 
     Returns:
         ``ValidationVerdict``;verifier 的输出文本作为 ``findings`` 带回。
+
+    Raises:
+        subprocess.TimeoutExpired: verifier 超时被杀。抛出前先把已收到的部分
+            输出落盘,否则这一轮的判定过程完全无从查证。
     """
     prompt = build_verifier_prompt(issue, builder_sha, manifest)
-    result = run_agent_with_prompt_resilient(
-        verifier_agent,
-        prompt,
-        worktree_path,
-        process_runner,
-        capture_output=True,
-        timeout_seconds=timeout_seconds,
-        issue=issue,
-    )
+    try:
+        result = run_agent_with_prompt_resilient(
+            verifier_agent,
+            prompt,
+            worktree_path,
+            process_runner,
+            capture_output=True,
+            timeout_seconds=timeout_seconds,
+            inactivity_timeout_seconds=inactivity_timeout_seconds,
+            issue=issue,
+        )
+    except subprocess.TimeoutExpired as timeout_error:
+        _save_timed_out_verifier_response(
+            timeout_error,
+            issue=issue,
+            verifier_agent=verifier_agent,
+            builder_sha=builder_sha,
+            response_log_path=response_log_path,
+        )
+        raise
     response_text = extract_agent_response_text(result)
     verdict = parse_verifier_verdict(response_text, findings=response_text.strip()[:4000])
 
@@ -382,6 +460,11 @@ def run_verifier_gate(
 
     默认开(``verifier_enabled``)。仅对带 ``iar:structured-evidence`` marker、且要求验证的 issue 生效。
 
+    超时按运行事故处理而不是 verdict:墙钟(``verifier_timeout_seconds``)与静默期
+    (``verifier_inactivity_timeout_seconds``)两条线并存,超时不伪造 verdict,而是
+    先把部分输出落盘再让异常上抛。另外 verifier 复跑证据脚本会覆盖 builder 的
+    ``rv-*`` 文件,因此这里对证据目录做快照并在结束后恢复。
+
     Returns:
         ``ValidationVerdict`` 当 verifier 实际运行(verdict 非 red 时返回,red
         时抛异常);``None`` 当 verifier 未启用 / issue 不要求验证 / 无结构化证据
@@ -389,6 +472,7 @@ def run_verifier_gate(
 
     Raises:
         ValidationEvidenceError: verifier 判定 red(经 recovery 自动打回 builder)。
+        subprocess.TimeoutExpired: verifier 超时被杀(部分输出已落盘、证据已恢复)。
     """
     if not config.validation.verifier_enabled:
         return None
@@ -401,16 +485,27 @@ def run_verifier_gate(
     verifier_agent = _choose_verifier_agent(config, builder_agent)
     builder_sha = get_head_sha(worktree_path, process_runner)
     response_log_path = worktree_path / config.validation.evidence_dir / _VERIFIER_RESPONSE_FILENAME
-    verdict = run_verifier_agent(
-        issue,
-        worktree_path,
-        builder_sha,
-        manifest,
-        verifier_agent,
-        process_runner,
-        timeout_seconds=config.validation.verifier_timeout_seconds,
-        response_log_path=response_log_path,
-    )
+    # verifier 复跑的正是 builder 的 capture 脚本,会把 rv-*.txt 覆盖成自己的
+    # (可能是 negative control 的)输出;快照 + 恢复保证发布出去的仍是通过门禁
+    # 的那份证据。恢复放在 finally:超时被杀时污染最严重。
+    evidence_snapshot = snapshot_evidence_dir(worktree_path, config)
+    try:
+        verdict = run_verifier_agent(
+            issue,
+            worktree_path,
+            builder_sha,
+            manifest,
+            verifier_agent,
+            process_runner,
+            timeout_seconds=config.validation.verifier_timeout_seconds,
+            inactivity_timeout_seconds=config.validation.verifier_inactivity_timeout_seconds,
+            response_log_path=response_log_path,
+        )
+    finally:
+        restore_evidence_snapshot(
+            evidence_snapshot,
+            keep_filenames=(_VERIFIER_RESPONSE_FILENAME,),
+        )
     if verdict.blocks:
         raise ValidationEvidenceError(
             _format_verifier_block_message(

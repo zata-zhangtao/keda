@@ -571,6 +571,7 @@ class AgentRunnerValidationSettings(BaseModel):
     verifier_enabled: bool = True
     verifier_agent: str = "auto"
     verifier_timeout_seconds: int = 1800
+    verifier_inactivity_timeout_seconds: int = 1200
     artifact_health_enabled: bool = True
     frontend_visual_evidence_required: bool = True
     frontend_paths: list[str] = Field(default_factory=lambda: ["frontend-admin", "frontend-public"])

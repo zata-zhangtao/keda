@@ -308,7 +308,8 @@ uv run --project /path/to/keda iar init
 # IAR 本地仓库配置
 # `iar init` 会写入全部仓库级配置的默认值；这些值随后显式覆盖全局默认值。
 # 没有默认值的可选字段未写入时，才继承 config.toml / 环境变量的全局默认值。
-# 修改后无需重启 daemon，下一次轮询自动生效。
+# 本文件在 daemon 启动时读取一次：改完要重启 daemon 才生效（`iar run` 这类单轮
+# 命令每次调用都重新读取，无需重启）。
 # 完整字段说明见 docs/guides/agent-runner.md。
 
 # 仓库身份标识（用于多仓库管理时区分不同仓库）
@@ -2484,7 +2485,8 @@ reexecute_timeout_seconds = 300    # 复跑单条命令的超时秒数（命令�
 reexecute_cache_enabled = true     # 工作区干净时按 HEAD^{tree} 缓存"已通过"，跳过重复复跑；脏则不缓存
 verifier_enabled = true            # 开 PR 前换一个 ≠builder 的 agent 对抗复验;red 自动打回 builder,yellow 贴警告评论,green 打 validation/verifier-passed label。仅对带 iar:structured-evidence marker 且要求验证的 issue 生效
 verifier_agent = "auto"            # verifier 用哪个 agent（auto=自动挑一个≠builder 的）
-verifier_timeout_seconds = 1800    # verifier agent 运行超时秒数
+verifier_timeout_seconds = 1800    # verifier 运行墙钟上限；多条 RV + negative control 的 PRD 需要更大值
+verifier_inactivity_timeout_seconds = 1200  # 连续多少秒没有任何输出才判卡死；与墙钟并存，让墙钟能放宽而真卡死仍被及时杀掉
 frontend_visual_evidence_required = true   # 前端改动（git diff 命中 frontend_paths）强制证据含视觉文件(图片/视频);否则门禁失败。按 diff 判定,独立于 verifier
 frontend_paths = ["frontend-admin", "frontend-public"]  # 判定为前端的目录前缀;runner 用它识别目标仓库前端改动
 
@@ -2503,6 +2505,25 @@ verifier 以 `capture_output` 运行，输出不进 stdout、也不逐行落日�
 - **两种阻断成因分开表述**：verdict marker 缺失时仍按 fail-safe 阻断（绝不静默放行），但它是 **verifier 侧的协议/可靠性故障**，不代表 builder 的改动有缺陷。此时 attempt Detail 与 recovery prompt 明确写"NO verdict marker / verifier-side protocol failure / do not invent fixes"，并指向上面那份原始响应；只有真判 `red` 才说"Fix what the verifier found"。
 - **为什么必须区分**：`ValidationVerdict.findings` 总会被填入响应文本，所以"findings 是否为空"无法用来判断有没有 verdict——唯一可靠信号是 `marker_found`。混在一起时，verifier 只是漏了最后那行 marker，builder 却被指使去修一个不存在的发现，白烧一轮 attempt。
 - **排查顺序**：daemon 被 verifier 挡下时，先读 `verifier-response.txt`；若里面没有任何实际发现，问题在 verifier agent（考虑用 `verifier_agent` 显式指定一个稳定的 agent，而不是 `auto`），不在被验的代码。
+
+### verifier 超时：墙钟与静默期两条线
+
+verifier 拿到的任务是"自己复跑真实入口 + 逐个跑 negative control"。RV 条目多、且带 E2E 的 PRD，这份工作量动辄超过半小时，而 builder 侧的墙钟是 `runner.timeout_seconds`（默认 14400）。只有一条墙钟线时，"复跑 E2E 的慢 verifier"和"彻底卡死的 verifier"无法区分：想让前者跑完就得把墙钟拉长，而拉长同样惠及后者。
+
+- `verifier_timeout_seconds`：墙钟上限，按最慢的真实工作量给足。
+- `verifier_inactivity_timeout_seconds`：连续无输出多久判卡死，语义与 builder 侧 `runner.inactivity_timeout_seconds` 相同。两条线并存后墙钟可以放宽，真卡死仍在静默期结束时被杀。
+
+超时按**运行事故**处理，不伪造 verdict：
+
+- 被杀前收到的部分输出写进 `verifier-response.txt`，文件头标 `TIMED OUT — no verdict`。否则"跑了半小时被杀"在磁盘上什么都不留。
+- Issue 的失败评论只贴命令名 + 超时秒数 + 部分输出尾部。`subprocess.TimeoutExpired.__str__` 会把整条命令原样拼进消息，而 agent 命令里带着完整 prompt——以前一次 verifier 超时会把几千行 prompt 贴进评论，真正有用的信息反而被埋掉。
+- 超时不进 builder 的 recovery 循环（那是 `red` 的语义）：Issue 判 `agent/failed`，人看清原因后再 relabel 重跑。
+
+### verifier 复跑不得覆盖 builder 的最终树证据
+
+verifier 能跑的就是 builder 写进 manifest 的那些 capture 脚本，而脚本会把输出写回同一批 `rv-*.txt`；跑 negative control 时它还会故意把代码改红。于是 verifier 一跑，已经通过门禁的证据就被它自己的复跑结果覆盖，被超时杀掉时更糟——证据目录停在最后一个 negative control 的破坏态，而门禁早就通过了，这份自相矛盾的证据会照原样发布给人审。
+
+因此 verifier 启动前对 `<evidence_dir>` 做一份临时快照（落在系统临时目录，不进 worktree），verifier 结束后（拿到 verdict 或抛异常都一样）把被改写、被删除的文件恢复回 builder 版本，恢复清单记进日志。verifier 自己的产物（`verifier-response.txt`）不在恢复范围内；verifier 新建的其他文件保留——删掉别人刚写出来的文件比留下它风险更大，而新文件本身就是"verifier 动过证据目录"的可见线索。
 
 ### 前端改动强制真实视觉证据（fail-closed）
 

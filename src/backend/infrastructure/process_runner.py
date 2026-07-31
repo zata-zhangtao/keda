@@ -298,7 +298,10 @@ class SubprocessRunner:
                         logger.warning("%s", line.rstrip("\n"))
                         stderr_lines.append(line)
                 return_code = process.wait(timeout=timeout)
-                watchdog.raise_if_timed_out()
+                watchdog.raise_if_timed_out(
+                    partial_stdout="".join(stdout_lines),
+                    partial_stderr="".join(stderr_lines),
+                )
             except BaseException:
                 # BaseException 而不是 Exception：Ctrl-C（KeyboardInterrupt）也必须
                 # 拆掉整个进程组，否则子进程会变成孤儿继续跑。
@@ -367,7 +370,7 @@ def _run_captured_process(
         else:
             stdout, stderr = _communicate_with_activity_tracking(process, watchdog)
             process.wait()
-        watchdog.raise_if_timed_out()
+        watchdog.raise_if_timed_out(partial_stdout=stdout, partial_stderr=stderr)
     except BaseException:
         _terminate_process_tree(process)
         process.wait()
@@ -461,12 +464,25 @@ class _ProcessWatchdog:
         with self._output_lock:
             self._last_output_at = time.monotonic()
 
-    def raise_if_timed_out(self) -> None:
-        """Raise TimeoutExpired when the watchdog killed the process."""
+    def raise_if_timed_out(
+        self,
+        *,
+        partial_stdout: str | None = None,
+        partial_stderr: str | None = None,
+    ) -> None:
+        """Raise TimeoutExpired when the watchdog killed the process.
+
+        杀进程之前读到的输出必须跟着异常一起往上走。捕获模式下调用方拿不到
+        任何流式输出，如果这里把已收集的 stdout/stderr 丢掉，一次超时就等于
+        "什么都没发生"——比如 verifier agent 跑了半小时被杀，操作者只能看到
+        一条 "timed out"，看不到它当时判到哪一步。
+        """
         if self._timed_out:
             raise subprocess.TimeoutExpired(
                 cmd=list(self._command),
                 timeout=self._effective_timeout,
+                output=partial_stdout,
+                stderr=partial_stderr,
             )
 
     def _format_label(self) -> str:

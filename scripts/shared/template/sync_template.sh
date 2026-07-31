@@ -325,8 +325,14 @@ _is_upstream_owned() {
         # MySQL 专属规则并扩到 145 行,模板骨架只有 57 行）,归项目所有。
         docs/ai-standards/alembic.md) return 1 ;;
         docs/ai-standards/*) return 0 ;;
-        pytest.ini) return 0 ;;
-        ruff.toml) return 0 ;;
+        # pytest.ini / ruff.toml 归项目所有:两者都必须承载项目自己的 marker、
+        # per-file-ignores 与 addopts。keda 完全不用这两个文件（配置集中在
+        # pyproject.toml,独立文件的优先级更高会静默顶掉它）;freshai 用,但要在
+        # 里面加自己的 rv_negative_oracle marker 与 tests/fakes 的 D 豁免。
+        # 模板无法为任何一方做权威版本,声明所有权只会让 sync 反复要求覆盖,
+        # 直到某次真的覆盖掉、静默丢掉这些本地配置。
+        pytest.ini) return 1 ;;
+        ruff.toml) return 1 ;;
         .cursor/commands/cursor.md) return 0 ;;
         .cursor/rules/*) return 0 ;;
         .github/copilot-instructions.md) return 0 ;;

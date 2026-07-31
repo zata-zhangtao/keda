@@ -718,6 +718,48 @@ def test_subprocess_runner_kills_silent_process_on_inactivity_timeout(
         )
 
 
+def test_captured_timeout_exception_carries_partial_output(tmp_path: Path) -> None:
+    """墙钟超时被杀时,已收到的输出必须挂在异常上。
+
+    捕获模式下调用方拿不到任何流式输出,如果超时把已收集的 stdout 丢掉,一次
+    "跑了半小时被杀"就只剩一行 timed out——比如 verifier agent 被杀,操作者看
+    不到它判到哪一步。
+    """
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    runner = SubprocessRunner()
+    script = "import time\nprint('checked rv-1', flush=True)\ntime.sleep(60)\n"
+
+    with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+        runner.run(
+            [sys.executable, "-c", script],
+            cwd=tmp_path,
+            capture_output=True,
+            timeout=2,
+        )
+
+    assert "checked rv-1" in str(exc_info.value.output or "")
+
+
+def test_inactivity_timeout_exception_carries_partial_output(tmp_path: Path) -> None:
+    """静默期超时走另一条读取路径,同样必须带回部分输出。"""
+    from backend.infrastructure.process_runner import SubprocessRunner
+
+    runner = SubprocessRunner()
+    script = "import time\nprint('checked rv-1', flush=True)\ntime.sleep(60)\n"
+
+    with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+        runner.run(
+            [sys.executable, "-c", script],
+            cwd=tmp_path,
+            capture_output=True,
+            timeout=3600,
+            inactivity_timeout=2,
+        )
+
+    assert "checked rv-1" in str(exc_info.value.output or "")
+
+
 def test_subprocess_runner_keeps_active_process_alive(
     tmp_path: Path,
 ) -> None:

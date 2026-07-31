@@ -551,11 +551,11 @@ def format_failure_comment(
         lines.append(format_attempt_history(attempt_results))
         lines.append("")
 
-    lines.extend(["```text", str(exc), "```", ""])
+    lines.extend(["```text", summarize_failure_exception(exc), "```", ""])
     if isinstance(cause, subprocess.CalledProcessError):
         lines.extend([format_agent_execution_failure(cause), ""])
     elif cause is not None:
-        lines.extend(["```text", str(cause), "```", ""])
+        lines.extend(["```text", summarize_failure_exception(cause), "```", ""])
     if issue_number is not None:
         transition_label = _detect_transition_target_label(exc)
         if transition_label is not None and _is_completion_workflow_label(transition_label):
@@ -854,11 +854,41 @@ def format_agent_execution_failure(exc: BaseException) -> str:
                 f"Exception type: {type(exc).__name__}",
                 "Exception:",
                 "```text",
-                truncate_recovery_output(str(exc)),
+                truncate_recovery_output(summarize_failure_exception(exc)),
                 "```",
             ]
         )
     return "\n".join(lines)
+
+
+def summarize_failure_exception(exc: BaseException) -> str:
+    """Render an exception for failure comments without echoing the agent prompt.
+
+    ``subprocess.TimeoutExpired.__str__`` 把整条命令原样拼进消息里,而 agent 的
+    命令里带着完整 prompt——一次 verifier 超时因此让 Issue 评论变成几千行 prompt,
+    真正有用的信息(谁超时了、超时前输出了什么)反而被埋掉。``CalledProcessError``
+    早就在这里做了短命令名 + 截断输出的处理,超时只是漏了同一条路。
+
+    非超时异常按 ``str(exc)`` 原样返回,保持既有行为不变。
+    """
+    if not isinstance(exc, subprocess.TimeoutExpired):
+        return str(exc)
+    summary_lines = [
+        f"Command `{_agent_command_name(exc.cmd)}` timed out after {exc.timeout}s "
+        "and was terminated."
+    ]
+    for stream_label, stream_content in (("stdout", exc.output), ("stderr", exc.stderr)):
+        if not stream_content:
+            continue
+        summary_lines.extend(
+            [
+                f"Partial {stream_label} captured before the kill:",
+                truncate_recovery_output(str(stream_content)),
+            ]
+        )
+    if not exc.output and not exc.stderr:
+        summary_lines.append("No output was captured before the kill.")
+    return "\n".join(summary_lines)
 
 
 def _agent_command_name(command: object) -> str:

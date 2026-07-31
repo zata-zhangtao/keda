@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -483,6 +484,190 @@ def test_run_verifier_agent_response_log_failure_does_not_break_gate(
     )
 
     assert verdict.risk == "green"
+
+
+def test_run_verifier_agent_saves_partial_output_when_timed_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """超时被杀时,verifier 已经产出的部分输出必须落盘。
+
+    以前这条路径直接抛 TimeoutExpired,写盘发生在返回之后,于是"跑了半小时被杀"
+    在磁盘上什么都不留,Issue 评论里只剩一行 timed out。
+    """
+    from backend.core.use_cases import run_verifier_agent as rva
+
+    def _fake_resilient(agent_name, prompt, worktree_path, process_runner, **kwargs):
+        raise subprocess.TimeoutExpired(
+            cmd=[agent_name, "--prompt", prompt],
+            timeout=1800,
+            output="I checked rv-1 and rv-2, then started the rv-3 negative control",
+            stderr="",
+        )
+
+    monkeypatch.setattr(rva, "run_agent_with_prompt_resilient", _fake_resilient)
+    response_log_path = tmp_path / ".iar" / "evidence" / "verifier-response.txt"
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        rva.run_verifier_agent(
+            _issue(),
+            tmp_path,
+            "abc1234",
+            _manifest(),
+            "kimi",
+            FakeProcessRunner(),
+            timeout_seconds=1800,
+            response_log_path=response_log_path,
+        )
+
+    saved = response_log_path.read_text(encoding="utf-8")
+    assert "TIMED OUT" in saved
+    assert "# timeout seconds: 1800" in saved
+    assert "I checked rv-1 and rv-2, then started the rv-3 negative control" in saved
+
+
+def test_run_verifier_agent_passes_both_timeouts_to_the_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """墙钟与静默期两条线都要传下去,否则慢与卡死无法区分。"""
+    from backend.core.use_cases import run_verifier_agent as rva
+
+    captured_kwargs: dict = {}
+
+    def _fake_resilient(agent_name, prompt, worktree_path, process_runner, **kwargs):
+        captured_kwargs.update(kwargs)
+        return CommandResult((agent_name,), 0, format_verifier_verdict_marker("green"), "")
+
+    monkeypatch.setattr(rva, "run_agent_with_prompt_resilient", _fake_resilient)
+
+    rva.run_verifier_agent(
+        _issue(),
+        tmp_path,
+        "abc1234",
+        _manifest(),
+        "kimi",
+        FakeProcessRunner(),
+        timeout_seconds=7200,
+        inactivity_timeout_seconds=1200,
+    )
+
+    assert captured_kwargs["timeout_seconds"] == 7200
+    assert captured_kwargs["inactivity_timeout_seconds"] == 1200
+
+
+def test_run_verifier_gate_passes_configured_timeouts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """两个超时值都必须来自配置,不能在代码里写死。"""
+    from backend.core.use_cases import run_verifier_agent as rva
+
+    captured_kwargs: dict = {}
+
+    monkeypatch.setattr(rva, "load_evidence_manifest", lambda *a, **k: _manifest())
+    monkeypatch.setattr(rva, "get_head_sha", lambda *a, **k: "abc1234")
+
+    def _fake_run(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return ValidationVerdict(risk="green")
+
+    monkeypatch.setattr(rva, "run_verifier_agent", _fake_run)
+    config = AppConfig(
+        validation=ValidationConfig(
+            verifier_enabled=True,
+            verifier_timeout_seconds=7200,
+            verifier_inactivity_timeout_seconds=900,
+        )
+    )
+
+    rva.run_verifier_gate(_structured_issue(), tmp_path, config, FakeProcessRunner(), "claude")
+
+    assert captured_kwargs["timeout_seconds"] == 7200
+    assert captured_kwargs["inactivity_timeout_seconds"] == 900
+
+
+def _write_builder_evidence(tmp_path: Path) -> Path:
+    """在 worktree 里放一份 builder 的最终树证据,返回证据目录。"""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    (evidence_dir / "scripts").mkdir(parents=True, exist_ok=True)
+    (evidence_dir / "rv-1.txt").write_text("2 passed in 4.44s\n", encoding="utf-8")
+    (evidence_dir / "scripts" / "capture_rv-1.sh").write_text("pytest -q\n", encoding="utf-8")
+    return evidence_dir
+
+
+def test_run_verifier_gate_restores_evidence_the_verifier_overwrote(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """verifier 复跑 capture 脚本会覆盖 builder 证据,门禁必须把它恢复回去。
+
+    verifier 跑 negative control 时故意把代码改红,产出的红色输出会盖掉已经通过
+    门禁的 rv-*.txt;不恢复的话发布给人审的就是这份自相矛盾的证据。
+    """
+    from backend.core.use_cases import run_verifier_agent as rva
+
+    evidence_dir = _write_builder_evidence(tmp_path)
+    monkeypatch.setattr(rva, "load_evidence_manifest", lambda *a, **k: _manifest())
+    monkeypatch.setattr(rva, "get_head_sha", lambda *a, **k: "abc1234")
+
+    def _verifier_that_overwrites_evidence(*args, **kwargs):
+        (evidence_dir / "rv-1.txt").write_text("2 failed in 4.44s\n", encoding="utf-8")
+        (evidence_dir / "verifier-response.txt").write_text("my verdict", encoding="utf-8")
+        return ValidationVerdict(risk="green")
+
+    monkeypatch.setattr(rva, "run_verifier_agent", _verifier_that_overwrites_evidence)
+    config = AppConfig(validation=ValidationConfig(verifier_enabled=True))
+
+    rva.run_verifier_gate(_structured_issue(), tmp_path, config, FakeProcessRunner(), "claude")
+
+    assert (evidence_dir / "rv-1.txt").read_text(encoding="utf-8") == "2 passed in 4.44s\n"
+    # verifier 自己的响应日志是它的产物，不能被恢复覆盖掉。
+    assert (evidence_dir / "verifier-response.txt").read_text(encoding="utf-8") == "my verdict"
+
+
+def test_run_verifier_gate_restores_evidence_when_verifier_times_out(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """超时被杀是污染最严重的场景:证据停在最后一个 negative control 的破坏态。"""
+    from backend.core.use_cases import run_verifier_agent as rva
+
+    evidence_dir = _write_builder_evidence(tmp_path)
+    monkeypatch.setattr(rva, "load_evidence_manifest", lambda *a, **k: _manifest())
+    monkeypatch.setattr(rva, "get_head_sha", lambda *a, **k: "abc1234")
+
+    def _verifier_killed_mid_negative_control(*args, **kwargs):
+        (evidence_dir / "rv-1.txt").write_text("2 failed in 4.44s\n", encoding="utf-8")
+        raise subprocess.TimeoutExpired(cmd=["kimi"], timeout=1800)
+
+    monkeypatch.setattr(rva, "run_verifier_agent", _verifier_killed_mid_negative_control)
+    config = AppConfig(validation=ValidationConfig(verifier_enabled=True))
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        rva.run_verifier_gate(_structured_issue(), tmp_path, config, FakeProcessRunner(), "claude")
+
+    assert (evidence_dir / "rv-1.txt").read_text(encoding="utf-8") == "2 passed in 4.44s\n"
+
+
+def test_run_verifier_gate_keeps_files_the_verifier_created(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """只恢复被改写/删除的文件;verifier 新建的文件保留,删别人刚写的更危险。"""
+    from backend.core.use_cases import run_verifier_agent as rva
+
+    evidence_dir = _write_builder_evidence(tmp_path)
+    monkeypatch.setattr(rva, "load_evidence_manifest", lambda *a, **k: _manifest())
+    monkeypatch.setattr(rva, "get_head_sha", lambda *a, **k: "abc1234")
+
+    def _verifier_that_adds_a_file(*args, **kwargs):
+        (evidence_dir / "verifier-notes.txt").write_text("probe log", encoding="utf-8")
+        (evidence_dir / "rv-1.txt").unlink()
+        return ValidationVerdict(risk="green")
+
+    monkeypatch.setattr(rva, "run_verifier_agent", _verifier_that_adds_a_file)
+    config = AppConfig(validation=ValidationConfig(verifier_enabled=True))
+
+    rva.run_verifier_gate(_structured_issue(), tmp_path, config, FakeProcessRunner(), "claude")
+
+    # 被删掉的 builder 证据要回来，verifier 自己的新文件留着。
+    assert (evidence_dir / "rv-1.txt").read_text(encoding="utf-8") == "2 passed in 4.44s\n"
+    assert (evidence_dir / "verifier-notes.txt").is_file()
 
 
 def test_run_verifier_gate_missing_marker_message_does_not_blame_the_builder(

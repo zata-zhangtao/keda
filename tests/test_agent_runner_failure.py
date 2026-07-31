@@ -387,6 +387,50 @@ def test_format_failure_comment_omits_agent_prompt_from_cause() -> None:
     assert "usage limit exceeded" in body
 
 
+def test_format_failure_comment_summarizes_timeout_instead_of_echoing_prompt() -> None:
+    """超时异常的 str() 会回显整条命令(含完整 prompt),评论里必须换成摘要。
+
+    verifier 的 prompt 有几千行；以前一次 verifier 超时会把它整份贴进 Issue
+    评论，真正有用的"谁超时了、超时前输出了什么"反而被埋掉。
+    """
+    timeout_failure = subprocess.TimeoutExpired(
+        cmd=["kimi", "--prompt", "HUGE_VERIFIER_PROMPT" * 200],
+        timeout=1800,
+        output="I checked rv-1 and rv-2, then started rv-3",
+        stderr="",
+    )
+
+    body = format_failure_comment(timeout_failure)
+
+    assert "HUGE_VERIFIER_PROMPT" not in body
+    assert "Command `kimi` timed out after 1800s" in body
+    assert "I checked rv-1 and rv-2, then started rv-3" in body
+
+
+def test_format_failure_comment_timeout_without_output_says_so() -> None:
+    """没有任何部分输出时要说明清楚,而不是留一段空 code block。"""
+    body = format_failure_comment(
+        subprocess.TimeoutExpired(cmd=["kimi", "--prompt", "x"], timeout=60)
+    )
+
+    assert "No output was captured before the kill." in body
+
+
+def test_format_agent_execution_failure_summarizes_timeout() -> None:
+    """attempt Detail 走的是另一条分支,同样不能回显 prompt。"""
+    detail = format_agent_execution_failure(
+        subprocess.TimeoutExpired(
+            cmd=["kimi", "--prompt", "HUGE_VERIFIER_PROMPT" * 200],
+            timeout=1800,
+            output="partial finding",
+        )
+    )
+
+    assert "HUGE_VERIFIER_PROMPT" not in detail
+    assert "Command `kimi` timed out after 1800s" in detail
+    assert "partial finding" in detail
+
+
 def test_format_failure_comment_includes_recovery_guidance() -> None:
     """With an issue number, the comment must end with relabel recovery steps."""
     attempt_history = [
