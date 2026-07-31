@@ -30,6 +30,28 @@
 - 需要凭据、沙箱账号或外部服务时，验证命令必须用环境变量显式开启，并记录无凭据时仍需通过的 fallback 验证。
 - PRD 或 planning 任务必须写明真实入口、mock 边界、数据/环境需求、命令或人工沙箱流程，以及该验证是否阻塞验收。
 
+## Frontend Visual Validation Fidelity
+
+前端截图或录屏必须标注验证层级。不得把组件预览、临时路由或手工注入状态称为真实入口验证。
+
+验证层级：
+
+- `component preview`：直接渲染组件、使用 Storybook、创建临时预览路由，或手工注入 props/state
+- `production composition`：使用生产中的 Dialog、Portal、Provider、布局容器和响应式约束，但允许替换后端数据
+- `real user flow`：从项目真实页面入口操作，通过真实路由和交互到达目标状态
+- `live integration`：真实用户流程连接真实后端及必要外部服务
+
+规则：
+
+1. 前端视觉改动至少验证到 `production composition`。涉及弹窗、浮层、Portal、父级布局、滚动容器或响应式约束时，单独的 `component preview` 不得作为验收证据。
+2. 改动用户流程、请求结果状态或跨组件交互时，应优先通过 Playwright 或等价方式从真实页面入口到达目标状态。无法完成时，必须记录阻塞条件、实际验证层级和未覆盖风险。
+3. 后端依赖可以 mock，但与目标改动相关的生产布局边界不得 mock，包括实际父容器、Dialog/Portal、Provider、主题、字体、视口和响应式断点。
+4. 临时预览页只能用于开发诊断，不得单独证明真实入口可用，且必须在交付前删除。
+5. 视觉证据必须记录验证层级、进入目标状态的操作路径、mock 或手工注入边界、浏览器、视口、主题，以及截图对应的具体断言。
+6. 未执行真实用户流程时，结论必须写成“组件预览通过”或“生产组合验证通过”，不得写“真实验证通过”“完整流程通过”或“E2E 通过”。
+7. 涉及响应式布局或可变内容长度时，必须覆盖与风险对应的代表性边界，例如窄视口、长文本、多行内容或滚动状态。
+8. 生成截图本身不等于视觉验收通过。Agent 必须检查最终渲染结果，并说明证据如何证明目标问题已经解决。
+
 ## Python Test Workflow
 
 优先使用仓库现有命令：
@@ -43,6 +65,41 @@
 - `uv run python hooks/shared/check_architecture.py`
 - `uv run python hooks/shared/check_guidelines_consistency.py`
 - `uv run mkdocs build`
+
+## Guard Tests
+
+`tests/guards/` 下的测试是**守卫测试**：它们断言仓库自身的约定、hook 行为、
+构建脚本契约和公共 API 契约没被破坏，而不是验证业务功能逻辑。业务功能测试
+放在 `tests/` 根目录或 `tests/backend/`。
+
+### 失败时如何处理
+
+**守卫测试失败，修复触发它的源代码、配置或脚本，不要修改守卫测试本身来让
+测试通过。** 改测试让失败消失等于拆掉规则本身——失败本来就是在告诉你有人
+破坏了约定。例如 `test_alembic_migration_naming.py` 失败，说明某个迁移文件
+名违反了命名约定，正确做法是改那个迁移文件名，而不是放宽测试断言。
+
+仅当**约定本身需要变更**时才修改守卫测试，且必须同步更新对应的约定文档。
+
+### 为什么单独成目录
+
+守卫测试和业务测试混在一起时，AI 编码代理无法区分二者：它的默认目标是"让
+测试通过"，而改测试是最短路径。集中到 `tests/guards/` 并在每个文件头标注
+guard test，是为了让代理第一眼识别"这是规则本身，不是被规则约束的对象"。
+每个守卫测试的 module docstring 都以"守护 X 的守卫测试（guard test）"开头，
+并指向本节。守卫测试清单见 `tests/guards/README.md`。
+
+### 提交保护
+
+修改 `tests/guards/**` 会触发 pre-commit hook `check-guard-test-modification`：
+默认拒绝提交，提示确认这是有意的规则更新。确认后设置环境变量再提交：
+
+```bash
+GUARD_UPDATE_ACK=1 git commit ...
+```
+
+AI 代理默认不会设置该变量，因此会被 hook 拦下——这是"指令被忽略"时的最后一
+道硬门禁。
 
 ## Playwright Boundary
 
@@ -124,7 +181,7 @@ tests/playwright-e2e/test-results/2026-07-02T11-31-08/
 
 HTML 报告仍固定在 `tests/playwright-e2e/playwright-report/`，可用 `just e2e-report` 打开。
 
-`just test` 会先执行 `SKIP=check-test-flag just lint --full`；当测试最终通过时，会同时刷新 `just test` 与 full lint 的本地通过标记。若代码有效 tree 未变化，后续 `just lint --full` 可以复用该标记走快速路径，但提交门禁仍会检查 `just test` 标记。
+`just test`（local 档）会先读 `.last_tested_commit` 与 `.last_linted_commit` 两个本地通过标记：test 标记命中时直接跳过 pytest，lint 标记命中时跳过 lint 前置。当 `just test` 真正运行测试并通过后，会同时刷新 test 与 full lint 标记，避免刚跑完 `just test` 后再次执行完整 full lint。本地调用默认使用 `pytest -q` 以压低启动/格式化开销，CI 环境（`CI` 非空）下回退到 `-v` 以保留每条用例的结果输出。CI 环境同时禁用这两条快路径，强制走完整 lint + pytest，避免跨 job/host 的 flag 文件泄漏掩盖回归。提交门禁仍会检查 `just test` 标记。
 
 交付前建议：
 
@@ -148,6 +205,16 @@ HTML 报告仍固定在 `tests/playwright-e2e/playwright-report/`，可用 `just
 6. **前端强制视觉证据**：如果 PRD 涉及 `frontend-admin/` 或 `frontend-public/` 改动，证据目录必须包含至少一个 `.png`、`.jpg` 或 `.webm` 文件。
 7. **最终校验**：verifier 通过后，`just ai implement` 运行 `scripts/shared/just/check_prd_evidence.sh` 再次确认前端视觉证据存在，缺少则阻止流程结束。
 8. **工具不可用**：verifier 默认工具不可用时，降级到与 executor 相同工具；相同工具也不可用时，流程暂停并提示人工，不自动回退到 executor 自检。
+
+### 证据链完整性
+
+可执行 oracle 除了 `real_entry` 与预期结果，还必须记录关键值来源、必须穿过的真实边界、禁止的旁路、fresh-state 独立观察，以及证据对应的最终代码树。具体要求：
+
+- UI 显示或复制的 URL、token、ID、命令、载荷必须从 UI 原样提取并用于后续动作，禁止重构等价值或硬编码替代路径。
+- 写 API 返回成功后，必须用新的 browser/request/process/DB session 经消费者入口读取，证明事务提交与持久化已经完成。
+- 前端流程必须断言浏览器实际请求的 canonical path、method 与 contract；已知 legacy/重复前缀需有负断言。
+- 影响入口、关键值构造、代理/路由、事务、存储、消费者或断言的相关改动会使旧证据失效，必须在最终代码树重新收集。
+- 真实运行或现场报告反驳已归档的 verifier `PASS` 时，旧验收立即失效；重开或创建关联回归 PRD，修复并重新独立验收后才能再次归档。
 
 人工终点审查时，按风险地图顺序查看证据包，重点抽查高风险 oracle 结果、前端截图/录屏和 verifier report。
 
