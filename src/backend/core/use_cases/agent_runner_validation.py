@@ -128,6 +128,15 @@ _MISPLACED_EVIDENCE_HELPER_PREFIXES = (
 # 都拦不住。误伤面很窄——只作用于**新增**文件的 basename,而产品代码里以
 # ``rv`` 开头的文件名本就罕见;真撞上时错误信息会直接给出正确去处。
 _RV_ORACLE_NAME_PATTERN = re.compile(r"^rv[-_]", re.IGNORECASE)
+# 命名规则只作用于**脚本**。证据产物(``rv-1-login.png``/``.txt``/``.webm``)是
+# 另一回事:部分下游仓库按 ``docs/ai-standards/testing.md`` 的规定把证据归档到
+# ``tasks/evidence/<prd-basename>/`` 并有 ``check_prd_evidence.sh`` 兜底,那是
+# 有文档、有工具背书的既定做法。本门禁的错误信息写的是"RV scripts must never
+# enter the code diff",拿它去拦一张 PNG 既不自洽,也会把那套流程直接打断。
+# "证据产物该不该进版本库"与本规则正交,应单独决策。
+_RV_SCRIPT_SUFFIXES = frozenset(
+    {".py", ".sh", ".bash", ".zsh", ".js", ".cjs", ".mjs", ".ts", ".rb", ".pl", ".ps1"}
+)
 _EVIDENCE_ORACLE_SUBDIR = "scripts"
 
 
@@ -958,8 +967,10 @@ def is_misplaced_evidence_helper(repo_relative_path: str, config: AppConfig) -> 
 
     1. 落在证据目录下 → 合法。证据目录是 RV 脚本的唯一归宿,其内部结构不受限。
     2. 命中历史上被反复误用的目录前缀 → 错放。
-    3. 文件名以 ``rv-``/``rv_`` 开头(``rv-1-login.py``、``rv_capture.sh`` 均算)
-       → 错放。这条与目录名无关,换个新目录名规避不掉。
+    3. 文件名以 ``rv-``/``rv_`` 开头**且**是脚本后缀(``rv-1-login.py``、
+       ``rv_capture.sh`` 均算) → 错放。这条与目录名无关,换个新目录名规避不掉;
+       但只管脚本——``rv-1-login.png`` 这类证据产物由别的规则管,见
+       :data:`_RV_SCRIPT_SUFFIXES`。
     4. 其余 → 合法。产品脚本(如 ``scripts/migrate_users.py``)不受影响。
 
     Args:
@@ -977,7 +988,11 @@ def is_misplaced_evidence_helper(repo_relative_path: str, config: AppConfig) -> 
         return False
     if normalized_path.startswith(_MISPLACED_EVIDENCE_HELPER_PREFIXES):
         return True
-    return bool(_RV_ORACLE_NAME_PATTERN.match(Path(normalized_path).name))
+    candidate_name = Path(normalized_path)
+    return bool(
+        _RV_ORACLE_NAME_PATTERN.match(candidate_name.name)
+        and candidate_name.suffix.lower() in _RV_SCRIPT_SUFFIXES
+    )
 
 
 def _expand_changed_path(worktree_path: Path, changed_path: str) -> list[str]:

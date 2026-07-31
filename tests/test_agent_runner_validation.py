@@ -590,6 +590,7 @@ def _status_runner(porcelain_stdout: str) -> FakeProcessRunner:
         "scripts/rv_capture.sh",
         "scripts/rv_render_png.py",
         "scripts/rv_setup_fixture.py",
+        "tools/rv-probe.cjs",
     ),
 )
 def test_ensure_no_misplaced_evidence_helpers_enters_recovery(
@@ -614,6 +615,13 @@ def test_ensure_no_misplaced_evidence_helpers_enters_recovery(
         # 证据目录内一律豁免，其内部结构不受限。
         ".iar/evidence/scripts/rv-1-oracle.py",
         ".iar/evidence/scripts/rv_capture.sh",
+        # 证据**产物**不归本规则管：下游按 docs/ai-standards/testing.md 把
+        # 截图/日志归档到 tasks/evidence/<prd>/，拿"RV scripts must never enter
+        # the code diff"去拦一张 PNG 既不自洽，也会打断那套既定流程。
+        "tasks/evidence/P1-FEAT-20260716-x/rv-1-share.png",
+        "tasks/evidence/P1-FEAT-20260722-y/rv-3-pytest.txt",
+        "tasks/evidence/P1-FEAT-20260722-y/rv-7-admin.webm",
+        "tasks/evidence/P1-FEAT-20260728-z/rv-13.html",
     ),
 )
 def test_ensure_no_misplaced_evidence_helpers_allows_legitimate_paths(

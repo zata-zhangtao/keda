@@ -611,7 +611,7 @@ flowchart TD
 
 - **FR-1**：给执行 Agent 的执行指令与恢复指令中，不得存在任何位于代码树的 RV 脚本目的地；唯一目的地为证据目录下的 `scripts/` 子目录。
 - **FR-2**：门禁必须拒绝落在四个禁止目录前缀（原三个 + 原豁免目录）下的变更路径。
-- **FR-3**：门禁必须拒绝文件名以 `rv-` / `rv_`（忽略大小写）开头且不位于证据目录内的新增路径，判定不依赖目录名。规则刻意不要求前缀后跟条目编号——按用途命名的取证脚本（`rv_capture.sh`、`rv_setup_fixture.py`）带编号的规则一个都拦不住。前缀相近的产品命名（`revenue.py`、`rvalue_cache.py`、`review.py`）不得误伤。
+- **FR-3**：门禁必须拒绝文件名以 `rv-` / `rv_`（忽略大小写）开头、**后缀为脚本类型**（`.py/.sh/.bash/.zsh/.js/.cjs/.mjs/.ts/.rb/.pl/.ps1`）且不位于证据目录内的新增路径，判定不依赖目录名。规则刻意不要求前缀后跟条目编号——按用途命名的取证脚本（`rv_capture.sh`、`rv_setup_fixture.py`）带编号的规则一个都拦不住。两侧边界都必须锁定：前缀相近的产品命名（`revenue.py`、`rvalue_cache.py`、`review.py`）不得误伤；证据**产物**（`tasks/evidence/<prd>/rv-1-x.png|txt|webm|html`）不归本规则管——那是 `docs/ai-standards/testing.md` 规定、`check_prd_evidence.sh` 兜底的既定归档流程，拿"RV scripts must never enter the code diff"去拦一张 PNG 既不自洽也会打断该流程。
 - **FR-4**：位于证据目录内的任何路径一律放行，不受 FR-2 / FR-3 约束。
 - **FR-5**：前瞻守卫与存量扫描必须共用同一个判定谓词，不得各自实现。
 - **FR-6**：门禁必须对 `git ls-files` 全量结果执行一次存量违规扫描，命中时输出 WARNING 级日志并列出路径，且不得抛出异常或以任何方式阻塞交付；git 命令失败时静默跳过。
@@ -648,6 +648,7 @@ flowchart TD
 | `agent_runner_validation.py` 交付后为 997 非空行，距 1000 行警告线仅 3 行 | 已实测 | 本次 hook Passed，但余量已耗尽。**下一次改该文件前应先执行 file-line-split PRD 第 ⑦ 批**（validators / evidence / gate 三段拆，目标 ≤800）。本次新增的 `is_misplaced_evidence_helper` / `_expand_changed_path` / `warn_legacy_evidence_helpers` / `list_evidence_upload_files` / `evidence_oracle_digest` 全部内聚于 "evidence" 块，可整体搬迁。 |
 | 交付过程中发现 7 个根级历史取证脚本 | 已处理（FR-14） | `rv_capture.sh`（自述"RV capture script for Issue #115"）等 7 个，全部 RV 专用、无任何 `just`/docs/tests/src 引用，已删除。它们暴露出原 `rv[-_]\d+[-_]` 规则的盲区（按用途命名而非按条目编号），规则已放宽到 `rv[-_]`。内容可从 `git show e2829f4^:scripts/<name>` 取回。 |
 | 命名规则放宽到 `rv[-_]` 后的误报风险 | 已接受的取舍 | 只作用于**新增**文件的 basename，产品代码里以 `rv` 开头的文件名本就罕见；`revenue.py` / `rvalue_cache.py` / `review.py` 三个近似前缀已加放行用例锁定。真撞上时错误信息直接给出正确去处，且属可恢复失败。相比之下，被否决的"反查清单引用"方案会误拒"新增产品脚本并以其为 RV 真实入口"这一常见形态，风险高一个量级。 |
+| 证据产物进版本库这件事本身，keda 与模板标准互相矛盾 | **未决，需单独决策** | keda 的执行指令写"Never put evidence files under version control"，而 `docs/ai-standards/testing.md`（模板仓下发）要求把截图/日志按 `rv-id` 归档到 `tasks/evidence/<prd-basename>/`，并有 `scripts/shared/just/check_prd_evidence.sh` 兜底。freshai 已按后者积累 9 个 PRD、47 个文件。两条规则长期并存且互相打脸，只是旧门禁从不检查 `tasks/evidence/` 才没爆。本 PRD 放宽命名规则时一度把它们全判为错放（回归，已修：命名规则加脚本后缀限定）。**这个矛盾本身不在本 PRD 范围内**——要么 keda 承认"归档到 tasks/evidence/ 是合法例外"并写进 prompt，要么模板标准改口，需要你定。 |
 | `roadmap_realistic_validation.py` 这类中性命名的 RV harness 仍拦不住 | 残留边界 | 本次已手工删除该文件，但规则键在 `rv-`/`rv_` 前缀、不在意图，同形态再出现不会被拦。主要防线仍是 prompt 不再提供代码树目的地；门禁是 backstop。rv-2 的 negative control 显式记录这一边界。 |
 
 ## 13. Decision Log
