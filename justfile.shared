@@ -1217,7 +1217,15 @@ sync-template flags="":
     else
         # Local mode relies on pytest.ini addopts to exclude slow/real_api/redis
         # markers and to enable pytest-xdist parallel execution.
-        uv run pytest tests/ "$pytest_verbosity_flag" --no-header -p no:cacheprovider || pytest_exit_code=$?
+        # 本地档测试目标。默认全量 `tests/`（靠 pytest.ini 的 addopts 排除
+        # slow/real_api/redis 并开 xdist）。测试套件规模差异极大——同一个默认值
+        # 在一个仓 19 秒、在另一个仓 45 分钟以上,而 check-test-flag 是提交硬门禁,
+        # 所以必须可按项目收窄。项目在自己的 .env / shell 里设
+        # `JUST_LOCAL_TEST_TARGET=tests/core` 即可,全量覆盖仍由 CI 与
+        # `just test full` 承担。用环境变量而非 just 变量:`import` 进来的变量
+        # 不允许被导入方重定义（just 1.53 报 "multiple definitions"）。
+        local_test_target="${JUST_LOCAL_TEST_TARGET:-tests/}"
+        uv run pytest "$local_test_target" "$pytest_verbosity_flag" --no-header -p no:cacheprovider || pytest_exit_code=$?
     fi
 
     if [ "$pytest_exit_code" -ne 0 ]; then
