@@ -128,6 +128,8 @@ _RV_ORACLE_NAME_PATTERN = re.compile(r"^rv[-_]", re.IGNORECASE)
 _RV_SCRIPT_SUFFIXES = frozenset(
     {".py", ".sh", ".bash", ".zsh", ".js", ".cjs", ".mjs", ".ts", ".rb", ".pl", ".ps1"}
 )
+_EVIDENCE_UPLOAD_SKIP_DIRS = frozenset({"__pycache__", "node_modules"})
+_EVIDENCE_UPLOAD_SKIP_SUFFIXES = frozenset({".pyc", ".pyo"})
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,12 @@ def list_evidence_upload_files(worktree_path: Path, config: AppConfig) -> list[s
             continue
         relative_path = candidate_path.relative_to(evidence_dir)
         if any(part.startswith(".") for part in relative_path.parts):
+            continue
+        # Python 字节码缓存不是证据:oracle 一旦被 pytest 收集过,
+        # ``__pycache__/*.pyc`` 就会出现在证据目录里,推到证据分支纯属噪音。
+        if _EVIDENCE_UPLOAD_SKIP_DIRS.intersection(relative_path.parts):
+            continue
+        if relative_path.suffix in _EVIDENCE_UPLOAD_SKIP_SUFFIXES:
             continue
         relative_paths.append(relative_path.as_posix())
     return sorted(relative_paths)

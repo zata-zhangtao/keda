@@ -633,6 +633,20 @@ def test_ensure_no_misplaced_evidence_helpers_allows_legitimate_paths(
     )
 
 
+def test_list_evidence_upload_files_skips_bytecode_caches(tmp_path: Path) -> None:
+    """oracle 被 pytest 收集过会留下 __pycache__/*.pyc，不该推到证据分支。"""
+    evidence_dir = tmp_path / ".iar" / "evidence"
+    (evidence_dir / "scripts" / "__pycache__").mkdir(parents=True)
+    (evidence_dir / "rv-1-run.txt").write_text("captured\n", encoding="utf-8")
+    (evidence_dir / "scripts" / "rv-1-oracle.py").write_text("assert x\n", encoding="utf-8")
+    (evidence_dir / "scripts" / "__pycache__" / "rv-1-oracle.cpython-313.pyc").write_bytes(b"\x00")
+    (evidence_dir / "scripts" / "stray.pyc").write_bytes(b"\x00")
+
+    uploaded = list_evidence_upload_files(tmp_path, AppConfig())
+
+    assert uploaded == ["rv-1-run.txt", "scripts/rv-1-oracle.py"]
+
+
 def test_ensure_no_misplaced_evidence_helpers_expands_untracked_directory(
     tmp_path: Path,
 ) -> None:
