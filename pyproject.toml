@@ -75,6 +75,13 @@ dev = [
     "socksio>=1.0.0",
 ]
 
+# 上游模板仓 zata-codes-template 另有独立的 pytest.ini 与 ruff.toml。keda 刻意
+# 不采用它们:独立配置文件的优先级**高于** pyproject.toml 的对应段落,一旦落地会
+# 静默顶掉下面这两块。具体冲突:模板 pytest.ini 的
+# `addopts = -m 'not slow and not real_api and not redis' -n auto --dist=loadgroup`
+# 会覆盖 `--testmon` 增量模式并引入 xdist 并行;模板 ruff.toml 会整体接管 lint 规则集。
+# `sync_template.sh --list` 会持续把这两个文件报为 NEW,那是预期的,不是漏同步。
+# 要改用模板版本,必须同时删掉这里的对应段落并重跑全量测试确认行为一致。
 [tool.pytest.ini_options]
 addopts = "--testmon"
 
