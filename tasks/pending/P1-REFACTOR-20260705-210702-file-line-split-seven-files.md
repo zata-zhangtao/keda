@@ -33,7 +33,7 @@
   - `src/backend/api/cli_typer.py` ≤ 800
   - `src/backend/core/use_cases/run_agent_once.py` ≤ 800
   - `src/backend/core/use_cases/agent_runner_orchestrate.py` ≤ 800
-  - `src/backend/core/use_cases/agent_runner_validation.py` ≤ 800
+  - ~~`src/backend/core/use_cases/agent_runner_validation.py` ≤ 800~~ **已完成（2026-07-31）**：712 非空行
   - `src/backend/engines/agent_runner/factory.py` ≤ 800
   - `src/backend/infrastructure/github_client.py` ≤ 800
 - `hooks/shared/max_file_lines.allowlist.txt` 内容清零（条目数从 7 → 0）；新增条目若必要（无法拆分的小窗口）必须配套新审批的拆分子 PRD。
@@ -124,7 +124,13 @@
   - 拆分 `cli_typer.py` 时，按 typer sub-app（`registry_app` / `daemon_app` / `worktree_app` / `loop_app` / `workflow_app` 等）单独搬到 `src/backend/api/cli_typer_<group>.py`。
   - 拆分 `core/use_cases/run_agent_once.py` 时，按"格式化 / 重试环路 / 单次入口"三段拆为 `agent_command.py`（`format_command` / `choose_agent` 等纯函数）、`agent_run_loop.py`（`run_agent_until_committed` 与 retry/resilient 段）、`run_agent_once.py`（仅留 `run_once` 入口）。
   - 拆分 `agent_runner_orchestrate.py` 时，按 `_process_*` 路由函数拆为多个 `_process_<stage>.py` 或并入相邻 use_case。
-  - 拆分 `agent_runner_validation.py` 时，按"validators / evidence / gate"三块拆。
+  - ~~拆分 `agent_runner_validation.py` 时，按"validators / evidence / gate"三块拆。~~ **已完成（2026-07-31）**：
+    `agent_runner_validation_parsing.py`（287 行，markdown 解析 + waiver + prompt 文本，纯文本进出）、
+    `agent_runner_validation_checklist.py`（79 行，PR body 勾选清单区块 + `ValidationChecklistState`）、
+    本体保留证据目录与复跑门禁（712 行）。第三块"gate"没有新建文件——软门禁本就在既有的
+    `agent_runner_validation_gate.py`，勾选清单是它的输入侧，故拆为 checklist 模块与之配对。
+    `agent_runner_validation.py` 保留全部 39 个对外符号的 re-export，14 个 import 方零改动；
+    测试数 1817 前后一致，属纯搬家。
   - 拆分 `factory.py` 时，按"config builder / factories / repository resolvers"三块拆为 `config_builder.py` 与 `factories/` 子包。
   - 拆分 `github_client.py` 时，把 5 个 dataclass（`IssueSummary` / `PullRequestSummary` / `LabelConfig` / `PullRequestContext` / `GhAuthStatus`）搬到 `github_models.py`，`GitHubCliClient` 留原文件即可（搬迁 dataclass 不动逻辑、不动 import 边）。
 - Architecture pattern to preserve: 四层依赖方向 `api → core → engines → infrastructure` 严格不破；`core/` 不直连 `infrastructure/`；拆分只做"搬家 + 拆 import 行"，不动函数体。

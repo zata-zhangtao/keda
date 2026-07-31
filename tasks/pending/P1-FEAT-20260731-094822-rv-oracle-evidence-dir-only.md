@@ -570,7 +570,7 @@ flowchart TD
 - [x] 判定规则只有一份实现：`rg -n "_MISPLACED_EVIDENCE_HELPER_PREFIXES" src/` 仅命中常量定义与谓词函数各一处，前瞻守卫与存量扫描共用该谓词。
 - [x] `list_evidence_files` 仍为单层实现（`rg -n "def list_evidence_files" -A 14` 可见 `iterdir`），递归遍历由独立的 `list_evidence_upload_files` 承担，rv-7 证据证明二者语义未混。
 - [x] 未新增任何配置项：`git diff --name-only` 不含 `config.toml` / `.env.example`；`rg -n "evidence_helper_allowlist|rv_oracle" src/backend/core/shared/models/agent_runner.py src/backend/infrastructure/config/settings.py` 无输出。
-- [x] `agent_runner_validation.py` 非空行数记录在案且未越过 1000 行警告线：**997**（`grep -cv '^[[:space:]]*$'`），`Check max file lines (non-empty)` hook Passed。**余量仅 3 行**——下一次改动该文件前应先完成 file-line-split PRD 第 ⑦ 批拆分，见第 12 节。
+- [x] `agent_runner_validation.py` 非空行数记录在案且未越过 1000 行警告线：**712**（`grep -cv '^[[:space:]]*$'`），`Check max file lines (non-empty)` hook Passed。交付过程中该文件一度涨到 1025 行（越线，被 `--warn-only` 掩盖），已由 file-line-split PRD 第 ⑦ 批拆分解决：拆出 `agent_runner_validation_parsing.py` / `agent_runner_validation_checklist.py`。
 
 ### Behavior Acceptance
 
