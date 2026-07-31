@@ -320,8 +320,11 @@ _is_upstream_owned() {
         # Cross-cutting build scripts maintained by the template
         scripts/build/*) return 0 ;;
         # AI standards hub and shared tool configs
+        # 例外必须排在下面的 glob 之前——case 取首个匹配。
+        # alembic.md 的迁移命名/字符集约定按项目的数据库而定（freshai 写了
+        # MySQL 专属规则并扩到 145 行,模板骨架只有 57 行）,归项目所有。
+        docs/ai-standards/alembic.md) return 1 ;;
         docs/ai-standards/*) return 0 ;;
-        docs/architecture/system-design.md) return 0 ;;
         pytest.ini) return 0 ;;
         ruff.toml) return 0 ;;
         .cursor/commands/cursor.md) return 0 ;;
@@ -341,7 +344,6 @@ _is_upstream_owned() {
         tests/playwright-e2e/fixtures/*) return 0 ;;
         tests/playwright-e2e/page-objects/*) return 0 ;;
         tests/playwright-e2e/scripts/*) return 0 ;;
-        tests/playwright-e2e/support/*) return 0 ;;
         tests/playwright-e2e/*.config.ts) return 0 ;;
         tests/playwright-e2e/package.json) return 0 ;;
         tests/playwright-e2e/pnpm-lock.yaml) return 0 ;;
