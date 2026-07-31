@@ -119,9 +119,15 @@ _MISPLACED_EVIDENCE_HELPER_PREFIXES = (
     "scripts/evidence_helpers/",
     "scripts/rv_evidence/",
 )
-# RV 条目命名（``rv-1-``/``rv_1_`` 等）几乎不会出现在产品交付物上,因此可以
-# 独立于目录名识别错放的取证脚本——这是"换个新目录名规避"的兜底防线。
-_RV_ORACLE_NAME_PATTERN = re.compile(r"^rv[-_]\d+[-_]", re.IGNORECASE)
+# ``rv-``/``rv_`` 前缀几乎不会出现在产品交付物上,因此可以独立于目录名识别
+# 错放的取证脚本——这是"换个新目录名规避"的兜底防线。
+#
+# 刻意不要求前缀后跟条目编号(曾用 ``^rv[-_]\d+[-_]``):keda 自身就攒下了
+# ``rv_capture.sh``(自述 "RV capture script for Issue #115")、``rv_follow.py``、
+# ``rv_setup_fixture.py`` 一类按用途而非按条目命名的取证脚本,带编号的规则一个
+# 都拦不住。误伤面很窄——只作用于**新增**文件的 basename,而产品代码里以
+# ``rv`` 开头的文件名本就罕见;真撞上时错误信息会直接给出正确去处。
+_RV_ORACLE_NAME_PATTERN = re.compile(r"^rv[-_]", re.IGNORECASE)
 _EVIDENCE_ORACLE_SUBDIR = "scripts"
 
 
@@ -893,6 +899,13 @@ def ensure_validation_commands_pass(
                 "command passes (or correct the command). Set "
                 "`validation.reexecute_commands=false` to opt out."
             )
+        # 逐条记耗时：attempt 历史里的 ``rv_reexec`` 只有一个合计值，慢在哪一条
+        # 只能靠这条日志（例如一条 e2e 吃掉几百秒）。
+        _logger.info(
+            "Realistic Validation item %s re-executed in %.1fs.",
+            block.item_number,
+            result.duration_seconds,
+        )
         if cache_key is not None:
             newly_passed[cache_key] = datetime.now(timezone.utc).isoformat()
 
@@ -945,8 +958,8 @@ def is_misplaced_evidence_helper(repo_relative_path: str, config: AppConfig) -> 
 
     1. 落在证据目录下 → 合法。证据目录是 RV 脚本的唯一归宿,其内部结构不受限。
     2. 命中历史上被反复误用的目录前缀 → 错放。
-    3. 文件名是 RV 条目命名(``rv-1-``/``rv_1_`` 等) → 错放。这条与目录名无关,
-       换个新目录名规避不掉。
+    3. 文件名以 ``rv-``/``rv_`` 开头(``rv-1-login.py``、``rv_capture.sh`` 均算)
+       → 错放。这条与目录名无关,换个新目录名规避不掉。
     4. 其余 → 合法。产品脚本(如 ``scripts/migrate_users.py``)不受影响。
 
     Args:

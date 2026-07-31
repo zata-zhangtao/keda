@@ -17,6 +17,7 @@ from backend.core.shared.models.agent_runner import (
     IssueSummary,
 )
 from backend.core.use_cases.run_agent_once import (
+    AttemptPhaseTimer,
     AgentUnavailableError,
     MaxRetriesExceededError,
     PrdDeliveryError,
@@ -144,6 +145,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
             )
 
         attempt_started_mono = time.monotonic()
+        attempt_phases = AttemptPhaseTimer()
         attempt_started_iso = datetime.now(timezone.utc).isoformat()
         repo_id = _resolve_repo_id(issue, worktree_path)
 
@@ -151,27 +153,31 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
         try:
             if attempt_index == 0:
                 if prompt_override is not None:
-                    run_agent_with_prompt_resilient(
-                        selected_agent,
-                        prompt_override,
-                        worktree_path,
-                        process_runner,
-                        issue=issue,
-                        transient_retry_attempts=(config.runner.transient_retry_attempts),
-                        transient_retry_delay_seconds=(config.runner.transient_retry_delay_seconds),
-                        timeout_seconds=config.runner.timeout_seconds,
-                        inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
-                    )
+                    with attempt_phases.measure("agent"):
+                        run_agent_with_prompt_resilient(
+                            selected_agent,
+                            prompt_override,
+                            worktree_path,
+                            process_runner,
+                            issue=issue,
+                            transient_retry_attempts=(config.runner.transient_retry_attempts),
+                            transient_retry_delay_seconds=(
+                                config.runner.transient_retry_delay_seconds
+                            ),
+                            timeout_seconds=config.runner.timeout_seconds,
+                            inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
+                        )
                 else:
-                    run_agent(
-                        selected_agent,
-                        issue,
-                        worktree_path,
-                        config,
-                        process_runner,
-                        timeout_seconds=config.runner.timeout_seconds,
-                        inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
-                    )
+                    with attempt_phases.measure("agent"):
+                        run_agent(
+                            selected_agent,
+                            issue,
+                            worktree_path,
+                            config,
+                            process_runner,
+                            timeout_seconds=config.runner.timeout_seconds,
+                            inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
+                        )
             else:
                 long_term_store, skill_store = _resolve_memory_stores(worktree_path, config.memory)
                 recovery_prompt = build_recovery_prompt(
@@ -189,17 +195,18 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                 recovery_timeout = (
                     config.runner.recovery_timeout_seconds or config.runner.timeout_seconds
                 )
-                run_agent_with_prompt_resilient(
-                    selected_agent,
-                    recovery_prompt,
-                    worktree_path,
-                    process_runner,
-                    issue=issue,
-                    transient_retry_attempts=config.runner.transient_retry_attempts,
-                    transient_retry_delay_seconds=(config.runner.transient_retry_delay_seconds),
-                    timeout_seconds=recovery_timeout,
-                    inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
-                )
+                with attempt_phases.measure("agent"):
+                    run_agent_with_prompt_resilient(
+                        selected_agent,
+                        recovery_prompt,
+                        worktree_path,
+                        process_runner,
+                        issue=issue,
+                        transient_retry_attempts=config.runner.transient_retry_attempts,
+                        transient_retry_delay_seconds=(config.runner.transient_retry_delay_seconds),
+                        timeout_seconds=recovery_timeout,
+                        inactivity_timeout_seconds=config.runner.inactivity_timeout_seconds,
+                    )
         except AgentUnavailableError:
             # The agent CLI could not be launched; let the cross-agent fallback
             # skip to the next candidate instead of burning recovery attempts.
@@ -230,6 +237,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                         agent=selected_agent,
                         started_mono=attempt_started_mono,
                         started_iso=attempt_started_iso,
+                        phase_durations=attempt_phases.snapshot(),
                     ),
                     on_attempt_recorded,
                 ),
@@ -264,7 +272,8 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
             continue
 
         # Phase 2: 验证 agent 产出的代码（staging 之前）
-        verification_results = run_verification(worktree_path, config, process_runner)
+        with attempt_phases.measure("verification"):
+            verification_results = run_verification(worktree_path, config, process_runner)
         final_verification_results = verification_results
         try:
             ensure_verification_passed(verification_results)
@@ -292,6 +301,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                         agent=selected_agent,
                         started_mono=attempt_started_mono,
                         started_iso=attempt_started_iso,
+                        phase_durations=attempt_phases.snapshot(),
                     ),
                     on_attempt_recorded,
                 ),
@@ -321,12 +331,13 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
 
         # Phase 3: 检查 PRD 交付（归档已完成 PRD）
         try:
-            ensure_prd_delivery_ready(
-                issue,
-                worktree_path,
-                process_runner,
-                prd_baseline_content=prd_baseline_content,
-            )
+            with attempt_phases.measure("prd_delivery"):
+                ensure_prd_delivery_ready(
+                    issue,
+                    worktree_path,
+                    process_runner,
+                    prd_baseline_content=prd_baseline_content,
+                )
         except PrdDeliveryError as exc:
             after_sha = get_head_sha(worktree_path, process_runner)
             failure_type = classify_failure(
@@ -348,6 +359,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                         agent=selected_agent,
                         started_mono=attempt_started_mono,
                         started_iso=attempt_started_iso,
+                        phase_durations=attempt_phases.snapshot(),
                     ),
                     on_attempt_recorded,
                 ),
@@ -375,20 +387,23 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
 
         # Phase 3.5: Realistic Validation 证据门禁（要求验证且无豁免时）
         try:
-            ensure_validation_evidence_ready(issue, worktree_path, config, process_runner)
-            ensure_no_misplaced_evidence_helpers(worktree_path, config, process_runner)
+            with attempt_phases.measure("evidence"):
+                ensure_validation_evidence_ready(issue, worktree_path, config, process_runner)
+                ensure_no_misplaced_evidence_helpers(worktree_path, config, process_runner)
             # 存量违规只告警不阻塞：前瞻守卫只看本次变更，历史交付留在主干里的
             # 取证脚本否则永远不可见。
             warn_legacy_evidence_helpers(worktree_path, config, process_runner)
-            ensure_validation_commands_pass(issue, worktree_path, config, process_runner)
+            with attempt_phases.measure("rv_reexec"):
+                ensure_validation_commands_pass(issue, worktree_path, config, process_runner)
             # Phase 3.6: independent verifier (pre-PR; red -> this same recovery
             # loop auto-repairs, bounded; escalates to a human only on exhaustion).
             # Local import breaks the run_agent_once <-> run_verifier_agent cycle.
             from backend.core.use_cases.run_verifier_agent import run_verifier_gate
 
-            verifier_verdict = run_verifier_gate(
-                issue, worktree_path, config, process_runner, selected_agent
-            )
+            with attempt_phases.measure("verifier"):
+                verifier_verdict = run_verifier_gate(
+                    issue, worktree_path, config, process_runner, selected_agent
+                )
         except ValidationEvidenceError as exc:
             after_sha = get_head_sha(worktree_path, process_runner)
             failure_type = classify_failure(
@@ -410,6 +425,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                         agent=selected_agent,
                         started_mono=attempt_started_mono,
                         started_iso=attempt_started_iso,
+                        phase_durations=attempt_phases.snapshot(),
                     ),
                     on_attempt_recorded,
                 ),
@@ -443,13 +459,14 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                 issue.number,
             )
             try:
-                final_verification_results = commit_requested_changes(
-                    issue,
-                    worktree_path,
-                    config,
-                    process_runner,
-                    expected_branch=expected_branch,
-                )
+                with attempt_phases.measure("commit"):
+                    final_verification_results = commit_requested_changes(
+                        issue,
+                        worktree_path,
+                        config,
+                        process_runner,
+                        expected_branch=expected_branch,
+                    )
             except VerificationFailedError as exc:
                 # staging 后验证失败：runner autofix 已在 commit_requested_changes
                 # 内部尝试过。先 unstage，再交给 Fix Agent 处理简单局部失败。
@@ -480,13 +497,14 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                         )
                         if failed_verification_results(post_fix_verification):
                             raise VerificationFailedError(post_fix_verification)
-                        final_verification_results = commit_requested_changes(
-                            issue,
-                            worktree_path,
-                            config,
-                            process_runner,
-                            expected_branch=expected_branch,
-                        )
+                        with attempt_phases.measure("commit"):
+                            final_verification_results = commit_requested_changes(
+                                issue,
+                                worktree_path,
+                                config,
+                                process_runner,
+                                expected_branch=expected_branch,
+                            )
                         fix_succeeded = True
                     except (
                         RuntimeError,
@@ -530,6 +548,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                                 agent=selected_agent,
                                 started_mono=attempt_started_mono,
                                 started_iso=attempt_started_iso,
+                                phase_durations=attempt_phases.snapshot(),
                             ),
                             on_attempt_recorded,
                         ),
@@ -585,6 +604,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                                 agent=selected_agent,
                                 started_mono=attempt_started_mono,
                                 started_iso=attempt_started_iso,
+                                phase_durations=attempt_phases.snapshot(),
                             ),
                             on_attempt_recorded,
                         ),
@@ -623,6 +643,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                             agent=selected_agent,
                             started_mono=attempt_started_mono,
                             started_iso=attempt_started_iso,
+                            phase_durations=attempt_phases.snapshot(),
                         ),
                         on_attempt_recorded,
                     ),
@@ -664,6 +685,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                 agent=selected_agent,
                 started_mono=attempt_started_mono,
                 started_iso=attempt_started_iso,
+                phase_durations=attempt_phases.snapshot(),
             )
             (
                 _append_attempt_and_notify(
@@ -710,6 +732,7 @@ def run_agent_until_committed(request: AgentExecutionRequest) -> AgentCommitResu
                     agent=selected_agent,
                     started_mono=attempt_started_mono,
                     started_iso=attempt_started_iso,
+                    phase_durations=attempt_phases.snapshot(),
                 ),
                 on_attempt_recorded,
             ),

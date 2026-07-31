@@ -582,10 +582,14 @@ def _status_runner(porcelain_stdout: str) -> FakeProcessRunner:
         "scripts/evidence_helpers/seed.py",
         # 原豁免目录：本身已不再是合法去处。
         "scripts/rv_evidence/rv-1-login.py",
-        # 与目录名无关：换任何新目录名，RV 条目命名依然被拦。
+        # 与目录名无关：换任何新目录名，rv- / rv_ 前缀依然被拦。
         "scripts/rv_helpers/rv-2-probe.py",
         "tools/probes/rv_3_check.py",
         "RV-4-Shout.py",
+        # 按用途而非按条目编号命名的取证脚本——keda 自身攒下过一批这种。
+        "scripts/rv_capture.sh",
+        "scripts/rv_render_png.py",
+        "scripts/rv_setup_fixture.py",
     ),
 )
 def test_ensure_no_misplaced_evidence_helpers_enters_recovery(
@@ -601,12 +605,15 @@ def test_ensure_no_misplaced_evidence_helpers_enters_recovery(
 @pytest.mark.parametrize(
     "allowed_path",
     (
-        # 正常产品脚本不受影响——命名规则要求 rv 后面紧跟编号。
+        # 正常产品脚本不受影响——规则只匹配 rv 紧跟分隔符的 basename。
         "scripts/migrate_users.py",
-        "scripts/rv_render_png.py",
+        # 前缀相近但不匹配：revenue / rvalue / review 都不该被误伤。
         "src/backend/core/use_cases/revenue.py",
+        "src/backend/core/shared/rvalue_cache.py",
+        "src/backend/api/review.py",
         # 证据目录内一律豁免，其内部结构不受限。
         ".iar/evidence/scripts/rv-1-oracle.py",
+        ".iar/evidence/scripts/rv_capture.sh",
     ),
 )
 def test_ensure_no_misplaced_evidence_helpers_allows_legitimate_paths(

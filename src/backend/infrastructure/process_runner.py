@@ -118,12 +118,18 @@ class _TimestampedStreamFormatter:
 
 @dataclass(frozen=True)
 class CommandResult:
-    """Captured subprocess result."""
+    """Captured subprocess result.
+
+    ``duration_seconds`` 让调用方能把"这一步花了多久"记进 attempt 历史 /
+    日志——没有它，卡住的到底是哪条命令只能靠翻日志时间戳倒推。字段与
+    ``backend.core.shared.models.agent_runner.CommandResult`` 保持一致。
+    """
 
     command: tuple[str, ...]
     return_code: int
     stdout: str
     stderr: str
+    duration_seconds: float = 0.0
 
 
 class CommandFailedError(subprocess.CalledProcessError):
@@ -183,6 +189,7 @@ class SubprocessRunner:
                 instead of the shared stdout, so parallel Issue runs can keep
                 each agent's output in its own panel/log without interleaving.
         """
+        started_mono: float = time.monotonic()
         if input_text is not None:
             completed = subprocess.run(
                 list(command),
@@ -313,6 +320,7 @@ class SubprocessRunner:
             return_code=completed.returncode,
             stdout=stdout,
             stderr=stderr,
+            duration_seconds=round(time.monotonic() - started_mono, 3),
         )
         if check and completed.returncode != 0:
             raise CommandFailedError(

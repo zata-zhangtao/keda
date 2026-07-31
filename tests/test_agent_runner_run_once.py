@@ -617,3 +617,46 @@ def test_run_once_recovers_after_prd_delivery_failure(tmp_path: Path) -> None:
         if c["method"] == "edit_issue_labels" and config.labels.failed in c.get("add", [])
     ]
     assert len(failed_calls) == 0
+
+
+def test_attempt_phase_timer_accumulates_and_orders_by_cost() -> None:
+    """同一阶段多次进入要累加，快照按耗时降序。
+
+    attempt 历史只摊耗时最大的前几个阶段，顺序错了就会摊错——"卡了很久"依然
+    定位不到环节。
+    """
+    import time
+
+    from backend.core.use_cases.run_agent_once import AttemptPhaseTimer
+
+    timer = AttemptPhaseTimer()
+    with timer.measure("verification"):
+        time.sleep(0.03)
+    with timer.measure("agent"):
+        time.sleep(0.01)
+    with timer.measure("verification"):
+        time.sleep(0.03)
+
+    snapshot = timer.snapshot()
+
+    assert [phase.name for phase in snapshot] == ["verification", "agent"]
+    assert snapshot[0].seconds > snapshot[1].seconds
+    assert snapshot[0].seconds >= 0.06
+
+
+def test_attempt_phase_timer_records_even_when_phase_raises() -> None:
+    """阶段内抛异常也必须记时——失败的阶段往往正是慢的那个。"""
+    import contextlib
+    import time
+
+    from backend.core.use_cases.run_agent_once import AttemptPhaseTimer
+
+    timer = AttemptPhaseTimer()
+    with contextlib.suppress(RuntimeError), timer.measure("rv_reexec"):
+        time.sleep(0.02)
+        raise RuntimeError("command timed out")
+
+    snapshot = timer.snapshot()
+
+    assert [phase.name for phase in snapshot] == ["rv_reexec"]
+    assert snapshot[0].seconds >= 0.02

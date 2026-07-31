@@ -354,7 +354,8 @@ This section is a living implementation guide based on current repository analys
 |---|---|---|
 | 文档中旧目录不再作为目的地出现 | `rg -n "rv_evidence" docs/ scripts/ mkdocs.yml` | 无输出 |
 | 锚定 PRD 中旧目录引用归零 | `rg -n "rv_evidence" tasks/pending/P1-BUG-20260704-153640-agent-runner-memory-stable-anchoring.md` | 无输出 |
-| 源码中仅剩「被封禁前缀」与「拒绝断言」两类提及 | `rg -n "rv_evidence" src/ tests/` | 恰 5 处：`_MISPLACED_EVIDENCE_HELPER_PREFIXES` 常量 1 处、解释豁免口为何被移除的 docstring 1 处、测试中构造被拒路径 3 处。**不能为 0**——黑名单必须写出目录名才能封禁它 |
+| 源码中仅剩「被封禁前缀」与「拒绝断言」两类提及 | `rg -n "rv_evidence" src/ tests/` | 全部命中只能是 `_MISPLACED_EVIDENCE_HELPER_PREFIXES` 常量、或测试里构造的被拒路径 / 不含旧目录的 prompt 断言。**不能为 0**——黑名单必须写出目录名才能封禁它；也不应出现在任何 prompt 构造代码里 |
+| keda 自身无任何 `rv-` / `rv_` 前缀文件（FR-14） | `git ls-files \| while read -r f; do case "$(basename "$f")" in rv-*\|rv_*) echo "$f";; esac; done` | 无输出 |
 | 旧常量彻底移除 | `rg -n "_REUSABLE_RV_SCRIPT" src/ tests/` | 无输出 |
 | keda 自身已合规 | `git ls-files scripts/rv_evidence` | 无输出 |
 | 第一层语义未被误改为递归 | `rg -n "def list_evidence_files" -A 14 src/backend/core/use_cases/agent_runner_validation.py` | 仍为 `iterdir` 单层实现 |
@@ -602,7 +603,7 @@ flowchart TD
 ### Delivery Readiness
 
 - [x] 推荐方案完整落地，无遗留的 Phase 2 / 临时兼容层：豁免口常量、白名单分支、旧目录 12 个文件全部消失，不存在"暂时保留待后续清理"的条目。
-- [x] keda 自身在新规则下合规：`git ls-files scripts/rv_evidence` 无输出。
+- [x] keda 自身在新规则下合规：`git ls-files scripts/rv_evidence` 无输出；且 `git ls-files` 中不存在任何 basename 以 `rv-` / `rv_` 开头的文件（FR-14，7 个根级历史取证脚本已删除）。
 - [x] 上线一次性成本已知悉并记录：各下游仓库首次运行复跑缓存全部失效重跑一轮。
 - [x] 无未决回归或发布阻塞项。
 
@@ -610,7 +611,7 @@ flowchart TD
 
 - **FR-1**：给执行 Agent 的执行指令与恢复指令中，不得存在任何位于代码树的 RV 脚本目的地；唯一目的地为证据目录下的 `scripts/` 子目录。
 - **FR-2**：门禁必须拒绝落在四个禁止目录前缀（原三个 + 原豁免目录）下的变更路径。
-- **FR-3**：门禁必须拒绝文件名匹配 RV 条目命名（`rv` + 分隔符 + 数字 + 分隔符，忽略大小写）且不位于证据目录内的新增路径，判定不依赖目录名。
+- **FR-3**：门禁必须拒绝文件名以 `rv-` / `rv_`（忽略大小写）开头且不位于证据目录内的新增路径，判定不依赖目录名。规则刻意不要求前缀后跟条目编号——按用途命名的取证脚本（`rv_capture.sh`、`rv_setup_fixture.py`）带编号的规则一个都拦不住。前缀相近的产品命名（`revenue.py`、`rvalue_cache.py`、`review.py`）不得误伤。
 - **FR-4**：位于证据目录内的任何路径一律放行，不受 FR-2 / FR-3 约束。
 - **FR-5**：前瞻守卫与存量扫描必须共用同一个判定谓词，不得各自实现。
 - **FR-6**：门禁必须对 `git ls-files` 全量结果执行一次存量违规扫描，命中时输出 WARNING 级日志并列出路径，且不得抛出异常或以任何方式阻塞交付；git 命令失败时静默跳过。
@@ -618,6 +619,7 @@ flowchart TD
 - **FR-8**：`list_evidence_files` 必须保持仅枚举证据目录第一层，证据覆盖率对账与视觉证据判定的输入不得包含子目录内容。
 - **FR-9**：复跑缓存键必须并入一个对证据目录 `scripts/` 子目录内容求出的摘要；该子目录不存在时摘要取固定值。
 - **FR-10**：keda 仓库中 `scripts/rv_evidence/` 下的 12 个已跟踪文件全部删除。
+- **FR-14**：keda 仓库根级 7 个历史取证脚本一并删除（`rv_capture.sh`、`rv_follow.py`、`rv_kill_live_pid.py`、`rv_render_png.py`、`rv_setup_fixture.py`、`rv_spawn_live_pid.py`、`roadmap_realistic_validation.py`）。交付后 `git ls-files` 中不得存在任何 basename 以 `rv-` / `rv_` 开头的文件。
 - **FR-11**：`tasks/pending/P1-BUG-20260704-153640-agent-runner-memory-stable-anchoring.md` 的验证计划与改动树中所有指向被删目录的引用改写到证据目录。
 - **FR-12**：`docs/guides/agent-runner.md`、`docs/guides/prd-standard.md`、`scripts/README.md` 同步改为单一目的地表述，其中 agent-runner 指南额外说明证据分支现承载 oracle 源码。
 - **FR-13**：不新增任何配置项、manifest 字段或 PRD 标记。
@@ -631,7 +633,7 @@ flowchart TD
 - 不改写 `tasks/archive/` 下的归档 PRD——它们是历史记录。
 - 不承担 `agent_runner_validation.py` 的文件拆分——那是 file-line-split PRD 的范围。
 - 不新增任何"按仓库开关本规则"的配置能力。
-- 不试图识别被中性命名的 RV 辅助脚本（如 `scripts/fault_inject_login.py`）——命名规则的覆盖边界由 rv-2 的 negative control 显式记录。
+- 不试图识别**完全不带 `rv-` / `rv_` 前缀**的 RV 辅助脚本（如 `scripts/fault_inject_login.py`、`roadmap_realistic_validation.py`）——规则键在前缀，不在意图。这条覆盖边界由 rv-2 的 negative control 显式记录，不得粉饰。
 
 ## 12. Risks And Follow-Ups
 
@@ -644,7 +646,9 @@ flowchart TD
 | 锚定 PRD 的 19KB oracle 被删除 | 迁移风险 | 内容可从 git history 完整取回（`git show <sha>:scripts/rv_evidence/rv_anchor_cross_worktree.py`），改写后的验证计划中已注明这一取回方式，执行时在证据目录重建。 |
 | 与 file-line-split PRD 第 ⑦ 批改同一文件 | 排期风险 | 软冲突，新增代码归入 "evidence" 职责块保持切分边界可用，谁先落地另一方 rebase。 |
 | `agent_runner_validation.py` 交付后为 997 非空行，距 1000 行警告线仅 3 行 | 已实测 | 本次 hook Passed，但余量已耗尽。**下一次改该文件前应先执行 file-line-split PRD 第 ⑦ 批**（validators / evidence / gate 三段拆，目标 ≤800）。本次新增的 `is_misplaced_evidence_helper` / `_expand_changed_path` / `warn_legacy_evidence_helpers` / `list_evidence_upload_files` / `evidence_oracle_digest` 全部内聚于 "evidence" 块，可整体搬迁。 |
-| 交付过程中发现 7 个根级 `scripts/rv_*.py|sh` 历史取证脚本 | 已知存量，本次未处理 | `rv_capture.sh`（自述"RV capture script for Issue #115"）、`rv_follow.py`、`rv_kill_live_pid.py`、`rv_render_png.py`、`rv_setup_fixture.py`、`rv_spawn_live_pid.py`、`roadmap_realistic_validation.py`。命名为 `rv_<单词>` 而非 `rv_<数字>`，因此不触发本次的 RV 条目命名规则；且无任何 `just`/docs/tests/src 引用它们。它们属于用户已决策的"存量只告警"类别，但当前连告警都不会触发。**跟进项**：单独评估这 7 个文件是删除、迁入证据目录，还是把命名规则从 `rv[-_]\d+[-_]` 放宽到 `rv[-_]`——放宽会提高对下游产品仓库误报的风险，需独立权衡。 |
+| 交付过程中发现 7 个根级历史取证脚本 | 已处理（FR-14） | `rv_capture.sh`（自述"RV capture script for Issue #115"）等 7 个，全部 RV 专用、无任何 `just`/docs/tests/src 引用，已删除。它们暴露出原 `rv[-_]\d+[-_]` 规则的盲区（按用途命名而非按条目编号），规则已放宽到 `rv[-_]`。内容可从 `git show e2829f4^:scripts/<name>` 取回。 |
+| 命名规则放宽到 `rv[-_]` 后的误报风险 | 已接受的取舍 | 只作用于**新增**文件的 basename，产品代码里以 `rv` 开头的文件名本就罕见；`revenue.py` / `rvalue_cache.py` / `review.py` 三个近似前缀已加放行用例锁定。真撞上时错误信息直接给出正确去处，且属可恢复失败。相比之下，被否决的"反查清单引用"方案会误拒"新增产品脚本并以其为 RV 真实入口"这一常见形态，风险高一个量级。 |
+| `roadmap_realistic_validation.py` 这类中性命名的 RV harness 仍拦不住 | 残留边界 | 本次已手工删除该文件，但规则键在 `rv-`/`rv_` 前缀、不在意图，同形态再出现不会被拦。主要防线仍是 prompt 不再提供代码树目的地；门禁是 backstop。rv-2 的 negative control 显式记录这一边界。 |
 
 ## 13. Decision Log
 

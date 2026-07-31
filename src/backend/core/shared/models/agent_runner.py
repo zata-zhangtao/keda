@@ -31,12 +31,23 @@ class AgentCommitResult:
 
 @dataclass(frozen=True)
 class CommandResult:
-    """Captured subprocess result."""
+    """Captured subprocess result.
+
+    Attributes:
+        command: Executed command and arguments.
+        return_code: Process exit code.
+        stdout: Captured standard output.
+        stderr: Captured standard error.
+        duration_seconds: Wall-clock seconds the command took. ``0.0`` when the
+            caller constructed the result synthetically instead of running a
+            process.
+    """
 
     command: tuple[str, ...]
     return_code: int
     stdout: str
     stderr: str
+    duration_seconds: float = 0.0
 
 
 class FailureType(Enum):
@@ -54,6 +65,26 @@ class FailureType(Enum):
 
 
 @dataclass(frozen=True)
+class PhaseDuration:
+    """Wall-clock time one execution-loop phase consumed inside an attempt.
+
+    只有一个 attempt 总时长时，"卡了很久"无法定位：几千秒到底是 agent 自己在
+    想、还是 ``just test`` 挂住、还是某条 RV 命令一路超时重试，看不出来。按阶段
+    累计后，attempt 历史才能直接回答"时间花在哪"。
+
+    Attributes:
+        name: Phase identifier, e.g. ``agent`` / ``verification`` /
+            ``prd_delivery`` / ``evidence`` / ``rv_reexec`` / ``verifier`` /
+            ``commit``.
+        seconds: Accumulated wall-clock seconds for that phase within the
+            attempt (同一阶段被多次进入时累加).
+    """
+
+    name: str
+    seconds: float
+
+
+@dataclass(frozen=True)
 class AttemptResult:
     """Record of a single agent execution attempt.
 
@@ -66,6 +97,8 @@ class AttemptResult:
         started_at: ISO-8601 UTC timestamp when the attempt started.
         finished_at: ISO-8601 UTC timestamp when the attempt finished.
         duration_seconds: Wall-clock seconds spent in the attempt.
+        phase_durations: Per-phase breakdown of ``duration_seconds``；空元组表示
+            本次 attempt 未打点（旧记录或未走执行循环的路径）。
     """
 
     attempt_number: int
@@ -76,6 +109,7 @@ class AttemptResult:
     started_at: str = ""
     finished_at: str = ""
     duration_seconds: float = 0.0
+    phase_durations: tuple[PhaseDuration, ...] = ()
 
 
 @dataclass(frozen=True)

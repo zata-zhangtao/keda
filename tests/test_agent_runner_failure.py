@@ -629,3 +629,97 @@ def test_resolve_agent_fallback_order_empty_disables_fallback() -> None:
     config = AppConfig(runner=RunnerConfig(agent_fallback_order=()))
     order = resolve_agent_fallback_order(issue, config, "auto")
     assert order == ["codex"]
+
+
+def test_format_attempt_duration_shows_phase_breakdown() -> None:
+    """Duration 列必须摊出耗时最大的几个阶段，否则"卡了很久"定位不到环节。"""
+    from backend.core.shared.models.agent_runner import PhaseDuration
+    from backend.core.use_cases.agent_runner_failure import format_attempt_duration
+
+    result = AttemptResult(
+        attempt_number=4,
+        failure_type=FailureType.TRANSIENT,
+        recovered=False,
+        detail="kimi died",
+        agent="kimi",
+        duration_seconds=7153.9,
+        phase_durations=(
+            PhaseDuration(name="agent", seconds=7100.2),
+            PhaseDuration(name="verification", seconds=40.1),
+            PhaseDuration(name="rv_reexec", seconds=12.4),
+            PhaseDuration(name="commit", seconds=1.2),
+        ),
+    )
+
+    rendered = format_attempt_duration(result)
+
+    assert rendered.startswith("7153.9s (")
+    assert "agent 7100.2s" in rendered
+    assert "verification 40.1s" in rendered
+    assert "rv_reexec 12.4s" in rendered
+    # 只摊前三个，避免把表格单元格撑爆。
+    assert "commit" not in rendered
+
+
+def test_format_attempt_duration_without_phases_is_plain_total() -> None:
+    """旧记录没有阶段明细时退回纯总时长，不能渲染出空括号。"""
+    from backend.core.use_cases.agent_runner_failure import format_attempt_duration
+
+    result = AttemptResult(
+        attempt_number=1,
+        failure_type=FailureType.NO_COMMITS,
+        recovered=False,
+        detail="lint failed",
+        agent="claude",
+        duration_seconds=12.0,
+    )
+
+    assert format_attempt_duration(result) == "12.0s"
+
+
+def test_format_attempt_duration_hides_negligible_phases() -> None:
+    """亚秒级阶段不进单元格——它们不是"卡住"的原因，只会挤掉真正的大头。"""
+    from backend.core.shared.models.agent_runner import PhaseDuration
+    from backend.core.use_cases.agent_runner_failure import format_attempt_duration
+
+    result = AttemptResult(
+        attempt_number=2,
+        failure_type=FailureType.SUCCESS,
+        recovered=False,
+        detail="",
+        agent="claude",
+        duration_seconds=900.4,
+        phase_durations=(
+            PhaseDuration(name="agent", seconds=900.0),
+            PhaseDuration(name="prd_delivery", seconds=0.2),
+        ),
+    )
+
+    rendered = format_attempt_duration(result)
+
+    assert rendered == "900.4s (agent 900.0s)"
+
+
+def test_attempt_history_table_carries_phase_breakdown() -> None:
+    """表格渲染必须真的把阶段明细带进 Duration 列。"""
+    from backend.core.shared.models.agent_runner import PhaseDuration
+
+    table = format_attempt_history(
+        [
+            AttemptResult(
+                attempt_number=1,
+                failure_type=FailureType.VERIFICATION_FAILED,
+                recovered=False,
+                detail="just test failed",
+                agent="claude",
+                duration_seconds=1000.0,
+                phase_durations=(
+                    PhaseDuration(name="verification", seconds=940.0),
+                    PhaseDuration(name="agent", seconds=60.0),
+                ),
+            )
+        ]
+    )
+
+    assert "verification 940.0s" in table
+    assert "agent 60.0s" in table

@@ -21,7 +21,8 @@ import shlex
 import subprocess
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +40,7 @@ from backend.core.shared.models.agent_runner import (
     CommandResult,
     FailureType,
     IssueSummary,
+    PhaseDuration,
 )
 from backend.core.use_cases.agent_runner_commit import (
     EmptyCommitRequestError,
@@ -842,6 +844,50 @@ def wait_before_recovery_attempt(
     time.sleep(delay_seconds)
 
 
+class AttemptPhaseTimer:
+    """按阶段累计一个 attempt 内部的耗时。
+
+    只记一个 attempt 总时长时，"卡了很久"定位不到环节——几千秒可能是 agent 自己
+    在想，也可能是 ``just test`` 挂住、或某条 RV 命令一路超时。同一阶段被多次进入
+    时累加（例如 recovery 循环内多次 verification）。
+    """
+
+    def __init__(self) -> None:
+        """初始化空的阶段累计表。"""
+        self._accumulated_seconds: dict[str, float] = {}
+
+    @contextmanager
+    def measure(self, phase_name: str) -> Iterator[None]:
+        """计时一个阶段；即使阶段内抛异常也照常累计。
+
+        Args:
+            phase_name: 阶段名，进入 ``PhaseDuration.name``。
+
+        Yields:
+            None。
+        """
+        phase_started_mono: float = time.monotonic()
+        try:
+            yield
+        finally:
+            elapsed_seconds: float = time.monotonic() - phase_started_mono
+            self._accumulated_seconds[phase_name] = (
+                self._accumulated_seconds.get(phase_name, 0.0) + elapsed_seconds
+            )
+
+    def snapshot(self) -> tuple[PhaseDuration, ...]:
+        """按耗时降序返回当前累计结果。"""
+        ordered_phases = sorted(
+            self._accumulated_seconds.items(),
+            key=lambda phase_entry: phase_entry[1],
+            reverse=True,
+        )
+        return tuple(
+            PhaseDuration(name=phase_name, seconds=round(seconds, 3))
+            for phase_name, seconds in ordered_phases
+        )
+
+
 def _make_attempt_result(
     *,
     attempt_number: int,
@@ -851,6 +897,7 @@ def _make_attempt_result(
     agent: str,
     started_mono: float,
     started_iso: str,
+    phase_durations: tuple[PhaseDuration, ...] = (),
 ) -> AttemptResult:
     """Build an ``AttemptResult`` with wall-clock timing filled in now."""
     finished_mono = time.monotonic()
@@ -864,6 +911,7 @@ def _make_attempt_result(
         started_at=started_iso,
         finished_at=finished_iso,
         duration_seconds=round(finished_mono - started_mono, 3),
+        phase_durations=phase_durations,
     )
 
 

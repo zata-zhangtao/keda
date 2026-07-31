@@ -981,3 +981,18 @@ def test_captured_keyboard_interrupt_tears_down_process_group(tmp_path: Path) ->
             process_runner._run_captured_process(["sleep", "30"], cwd=tmp_path, timeout=5)
 
     terminate_mock.assert_called_once_with(fake_process)
+
+
+def test_command_result_records_duration(tmp_path: Path) -> None:
+    """CommandResult 必须带耗时，否则"哪条命令慢"没有数据源可记进 attempt 历史。"""
+    runner = SubprocessRunner()
+
+    result = runner.run(
+        [sys.executable, "-c", "import time; time.sleep(0.05)"],
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert result.return_code == 0
+    assert result.duration_seconds >= 0.05

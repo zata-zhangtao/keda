@@ -444,6 +444,34 @@ def _format_attempt_start(started_at: str) -> str:
     return started_datetime.astimezone(timezone.utc).strftime(_ATTEMPT_START_DISPLAY_FORMAT)
 
 
+_MAX_RENDERED_PHASES = 3
+_PHASE_RENDER_FLOOR_SECONDS = 0.5
+
+
+def format_attempt_duration(result: AttemptResult) -> str:
+    """把 attempt 总时长渲染成"总时长（耗时最大的几个阶段）"。
+
+    只显示一个总时长时，"卡了很久"无法定位——几千秒可能是 agent 自己在想，也可能
+    是 ``just test`` 挂住或某条 RV 命令一路超时。这里把耗时最大的几个阶段直接摊在
+    表格里，一眼能看出时间去哪了；阶段明细缺失（旧记录）时退回纯总时长。
+
+    Args:
+        result: 要渲染的 attempt 记录。
+
+    Returns:
+        形如 ``7153.9s (agent 7100.2s · verification 40.1s)`` 的单元格文本。
+    """
+    total_duration = f"{result.duration_seconds:.1f}s"
+    rendered_phases = [
+        f"{phase.name} {phase.seconds:.1f}s"
+        for phase in result.phase_durations[:_MAX_RENDERED_PHASES]
+        if phase.seconds >= _PHASE_RENDER_FLOOR_SECONDS
+    ]
+    if not rendered_phases:
+        return total_duration
+    return f"{total_duration} ({' · '.join(rendered_phases)})"
+
+
 def format_attempt_history(
     attempt_results: list[AttemptResult],
     *,
@@ -471,7 +499,7 @@ def format_attempt_history(
         detail = _summarize_attempt_detail(result.detail)
         recovered = "Yes" if result.recovered else "No"
         agent = result.agent or "-"
-        duration = f"{result.duration_seconds:.1f}s"
+        duration = format_attempt_duration(result)
         lines.append(
             f"| {result.attempt_number} | {_format_attempt_start(result.started_at)} | {agent} | "
             f"{result.failure_type.value} | {recovered} | {duration} | {detail} |"
