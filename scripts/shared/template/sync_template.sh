@@ -260,9 +260,15 @@ _is_always_skipped() {
         # Project-owned root-level files (the project writes these; the
         # template never overwrites them)
         README.md|pyproject.toml|config.toml|mkdocs.yml|uv.lock) return 0 ;;
-        CLAUDE.md|main.py|justfile) return 0 ;;
+        main.py|justfile) return 0 ;;
         findings.md|progress.md|task_plan.md) return 0 ;;
         .DS_Store|.dockerignore|.gitignore) return 0 ;;
+        # Tests that exercise template-only artifacts (e.g. skills/prd/scripts)
+        # are not portable to derived projects: the underlying artifact is
+        # always-skipped below, so importing the test would guarantee a
+        # collection-time FileNotFoundError downstream. Keep these tests
+        # template-internal by listing them here.
+        tests/test_prd_skill_checker.py) return 0 ;;
     esac
     case "$p" in
         # Local state, build output, runtime artifacts
@@ -313,10 +319,11 @@ _is_upstream_owned() {
         scripts/shared/*) return 0 ;;
         # Cross-cutting build scripts maintained by the template
         scripts/build/*) return 0 ;;
-        # Tool entry files and the AI standards hub
-        AGENTS.md) return 0 ;;
+        # AI standards hub and shared tool configs
         docs/ai-standards/*) return 0 ;;
         docs/architecture/system-design.md) return 0 ;;
+        pytest.ini) return 0 ;;
+        ruff.toml) return 0 ;;
         .cursor/commands/cursor.md) return 0 ;;
         .cursor/rules/*) return 0 ;;
         .github/copilot-instructions.md) return 0 ;;
@@ -344,6 +351,27 @@ _is_upstream_owned() {
         tests/playwright-e2e/.gitignore) return 0 ;;
         tests/playwright-e2e/README.md) return 0 ;;
         tests/playwright-e2e/demo/*) return 0 ;;
+    esac
+    return 1
+}
+
+# AI 适配层文件：模板维护的 AI 入口与规范源。派生项目常会自定义这些文件
+# （改入口指向、调整规范），因此默认模式不同步它们，只在 --all 模式才作为
+# 候选出现。它们仍在 _is_upstream_owned 中，所以 --all 模式下即使匹配
+# project_skip_paths（如 docs/）也会显示。AGENTS.md 和 CLAUDE.md 不在此函数
+# 中：它们不是 upstream_owned，默认模式本就不显示；CLAUDE.md 已从
+# _is_always_skipped 移除，所以 --all 模式可以同步它。
+_is_ai_adapter_file() {
+    local p="$1"
+    case "$p" in
+        # AI 规范源
+        docs/ai-standards/*) return 0 ;;
+        # Copilot 入口与 scoped instructions
+        .github/copilot-instructions.md) return 0 ;;
+        .github/instructions/*.md) return 0 ;;
+        # Cursor 入口
+        .cursor/commands/cursor.md) return 0 ;;
+        .cursor/rules/*) return 0 ;;
     esac
     return 1
 }
@@ -418,27 +446,32 @@ _ensure_fzf() {
 }
 
 CC_SWITCH_SKILLS_DIR="${CC_SWITCH_SKILLS_DIR:-}"
-SKILL_INSTALL_TARGET_DIR=""
+SKILL_INSTALL_TARGET_DIRS=()
 
-_resolve_skill_install_target_dir() {
-    if [ -n "$SKILL_INSTALL_TARGET_DIR" ]; then
+_resolve_skill_install_target_dirs() {
+    if [ "${#SKILL_INSTALL_TARGET_DIRS[@]}" -gt 0 ]; then
         return 0
     fi
 
     if [ -n "$CC_SWITCH_SKILLS_DIR" ]; then
-        SKILL_INSTALL_TARGET_DIR="$CC_SWITCH_SKILLS_DIR"
+        SKILL_INSTALL_TARGET_DIRS+=("$CC_SWITCH_SKILLS_DIR")
+    elif [ -d "$HOME/.cc-switch" ]; then
+        SKILL_INSTALL_TARGET_DIRS+=("$HOME/.cc-switch/skills")
+    fi
+
+    if [ -d "$HOME/.pi" ]; then
+        SKILL_INSTALL_TARGET_DIRS+=("$HOME/.pi/agent/skills")
+    fi
+
+    if [ "${#SKILL_INSTALL_TARGET_DIRS[@]}" -gt 0 ]; then
         return 0
     fi
 
-    if [ -d "$HOME/.cc-switch" ]; then
-        SKILL_INSTALL_TARGET_DIR="$HOME/.cc-switch/skills"
-        return 0
-    fi
-
-    echo "No ~/.cc-switch directory found."
+    echo "No ~/.cc-switch or ~/.pi directory found."
     echo "Choose a skill install target:"
     echo "  [1] Codex  -> $HOME/.codex/skills"
     echo "  [2] Claude -> $HOME/.claude/skills"
+    echo "  [3] Pi     -> $HOME/.pi/agent/skills"
     echo "  [q] Skip skill installation"
 
     while true; do
@@ -447,11 +480,15 @@ _resolve_skill_install_target_dir() {
         read -r target_choice </dev/tty
         case "$target_choice" in
             1)
-                SKILL_INSTALL_TARGET_DIR="$HOME/.codex/skills"
+                SKILL_INSTALL_TARGET_DIRS+=("$HOME/.codex/skills")
                 return 0
                 ;;
             2)
-                SKILL_INSTALL_TARGET_DIR="$HOME/.claude/skills"
+                SKILL_INSTALL_TARGET_DIRS+=("$HOME/.claude/skills")
+                return 0
+                ;;
+            3)
+                SKILL_INSTALL_TARGET_DIRS+=("$HOME/.pi/agent/skills")
                 return 0
                 ;;
             q|Q|"")
@@ -472,21 +509,28 @@ _collect_template_skill_updates() {
         return 0
     fi
 
-    if ! _resolve_skill_install_target_dir; then
+    if ! _resolve_skill_install_target_dirs; then
         return 0
     fi
 
     while IFS= read -r template_skill_dir; do
-        local skill_name installed_skill_dir skill_status
+        local skill_name installed_skill_dir skill_status skill_target_dir
         skill_name="$(basename "$template_skill_dir")"
-        installed_skill_dir="$SKILL_INSTALL_TARGET_DIR/$skill_name"
+        skill_status=""
 
-        if [ ! -d "$installed_skill_dir" ]; then
-            skill_status="NEW"
-        elif diff -qr "$template_skill_dir" "$installed_skill_dir" >/dev/null 2>&1; then
+        for skill_target_dir in "${SKILL_INSTALL_TARGET_DIRS[@]}"; do
+            installed_skill_dir="$skill_target_dir/$skill_name"
+            if [ ! -d "$installed_skill_dir" ]; then
+                skill_status="NEW"
+                break
+            fi
+            if ! diff -qr "$template_skill_dir" "$installed_skill_dir" >/dev/null 2>&1; then
+                skill_status="UPDATE"
+            fi
+        done
+
+        if [ -z "$skill_status" ]; then
             continue
-        else
-            skill_status="UPDATE"
         fi
 
         template_skill_entries+=("$skill_status"$'\t'"$skill_name"$'\t'"$template_skill_dir")
@@ -505,7 +549,12 @@ _install_template_skills() {
         return 0
     fi
 
-    echo "Template skills with installable updates for $SKILL_INSTALL_TARGET_DIR:"
+    echo "Template skills will be installed to:"
+    local skill_target_dir
+    for skill_target_dir in "${SKILL_INSTALL_TARGET_DIRS[@]}"; do
+        echo "  - $skill_target_dir"
+    done
+    echo "Template skills with installable updates:"
     local skill_entry_preview skill_status_preview skill_name_preview
     for skill_entry_preview in "${template_skill_entries[@]}"; do
         skill_status_preview="${skill_entry_preview%%$'\t'*}"
@@ -623,14 +672,15 @@ _install_template_skills() {
         return 0
     fi
 
-    mkdir -p "$SKILL_INSTALL_TARGET_DIR"
-
     local installed_count=0
     for skill_name in "${selected_skill_names[@]}"; do
         template_skill_dir="$template_root/skills/$skill_name"
-        rsync -a --delete "$template_skill_dir/" "$SKILL_INSTALL_TARGET_DIR/$skill_name/"
-        echo "  ✅ Installed: $SKILL_INSTALL_TARGET_DIR/$skill_name"
-        ((installed_count++)) || true
+        for skill_target_dir in "${SKILL_INSTALL_TARGET_DIRS[@]}"; do
+            mkdir -p "$skill_target_dir"
+            rsync -a --delete "$template_skill_dir/" "$skill_target_dir/$skill_name/"
+            echo "  ✅ Installed: $skill_target_dir/$skill_name"
+            ((installed_count++)) || true
+        done
     done
 
     skill_install_count=$installed_count
@@ -777,8 +827,10 @@ if ! $LOCAL_SKILLS_MODE; then
             continue
         fi
         if ! $SHOW_ALL; then
-            # Default mode: only upstream-owned entries show up in the TUI.
-            if ! _is_upstream_owned "$rel_path"; then
+            # Default mode: only upstream-owned entries show up in the TUI,
+            # excluding AI adapter files (docs/ai-standards/, .github Copilot
+            # entries, .cursor entries) which only appear in --all mode.
+            if ! _is_upstream_owned "$rel_path" || _is_ai_adapter_file "$rel_path"; then
                 continue
             fi
         else

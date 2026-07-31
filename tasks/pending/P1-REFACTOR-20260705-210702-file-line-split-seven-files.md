@@ -249,7 +249,7 @@
 
 | Check | Command | Expected Result | If It Fails, Inspect First |
 |---|---|---|---|
-| 行数清零 | `wc -l` 7 个目标文件 + `cat hooks/shared/max_file_lines.allowlist.txt` | 全部 ≤ 800；豁免单 0 行 | 是否漏拆 / 是否忘记把已合规文件从豁免单移除 |
+| 行数清零 | `wc -l` 7 个目标文件 + `uv run python hooks/shared/check_max_file_lines.py --max-lines 1000 --glob '*.py' src/backend` | 全部 ≤ 800；扫描无 [ERROR] | 是否漏拆（豁免单机制已移除，无绕过可用） |
 | import 跟随搬迁 | `rg -n "from backend\.api\.(cli(_parsed_commands\|_typer_[a-z]+)? )\|from backend\.core\.use_cases\.(agent_command\|agent_run_loop\|agent_runner_orchestrate_process_[a-z]+\|agent_runner_validation_(validators\|evidence\|gate))\|from backend\.engines\.agent_runner\.(factory_config_builder\|factories)\|from backend\.infrastructure\.github_models" src/ tests/` | 新路径被引用 | 漏 import / 漏 `__init__.py` re-export |
 | 既有重要 import 边保持 | `rg -n "from backend\.api\.cli import" src/backend/api/cli_typer.py` | 仍有命中（cli_typer.py 第 19 行附近的 `_run_parsed_command` / `error_console`）；否则确认被引符号已迁到合适家 | cli.py 大幅裁剪时是否误删了被 cli_typer 引用的符号 |
 | 架构门禁仍严格 | `rg -n '"api":' hooks/shared/check_architecture.py` | `["infrastructure", "engines"]` | 拆分是否意外让 `api → engines` 直连回归（不应发生，仅守边） |
@@ -310,9 +310,9 @@ flowchart TB
 
 ```yaml
 - id: rv-1
-  behavior: 行数门禁清零;max_file_lines.allowlist.txt 内容为空
-  real_entry: "uv run python hooks/shared/check_max_file_lines.py --max-lines 1000 --glob '*.py' src/backend --allow-list-file hooks/shared/max_file_lines.allowlist.txt"
-  expected: "无 [ERROR] 输出;cat hooks/shared/max_file_lines.allowlist.txt | grep -v '^#\\|^$' | wc -l = 0;每个目标文件 uv run python hooks/shared/check_max_file_lines.py --max-lines 800 <file> 返回 0"
+  behavior: 行数门禁清零;src/backend 下无 .py 文件超过 1000 非空行
+  real_entry: "uv run python hooks/shared/check_max_file_lines.py --max-lines 1000 --glob '*.py' src/backend"
+  expected: "无 [ERROR] 输出;每个目标文件 uv run python hooks/shared/check_max_file_lines.py --max-lines 800 <file> 返回 0"
   mock_boundary: "不 mock;真实扫描 src/backend"
   negative_control: "临时把 src/backend/api/cli_helpers.py 改成 1100 行,跑 rv-1 整条命令"
   expected_fail: "[ERROR] cli_helpers.py: ... 非空行,超过上限 1000 行"
@@ -429,7 +429,7 @@ Failure triage:
 
 - [ ] 拆分过程中新增的子模块带 Google Style docstring(沿用既有惯例)
 - [ ] 本 PRD 与 `docs/ai-standards/code-reuse.md` 与 `CLAUDE.md` 关于文件行数的表述三者一致;本 PRD 未修改规范层
-- [ ] `hooks/shared/max_file_lines.allowlist.txt` 在拆分过程中按文件合规进度逐行移除,**最终 0 条**(仅允许 `#` 注释行)
+- [~] ~~`hooks/shared/max_file_lines.allowlist.txt` 最终 0 条~~ —— 豁免单机制已随模板同步移除（上游删掉了 `--allow-list-file`，keda 的本地实现是 `3cbb768` 手改 upstream-owned hook 留下的）。豁免单当时已清零，文件已删除，此项自然满足且不再适用
 
 ### Validation Acceptance
 
@@ -450,7 +450,7 @@ Failure triage:
 ## 10. Functional Requirements
 
 - FR-1: 7 个目标 `.py` 文件的非空行数全部 ≤ 800:`cli.py` / `cli_typer.py` / `run_agent_once.py` / `agent_runner_orchestrate.py` / `agent_runner_validation.py` / `factory.py` / `github_client.py`。
-- FR-2: `hooks/shared/max_file_lines.allowlist.txt` 最终 0 条(只有注释行),本 PRD 完成时不允许留尾宽限。
+- FR-2: ~~豁免单最终 0 条~~ —— 已作废：豁免单机制随模板同步移除（见 Acceptance Checklist 对应条目）。等价约束改为：`src/backend` 下无 `.py` 超过 1000 非空行，且 7 个目标文件均 ≤ 800，无任何绕过机制可用。
 - FR-3: 拆分只动文件组织与 import 路径,不动函数体 / 类体 / dataclass 字段;`uv run iar <sub> --help` 输出与拆分前逐字节一致。
 - FR-4: 拆分不改变四层依赖方向;新增 import 仅在同层内部跟随符号搬迁。
 - FR-5: `cli_typer.py` 对 `cli.py` 的既有 import(`_run_parsed_command` / `error_console`)必须继续可用,或在被引用符号迁家后保持同模块内 re-export。
@@ -466,6 +466,9 @@ Failure triage:
 - 不引入自动重构工具(rope / LibCST 等),纯手改以保证 review 可读。
 
 ## 12. Risks And Follow-Ups
+
+> **2026-07-31 更新：豁免单机制已不存在。** 模板同步（上游 `zata-codes-template`）删除了 `check_max_file_lines.py` 的 `--allow-list-file` 参数——keda 原有的实现是 `3cbb768` 直接手改 upstream-owned hook 留下的本地分叉，本次同步把它对齐回上游。当时豁免单已清零，`hooks/shared/max_file_lines.allowlist.txt` 随之删除。本 PRD 正文中其余提及豁免单的段落保留为历史叙述，**执行时以 §7.6 的 rv-1 与 Acceptance Checklist 为准**：约束等价于"`src/backend` 下无 `.py` 超过 1000 非空行，7 个目标文件均 ≤ 800"，且不再有任何绕过机制可用（比原方案更严）。
+
 
 - 风险:`core/use_cases/agent_runner_orchestrate.py` 的 `_process_*` 路由函数拆开后,被其它 use_case 反向引用可能漏 import。缓解:`§7.3` 的 `rg` import 跟随检查、`uv run just test` 全绿。
 - 风险:`factory.py` 被很多模块 `from backend.engines.agent_runner.factory import get_agent_runner_settings` / `logger` / `create_*` 直接拉,迁工厂到 `factories/*.py` 时漏一处即报 `ImportError`。缓解:`§7.3` 隐藏入口检查 + `factory.py` 保留薄 re-export 层让旧路径全数可用。

@@ -58,6 +58,18 @@ flag_head="$(sed -n '2p' "$FLAG_FILE")"
 flag_tree="$(sed -n '3p' "$FLAG_FILE")"
 
 if [ "$current_branch" != "$flag_branch" ] || [ "$current_head" != "$flag_head" ] || [ "$current_tree" != "$flag_tree" ]; then
+    # staged 树对不上时，先看是不是只差"部分改动没 add"：working 树（just test
+    # 记录时的口径）如果和 flag 一致，说明内容本身没变，只需 git add -A 归一，
+    # 不需要重新跑一遍（可能很慢的）just test。
+    if [ -n "$staged_files" ] && [ "$current_branch" = "$flag_branch" ] && [ "$current_head" = "$flag_head" ]; then
+        working_tree="$(quality_effective_tree working test)"
+        if [ "$working_tree" = "$flag_tree" ]; then
+            echo "❌ 存在未 staged 的改动，但内容已包含在上次 just test 的测试范围内（未变化）。"
+            echo "   请运行 git add -A 让 staged 树与 working 树一致后再提交，无需重新运行 just test。"
+            echo "   当前 staged tree: ${current_tree:0:8}；working tree（与标记一致）: ${working_tree:0:8}"
+            exit 1
+        fi
+    fi
     echo "❌ just test 标记已过期。分支、HEAD 或提交内容已变更，请重新运行 just test。"
     echo "   当前: $current_branch @ ${current_head:0:8} (tree: ${current_tree:0:8})"
     echo "   标记: $flag_branch @ ${flag_head:0:8} (tree: ${flag_tree:0:8})"

@@ -64,8 +64,13 @@ src/<module>/api/ -> src/<module>/core/ -> src/<module>/engines/ -> src/<module>
 
 ## Composition Root
 
-- `src/backend/main.py` 是真实后端 composition root
+- `src/backend/composition/` 是真实后端 composition root，允许依赖全部四层，
+  但只负责对象创建、配置转换、启动数据准备和依赖连接
+- `src/backend/composition/app_factory.py` 是 FastAPI 应用汇总入口
+- `src/backend/main.py` 是兼容与进程启动薄入口
 - 根目录 `main.py` 只是兼容包装器
+- `api/core/engines/infrastructure` 均不得反向导入
+  `backend.composition`，该规则由架构 hook 强制检查
 
 ## Frontend Boundary
 

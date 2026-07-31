@@ -225,8 +225,8 @@ def check_alembic_migration_file(
                 target=filename,
                 reason=(
                     f"文件名不符合迁移脚本命名约定 "
-                    f"YYYY{separator}MM{separator}DD{separator}HH{separator}MM{separator}SS"
-                    f"{separator}<slug>.py（分隔符为 '{separator}'）。"
+                    f"YYYYMMDD{separator}HHMMSS{separator}<slug>.py"
+                    f"（分隔符为 '{separator}'，<slug> 仅允许 [a-z][a-z0-9_]*）。"
                 ),
             )
         )
@@ -424,7 +424,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help=(
             "要求文件内 revision 字符串等于文件名中的时间戳前缀 "
-            "（YYYY<sep>MM<sep>DD<sep>HH<sep>MM<sep>SS，不含 slug 段）。"
+            "（YYYYMMDD<sep>HHMMSS，不含 slug 段）。"
         ),
     )
     parser.add_argument(

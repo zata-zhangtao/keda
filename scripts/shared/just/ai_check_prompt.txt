@@ -4,7 +4,13 @@ File to review: <FILE_PATH>
 
 First, read the file at <FILE_PATH> end-to-end. Then read the project standards that are most relevant to it (start with `docs/ai-standards/index.md` and follow the per-topic pages it links to — architecture, naming, comments-docstrings, documentation, testing, tooling). For backend files (anything under `src/backend/`), also read `docs/architecture/system-design.md` as the authoritative layer-placement and dependency-direction reference. For files under `docs/`, also re-check the corresponding `mkdocs.yml` `nav:` entry and prefer `mkdocstrings` directives over hand-copied Python signatures.
 
-Group your findings into three categories. Report ALL of them — if a category is empty, say "none" for that one rather than skipping it.
+If the file at <FILE_PATH> is a PRD (typically under `tasks/pending/` or `tasks/archive/`, or containing PRD sections such as Problem Statement / Acceptance Criteria / Realistic Validation Plan), review it as a PRD and add the following two categories in addition to the general categories below:
+
+4. **False requirement / necessity check** — evaluate whether the problem is real, whether the stated user or business value is justified, whether acceptance criteria are concrete and testable, and whether the PRD duplicates existing functionality or solves a non-problem. Flag any scope creep, tautological value claims, missing evidence, or acceptance criteria that cannot be realistically validated.
+
+5. **Implementation design review** — assess whether the proposed technical approach, layer placement, data model changes, API surface, and dependency direction are reasonable. Check for violations of the four-layer architecture, over-engineering, underspecified integration points, and risks that would make the implementation unnecessarily complex or fragile.
+
+Group your findings into the categories below. Report ALL of them — if a category is empty, say "none" for that one rather than skipping it.
 
 1. **Stale references** — places in the file that mention a function, class, file path, command, just recipe, or env var that no longer exists in the repo. Verify each one yourself (use `rg`, `grep`, `ls`, `git log`, etc.) before reporting it. For each finding give: the current line, what it references, and the evidence that it's gone (or the rename that replaces it).
 
@@ -12,6 +18,6 @@ Group your findings into three categories. Report ALL of them — if a category 
 
 3. **Proactive improvements** — even where the file does not strictly violate any rule, suggest concrete changes that would align it better with current project conventions (clearer SSA-style names, better placement in the four-layer architecture, more accurate docstring, replacing a manual list with a call into `src/backend/core/`, etc.).
 
-For each finding, give: the location (path:line when possible), the current text, why it's a problem, and a concrete recommended fix. If the file is fully clean across all three categories, say so explicitly.
+For each finding, give: the location (path:line when possible), the current text, why it's a problem, and a concrete recommended fix. If the file is fully clean across all categories, say so explicitly.
 
 Do NOT modify the file. After you finish the report, stay in interactive mode so I can ask follow-up questions, drill into specific findings, or request targeted edits one at a time.

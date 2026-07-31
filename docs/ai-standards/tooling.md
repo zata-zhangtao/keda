@@ -20,11 +20,13 @@
 | `just sync` | 同步开发依赖 |
 | `just run` | 运行主应用（后端 + 管理平台前端 + 前台官网）；若前端 `node_modules` 缺失会自动运行 `pnpm install` |
 | `just run backend_port=8010 frontend_admin_port=13173 frontend_public_port=3001` | 使用指定端口运行主应用，并保存为当前 Git worktree 的默认端口 |
-| `just run frontend-public` | 只启动前台官网（Next.js，默认端口 3000） |
-| `just frontend-public dev` | 在 `frontend-public/` 运行 `pnpm dev` |
+| `just run frontend-public` | 只启动前台官网（Next.js，端口读取当前 run-state） |
+| `just frontend-public dev` | 委托 `just run frontend-public`，读取当前 run-state 端口 |
 | `just down` | 按当前 Git worktree 保存的端口停止本地开发服务 |
-| `just copy <new-dir>` | 派生新项目；随机分配三个互不重叠的端口（后端 8000-8999、管理平台前端 5180-5999、前台官网 3010-3999）避免多副本端口冲突 |
+| `just copy <new-dir>` | 派生新项目；随机分配三个互不重叠的端口避免多副本端口冲突，并根据新项目名自动生成独立 PostgreSQL 数据库 |
+| `just worktree <branch>` | 仅能从 Git primary worktree 创建；自动分配端口、创建专用 PostgreSQL 空库并执行迁移，开发与 E2E 共用该 Worktree 的数据库 |
 | `just test` | 运行本地测试 |
+| `just bench-test` | 验证 warm / after-edit 场景的 `just test` 是否满足 30 秒预算 |
 | `uv run mkdocs build` | 验证文档站点 |
 | `just docs-serve` | 本地预览文档 |
 | `just ai check <file> [claude\|kimi]` | 用 AI 审查单个文件；使用 kimi 时会自动恢复当前工作目录的上一个会话，方便追问 |
@@ -55,7 +57,26 @@
 - 传入 `backend_port`、`frontend_admin_port` 或 `frontend_public_port` 时，会保存本次端口配置。
 - 后续 `just run` 和 `just down` 会复用保存的端口。
 - 前端 Vite 使用 `strictPort`，端口被占用时直接失败，避免自动漂移后 `just down` 停错端口。
-- `just copy <name>` 派生新项目时，会从三个互不重叠的区间随机分配端口（后端 `8000-8999`、管理平台前端 `5180-5999`、前台官网 `3010-3999`），并写入 destination justfile 的 `run`/`down` 默认值以及 `.env.run-state`，让首次 `just run` 就走随机端口；所选端口会打印到 stdout。`just sync-template` 不会覆盖已随机化的 justfile，因此派生项目可以长期保留自己的端口。
+- `just copy <name>` 派生新项目时，会从三个互不重叠的区间随机分配端口（后端 `8000-8999`、管理平台前端 `5180-5999`、前台官网 `3010-3999`），并且只写入 destination 的 `.env.run-state`；不会改写 justfile、前端配置或文档中的 fallback。首次 `just run` 会读取随机端口，所选端口也会打印到 stdout。
+- `just frontend dev` 与 `just frontend-public dev` 会委托给对应的 `just run` target，因此同样读取 `.env.run-state`，不会绕过已保存端口。
+- `just run docker` 会把 `.env.run-state` 作为最后一层 Compose 插值环境，动态设置三个主机端口；容器内部端口仍固定为 backend `8000`、admin `80`、public `3000`，不属于需要随机化的主机端口。
+
+## Project Database Isolation
+
+`just copy <name>` 派生新项目时，会读取目标目录 `.env.local` 中的 `DATABASE_URL`。如果该 URL 使用 PostgreSQL，脚本会基于新项目名称派生一个唯一的数据库名（小写、下划线连接、不超过 63 字节），替换 URL 中的数据库名部分，并尝试连接 `postgres` 维护数据库自动创建该数据库；数据库创建后会立即执行 `uv run alembic upgrade head`。这样多个派生项目不会共享同一个数据库，且复制完成后已有完整迁移结构，避免迁移版本冲突或数据串扰。
+
+- 自动创建依赖当前环境已安装的 `psycopg2`；若不可用或连接失败，会打印手动建库命令。
+- 若 `.env.local` 不存在、未配置 `DATABASE_URL` 或使用非 PostgreSQL 数据库，则跳过 PostgreSQL 建库步骤，但复制流程仍会执行 Alembic 迁移。
+- 仅修改目标目录的 `.env.local`；模板源文件中的 `.env.example` 保持占位符不变。
+
+## Worktree Database Isolation
+
+`just worktree <branch>` 只能从 Git primary worktree 发起。创建时会复制必要环境配置，但会为目标 Worktree 重新派生唯一的 PostgreSQL 数据库名（包含分支标识和短哈希），改写**目标 Worktree** 的 `.env.local` 中 `DATABASE_URL`，然后执行 `uv run alembic upgrade head`。因此每个 Worktree 有独立的 `alembic_version` 和数据，开发服务与该 Worktree 的 E2E 测试共用这一个可丢弃的数据库。
+
+- 不复制主开发库或生产库的数据；初始状态是空库加当前迁移及应用 bootstrap seed。
+- `.env.local` 缺少 PostgreSQL `DATABASE_URL`，或创建数据库失败时，Worktree 创建会失败，避免静默回退到共享库。
+- Worktree 删除时数据库默认保留，方便排查；需要清理时手动删除对应数据库。
+- 数据库隔离不解决 Alembic 源码迁移链并发：多个分支各自新增 migration 后，合并前仍必须 rebase 并运行 `uv run alembic heads`，确保仅有一个 head。
 
 ## Automatic Frontend Dependency Install
 
@@ -79,6 +100,7 @@
 - 新增、复制或重命名进入 `tasks/archive/` 的 PRD 也必须完成验收清单
 - 已存在的历史 archive PRD 不会因为普通修改被重新套用新规则
 - 验收清单标题支持英文 `Acceptance Checklist`、中文 `验收清单` 和双语标题
+- skill 内 checker 还会拒绝缺失关键值来源、必经边界、禁止旁路、fresh-state probe 或最终代码树证据的可执行 oracle
 
 这条规则的目标是让“归档”代表交付完成，同时避免历史归档文档被新标准批量翻旧账。
 
@@ -123,6 +145,24 @@ uv run pre-commit run --show-diff-on-failure
 2. 修改复用边界、架构规则、AI 规范入口或疑似重复逻辑时运行 `just lint --reuse`。
 3. 交付、PRD 归档或合并前运行 `just lint --repo`；如果时间受限，至少运行 `just lint --full` 和相关测试。
 
+## AI Adapter Sync
+
+`just sync-template` 默认模式只同步上游维护的基础设施（`justfile.shared`、`scripts/shared/*`、`scripts/build/*`、工具配置、`hooks/shared/*`、E2E 基础设施等），**不同步 AI 适配层文件**：
+
+- AI 规范源：`docs/ai-standards/*`
+- Copilot 入口：`.github/copilot-instructions.md`、`.github/instructions/*.md`
+- Cursor 入口：`.cursor/commands/cursor.md`、`.cursor/rules/*`
+- 跨工具入口摘要：`AGENTS.md`、`CLAUDE.md`
+
+这些文件派生项目常会自定义（改入口指向、调整规范），默认覆盖会破坏项目定制，因此只在 `just sync-template --all` 模式才作为同步候选出现。实现见 `scripts/shared/template/sync_template.sh` 的 `_is_ai_adapter_file`。
+
+模板包含 Skill 更新时，`just sync-template` 与 `just sync-local-skills` 按本机目录选择安装目标：
+
+1. 检测到 `~/.cc-switch` 时加入 `~/.cc-switch/skills`。
+2. 检测到 `~/.pi` 时加入 Pi 的 `~/.pi/agent/skills`；它与 cc-switch 不互斥。
+3. 同时检测到两者时，同一批选中的 Skill 会同步到两个目录。
+4. 两者均不存在时，交互选择 Codex、Claude 或 Pi 的 skills 目录。
+
 ## Pre-commit Configuration Sync
 
 `.pre-commit-config.yaml` 由模板上游维护，已通过 `scripts/shared/template/sync_template.sh` 的 `_is_upstream_owned()` 纳入同步清单。派生项目**不要直接手改**该文件——本地修改会在下次 `sync_template` 时被覆盖。
@@ -166,7 +206,7 @@ uv run pre-commit run --all-files
 - `.last_tested_commit`：绑定当前分支、HEAD 和 test 有效 tree；提交前由 `check-test-flag` 校验，并在 `just test` 入口用于判断是否需要重新跑测试。
 - 对于刚 `git init`、尚无首个 commit 的仓库，flag 会绑定当前分支、`no-commit` 和对应有效 tree，因此模板仓库复制后可在首次提交前正常运行 `just test` / `just lint --full` / `git commit` 流程。
 
-`just test` 在入口处会先检查 `.last_tested_commit`：若分支、HEAD 和 test 有效 tree 均未变化，则直接打印提示并退出，避免重复 lint 与 pytest。只有在 flag 无效或不存在时，才会执行 `SKIP=check-test-flag just lint --full` 并运行测试。测试成功后会同时刷新 test 标记和 full lint 标记，避免刚跑完 `just test` 后再次执行完整 full lint。
+`just test` 在入口处先读 `.last_tested_commit`：若分支、HEAD 和 test 有效 tree 均未变化，则直接打印提示并退出，避免重复 pytest。如果 test 标记不命中，则进一步读 `.last_linted_commit`：命中时跳过 lint 前置直接进入 pytest，未命中时才执行 `SKIP=check-test-flag just lint --full`。这种"两级快路径"是 warm tree 上 `just test` 能稳定低于 30s 的关键。CI 环境（`CI` 非空）下会禁用这两条快路径，强制走完整 lint + pytest，避免跨 job/host 的 flag 文件泄漏掩盖回归。测试成功后会同时刷新 test 标记和 full lint 标记，避免刚跑完 `just test` 后再次执行完整 full lint。本地 pytest 默认使用 `-q`，CI 下回退到 `-v`。
 
 `just lint --full` 的快速路径仍会执行轻量的 `check-test-flag`，除非调用方显式设置 `SKIP=check-test-flag`。如果 `SKIP` 跳过了除 `check-test-flag` 以外的 hook，本次 full lint 不会写入 `.last_linted_commit`。
 
@@ -211,6 +251,7 @@ uv run pre-commit run --all-files
 - 新增、复制或重命名进入 `tasks/archive/` 的 PRD 也必须完成验收清单
 - 已存在的历史 archive PRD 不会因为普通修改被重新套用新规则
 - 验收清单标题支持英文 `Acceptance Checklist`、中文 `验收清单` 和双语标题
+- skill 内 checker 还会拒绝缺失关键值来源、必经边界、禁止旁路、fresh-state probe 或最终代码树证据的可执行 oracle
 
 这条规则的目标是让"归档"代表交付完成，同时避免历史归档文档被新标准批量翻旧账。
 

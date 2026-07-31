@@ -37,7 +37,11 @@
 
 ## 当前目录
 
-- `src/backend/main.py`：后端真实 composition root，只做依赖组装。
+- `src/backend/composition/`：后端真实 composition root，按认证、业务运行依赖、
+  启动数据和 FastAPI 应用工厂拆分装配。
+- `src/backend/composition/app_factory.py`：汇总路由、中间件和各领域组件，
+  不承载业务规则。
+- `src/backend/main.py`：兼容导出与进程启动薄入口。
 - `main.py`：根目录兼容启动包装器，转发到 `backend.main`。
 - `src/backend/infrastructure/config/`：承接配置管理；还承接 OpenAI 协议 provider 注册表与 `create_chat_model` 工厂（按 `provider/model_id` 分发）。
 - `src/backend/infrastructure/logging/`：承接日志实现。
@@ -82,11 +86,16 @@ flowchart TD
 
     subgraph Backend["Python 后端"]
         direction TB
+        Composition["src/backend/composition/\n依赖装配边界"]
         Apps["src/backend/api/ 接入层"]
         Core["src/backend/core/ 核心编排层"]
         Platform["src/backend/engines/ 平台能力层"]
         Infra["src/backend/infrastructure/ 基础设施层"]
 
+        Composition --> Apps
+        Composition --> Core
+        Composition --> Platform
+        Composition --> Infra
         Apps --> Core
         Core --> Platform
         Core --> Infra
@@ -177,6 +186,7 @@ src/backend/api/ → src/backend/core/ → src/backend/engines/ → src/backend/
 3. `src/backend/engines/` 只能实现 `src/backend/core/` 定义的契约。
 4. `src/backend/infrastructure/` 负责具体集成，不包含业务编排。
 5. 配置、日志、数据库和通用辅助函数位于 `src/backend/infrastructure/` 下的正式模块。
+6. `src/backend/composition/` 位于四层之外，只负责创建并连接对象；四层模块不得反向依赖它。
 
 ## 认证与会话域
 
@@ -209,5 +219,6 @@ src/backend/api/ → src/backend/core/ → src/backend/engines/ → src/backend/
 - 抽象端口：`core/shared/interfaces/`（`user_account_repository.py` / `password_hasher.py` / `session_store.py`）
 - 基础设施实现：`infrastructure/auth/`（`redis_session_store.py` / `bcrypt_password_hasher.py` / `redis_client.py`）、`infrastructure/persistence/repos/user_account_repo.py`、`infrastructure/persistence/models/{public_user,admin_user}.py`
 - 接入层：`api/auth_router.py`、`api/admin/`、`api/dependencies.py`
-- 初始管理员：`main.py` 启动时按 `AUTH_ADMIN_BOOTSTRAP_*` 幂等种子创建
+- 初始管理员：`composition/bootstrap.py` 启动时按
+  `AUTH_ADMIN_BOOTSTRAP_*` 幂等种子创建
 - 运行依赖：Redis（`REDIS_URL`）；密码以 bcrypt 哈希持久化

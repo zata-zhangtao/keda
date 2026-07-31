@@ -83,11 +83,25 @@ def update_database_url(
     return (new_url, derive_database_name(database_identifier)) if updated else (None, None)
 
 
-def create_postgres_database(database_url: str) -> bool:
+def create_postgres_database(
+    database_url: str,
+    locale: str = "",
+    encoding: str = "",
+) -> bool:
     """尝试根据 ``DATABASE_URL`` 创建 PostgreSQL 数据库。
+
+    不显式给定 ``LOCALE`` / ``ENCODING`` 时，从 ``template0`` 复制（避免被
+    集群 ``template1`` 自定义污染），并继承 cluster 默认 collation——这是
+    最广泛兼容的默认行为。
+
+    显式给定 ``locale`` 或 ``encoding`` 时，会拼到 ``CREATE DATABASE``
+    语句中。注意 PostgreSQL 要求 ``ENCODING`` 与 ``LC_COLLATE`` / ``LC_CTYPE``
+    都与 OS locale 匹配，若集群未安装该 locale 会报错。
 
     Args:
         database_url: 已更新为项目专用数据库的 URL。
+        locale: 可选 PostgreSQL ``LOCALE``，例如 ``C.UTF-8``。
+        encoding: 可选 PostgreSQL ``ENCODING``，例如 ``UTF8``。
 
     Returns:
         数据库已创建或已存在返回 ``True``，否则返回 ``False``。
@@ -108,6 +122,8 @@ def create_postgres_database(database_url: str) -> bool:
         print("psycopg2 不可用，无法自动创建数据库。")
         return False
 
+    create_database_sql = compose_postgres_create_database_sql(db_name, locale, encoding)
+
     connection = None
     try:
         connection = psycopg2.connect(
@@ -126,8 +142,12 @@ def create_postgres_database(database_url: str) -> bool:
             if cursor.fetchone():
                 print(f"数据库 '{db_name}' 已存在。")
                 return True
-            cursor.execute(f"CREATE DATABASE {db_name};")
-        print(f"已创建数据库: {db_name}")
+            cursor.execute(create_database_sql)
+        print(
+            f"已创建数据库: {db_name}"
+            + (f" (locale={locale})" if locale else "")
+            + (f" (encoding={encoding})" if encoding else "")
+        )
         return True
     except psycopg2.Error as exc:
         print(f"无法创建数据库 '{db_name}': {exc}")
@@ -137,11 +157,54 @@ def create_postgres_database(database_url: str) -> bool:
             connection.close()
 
 
-def create_mysql_database(database_url: str) -> bool:
+def compose_postgres_create_database_sql(
+    db_name: str,
+    locale: str = "",
+    encoding: str = "",
+) -> str:
+    """拼装 PostgreSQL ``CREATE DATABASE`` 语句。
+
+    始终从 ``template0`` 复制，避免被集群 ``template1`` 自定义污染。
+    显式传入 ``locale`` / ``encoding`` 时追加对应子句。
+
+    单独抽出来便于单元测试在没有真实数据库时验证 SQL 形式。
+    """
+    db_options = []
+    if encoding:
+        db_options.append(f"ENCODING = '{encoding}'")
+    if locale:
+        db_options.append(f"LOCALE = '{locale}'")
+    options_clause = f" WITH { ' '.join(db_options)}" if db_options else ""
+    return f"CREATE DATABASE {db_name}{options_clause} TEMPLATE template0;"
+
+
+# MySQL 默认字符集 / 排序规则。
+# 选 ``utf8mb4_unicode_ci`` 与 MySQL 5.7 默认以及大多数 ORM 默认一致，
+# 跨 MySQL 5.7 / 8.0 / MariaDB 全部可用。
+# MySQL 8 服务器默认 ``utf8mb4_0900_ai_ci`` 与此不同，会与某些既有依赖
+# ``utf8mb4_unicode_ci`` 的迁移链路触发 ``Illegal mix of collations``，
+# 所以上游默认走更保守的 ``utf8mb4_unicode_ci``；下游项目如有其他选择，
+# 在 ``.env.local`` 用 ``DATABASE_CHARSET`` / ``DATABASE_COLLATION`` 覆盖。
+DEFAULT_MYSQL_CHARSET = "utf8mb4"
+DEFAULT_MYSQL_COLLATION = "utf8mb4_unicode_ci"
+
+
+def create_mysql_database(
+    database_url: str,
+    charset: str = DEFAULT_MYSQL_CHARSET,
+    collation: str = DEFAULT_MYSQL_COLLATION,
+) -> bool:
     """尝试根据 ``DATABASE_URL`` 创建 MySQL 数据库。
+
+    创建时显式带上 ``CHARACTER SET`` / ``COLLATE``，避免落到 MySQL 8
+    服务器默认 ``utf8mb4_0900_ai_ci``。下游项目可通过 ``charset`` /
+    ``collation`` 参数或 ``.env.local`` 的 ``DATABASE_CHARSET`` /
+    ``DATABASE_COLLATION`` 覆盖。
 
     Args:
         database_url: 已更新为项目专用数据库的 MySQL URL。
+        charset: 新建数据库的字符集，默认与上游通用保守选择一致。
+        collation: 新建数据库的排序规则，默认与上游通用保守选择一致。
 
     Returns:
         数据库已创建或已存在返回 ``True``，否则返回 ``False``。
@@ -162,6 +225,8 @@ def create_mysql_database(database_url: str) -> bool:
         print("PyMySQL 不可用，无法自动创建数据库。")
         return False
 
+    create_database_sql = compose_mysql_create_database_sql(db_name, charset, collation)
+
     connection = None
     try:
         connection = pymysql.connect(
@@ -180,8 +245,8 @@ def create_mysql_database(database_url: str) -> bool:
             if cursor.fetchone():
                 print(f"数据库 '{db_name}' 已存在。")
                 return True
-            cursor.execute(f"CREATE DATABASE `{db_name}`;")
-        print(f"已创建数据库: {db_name}")
+            cursor.execute(create_database_sql)
+        print(f"已创建数据库: {db_name} (charset={charset}, collation={collation})")
         return True
     except pymysql.MySQLError as exc:
         print(f"无法创建数据库 '{db_name}': {exc}")
@@ -189,6 +254,65 @@ def create_mysql_database(database_url: str) -> bool:
     finally:
         if connection is not None:
             connection.close()
+
+
+def compose_mysql_create_database_sql(
+    db_name: str,
+    charset: str = DEFAULT_MYSQL_CHARSET,
+    collation: str = DEFAULT_MYSQL_COLLATION,
+) -> str:
+    """拼装 MySQL ``CREATE DATABASE`` 语句。
+
+    始终显式带 ``CHARACTER SET`` / ``COLLATE``，避免落到 MySQL 8
+    服务器默认 ``utf8mb4_0900_ai_ci``。单独抽出来便于单元测试。
+    """
+    return f"CREATE DATABASE `{db_name}` " f"CHARACTER SET {charset} COLLATE {collation};"
+
+
+# .env.local 中可被下游项目覆盖的数据库建库选项；优先级高于模块默认。
+# 设置后会被 ``main()`` 读取并传给 ``create_postgres_database`` /
+# ``create_mysql_database``。不设置则用模块默认值。
+DATABASE_OPTION_KEYS: tuple[str, ...] = (
+    "DATABASE_CHARSET",
+    "DATABASE_COLLATION",
+    "DATABASE_LOCALE",
+    "DATABASE_ENCODING",
+)
+
+
+def read_database_options(env_local_path: Path) -> dict[str, str]:
+    """从 ``.env.local`` 读取 ``DATABASE_*`` 建库选项。
+
+    解析规则：
+
+    - 形式 ``KEY=VALUE`` 的行；忽略 ``#`` 开头的注释；
+    - 命中 ``DATABASE_OPTION_KEYS`` 之一的键即纳入结果；
+    - ``VALUE`` 去掉首尾空白，保留空串（与"未设置"等价；
+      ``main()`` 会用 ``or <default>`` 兜底）。
+
+    Args:
+        env_local_path: 目标项目 ``.env.local`` 路径。
+
+    Returns:
+        ``{key: value}`` 形式的选项字典。仅包含出现在文件中的键，
+        缺失的键不在结果里（让调用方用 ``dict.get`` 配默认值）。
+    """
+    options: dict[str, str] = {}
+    if not env_local_path.exists():
+        return options
+
+    for raw_line in env_local_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if separator != "=":
+            continue
+        key = key.strip()
+        if key not in DATABASE_OPTION_KEYS:
+            continue
+        options[key] = value.strip()
+    return options
 
 
 def main() -> int:
@@ -216,11 +340,22 @@ def main() -> int:
 
     print(f"已将 DATABASE_URL 改写为项目专用数据库: {db_name}")
 
+    # 下游项目可在 .env.local 里覆盖四个建库选项；未设置则用模块默认。
+    database_options = read_database_options(env_local_path)
+    mysql_charset = database_options.get("DATABASE_CHARSET") or DEFAULT_MYSQL_CHARSET
+    mysql_collation = database_options.get("DATABASE_COLLATION") or DEFAULT_MYSQL_COLLATION
+    postgres_locale = database_options.get("DATABASE_LOCALE", "")
+    postgres_encoding = database_options.get("DATABASE_ENCODING", "")
+
     parsed_database_url = urlparse(new_url)
     if parsed_database_url.scheme.startswith("postgresql"):
-        database_ready = create_postgres_database(new_url)
+        database_ready = create_postgres_database(
+            new_url, locale=postgres_locale, encoding=postgres_encoding
+        )
     elif parsed_database_url.scheme.startswith("mysql"):
-        database_ready = create_mysql_database(new_url)
+        database_ready = create_mysql_database(
+            new_url, charset=mysql_charset, collation=mysql_collation
+        )
     else:
         database_ready = False
 

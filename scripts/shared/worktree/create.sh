@@ -698,6 +698,9 @@ function ai_worktree() {
     local source_env_file_path=""
     local relative_env_file_path=""
     local target_env_file_path=""
+    local primary_worktree_path=""
+    local normalized_primary_worktree_path=""
+    local normalized_current_worktree_path=""
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -815,6 +818,15 @@ function ai_worktree() {
     fi
 
     repo_root_path="$(git rev-parse --show-toplevel)"
+    primary_worktree_path="$(git worktree list --porcelain | awk '/^worktree / {print substr($0, 10); exit}')"
+    normalized_primary_worktree_path="$(cd "$primary_worktree_path" && pwd -P)"
+    normalized_current_worktree_path="$(cd "$repo_root_path" && pwd -P)"
+    if [ "$normalized_current_worktree_path" != "$normalized_primary_worktree_path" ]; then
+        echo "❌ 只能从 Git primary worktree 创建新的 worktree。"
+        echo "   primary: $normalized_primary_worktree_path"
+        echo "   current: $normalized_current_worktree_path"
+        return 1
+    fi
     repo_parent_path="$(dirname "$repo_root_path")"
     # 1. 约定 worktree 统一集中到 <repo_parent>/<repo-name>-worktrees/
     #    issue-* 分支在未指定 --subdir 时默认归入 tasks/ 子目录
@@ -929,6 +941,7 @@ function ai_worktree() {
             -not -path "$repo_root_path/.venv/*" \
             -not -path "$repo_root_path/.uv-cache/*" \
             -not -path "$repo_root_path/site/*" \
+            -not -path "$repo_root_path/.env.run-state" \
             -not -path "*/.iar-worktrees/*" \
             -not -path "*/node_modules/*"
     )

@@ -118,3 +118,10 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
+      - id: check-guard-test-modification
+        name: Check guard test modification
+        entry: uv run python hooks/shared/check_guard_test_modification.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

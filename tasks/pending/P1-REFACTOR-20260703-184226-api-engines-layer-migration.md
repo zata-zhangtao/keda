@@ -1,5 +1,19 @@
 # PRD: api → engines 直连迁移至 core 编排层并恢复架构门禁
 
+> **2026-07-31：本 PRD 现在卡着一次模板同步。** 上游 `zata-codes-template` 的
+> `hooks/shared/check_architecture.py` 已删除 `api/ → engines/` 的过渡期放宽
+> （`api` 的禁止列表加入了 `engines`，并新增 composition root 规则）。keda 当前树上
+> 有 **40 处** `[backend/api] → [engines]` 违规，直接同步会让每次 commit 硬失败，
+> 因此该文件被**暂缓同步**，keda 继续使用带放宽的本地版本。
+>
+> **解除条件**：本 PRD 完成、40 处违规清零后，执行
+> `cp <template>/hooks/shared/check_architecture.py hooks/shared/` 完成同步，
+> 并同步更新 `CLAUDE.md` 与 `docs/architecture/system-design.md` 中关于过渡期放宽的措辞。
+> 届时 keda 才算真正回到上游一致。
+>
+> 违规清单可用 `uv run --no-sync python hooks/shared/check_architecture.py` 随时重出。
+
+
 > 本 PRD 分两个 altitude，分别服务不同读者，自上而下阅读：
 >
 > - **Part A · 人审层 (Review Layer)** — 需求方 / 验收人读这部分，决定"该不该做、做得对不对"，并通过风险地图知道**哪些地方必须亲自确认**。Part A 不出现实现机制、文件路径、命令。
